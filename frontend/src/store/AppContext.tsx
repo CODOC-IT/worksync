@@ -18,7 +18,8 @@ import {
   WeeklySummaryDraft,
   BreakType,
   WorkBreak,
-  ControlledEditRequest
+  ControlledEditRequest,
+  TaskStatusHistoryEntry
 } from '../types';
 import {
   INITIAL_USERS,
@@ -84,14 +85,26 @@ interface AppState {
   createProject: (data: Partial<Project>) => void;
   approveProject: (projectId: string) => void;
   rejectProject: (projectId: string, reason?: string) => void;
+  updateProject: (projectId: string, data: Partial<Project>) => void;
+  deleteProject: (projectId: string) => void;
   createTask: (data: TaskMutationData) => TaskMutationResult;
   updateTask: (taskId: string, data: TaskMutationData) => TaskMutationResult;
   deleteTask: (taskId: string) => TaskMutationResult;
   updateTaskStatus: (
     taskId: string,
     newStatus: TaskStatus,
-    extraInfo?: { workSummary?: string; completionSummary?: string; blockerReason?: string; reopenReason?: string }
-  ) => void;
+    extraInfo?: {
+      workSummary?: string;
+      completionSummary?: string;
+      blockerReason?: string;
+      reopenReason?: string;
+      // Project Board fields: `note` is the mandatory reason shown in the board's
+      // status-change modal and is recorded on Task.statusHistory. `reviewDecision`
+      // marks the change as an explicit Team Lead/Admin Approve or Reject action.
+      note?: string;
+      reviewDecision?: 'Approve' | 'Reject';
+    }
+  ) => { success: boolean; message: string };
   proposeControlledEdit: (taskId: string, field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status', newValue: string, reason: string) => void;
   approveApprovalItem: (approvalId: string) => void;
   rejectApprovalItem: (approvalId: string, reason?: string) => void;
@@ -167,6 +180,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Fetch persisted database users on mount
+  useEffect(() => {
+    fetch('/api/auth/users')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+          setUsers(data.users as User[]);
+        }
+      })
+      .catch(() => {
+        // Silently keep default users if offline
+      });
+  }, []);
+
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
@@ -234,24 +261,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isAdmin = currentRole === 'Admin';
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-    
+
+    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
+    // Team Lead creation always routes to Pending Approval for Admin review.
+    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
+    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
+
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status: isAdmin ? 'Active' : 'Pending Approval',
-      approvalStatus: isAdmin ? 'Approved' : 'Pending Approval',
+      status,
+      approvalStatus,
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
       memberIds: data.memberIds || [currentUser.id],
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      priority: data.priority || 'Medium',
       progress: 0,
       tags: data.tags || ['New Project'],
       milestones: data.milestones || [],
-      files: [],
-      pinnedMessagesCount: 0
+      files: data.files || [],
+      pinnedMessagesCount: 0,
+      creationReason: data.creationReason
     };
 
     setProjects((prev) => [newProject, ...prev]);
@@ -306,6 +340,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((sa) => (sa.targetId === projectId ? { ...sa, status: 'Rejected' } : sa))
     );
     pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
+  };
+
+  const updateProject = (projectId: string, data: Partial<Project>) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+    );
+    pushActivity('Updated project', 'Project', projectId, data.title || project.title);
+  };
+
+  const deleteProject = (projectId: string) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    pushActivity('Deleted project', 'Project', projectId, project.title);
   };
 
   // Client-side prototype data boundary. The future API must repeat every
@@ -368,36 +421,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return result;
   };
 
-  // Update Task Status (Kanban & Details) with mandatory reason/summary handlers
+  // Update Task Status (Kanban & Details) with mandatory reason/summary handlers.
+  // The Project Board module always supplies `extraInfo.note` (validated as non-empty by
+  // its own status-change modal); `reviewDecision` is set only when a Team Lead/Admin is
+  // resolving a task that's Pending review approval.
   const updateTaskStatus = (
     taskId: string,
     newStatus: TaskStatus,
-    extraInfo?: { workSummary?: string; completionSummary?: string; blockerReason?: string; reopenReason?: string }
-  ) => {
+    extraInfo?: {
+      workSummary?: string;
+      completionSummary?: string;
+      blockerReason?: string;
+      reopenReason?: string;
+      note?: string;
+      reviewDecision?: 'Approve' | 'Reject';
+    }
+  ): { success: boolean; message: string } => {
     const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
+    if (!task) return { success: false, message: 'Task not found.' };
+
+    const note = extraInfo?.note?.trim();
+    const historyEntry: TaskStatusHistoryEntry | null = note
+      ? {
+          id: `tsh-${Date.now()}`,
+          fromStatus: task.status,
+          toStatus: newStatus,
+          note,
+          changedBy: currentUser.id,
+          changedByName: currentUser.name,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        }
+      : null;
 
     setTasks((prev) =>
       prev.map((t) => {
-        if (t.id === taskId) {
-          return {
-            ...t,
-            status: newStatus,
-            workSummary: extraInfo?.workSummary ?? t.workSummary,
-            completionSummary: extraInfo?.completionSummary ?? t.completionSummary,
-            blockerReason: extraInfo?.blockerReason ?? t.blockerReason,
-            reopenReason: extraInfo?.reopenReason ?? t.reopenReason
-          };
-        }
-        return t;
+        if (t.id !== taskId) return t;
+        return {
+          ...t,
+          status: newStatus,
+          workSummary: extraInfo?.workSummary ?? t.workSummary,
+          completionSummary: extraInfo?.completionSummary ?? t.completionSummary,
+          blockerReason: extraInfo?.blockerReason ?? t.blockerReason,
+          reopenReason: extraInfo?.reopenReason ?? t.reopenReason,
+          // Entering Review always opens a pending approval decision; leaving Review by any
+          // path (drag, dropdown, or an Approve/Reject decision) resolves/clears it.
+          reviewApproval: newStatus === 'Review' ? 'Pending' : undefined,
+          statusHistory: historyEntry ? [...(t.statusHistory || []), historyEntry] : t.statusHistory
+        };
       })
     );
 
-    pushActivity(`Moved task to ${newStatus}`, 'Task', taskId, task.title, {
+    const activityAction =
+      extraInfo?.reviewDecision === 'Approve'
+        ? 'Approved task review'
+        : extraInfo?.reviewDecision === 'Reject'
+        ? 'Rejected task review'
+        : `Moved task to ${newStatus}`;
+
+    pushActivity(activityAction, 'Task', taskId, task.title, {
       field: 'status',
       oldVal: task.status,
       newVal: newStatus
     });
+
+    return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
   };
 
   // Controlled Field Edits (Team Member submits -> TL/Admin approves)
@@ -749,6 +836,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createProject,
         approveProject,
         rejectProject,
+        updateProject,
+        deleteProject,
         createTask,
         updateTask,
         deleteTask,

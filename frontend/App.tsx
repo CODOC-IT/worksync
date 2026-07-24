@@ -10,8 +10,11 @@ import { LoginView } from '../frontend/src/features/auth/LoginView';
 import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
+import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
 import { TasksView } from '../frontend/src/features/tasks/TasksView';
 import { AttendanceView } from '../frontend/src/features/attendance/AttendanceView';
+import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
+import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -107,6 +110,17 @@ const AppContent: React.FC = () => {
 {currentTab === 'tasks' && <TasksView />}
 {currentTab === 'attendance' && <AttendanceView />}
 {currentTab === 'profile' && <ProfileView />}
+          {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
+
+          {currentTab === 'projects' && <ProjectsView />}
+
+          {currentTab === 'tasks' && <TasksView />}
+
+          {currentTab === 'kanban' && <KanbanView />}
+
+          {currentTab === 'approvals' && <ApprovalsInboxView />}
+
+          {currentTab === 'profile' && <ProfileView />}
 
           {/* Settings Tab */}
           {currentTab === 'settings' && (

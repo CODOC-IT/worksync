@@ -104,6 +104,12 @@ router.get('/me', authenticateJWT, (req: AuthenticatedRequest, res: Response): v
   });
 });
 
+// GET /api/auth/users
+router.get('/users', (_req, res: Response): void => {
+  const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
+  res.status(200).json({ success: true, users });
+});
+
 // POST /api/auth/logout
 router.post('/logout', authenticateJWT, (_req, res: Response): void => {
   res.status(200).json({ success: true, message: 'Logout successful.' });

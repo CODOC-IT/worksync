@@ -1,8 +1,12 @@
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
 
 // Pre-hashed default password for initial seed users: "password123"
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
+
+const DB_FILE_PATH = path.resolve(process.cwd(), 'database', 'users_db.json');
 
 const INITIAL_USERS: UserRecord[] = [
   {
@@ -59,9 +63,57 @@ class UserStore {
   private users: Map<string, UserRecord> = new Map();
 
   constructor() {
-    INITIAL_USERS.forEach((user) => {
-      this.users.set(user.email.toLowerCase(), user);
-    });
+    this.initDatabase();
+  }
+
+  private initDatabase(): void {
+    try {
+      // Ensure database directory exists
+      const dbDir = path.dirname(DB_FILE_PATH);
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+      }
+
+      if (fs.existsSync(DB_FILE_PATH)) {
+        const fileData = fs.readFileSync(DB_FILE_PATH, 'utf-8');
+        const parsedUsers: UserRecord[] = JSON.parse(fileData);
+        
+        parsedUsers.forEach((user) => {
+          this.users.set(user.email.toLowerCase(), user);
+        });
+
+        // Ensure default seed users exist if missing
+        INITIAL_USERS.forEach((user) => {
+          if (!this.users.has(user.email.toLowerCase())) {
+            this.users.set(user.email.toLowerCase(), user);
+          }
+        });
+
+        this.persistToDisk();
+        console.log(`[Database] Loaded ${this.users.size} user records from ${DB_FILE_PATH} ✓`);
+      } else {
+        // Seed initial users into database file
+        INITIAL_USERS.forEach((user) => {
+          this.users.set(user.email.toLowerCase(), user);
+        });
+        this.persistToDisk();
+        console.log(`[Database] Initialized new user database at ${DB_FILE_PATH} with seed records ✓`);
+      }
+    } catch (err: any) {
+      console.error(`[Database Error] Failed to load database file: ${err.message}. Falling back to initial seed.`);
+      INITIAL_USERS.forEach((user) => {
+        this.users.set(user.email.toLowerCase(), user);
+      });
+    }
+  }
+
+  private persistToDisk(): void {
+    try {
+      const userList = Array.from(this.users.values());
+      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(userList, null, 2), 'utf-8');
+    } catch (err: any) {
+      console.error(`[Database Error] Failed to persist users to disk: ${err.message}`);
+    }
   }
 
   public findByEmail(email: string): UserRecord | undefined {
@@ -70,6 +122,10 @@ class UserStore {
 
   public findById(id: string): UserRecord | undefined {
     return Array.from(this.users.values()).find((user) => user.id === id);
+  }
+
+  public getAllUsers(): UserRecord[] {
+    return Array.from(this.users.values());
   }
 
   public createUser(userData: {
@@ -99,6 +155,8 @@ class UserStore {
     };
 
     this.users.set(newUser.email, newUser);
+    this.persistToDisk();
+    console.log(`[Database] Created and persisted new user: ${newUser.name} (${newUser.email}) ✓`);
     return newUser;
   }
 
