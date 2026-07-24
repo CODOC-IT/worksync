@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=220&section=header&text=WorkSync%20Core&fontSize=52&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=75&descSize=16" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=280&section=header&text=WorkSync%20Core&fontSize=52&fontAlignY=38&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=62&descSize=16" width="100%"/>
 
 [![Vite](https://img.shields.io/badge/Vite-6.4.3-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![React](https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
@@ -35,7 +35,7 @@
 
 ## 🌟 About WorkSync
 
-**WorkSync** is a Cyberpunk Glassmorphism Enterprise Office Management System built for modern software engineering teams. It delivers real time task orchestration, granular role based access control (RBAC), attendance tracking, AI powered prompt generation, Kanban boards, project calendars, and complete audit trail logging.
+**WorkSync** is a Cyberpunk Glassmorphism Enterprise Office Management System built for modern software engineering teams. It delivers real time task orchestration, granular role based access control (RBAC), attendance tracking, AI powered prompt generation, Kanban boards, project calendars, and complete audit trail logging. 🧩
 
 > 🚀 Built by a team of **10 active interns**, each owning a dedicated module, following a **70 table PostgreSQL 3NF schema** and a functional specification that covers permanent and temporary access roles, approval workflows, and full notification routing.
 
@@ -47,13 +47,13 @@
 
 | No. | 🧑‍💻 Intern | 🎯 Assigned Module | 📊 Status |
 |:---:|---|---|:---:|
-| 01 | [@Salman-ahmed-2](https://github.com/Salman-ahmed-2) | Dashboard / Login / Frontend | 🟡 In Progress |
-| 02 | [@TahaSohail-Goat](https://github.com/TahaSohail-Goat) | Dashboard / Frontend | 🟡 In Progress |
-| 03 | [@laibainqilab-ds](https://github.com/laibainqilab-ds) | Project Management / Calendar | 🟡 In Progress |
-| 04 | [@abihajibbran1-lang](https://github.com/abihajibbran1-lang) | Task Creation / Comments | 🟡 In Progress |
-| 05 | [@Bilalmughal-07](https://github.com/Bilalmughal-07) | Kanban Board / Notifications | 🟡 In Progress |
+| 01 | [@Salman-ahmed-2](https://github.com/Salman-ahmed-2) | Dashboard, Login, Frontend | 🟡 In Progress |
+| 02 | [@TahaSohail-Goat](https://github.com/TahaSohail-Goat) | Dashboard, Frontend | 🟡 In Progress |
+| 03 | [@laibainqilab-ds](https://github.com/laibainqilab-ds) | Project Management, Calendar | 🟡 In Progress |
+| 04 | [@abihajibbran1-lang](https://github.com/abihajibbran1-lang) | Task Creation, Comments | 🟡 In Progress |
+| 05 | [@Bilalmughal-07](https://github.com/Bilalmughal-07) | Kanban Board, Notifications | 🟡 In Progress |
 | 06 | [@meowryam](https://github.com/meowryam) | Reports | 🟡 In Progress |
-| 07 | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | Team Members / Profile / Settings | 🟢 Completed |
+| 07 | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | Team Members, Profile, Settings | 🟢 Completed |
 | 08 | [@hassaanahmed-dev](https://github.com/hassaanahmed-dev) | Prompt Builder | 🟡 In Progress |
 | 09 | [@inshrahmumtaz](https://github.com/inshrahmumtaz) | Attendance and Breaks | 🟡 In Progress |
 | 10 | [@muhammad-haris2](https://github.com/muhammad-haris2) | Activity Log | 🟡 In Progress |
@@ -65,14 +65,14 @@
 ## 🏆 All 10 Interns Module Showcase
 
 <details open>
-<summary><b>1️⃣ 🖥️ Dashboard / Login / Frontend</b></summary>
+<summary><b>1️⃣ 🖥️ Dashboard, Login, Frontend</b></summary>
 <br/>
 
 **Assigned to**: [`@Salman-ahmed-2`](https://github.com/Salman-ahmed-2) and [`@TahaSohail-Goat`](https://github.com/TahaSohail-Goat)
 
 - 🏠 Central workspace dashboard with project, task, and attendance overview cards
 - 🔐 Role selector login screen for Admin, Team Lead, HR, and Team Member access
-- 🎨 Glassmorphism dark mode UI with cyan/purple gradient design system
+- 🎨 Glassmorphism dark mode UI with cyan and purple gradient design system
 - 📱 Responsive sidebar with collapsible navigation and keyboard shortcuts
 
 </details>
@@ -97,9 +97,9 @@
 **Assigned to**: [`@abihajibbran1-lang`](https://github.com/abihajibbran1-lang)
 
 - 📝 Protected task creation with approval routing through Team Lead
-- 💬 Asynchronous discussion threads on tasks with @mentions
+- 💬 Asynchronous discussion threads on tasks
 - 🚧 Blocker reporting with mandatory explanation requirement
-- 🔄 Status workflow: Todo, In Progress, Review, Done, Blocked
+- 🔄 Status workflow, moving through Todo, In Progress, Review, Done, and Blocked
 - 📎 File attachment upload for tasks and completion evidence
 
 </details>
@@ -111,7 +111,7 @@
 **Assigned to**: [`@Bilalmughal-07`](https://github.com/Bilalmughal-07)
 
 - 🎯 Drag and drop Kanban board with column based task flow management
-- 🔔 Real time notification inbox with read/unread state management
+- 🔔 Real time notification inbox with read and unread state management
 - 🏷️ Priority and status filters on the Kanban view
 - 📲 Push notification routing matrix for all workspace events
 
@@ -126,12 +126,12 @@
 - 📊 Project progress, overdue tasks, workload distribution, and completion trends
 - 💾 Saved report filters with scheduled generation support
 - 📤 Report export in multiple formats
-- 🔐 Role scoped report access (Admin: all, Team Lead: assigned projects, HR: attendance)
+- 🔐 Role scoped report access, Admin sees all, Team Lead sees assigned projects, HR sees attendance
 
 </details>
 
 <details open>
-<summary><b>6️⃣ 👥 Team Members / Personal Profile / Settings</b></summary>
+<summary><b>6️⃣ 👥 Team Members, Personal Profile, Settings</b></summary>
 <br/>
 
 **Assigned to**: [`@AbdulAzeemHashmi`](https://github.com/AbdulAzeemHashmi) 🟢
@@ -146,16 +146,16 @@
 **🧑 Personal Profile**
 - 🎨 Role aware profile hero banner with status indicator and GitHub link
 - ✏️ Edit Profile modal covering name, email, title, department, status, and GitHub handle
-- 🔴 Admin panel: System stats strip showing Active Users, Open Tasks, and Active Projects
-- 🟣 Team Lead panel: My Team tab showing reporting members with task counts
-- 🩷 HR panel: My HR Requests tab for submitted and reviewed HR requests
+- 🔴 Admin panel, showing System Stats strip with Active Users, Open Tasks, and Active Projects
+- 🟣 Team Lead panel, showing My Team tab with reporting members and task counts
+- 🩷 HR panel, showing My HR Requests tab for submitted and reviewed HR requests
 
 **⚙️ Settings**
-- 🌙 Dark/Light mode theme toggle
+- 🌙 Dark and Light mode theme toggle
 - 🔔 Email, In App, and Weekly Digest notification preference toggles
 - 🔒 Password update interface with inline validation feedback
-- ⏰ Office hours configuration (Admin/HR: edit, Team Lead: read only, Member: hidden)
-- 🛡️ Admin Safeguards: masked AI API key, JSON Vault export, and Sole Admin protection check
+- ⏰ Office hours configuration, Admin and HR can edit, Team Lead gets read only, Member has it hidden
+- 🛡️ Admin Safeguards, including a masked AI API key, JSON Vault export, and Sole Admin protection check
 
 </details>
 
@@ -182,7 +182,7 @@
 - ☕ Break timer with Lunch, Short Break, and Other break type categorization
 - 📋 Leave request submission (Casual, Sick, Annual, Unpaid) with HR review routing
 - 🩷 Attendance correction requests with HR approval workflow
-- 🚫 HR self approval prevention and Administrator fallback routing
+- 🚫 HR self approval prevention with Administrator fallback routing
 
 </details>
 
@@ -194,7 +194,7 @@
 
 - 📜 Append only activity log for all workspace operations
 - 🔍 Filter by actor, action type, target entity, and date range
-- 🏷️ Scope filtered views per role (Admin: all activity, others: scoped)
+- 🏷️ Scope filtered views per role, Admin sees all activity, others see a scoped view
 - 🔗 Action entries linked to target projects, tasks, attendance, and settings records
 
 </details>
@@ -203,7 +203,7 @@
 
 ## 🗄️ Database Architecture
 
-The system runs on **PostgreSQL 16+** normalized to **Third Normal Form (3NF)** with **70 tables** across **11 business schemas**.
+The system runs on **PostgreSQL 16+** normalized to **Third Normal Form (3NF)** with **70 tables** across **11 business schemas**. 🧠
 
 <div align="center">
 
@@ -257,12 +257,12 @@ flowchart TD
 
 | Feature | 🔴 Admin | 🟣 Team Lead | 🩷 HR | 🔵 Team Member |
 |---|:---:|:---:|:---:|:---:|
-| Create/Edit/Delete Projects | ✅ | Assigned only | ❌ | ❌ |
-| Create/Assign Tasks | ✅ | Assigned projects | ❌ | ❌ |
+| Create, Edit, Delete Projects | ✅ | Assigned only | ❌ | ❌ |
+| Create and Assign Tasks | ✅ | Assigned projects | ❌ | ❌ |
 | Approve Protected Changes | ✅ Override | Assigned projects | ❌ | ❌ |
 | View All Reports | ✅ | Assigned scope | Attendance only | Personal only |
 | Manage All Attendance | ✅ | ❌ | Within HR scope | ❌ |
-| Grant/Revoke Temp Roles | ✅ | ❌ | ❌ | ❌ |
+| Grant and Revoke Temp Roles | ✅ | ❌ | ❌ | ❌ |
 | Edit Own Profile | ✅ | ✅ | ✅ | ✅ |
 | View Team Members Tab | ✅ | ✅ | ✅ | ✅ |
 | View Admin Quick Stats | ✅ | ❌ | ❌ | ❌ |
@@ -285,11 +285,11 @@ flowchart TD
 
 | Category | Technology |
 |---|---|
-| ⚛️ Framework | React 18 + TypeScript 5.5 |
+| ⚛️ Framework | React 18 with TypeScript 5.5 |
 | ⚡ Build Tool | Vite 6.4 |
-| 🎨 Styling | Vanilla CSS + Tailwind CSS 3.4 + Custom Glassmorphism |
+| 🎨 Styling | Vanilla CSS, Tailwind CSS 3.4, and Custom Glassmorphism |
 | 🧩 Icons | Lucide React |
-| 🧠 State | React Context API + LocalStorage Persistence |
+| 🧠 State | React Context API with LocalStorage Persistence |
 | 🗄️ Database | PostgreSQL 16+ (70 tables, 11 schemas, 163 FK relations) |
 
 <br/>
@@ -389,6 +389,6 @@ Built with ❤️ by the **WorkSync Intern Team**
 
 [![GitHub Org](https://img.shields.io/badge/Repository-Salman--ahmed--2%2Fworksync-181717?style=flat-square&logo=github)](https://github.com/Salman-ahmed-2/worksync)
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=120&section=footer" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=150&section=footer" width="100%"/>
 
 </div>

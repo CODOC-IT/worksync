@@ -13,6 +13,8 @@ import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
 import { TasksView } from '../frontend/src/features/tasks/TasksView';
 import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssistantView';
+import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
+import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -111,6 +113,9 @@ const AppContent: React.FC = () => {
           {currentTab === 'tasks' && <TasksView />}
 
           {currentTab === 'ai-assistant' && <AIAssistantView />}
+          {currentTab === 'kanban' && <KanbanView />}
+
+          {currentTab === 'approvals' && <ApprovalsInboxView />}
 
           {currentTab === 'profile' && <ProfileView />}
 
