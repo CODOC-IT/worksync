@@ -167,6 +167,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Fetch persisted database users on mount
+  useEffect(() => {
+    fetch('/api/auth/users')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+          setUsers(data.users as User[]);
+        }
+      })
+      .catch(() => {
+        // Silently keep default users if offline
+      });
+  }, []);
+
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
