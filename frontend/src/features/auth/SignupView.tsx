@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
 import { Sparkles, Lock, Mail, User as UserIcon, Building2, Briefcase, Eye, EyeOff, ArrowRight, AlertCircle, Shield } from 'lucide-react';
+import { OTPVerificationView } from './OTPVerificationView';
 
 interface SignupViewProps {
   onSignupSuccess: () => void;
@@ -22,6 +23,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showOTP, setShowOTP] = useState<boolean>(false);
 
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,37 +42,39 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/register', {
+      // Send OTP to email first — registration happens after OTP verification
+      const res = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          email,
-          password,
-          role,
-          department,
-          title: title || `${role.replace('_', ' ')} Specialist`
-        })
+        body: JSON.stringify({ email, name })
       });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Registration failed.');
-      }
-
-      if (data.token) {
-        localStorage.setItem('worksync_auth_token', data.token);
-      }
-
-      setRole(role);
-      onSignupSuccess();
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to send verification code.');
+      setShowOTP(true);
     } catch (err: any) {
       setErrorMsg(err.message || 'Registration failed.');
     } finally {
       setLoading(false);
     }
   };
+
+  const handleOTPSuccess = (_token: string, user: any) => {
+    const userRole: UserRole = user?.role || role;
+    setRole(userRole);
+    onSignupSuccess();
+  };
+
+  if (showOTP) {
+    return (
+      <OTPVerificationView
+        email={email}
+        name={name}
+        registrationData={{ password, role, department, title: title || `${role.replace('_', ' ')} Specialist` }}
+        onVerifySuccess={handleOTPSuccess}
+        onBack={() => setShowOTP(false)}
+      />
+    );
+  }
 
   return (
     <div

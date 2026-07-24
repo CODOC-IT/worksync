@@ -3,11 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import assistantRoutes from './routes/assistantRoutes.js';
+import otpRoutes from './routes/otpRoutes.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
 
 dotenv.config();
 
-// Fail-fast security check on boot
+// Fail-fast security checks on boot
 validateAuthConfig();
 
 const app = express();
@@ -19,6 +20,7 @@ app.use(express.json({ limit: '1mb' }));
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/assistant', assistantRoutes);
+app.use('/api/otp', otpRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
