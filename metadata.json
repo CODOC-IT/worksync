@@ -1,0 +1,6 @@
+{
+  "name": "Office Management System",
+  "description": "Kinetic Glass frontend prototype for project management, attendance, HR requests, AI assistant, and office workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
