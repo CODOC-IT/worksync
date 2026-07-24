@@ -1,14 +1,19 @@
 import { Resend } from 'resend';
 
-const resendApiKey = process.env.RESEND_API_KEY;
-const fromEmail = process.env.RESEND_FROM_EMAIL || 'WorkSync <onboarding@resend.dev>';
+const PLACEHOLDER = 're_your_resend_api_key_here';
 
-if (!resendApiKey) {
-  console.error('[FATAL] RESEND_API_KEY is not set in environment variables. Server cannot send OTP emails.');
-  if (process.env.NODE_ENV !== 'test') process.exit(1);
-}
+export const isEmailConfigured = (): boolean => {
+  const key = process.env.RESEND_API_KEY;
+  return Boolean(key && key !== PLACEHOLDER && key.startsWith('re_'));
+};
 
-const resend = new Resend(resendApiKey || '');
+const getResendClient = () => {
+  const key = process.env.RESEND_API_KEY || 'placeholder';
+  return new Resend(key);
+};
+
+const getFromEmail = () =>
+  process.env.RESEND_FROM_EMAIL || 'WorkSync <onboarding@resend.dev>';
 
 export const sendOTPEmail = async (toEmail: string, name: string, otp: string): Promise<void> => {
   const html = `
@@ -74,6 +79,9 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
   </table>
 </body>
 </html>`;
+
+  const resend = getResendClient();
+  const fromEmail = getFromEmail();
 
   const { error } = await resend.emails.send({
     from: fromEmail,

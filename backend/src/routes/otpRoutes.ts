@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { otpStore } from '../store/otpStore.js';
-import { sendOTPEmail } from '../services/emailService.js';
+import { sendOTPEmail, isEmailConfigured } from '../services/emailService.js';
 import { userStore } from '../store/userStore.js';
 import { UserRole } from '../types.js';
 
@@ -11,6 +11,11 @@ const router = Router();
 router.post('/send', async (req, res: Response): Promise<void> => {
   try {
     const { email, name } = req.body;
+
+    if (!isEmailConfigured()) {
+      res.status(503).json({ success: false, message: 'Email service is not configured. Please add a valid RESEND_API_KEY to your .env file.' });
+      return;
+    }
 
     if (!email || !name) {
       res.status(400).json({ success: false, message: 'Email and name are required.' });
