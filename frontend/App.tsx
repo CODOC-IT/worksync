@@ -6,10 +6,12 @@ import { GlobalSearchModal } from '../frontend/src/components/common/GlobalSearc
 import { ShortcutsModal } from '../frontend/src/components/common/ShortcutsModal';
 
 // Features
+import { LoginView } from '../frontend/src/features/auth/LoginView';
+import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
-
+import { TasksView } from '../frontend/src/features/tasks/TasksView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -40,7 +42,21 @@ const AppContent: React.FC = () => {
   }, []);
 
   if (currentTab === 'login') {
-    return <LoginView onLoginSuccess={() => setCurrentTab('dashboard')} />;
+    return (
+      <LoginView
+        onLoginSuccess={() => setCurrentTab('dashboard')}
+        onSwitchToSignup={() => setCurrentTab('signup')}
+      />
+    );
+  }
+
+  if (currentTab === 'signup') {
+    return (
+      <SignupView
+        onSignupSuccess={() => setCurrentTab('dashboard')}
+        onSwitchToLogin={() => setCurrentTab('login')}
+      />
+    );
   }
 
   const handleNavigate = (tab: string, _filterId?: string) => {
@@ -90,6 +106,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
 
           {currentTab === 'projects' && <ProjectsView />}
+
+          {currentTab === 'tasks' && <TasksView />}
 
           {currentTab === 'profile' && <ProfileView />}
 
