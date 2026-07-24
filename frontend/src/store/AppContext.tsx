@@ -103,7 +103,7 @@ const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [currentRole, setCurrentRole] = useState<UserRole>('Manager');
+  const [currentRole, setCurrentRole] = useState<UserRole>('Admin');
   const [currentUser, setCurrentUser] = useState<User>(INITIAL_USERS[0]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
@@ -191,9 +191,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActivityLogs((prev) => [newAct, ...prev]);
   };
 
-  // Create Project (Role Enforcement: TL creation needs Manager approval)
+  // Create Project (Role Enforcement: TL creation needs Admin approval)
   const createProject = (data: Partial<Project>) => {
-    const isManager = currentRole === 'Manager';
+    const isAdmin = currentRole === 'Admin';
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
     
@@ -202,8 +202,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status: isManager ? 'Active' : 'Pending Approval',
-      approvalStatus: isManager ? 'Approved' : 'Pending Approval',
+      status: isAdmin ? 'Active' : 'Pending Approval',
+      approvalStatus: isAdmin ? 'Approved' : 'Pending Approval',
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
       memberIds: data.memberIds || [currentUser.id],
@@ -218,8 +218,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProjects((prev) => [newProject, ...prev]);
 
-    if (!isManager) {
-      // Create System Approval for Manager
+    if (!isAdmin) {
+      // Create System Approval for Admin
       const approval: SystemApproval = {
         id: `app-${Date.now()}`,
         type: 'Project_Creation',
@@ -228,12 +228,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requestedBy: currentUser.id,
         requestedRole: currentRole,
         createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Manager approval.`,
+        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
         status: 'Pending'
       };
       setSystemApprovals((prev) => [approval, ...prev]);
       
-      // Notify Managers
+      // Notify Admins
       const notif: NotificationItem = {
         id: `notif-${Date.now()}`,
         userId: 'usr-1',
@@ -332,7 +332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Controlled Field Edits (Team Member submits -> TL/Manager approves)
+  // Controlled Field Edits (Team Member submits -> TL/Admin approves)
   const proposeControlledEdit = (
     taskId: string,
     field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status',
@@ -610,17 +610,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  // Deactivate Manager Safeguard Check
+  // Deactivate Admin Safeguard Check
   const deactivateUser = (userId: string) => {
     const targetUser = users.find((u) => u.id === userId);
     if (!targetUser) return { success: false, message: 'User not found.' };
 
-    if (targetUser.role === 'Manager') {
-      const activeManagersCount = users.filter((u) => u.role === 'Manager' && u.status === 'active').length;
-      if (activeManagersCount <= 1) {
+    if (targetUser.role === 'Admin') {
+      const activeAdminsCount = users.filter((u) => u.role === 'Admin' && u.status === 'active').length;
+      if (activeAdminsCount <= 1) {
         return {
           success: false,
-          message: 'Action Blocked: Cannot deactivate the sole active Manager account in the system.'
+          message: 'Action Blocked: Cannot deactivate the sole active Admin account in the system.'
         };
       }
     }

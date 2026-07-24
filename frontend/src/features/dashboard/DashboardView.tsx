@@ -67,7 +67,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             Welcome back, <span className="text-gradient-neon">{currentUser.name}</span>
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            {currentRole === 'Manager' && 'System Oversight Active: 1 pending project, 1 task creation, and 1 controlled edit requiring decision.'}
+            {currentRole === 'Admin' && 'System Oversight Active: 1 pending project, 1 task creation, and 1 controlled edit requiring decision.'}
             {currentRole === 'Team_Lead' && 'Team Operations Active: Manage projects, approve controlled field edits, and track milestones.'}
             {currentRole === 'HR' && 'People Operations Active: 3 attendance corrections and leave exceptions waiting in your HR queue.'}
             {currentRole === 'Team_Member' && 'My Workstation Active: Track assigned tasks, log attendance/breaks, and craft AI PR templates.'}
@@ -76,7 +76,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
         {/* Quick Action Button Bar */}
         <div className="flex flex-wrap items-center gap-2">
-          {(currentRole === 'Manager' || currentRole === 'Team_Lead') && (
+          {(currentRole === 'Admi' || currentRole === 'Team_Lead') && (
             <button
               onClick={() => onNavigate('projects')}
               className="px-3 py-2 rounded-xl glass-button-neon text-xs font-semibold flex items-center gap-1.5 shadow"
@@ -243,8 +243,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           )}
 
-          {/* Manager & Team Lead Pending Approvals Queue */}
-          {(currentRole === 'Manager' || currentRole === 'Team_Lead') && (
+          {/* Admi & Team Lead Pending Approvals Queue */}
+          {(currentRole === 'Admi' || currentRole === 'Team_Lead') && (
             <div className="glass-panel p-5 border border-amber-500/30">
               <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
