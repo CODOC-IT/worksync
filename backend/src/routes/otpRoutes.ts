@@ -38,6 +38,16 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    // Check if name is already taken by another user
+    const nameExists = userStore.findByName(name.trim());
+    if (nameExists) {
+      res.status(409).json({
+        success: false,
+        message: `The name "${name.trim()}" is already registered. Please choose a different name.`
+      });
+      return;
+    }
+
     // Email format check
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email.trim())) {
