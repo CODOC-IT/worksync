@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=220&section=header&text=WorkSync%10Core&fontSize=52&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=75&descSize=20" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=220&section=header&text=WorkSync%10Core&fontSize=52&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=75&descSize=16" width="100%"/>
 
 [![Vite](https://img.shields.io/badge/Vite-6.4.3-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![React](https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
