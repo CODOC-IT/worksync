@@ -68,7 +68,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
           </div>
           <div>
             <h2 className="text-lg font-bold text-white">Keyboard Shortcuts Help</h2>
-            <p className="text-xs text-slate-400">Boost your workflow productivity across Kinetic OS</p>
+            <p className="text-xs text-slate-400">Boost your workflow productivity across Worksync</p>
           </div>
         </div>
 

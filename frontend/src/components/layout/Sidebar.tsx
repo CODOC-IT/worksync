@@ -82,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div>
               <span className="font-bold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
-                KINETIC OS
+                Worksync
               </span>
               <p className="text-[10px] text-slate-400 font-mono tracking-wider">OFFICE CORE</p>
             </div>
