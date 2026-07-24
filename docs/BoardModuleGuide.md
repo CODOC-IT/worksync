@@ -32,9 +32,10 @@ module), sending real notifications (Notification module), authentication, user 
 | `frontend/src/features/kanban/boardAccess.ts` | Pure, colocated permission/scoping helpers (new) |
 | `frontend/src/types/index.ts` | Added `TaskStatusHistoryEntry`, `ReviewApprovalStatus`, and two optional fields on `Task` |
 | `frontend/src/store/AppContext.tsx` | Extended the pre-existing (previously unused) `updateTaskStatus` action to append history + drive the approval state machine |
-| `frontend/App.tsx` | Added the `currentTab === 'kanban'` render case |
-| `frontend/src/components/layout/Sidebar.tsx` | **Not modified** — the `kanban` nav entry already existed |
-| `frontend/src/features/tasks/taskRules.ts` | **Not modified** — `canEditTask` and `isTaskOverdue` are imported/reused as-is |
+| `frontend/App.tsx` | Added the `currentTab === 'kanban'` and `currentTab === 'approvals'` render cases |
+| `frontend/src/components/layout/Sidebar.tsx` | **Not modified** — the `kanban`/`approvals` nav entries already existed |
+| `frontend/src/features/tasks/taskRules.ts` | **Not modified** — `canEditTask`, `isTaskOverdue`, `getTaskStartDate` are imported/reused as-is |
+| `frontend/src/features/approvals/ApprovalsInboxView.tsx` | Implemented alongside the board by explicit request — see §17, a related but distinct approval mechanism |
 
 ## 4. Why `board.js` / `board.css` were not reused
 
@@ -231,3 +232,30 @@ a single shared audit trail for both surfaces.
 spent per column, review rejection rate, etc.) without the Reports module needing to touch the
 board's own code — it can read `tasks.flatMap(t => t.statusHistory ?? [])` directly from
 `AppContext`, the same way it already reads `tasks`/`projects` today.
+
+## 17. Relationship to the Approvals Inbox (`frontend/src/features/approvals/`)
+
+`ApprovalsInboxView.tsx` was implemented alongside the board (by explicit request, beyond the
+original board-only brief) because it had the same problem as the board: the `approvals` nav
+item and its pending-count badge already existed in `Sidebar.tsx`, but the view file was an
+empty stub and `App.tsx` had no render case for it, so it was unreachable. It reuses the
+already-existing `systemApprovals` state and `approveApprovalItem`/`rejectApprovalItem`
+actions in `AppContext.tsx` — no new state was added for it.
+
+**This is a separate approval mechanism from the board's own Review workflow (§11) — don't
+conflate them:**
+
+| | Approvals Inbox | Board's Review → Done gate |
+|---|---|---|
+| Data | `SystemApproval[]` (`systemApprovals`) | `Task.status` / `Task.reviewApproval` |
+| Approves | Project creation, task creation, controlled field edits | A task's Review-column submission |
+| Decided by | Admin (always); Team Lead (only for projects they lead; never project-creation) | Admin, or the Team Lead of that task's project |
+| Where | `/approvals` screen | Inline on the board's `Review` column cards |
+
+They happen to share the same two roles as decision-makers, which is why a Team Lead's
+`canDecide` check in `ApprovalsInboxView.tsx` mirrors the same "only for projects they lead"
+rule as `canDecideReview` in `boardAccess.ts` — but they are intentionally two separate,
+independently callable functions (one keyed by `SystemApproval.targetId`'s owning project, the
+other by `Project.teamLeadId` directly) rather than a shared abstraction, since the two
+approval domains may diverge later (e.g. multi-step approval chains for one but not the
+other).
