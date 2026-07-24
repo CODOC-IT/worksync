@@ -12,6 +12,7 @@ import { DashboardView } from '../frontend/src/features/dashboard/DashboardView'
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
 import { TasksView } from '../frontend/src/features/tasks/TasksView';
+import { AttendanceView } from '../frontend/src/features/attendance/AttendanceView';
 import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssistantView';
 import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
@@ -106,6 +107,10 @@ const AppContent: React.FC = () => {
 
         {/* Main Scrollable View Area */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
+         {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
+{currentTab === 'tasks' && <TasksView />}
+{currentTab === 'attendance' && <AttendanceView />}
+{currentTab === 'profile' && <ProfileView />}
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
 
           {currentTab === 'projects' && <ProjectsView />}
