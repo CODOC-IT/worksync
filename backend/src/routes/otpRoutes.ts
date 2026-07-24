@@ -27,6 +27,17 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    const nameParts = name.trim().split(/\s+/).filter(Boolean);
+    if (nameParts.length < 2) {
+      res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
+      return;
+    }
+
+    if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
+      res.status(400).json({ success: false, message: 'First name and last name cannot be the same.' });
+      return;
+    }
+
     // Email format check
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email.trim())) {
