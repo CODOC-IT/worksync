@@ -1,21 +1,24 @@
+import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 
 const BREVO_PLACEHOLDER = 'xkeysib-your-brevo-api-key-here';
 const RESEND_PLACEHOLDER = 're_your_resend_api_key_here';
 
 export const isEmailConfigured = (): boolean => {
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
   const brevoKey = process.env.BREVO_API_KEY;
   const resendKey = process.env.RESEND_API_KEY;
 
+  const hasSmtp = Boolean(smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here');
   const hasBrevo = Boolean(brevoKey && brevoKey !== BREVO_PLACEHOLDER && brevoKey.startsWith('xkeysib-'));
   const hasResend = Boolean(resendKey && resendKey !== RESEND_PLACEHOLDER && resendKey.startsWith('re_'));
 
-  return hasBrevo || hasResend;
+  return hasSmtp || hasBrevo || hasResend;
 };
 
 const getSenderInfo = () => {
-  const fromEnv = process.env.BREVO_SENDER_EMAIL || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-  // Parse name and email if in "Name <email@domain.com>" format
+  const fromEnv = process.env.SMTP_USER || process.env.BREVO_SENDER_EMAIL || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
   const match = fromEnv.match(/^(?:"?([^"]*)"?\s)?<([^>]+)>$/);
   if (match) {
     return { name: match[1] || 'WorkSync', email: match[2] };
@@ -88,11 +91,34 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
 </body>
 </html>`;
 
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
   const brevoKey = process.env.BREVO_API_KEY;
   const resendKey = process.env.RESEND_API_KEY;
   const sender = getSenderInfo();
 
-  // Try Brevo first if key starts with xkeysib-
+  // 1. Try Nodemailer Gmail SMTP if configured
+  if (smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here') {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: smtpUser,
+        pass: smtpPass
+      }
+    });
+
+    await transporter.sendMail({
+      from: `"WorkSync" <${smtpUser}>`,
+      to: toEmail,
+      subject: `${otp} is your WorkSync verification code`,
+      html: htmlContent
+    });
+
+    console.log(`[Nodemailer SMTP] OTP email sent successfully to ${toEmail} ✓`);
+    return;
+  }
+
+  // 2. Try Brevo API if key provided
   if (brevoKey && brevoKey.startsWith('xkeysib-')) {
     const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
@@ -118,7 +144,7 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
     return;
   }
 
-  // Fallback to Resend
+  // 3. Try Resend API as fallback
   if (resendKey && resendKey.startsWith('re_')) {
     const resend = new Resend(resendKey);
     const { error } = await resend.emails.send({
@@ -136,5 +162,5 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
     return;
   }
 
-  throw new Error('No valid email provider API key found (BREVO_API_KEY or RESEND_API_KEY).');
+  throw new Error('No email credentials configured. Please set SMTP_USER & SMTP_PASS in .env for Gmail SMTP.');
 };
