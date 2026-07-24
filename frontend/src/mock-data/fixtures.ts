@@ -20,7 +20,7 @@ export const INITIAL_USERS: User[] = [
     id: 'usr-1',
     name: 'Alexander Wright',
     email: 'alexander.w@cyberoffice.io',
-    role: 'Manager',
+    role: 'Admin',
     department: 'Executive Operations',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     title: 'Managing Director & Operations Oversight',
@@ -184,7 +184,7 @@ export const INITIAL_PROJECTS: Project[] = [
     description: 'Ultra-low latency web-sockets messaging with pinned message caps, @mentions, and file previews.',
     status: 'Pending Approval',
     approvalStatus: 'Pending Approval',
-    createdBy: 'usr-2', // Team Lead created -> needs Manager approval!
+    createdBy: 'usr-2', // Team Lead created -> needs Admin approval!
     teamLeadId: 'usr-2',
     memberIds: ['usr-2', 'usr-7'],
     startDate: '2026-08-01',
@@ -201,7 +201,7 @@ export const INITIAL_PROJECTS: Project[] = [
     id: 'prj-5',
     code: 'PROJ-QA',
     title: 'Zero-Trust Security & Backup Vault',
-    description: 'Automated database snapshots, manager two-step deactivation flow safeguards, and audit log vault.',
+    description: 'Automated database snapshots, Admin two-step deactivation flow safeguards, and audit log vault.',
     status: 'Active',
     approvalStatus: 'Approved',
     createdBy: 'usr-1',
@@ -210,7 +210,7 @@ export const INITIAL_PROJECTS: Project[] = [
     startDate: '2026-04-01',
     targetDate: '2026-07-30',
     progress: 95,
-    tags: ['Security', 'DevOps', 'Manager Oversight'],
+    tags: ['Security', 'DevOps', 'Admin Oversight'],
     pinnedMessagesCount: 3,
     milestones: [
       { id: 'm-10', title: 'Database Export & Snapshot Utility', dueDate: '2026-07-01', completed: true }
@@ -363,7 +363,7 @@ export const INITIAL_TASKS: Task[] = [
     creatorId: 'usr-2',
     dueDate: '2026-08-05',
     estimatedHours: 6,
-    approvalStatus: 'Pending Approval', // Pending Manager Approval!
+    approvalStatus: 'Pending Approval', // Pending Admin Approval!
     tags: ['Chat', 'Pending Approval'],
     dependencies: [],
     subtasks: [],
@@ -404,8 +404,8 @@ export const INITIAL_TASKS: Task[] = [
     id: 'tsk-108',
     taskNumber: 'QA-03',
     projectId: 'prj-5',
-    title: 'Two-Step Manager Deactivation Confirmation Modal',
-    description: 'Build fail-safe dialog flow requiring explicit second confirmation and preventing deactivation of the last Manager.',
+    title: 'Two-Step Admin Deactivation Confirmation Modal',
+    description: 'Build fail-safe dialog flow requiring explicit second confirmation and preventing deactivation of the last Admin.',
     status: 'In Progress',
     priority: 'High',
     assigneeId: 'usr-7',
@@ -413,10 +413,10 @@ export const INITIAL_TASKS: Task[] = [
     dueDate: '2026-07-28',
     estimatedHours: 8,
     approvalStatus: 'Approved',
-    tags: ['Security', 'Settings', 'Manager Oversight'],
+    tags: ['Security', 'Settings', 'Admin Oversight'],
     dependencies: [],
     subtasks: [
-      { id: 'sub-10', title: 'Check count of active Managers before allowing submit', completed: true },
+      { id: 'sub-10', title: 'Check count of active Admins before allowing submit', completed: true },
       { id: 'sub-11', title: 'Step 2 secondary password/phrase confirmation UI', completed: true }
     ],
     attachments: [],
@@ -580,7 +580,7 @@ export const INITIAL_CHAT_MESSAGES: ChatMessage[] = [
     id: 'msg-4',
     projectId: 'prj-1',
     senderId: 'usr-1',
-    message: 'Great progress. Remember that all controlled field edits must be routed for Team Lead/Manager approval.',
+    message: 'Great progress. Remember that all controlled field edits must be routed for Team Lead/Admin approval.',
     timestamp: 'Today, 10:30',
     isPinned: true
   }
@@ -611,7 +611,7 @@ export const INITIAL_AI_LOGS: AIQueryLog[] = [
     id: 'qlog-3',
     userId: 'usr-1',
     userName: 'Alexander Wright',
-    userRole: 'Manager',
+    userRole: 'Admin',
     queryText: 'System-wide audit of pending project approvals and HR attendance exceptions.',
     scopeTouched: 'All Projects (6), System Approvals (3), HR Requests (3)',
     timestamp: '2026-07-23 17:30',
@@ -658,9 +658,9 @@ export const INITIAL_AI_AUDIT: AIUsageAudit[] = [
 export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   {
     id: 'notif-1',
-    userId: 'usr-1', // Manager
+    userId: 'usr-1', // Admin
     title: 'New Project Pending Approval',
-    message: 'Elena Rostova created project "OmniStream Realtime Communication". Manager approval required.',
+    message: 'Elena Rostova created project "OmniStream Realtime Communication". Admin approval required.',
     type: 'approval',
     read: false,
     timestamp: '1 hr ago',
@@ -718,7 +718,7 @@ export const INITIAL_ACTIVITY_LOGS: ActivityLogItem[] = [
     diff: {
       field: 'approvalStatus',
       oldVal: 'Draft',
-      newVal: 'Pending Manager Approval'
+      newVal: 'Pending Admin Approval'
     }
   },
   {
