@@ -182,6 +182,16 @@ Todo ⇄ In Progress ⇄ Review  →  (Team Lead / Admin decision)  →  Done
   step regardless of who is doing it. This is a deliberate simplification — see §13 for the
   natural follow-up.
 
+### Assignee overflow
+
+A card shows at most 2 assignee names inline; beyond that, a `+N` chip appears. Hovering or
+clicking the chip reveals every assigned member's full name. The popover is rendered via
+`createPortal` into `document.body` with `position: fixed` coordinates computed from the
+trigger's `getBoundingClientRect()` — a plain `position: absolute` tooltip would get clipped by
+the board column's `overflow-y-auto` scroll container (and, separately, by the containing-block
+change `.glass-panel`'s `backdrop-filter` introduces for `position: fixed` descendants), so the
+portal is required for correctness, not just convenience.
+
 ## 12. Current Limitations
 
 - `Blocked`-status tasks are not surfaced on the board (see §8).

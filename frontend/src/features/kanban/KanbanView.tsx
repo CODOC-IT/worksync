@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   ArrowRight,
@@ -427,10 +428,7 @@ const BoardCard: React.FC<{
       {isInReview && <StatusBadge status="Pending Approval" size="sm" />}
 
       <div className="space-y-1.5 border-t border-white/5 pt-2 text-[11px] text-slate-400">
-        <div className="flex items-center gap-1.5">
-          <UsersIcon size={12} className="shrink-0 text-slate-500" />
-          <span className="truncate">{assignees.length ? assignees.join(', ') : 'Unassigned'}</span>
-        </div>
+        <AssigneesDisplay names={assignees} />
         <div className="flex items-center gap-1.5">
           <CalendarClock size={12} className="shrink-0 text-slate-500" />
           <span>Start {formatDate(startDate)}</span>
@@ -484,6 +482,76 @@ const BoardCard: React.FC<{
           </button>
         </div>
       )}
+    </div>
+  );
+};
+
+// Shows up to two assignee names inline; any remaining names collapse into a "+N" chip
+// whose hover/click reveals every full name in a portal-rendered popover (so it never gets
+// clipped by the board column's scroll container).
+const AssigneesDisplay: React.FC<{ names: string[] }> = ({ names }) => {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  if (names.length === 0) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <UsersIcon size={12} className="shrink-0 text-slate-500" />
+        <span className="truncate">Unassigned</span>
+      </div>
+    );
+  }
+
+  const visibleNames = names.slice(0, 2);
+  const overflowCount = names.length - visibleNames.length;
+
+  const openTooltip = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setCoords({ top: rect.top - 8, left: Math.min(rect.left, window.innerWidth - 232) });
+    }
+    setOpen(true);
+  };
+  const closeTooltip = () => setOpen(false);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <UsersIcon size={12} className="shrink-0 text-slate-500" />
+      <span className="truncate">{visibleNames.join(', ')}</span>
+      {overflowCount > 0 && (
+        <button
+          ref={triggerRef}
+          type="button"
+          onMouseEnter={openTooltip}
+          onMouseLeave={closeTooltip}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (open) closeTooltip();
+            else openTooltip();
+          }}
+          className="shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold text-slate-300 transition hover:border-cyan-400/40 hover:text-cyan-300"
+          aria-label={`Show all ${names.length} assigned members`}
+        >
+          +{overflowCount}
+        </button>
+      )}
+      {open &&
+        coords &&
+        createPortal(
+          <div
+            style={{ position: 'fixed', top: coords.top, left: coords.left, transform: 'translateY(-100%)' }}
+            className="glass-panel-glow pointer-events-none z-50 w-max max-w-[220px] p-2.5 text-[11px] normal-case text-slate-200 shadow-xl"
+          >
+            <span className="mb-1 block text-[9px] uppercase tracking-wider text-slate-500">Assigned to</span>
+            <ul className="space-y-0.5">
+              {names.map((name) => (
+                <li key={name} className="truncate">{name}</li>
+              ))}
+            </ul>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
