@@ -3,6 +3,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
     --bg-canvas: #090a0f;
@@ -16,6 +17,7 @@
   }
 
   .light {
+    color-scheme: light;
     --bg-canvas: #f1f4f9;
     --surface-glass: rgba(255, 255, 255, 0.92);
     --surface-glass-border: rgba(0, 0, 0, 0.12);
