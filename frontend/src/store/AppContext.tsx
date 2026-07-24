@@ -46,6 +46,7 @@ import {
   prepareTaskUpdate,
   toTaskFormInput
 } from '../features/tasks/taskMutations';
+import { loadTasksFromSupabase } from '../features/tasks/taskRepository';
 
 interface AppState {
   currentRole: UserRole;
@@ -168,6 +169,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const hydrateTasks = async () => {
+      try {
+        const remoteTasks = await loadTasksFromSupabase(projects);
+        if (isActive && remoteTasks !== null) {
+          setTasks(remoteTasks);
+        }
+      } catch (error) {
+        console.warn(
+          'Supabase task query failed; continuing with local task data.',
+          error
+        );
+      }
+    };
+
+    void hydrateTasks();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   // Break Timer Interval Effect
