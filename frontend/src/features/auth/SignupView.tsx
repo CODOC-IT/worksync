@@ -67,6 +67,19 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       return;
     }
 
+    // Full Name must contain at least two words
+    const nameParts = name.trim().split(/\s+/).filter(Boolean);
+    if (nameParts.length < 2) {
+      setErrorMsg('Full Name must include both first and last name (e.g. "John Doe").');
+      return;
+    }
+
+    // The two name parts must not be identical
+    if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
+      setErrorMsg('First name and last name cannot be the same.');
+      return;
+    }
+
     // 2. Email Regex Validation
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email.trim())) {
