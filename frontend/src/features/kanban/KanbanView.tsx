@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   Calendar,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -19,10 +20,11 @@ import { Project, Task, TaskPriority, TaskStatus, User, UserRole } from '../../t
 import {
   canEditTask,
   getTaskAssigneeIds,
+  getTaskStartDate,
   getTaskStatusLabel,
   isTaskOverdue
 } from '../tasks/taskRules';
-import { BOARD_COLUMNS, canDecideReview, getAccessibleProjects } from './boardAccess';
+import { BOARD_COLUMNS, canDecideReview, getAccessibleProjects, getDueDateIndicator } from './boardAccess';
 
 const inputClass =
   'w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10';
@@ -387,6 +389,8 @@ const BoardCard: React.FC<{
   const canDrag = canEditTask(currentRole, currentUserId, project, task) && task.status !== 'Done';
   const canDecide = canDecideReview(currentRole, currentUserId, project);
   const overdue = isTaskOverdue(task, today);
+  const dueIndicator = getDueDateIndicator(task.dueDate, today, task.status === 'Done');
+  const startDate = getTaskStartDate(task);
   const assignees = getTaskAssigneeIds(task)
     .map((id) => users.find((user) => user.id === id)?.name)
     .filter((name): name is string => Boolean(name));
@@ -427,12 +431,18 @@ const BoardCard: React.FC<{
           <UsersIcon size={12} className="shrink-0 text-slate-500" />
           <span className="truncate">{assignees.length ? assignees.join(', ') : 'Unassigned'}</span>
         </div>
-        <div className={`flex items-center gap-1.5 ${overdue ? 'font-semibold text-rose-300' : ''}`}>
+        <div className="flex items-center gap-1.5">
+          <CalendarClock size={12} className="shrink-0 text-slate-500" />
+          <span>Start {formatDate(startDate)}</span>
+        </div>
+        <div className={`flex flex-wrap items-center gap-1.5 ${overdue ? 'font-semibold text-rose-300' : ''}`}>
           <Calendar size={12} className="shrink-0 text-slate-500" />
-          <span>{formatDate(task.dueDate)}</span>
-          {overdue && (
-            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-300">
-              Overdue
+          <span>Due {formatDate(task.dueDate)}</span>
+          {dueIndicator && (
+            <span
+              className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${dueIndicator.className}`}
+            >
+              {dueIndicator.label}
             </span>
           )}
         </div>
