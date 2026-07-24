@@ -49,7 +49,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
     });
   } catch (error: any) {
     console.error('[OTP Send Error]', error.message);
-    res.status(500).json({ success: false, message: 'Failed to send verification email. Please try again.' });
+    res.status(400).json({ success: false, message: error.message || 'Failed to send verification email. Please try again.' });
   }
 });
 

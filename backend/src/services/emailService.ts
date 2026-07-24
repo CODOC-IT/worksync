@@ -1,22 +1,30 @@
 import { Resend } from 'resend';
 
-const PLACEHOLDER = 're_your_resend_api_key_here';
+const BREVO_PLACEHOLDER = 'xkeysib-your-brevo-api-key-here';
+const RESEND_PLACEHOLDER = 're_your_resend_api_key_here';
 
 export const isEmailConfigured = (): boolean => {
-  const key = process.env.RESEND_API_KEY;
-  return Boolean(key && key !== PLACEHOLDER && key.startsWith('re_'));
+  const brevoKey = process.env.BREVO_API_KEY;
+  const resendKey = process.env.RESEND_API_KEY;
+
+  const hasBrevo = Boolean(brevoKey && brevoKey !== BREVO_PLACEHOLDER && brevoKey.startsWith('xkeysib-'));
+  const hasResend = Boolean(resendKey && resendKey !== RESEND_PLACEHOLDER && resendKey.startsWith('re_'));
+
+  return hasBrevo || hasResend;
 };
 
-const getResendClient = () => {
-  const key = process.env.RESEND_API_KEY || 'placeholder';
-  return new Resend(key);
+const getSenderInfo = () => {
+  const fromEnv = process.env.BREVO_SENDER_EMAIL || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  // Parse name and email if in "Name <email@domain.com>" format
+  const match = fromEnv.match(/^(?:"?([^"]*)"?\s)?<([^>]+)>$/);
+  if (match) {
+    return { name: match[1] || 'WorkSync', email: match[2] };
+  }
+  return { name: 'WorkSync', email: fromEnv };
 };
-
-const getFromEmail = () =>
-  process.env.RESEND_FROM_EMAIL || 'WorkSync <onboarding@resend.dev>';
 
 export const sendOTPEmail = async (toEmail: string, name: string, otp: string): Promise<void> => {
-  const html = `
+  const htmlContent = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -80,18 +88,53 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
 </body>
 </html>`;
 
-  const resend = getResendClient();
-  const fromEmail = getFromEmail();
+  const brevoKey = process.env.BREVO_API_KEY;
+  const resendKey = process.env.RESEND_API_KEY;
+  const sender = getSenderInfo();
 
-  const { error } = await resend.emails.send({
-    from: fromEmail,
-    to: toEmail,
-    subject: `${otp} is your WorkSync verification code`,
-    html
-  });
+  // Try Brevo first if key starts with xkeysib-
+  if (brevoKey && brevoKey.startsWith('xkeysib-')) {
+    const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'api-key': brevoKey
+      },
+      body: JSON.stringify({
+        sender,
+        to: [{ email: toEmail, name }],
+        subject: `${otp} is your WorkSync verification code`,
+        htmlContent
+      })
+    });
 
-  if (error) {
-    throw new Error(`Failed to send OTP email: ${error.message}`);
+    if (!brevoResponse.ok) {
+      const errorData = await brevoResponse.json();
+      throw new Error(`Brevo Error: ${errorData.message || brevoResponse.statusText}`);
+    }
+
+    console.log(`[Brevo] OTP email sent successfully to ${toEmail} ✓`);
+    return;
   }
-  console.log(`[Resend] OTP email sent to ${toEmail} ✓`);
+
+  // Fallback to Resend
+  if (resendKey && resendKey.startsWith('re_')) {
+    const resend = new Resend(resendKey);
+    const { error } = await resend.emails.send({
+      from: `${sender.name} <${sender.email}>`,
+      to: toEmail,
+      subject: `${otp} is your WorkSync verification code`,
+      html: htmlContent
+    });
+
+    if (error) {
+      throw new Error(`Resend Error: ${error.message}`);
+    }
+
+    console.log(`[Resend] OTP email sent successfully to ${toEmail} ✓`);
+    return;
+  }
+
+  throw new Error('No valid email provider API key found (BREVO_API_KEY or RESEND_API_KEY).');
 };
