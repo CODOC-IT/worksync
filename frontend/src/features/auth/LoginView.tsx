@@ -77,7 +77,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
   };
 
   return (
-    <div className="min-h-screen w-screen flex items-center justify-center bg-[#090a0f] text-slate-100 p-4 relative overflow-hidden cursor-glow-container">
+    <div
+      className="min-h-screen w-screen flex items-center justify-center bg-[#090a0f] text-slate-100 p-4 relative overflow-hidden cursor-glow-container bg-cover bg-center bg-no-repeat"
+      style={{
+        backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.82), rgba(9, 10, 15, 0.94)), url('/assets/images/auth-bg.png')`
+      }}
+    >
       {/* Background Animated Gradient Blobs */}
       <div className="absolute top-1/4 -left-20 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
       <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
