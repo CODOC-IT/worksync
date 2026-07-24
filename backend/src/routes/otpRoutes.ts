@@ -13,7 +13,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
     const { email, name } = req.body;
 
     if (!isEmailConfigured()) {
-      res.status(503).json({ success: false, message: 'Email service is not configured. Please add a valid RESEND_API_KEY to your .env file.' });
+      res.status(503).json({ success: false, message: 'Email service is not configured. Please add your Gmail App Password (SMTP_PASS) to your .env file.' });
       return;
     }
 
