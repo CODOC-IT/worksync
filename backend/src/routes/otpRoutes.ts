@@ -34,6 +34,16 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    // Check if email is already registered
+    const existingUser = userStore.findByEmail(email.trim().toLowerCase());
+    if (existingUser) {
+      res.status(409).json({
+        success: false,
+        message: `An account with the email "${email.trim()}" already exists. Please sign in instead.`
+      });
+      return;
+    }
+
     // Check 60s resend cooldown
     const { allowed, secondsLeft } = otpStore.canResend(email);
     if (!allowed) {
