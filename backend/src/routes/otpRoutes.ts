@@ -22,10 +22,15 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    if (name.trim().length < 4) {
+      res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
+      return;
+    }
+
     // Email format check
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      res.status(400).json({ success: false, message: 'Invalid email address format.' });
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(email.trim())) {
+      res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
       return;
     }
 
