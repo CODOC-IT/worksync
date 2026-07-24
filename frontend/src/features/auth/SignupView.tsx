@@ -215,7 +215,9 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         </div>
 
         {/* RIGHT COLUMN: Signup Form Area (60% width) */}
-        <div className="lg:col-span-7 p-6 md:p-10 flex flex-col space-y-6 overflow-y-auto min-h-0">
+        <div className="lg:col-span-7 flex flex-col min-h-0">
+          {/* Scrollable form area */}
+          <div className="flex-1 overflow-y-auto px-6 md:px-10 pt-6 md:pt-8 min-h-0">
           {/* Top Navigation Row */}
           <div className="flex items-center justify-between pb-2 border-b border-white/5">
             <div className="flex items-center gap-2">
@@ -255,7 +257,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
               )}
             </AnimatePresence>
 
-            <form onSubmit={handleSignupSubmit} className="space-y-3">
+            <form id="signup-form" onSubmit={handleSignupSubmit} className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Full Name */}
                 <div className="space-y-1">
@@ -459,30 +461,33 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                 </motion.div>
               )}
 
-              {/* Submit Button */}
-              <motion.button
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                type="submit"
-                disabled={loading}
-                className="w-full mt-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-bold text-xs shadow-lg shadow-purple-950/50 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-              >
-                {loading ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>Verify & Continue</span>
-                    <ArrowRight size={14} />
-                  </>
-                )}
-              </motion.button>
             </form>
           </div>
+          </div>{/* end scrollable area */}
 
-          {/* Footer Note */}
-          <div className="text-[11px] text-slate-500 text-center pt-2 border-t border-white/5 flex items-center justify-between">
-            <span>Secure Registration</span>
-            <span className="font-mono text-slate-600">WorkSync v1.0.4</span>
+          {/* Submit Button — pinned at bottom, always visible */}
+          <div className="px-6 md:px-10 pt-3 pb-4 border-t border-white/5 bg-slate-900/60 backdrop-blur-sm shrink-0">
+            <motion.button
+              form="signup-form"
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-bold text-xs shadow-lg shadow-purple-950/50 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+            >
+              {loading ? (
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>Verify & Continue</span>
+                  <ArrowRight size={14} />
+                </>
+              )}
+            </motion.button>
+            <p className="text-[11px] text-slate-500 text-center mt-2 flex items-center justify-between">
+              <span>Secure Registration</span>
+              <span className="font-mono text-slate-600">WorkSync v1.0.4</span>
+            </p>
           </div>
         </div>
       </motion.div>
