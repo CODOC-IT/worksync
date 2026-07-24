@@ -204,11 +204,79 @@ export interface ChatMessage {
   mentions?: string[];
 }
 
+export interface PromptVersion {
+  versionId: string;
+  versionNumber: number;
+  content: string;
+  isAiGenerated: boolean;
+  createdByUserId: string;
+  createdByName: string;
+  createdAtUtc: string;
+}
+
 export interface SavedPrompt {
   id: string;
   title: string;
   promptText: string;
   category: string;
+}
+
+export interface SavedPromptDetail {
+  id: string;
+  userId: string;
+  projectId: string | null;
+  taskId: string | null;
+  category: string;
+  title: string;
+  style: string;
+  additionalInstructions: string | null;
+  isArchived: boolean;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+  versions: PromptVersion[];
+}
+
+export interface PromptSummary {
+  id: string;
+  title: string;
+  category: string;
+  style: string;
+  isArchived: boolean;
+  versionCount: number;
+  latestContent: string;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface PromptCategory {
+  code: string;
+  name: string;
+  requiresProject: boolean;
+  requiresTask: boolean;
+}
+
+export interface ProjectSummary {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  startDate: string;
+  endDate: string;
+  milestoneCount: number;
+}
+
+export interface TaskSummary {
+  id: string;
+  taskNumber: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  assigneeId: string;
+  dueDate: string;
+  dependencies: string[];
 }
 
 export interface AIQueryLog {

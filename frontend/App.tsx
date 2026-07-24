@@ -12,6 +12,7 @@ import { DashboardView } from '../frontend/src/features/dashboard/DashboardView'
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
 import { TasksView } from '../frontend/src/features/tasks/TasksView';
+import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssistantView';
 import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 
@@ -111,6 +112,7 @@ const AppContent: React.FC = () => {
 
           {currentTab === 'tasks' && <TasksView />}
 
+          {currentTab === 'ai-assistant' && <AIAssistantView />}
           {currentTab === 'kanban' && <KanbanView />}
 
           {currentTab === 'approvals' && <ApprovalsInboxView />}
