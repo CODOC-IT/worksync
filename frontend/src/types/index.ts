@@ -43,11 +43,13 @@ export interface Project {
   memberIds: string[];
   startDate: string;
   targetDate: string;
+  priority?: TaskPriority;
   progress: number; // 0-100
   milestones: Milestone[];
   files: ProjectFile[];
   pinnedMessagesCount?: number;
   tags: string[];
+  creationReason?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
