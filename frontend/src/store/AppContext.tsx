@@ -73,6 +73,8 @@ interface AppState {
   createProject: (data: Partial<Project>) => void;
   approveProject: (projectId: string) => void;
   rejectProject: (projectId: string, reason?: string) => void;
+  updateProject: (projectId: string, data: Partial<Project>) => void;
+  deleteProject: (projectId: string) => void;
   createTask: (data: Partial<Task>) => void;
   updateTaskStatus: (
     taskId: string,
@@ -196,24 +198,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isAdmin = currentRole === 'Admin';
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-    
+
+    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
+    // Team Lead creation always routes to Pending Approval for Admin review.
+    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
+    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
+
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status: isAdmin ? 'Active' : 'Pending Approval',
-      approvalStatus: isAdmin ? 'Approved' : 'Pending Approval',
+      status,
+      approvalStatus,
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
       memberIds: data.memberIds || [currentUser.id],
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      priority: data.priority || 'Medium',
       progress: 0,
       tags: data.tags || ['New Project'],
       milestones: data.milestones || [],
-      files: [],
-      pinnedMessagesCount: 0
+      files: data.files || [],
+      pinnedMessagesCount: 0,
+      creationReason: data.creationReason
     };
 
     setProjects((prev) => [newProject, ...prev]);
@@ -268,6 +277,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((sa) => (sa.targetId === projectId ? { ...sa, status: 'Rejected' } : sa))
     );
     pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
+  };
+
+  const updateProject = (projectId: string, data: Partial<Project>) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+    );
+    pushActivity('Updated project', 'Project', projectId, data.title || project.title);
+  };
+
+  const deleteProject = (projectId: string) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    pushActivity('Deleted project', 'Project', projectId, project.title);
   };
 
   // Create Task
@@ -681,6 +709,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createProject,
         approveProject,
         rejectProject,
+        updateProject,
+        deleteProject,
         createTask,
         updateTaskStatus,
         proposeControlledEdit,
