@@ -120,6 +120,13 @@ class UserStore {
     return this.users.get(email.toLowerCase());
   }
 
+  public findByName(name: string): UserRecord | undefined {
+    const normalised = name.trim().toLowerCase();
+    return Array.from(this.users.values()).find(
+      (u) => u.name.trim().toLowerCase() === normalised
+    );
+  }
+
   public findById(id: string): UserRecord | undefined {
     return Array.from(this.users.values()).find((user) => user.id === id);
   }
