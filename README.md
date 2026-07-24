@@ -97,7 +97,7 @@
 **Assigned to**: [`@abihajibbran1-lang`](https://github.com/abihajibbran1-lang)
 
 - 📝 Protected task creation with approval routing through Team Lead
-- 💬 Asynchronous discussion threads on tasks with @mentions
+- 💬 Asynchronous discussion threads on tasks
 - 🚧 Blocker reporting with mandatory explanation requirement
 - 🔄 Status workflow, moving through Todo, In Progress, Review, Done, and Blocked
 - 📎 File attachment upload for tasks and completion evidence
