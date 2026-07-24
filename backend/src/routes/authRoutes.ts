@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
-import { authenticateJWT, AuthenticatedRequest, JWT_SECRET } from '../middleware/authMiddleware.js';
+import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 
 const router = Router();
 
@@ -30,8 +30,8 @@ router.post('/login', async (req, res: Response): Promise<void> => {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '24h' }
+      getJwtSecret(),
+      { expiresIn: JWT_EXPIRES_IN as any }
     );
 
     res.status(200).json({
@@ -70,8 +70,8 @@ router.post('/register', async (req, res: Response): Promise<void> => {
 
     const token = jwt.sign(
       { id: newUser.id, email: newUser.email, role: newUser.role },
-      JWT_SECRET,
-      { expiresIn: '24h' }
+      getJwtSecret(),
+      { expiresIn: JWT_EXPIRES_IN as any }
     );
 
     res.status(201).json({
