@@ -2,8 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
+import { validateAuthConfig } from './middleware/authMiddleware.js';
 
 dotenv.config();
+
+// Fail-fast security check on boot
+validateAuthConfig();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
