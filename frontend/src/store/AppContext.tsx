@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   UserRole,
   User,
@@ -36,6 +36,16 @@ import {
   INITIAL_SAVED_PROMPTS,
   INITIAL_WEEKLY_DRAFT
 } from '../mock-data/fixtures';
+import {
+  TaskMutationData,
+  TaskMutationResult
+} from '../features/tasks/taskRules';
+import {
+  prepareTaskCreation,
+  prepareTaskDeletion,
+  prepareTaskUpdate,
+  toTaskFormInput
+} from '../features/tasks/taskMutations';
 
 interface AppState {
   currentRole: UserRole;
@@ -73,7 +83,9 @@ interface AppState {
   createProject: (data: Partial<Project>) => void;
   approveProject: (projectId: string) => void;
   rejectProject: (projectId: string, reason?: string) => void;
-  createTask: (data: Partial<Task>) => void;
+  createTask: (data: TaskMutationData) => TaskMutationResult;
+  updateTask: (taskId: string, data: TaskMutationData) => TaskMutationResult;
+  deleteTask: (taskId: string) => TaskMutationResult;
   updateTaskStatus: (
     taskId: string,
     newStatus: TaskStatus,
@@ -120,6 +132,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [calendarEvents] = useState<CalendarEvent[]>(INITIAL_CALENDAR_EVENTS);
   const [savedPrompts] = useState<SavedPrompt[]>(INITIAL_SAVED_PROMPTS);
   const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>(INITIAL_WEEKLY_DRAFT);
+  const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
   const [activeBreak, setActiveBreak] = useState<{
     isBreaking: boolean;
@@ -270,34 +283,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
   };
 
-  // Create Task
-  const createTask = (data: Partial<Task>) => {
-    const parentProj = projects.find((p) => p.id === data.projectId);
-    const isPendingProj = parentProj?.approvalStatus === 'Pending Approval';
+  // Client-side prototype data boundary. The future API must repeat every
+  // authorization and validation check inside a PostgreSQL transaction.
+  const createTask = (data: TaskMutationData): TaskMutationResult => {
+    const input = toTaskFormInput(data);
+    const signature = JSON.stringify(input);
+    const now = Date.now();
+    if (
+      recentTaskSubmission.current?.signature === signature
+      && now - recentTaskSubmission.current.submittedAt < 2000
+    ) {
+      return {
+        success: false,
+        message: 'This task was already submitted. Please wait before trying again.'
+      };
+    }
 
-    const newTaskId = `tsk-${Date.now()}`;
-    const newTask: Task = {
-      id: newTaskId,
-      taskNumber: `${parentProj?.code || 'TSK'}-${Math.floor(10 + Math.random() * 90)}`,
-      projectId: data.projectId || projects[0]?.id || 'prj-1',
-      title: data.title || 'Untitled Task',
-      description: data.description || '',
-      status: data.status || 'Todo',
-      priority: data.priority || 'Medium',
-      assigneeId: data.assigneeId || currentUser.id,
-      creatorId: currentUser.id,
-      dueDate: data.dueDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-      estimatedHours: data.estimatedHours || 8,
-      subtasks: data.subtasks || [],
-      dependencies: data.dependencies || [],
-      tags: data.tags || ['Task'],
-      attachments: [],
-      approvalStatus: isPendingProj ? 'Pending Approval' : 'Approved',
-      createdAt: new Date().toISOString().split('T')[0]
-    };
+    const result = prepareTaskCreation(data, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    }, now);
+    if (!result.success || !result.task) return result;
 
-    setTasks((prev) => [newTask, ...prev]);
-    pushActivity('Created task', 'Task', newTaskId, newTask.title);
+    recentTaskSubmission.current = { signature, submittedAt: now };
+    setTasks((prev) => [result.task!, ...prev]);
+    pushActivity('Created task', 'Task', result.task.id, result.task.title);
+    return result;
+  };
+
+  const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
+    const result = prepareTaskUpdate(taskId, data, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    });
+    if (!result.success || !result.task) return result;
+
+    setTasks((prev) => prev.map((item) => item.id === taskId ? result.task! : item));
+    pushActivity('Updated task', 'Task', taskId, result.task.title);
+    return result;
+  };
+
+  const deleteTask = (taskId: string): TaskMutationResult => {
+    const result = prepareTaskDeletion(taskId, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    });
+    if (!result.success || !result.task) return result;
+    setTasks((prev) => prev.filter((item) => item.id !== taskId));
+    pushActivity('Deleted task', 'Task', taskId, result.task.title);
+    return result;
   };
 
   // Update Task Status (Kanban & Details) with mandatory reason/summary handlers
@@ -682,6 +725,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveProject,
         rejectProject,
         createTask,
+        updateTask,
+        deleteTask,
         updateTaskStatus,
         proposeControlledEdit,
         approveApprovalItem,
