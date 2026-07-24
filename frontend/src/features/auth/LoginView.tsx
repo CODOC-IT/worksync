@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
 import { Sparkles, Lock, Mail, Shield, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -61,15 +62,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
 
       onLoginSuccess();
     } catch (err: any) {
-      // Fallback grace mode if server endpoint proxy is offline
       setErrorMsg(err.message || 'Login failed.');
-      // Allow fallback login for seamless UI review
       const matchedUser = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
       if (matchedUser) {
         setRole(matchedUser.role);
         setTimeout(() => {
           onLoginSuccess();
-        }, 1200);
+        }, 1000);
       }
     } finally {
       setLoading(false);
@@ -83,18 +82,45 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
         backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.82), rgba(9, 10, 15, 0.94)), url('/assets/images/auth-bg.png')`
       }}
     >
-      {/* Background Animated Gradient Blobs */}
-      <div className="absolute top-1/4 -left-20 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
-      <div className="absolute bottom-1/4 -right-20 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
+      {/* Background Animated Floating Blobs */}
+      <motion.div
+        animate={{
+          scale: [1, 1.2, 1],
+          opacity: [0.15, 0.25, 0.15],
+          x: [0, 20, 0],
+          y: [0, -20, 0]
+        }}
+        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
+        className="absolute top-1/4 -left-20 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none"
+      />
+      <motion.div
+        animate={{
+          scale: [1, 1.25, 1],
+          opacity: [0.15, 0.3, 0.15],
+          x: [0, -25, 0],
+          y: [0, 25, 0]
+        }}
+        transition={{ duration: 15, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
+        className="absolute bottom-1/4 -right-20 w-96 h-96 bg-purple-600/25 rounded-full blur-3xl pointer-events-none"
+      />
 
-      <div className="w-full max-w-md z-10 space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-md z-10 space-y-6"
+      >
         {/* Brand Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-500 via-purple-600 to-pink-500 p-0.5 shadow-[0_0_25px_rgba(0,242,254,0.4)] mb-2">
+          <motion.div
+            whileHover={{ scale: 1.08, rotate: 5 }}
+            whileTap={{ scale: 0.95 }}
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-500 via-purple-600 to-pink-500 p-0.5 shadow-[0_0_25px_rgba(0,242,254,0.4)] mb-2 cursor-pointer"
+          >
             <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
               <Sparkles size={28} className="text-cyan-400 animate-pulse" />
             </div>
-          </div>
+          </motion.div>
           <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
             WorkSync
           </h1>
@@ -106,7 +132,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
           <div className="flex items-center justify-between pb-4 border-b border-white/10">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Shield size={18} className="text-cyan-400" /> Welcome Back
+                <Shield size={18} className="text-cyan-400 animate-bounce" /> Welcome Back
               </h2>
               <p className="text-xs text-slate-400">Sign in to access your role workspace</p>
             </div>
@@ -127,9 +153,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 { role: 'HR', label: 'Maryam (HR)', color: 'border-pink-500/40 text-pink-300' },
                 { role: 'Team_Member', label: 'Salman (Engineer)', color: 'border-emerald-500/40 text-emerald-300' }
               ].map((item) => (
-                <button
+                <motion.button
                   key={item.role}
                   type="button"
+                  whileHover={{ scale: 1.03, y: -1 }}
+                  whileTap={{ scale: 0.97 }}
                   onClick={() => handleQuickDemoSelect(item.role as UserRole)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all text-left flex items-center justify-between ${
                     selectedDemoRole === item.role
@@ -139,17 +167,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 >
                   <span className="truncate">{item.label}</span>
                   {selectedDemoRole === item.role && <CheckCircle2 size={12} className="text-cyan-400 shrink-0" />}
-                </button>
+                </motion.button>
               ))}
             </div>
           </div>
 
           {/* Error Alert */}
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 animate-shake">
-              <AlertCircle size={16} className="shrink-0 text-rose-400" />
+            <motion.div
+              initial={{ opacity: 0, height: 0, y: -6 }}
+              animate={{ opacity: 1, height: 'auto', y: 0 }}
+              className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 overflow-hidden"
+            >
+              <AlertCircle size={16} className="shrink-0 text-rose-400 animate-pulse" />
               <span>{errorMsg}</span>
-            </div>
+            </motion.div>
           )}
 
           {/* Credentials Form */}
@@ -194,7 +226,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
               </div>
             </div>
 
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={loading}
               className="w-full py-3 rounded-xl glass-button-neon font-bold text-sm flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 mt-2"
@@ -203,10 +237,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
-                  Sign In to Workspace <ArrowRight size={16} />
+                  Sign In to Workspace <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" />
                 </>
               )}
-            </button>
+            </motion.button>
           </form>
 
           {/* Toggle to Signup */}
@@ -228,7 +262,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
         <p className="text-[11px] text-slate-500 text-center">
           Secured with JWT authentication & BCrypt password encryption • Codoc WorkSync
         </p>
-      </div>
+      </motion.div>
     </div>
   );
 };

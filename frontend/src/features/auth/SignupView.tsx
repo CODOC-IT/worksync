@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
 import { Sparkles, Lock, Mail, User as UserIcon, Building2, Briefcase, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
@@ -78,18 +79,45 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.82), rgba(9, 10, 15, 0.94)), url('/assets/images/auth-bg.png')`
       }}
     >
-      {/* Background Blobs */}
-      <div className="absolute top-1/4 -right-20 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
-      <div className="absolute bottom-1/4 -left-20 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
+      {/* Background Floating Blobs */}
+      <motion.div
+        animate={{
+          scale: [1, 1.25, 1],
+          opacity: [0.15, 0.28, 0.15],
+          x: [0, -25, 0],
+          y: [0, 25, 0]
+        }}
+        transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}
+        className="absolute top-1/4 -right-20 w-96 h-96 bg-purple-600/25 rounded-full blur-3xl pointer-events-none"
+      />
+      <motion.div
+        animate={{
+          scale: [1, 1.2, 1],
+          opacity: [0.15, 0.25, 0.15],
+          x: [0, 20, 0],
+          y: [0, -20, 0]
+        }}
+        transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
+        className="absolute bottom-1/4 -left-20 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none"
+      />
 
-      <div className="w-full max-w-lg z-10 space-y-6">
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-lg z-10 space-y-6"
+      >
         {/* Brand Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-500 via-purple-600 to-pink-500 p-0.5 shadow-[0_0_25px_rgba(0,242,254,0.4)] mb-2">
+          <motion.div
+            whileHover={{ scale: 1.08, rotate: -5 }}
+            whileTap={{ scale: 0.95 }}
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-500 via-purple-600 to-pink-500 p-0.5 shadow-[0_0_25px_rgba(0,242,254,0.4)] mb-2 cursor-pointer"
+          >
             <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
               <Sparkles size={28} className="text-cyan-400 animate-pulse" />
             </div>
-          </div>
+          </motion.div>
           <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
             Join WorkSync
           </h1>
@@ -99,10 +127,14 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         {/* Signup Card */}
         <div className="glass-panel p-8 border border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] space-y-5 relative">
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2">
-              <AlertCircle size={16} className="shrink-0 text-rose-400" />
+            <motion.div
+              initial={{ opacity: 0, height: 0, y: -6 }}
+              animate={{ opacity: 1, height: 'auto', y: 0 }}
+              className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 overflow-hidden"
+            >
+              <AlertCircle size={16} className="shrink-0 text-rose-400 animate-pulse" />
               <span>{errorMsg}</span>
-            </div>
+            </motion.div>
           )}
 
           <form onSubmit={handleSignupSubmit} className="space-y-4">
@@ -232,7 +264,9 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
               </div>
             </div>
 
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={loading}
               className="w-full py-3 rounded-xl glass-button-neon font-bold text-sm flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 mt-2"
@@ -244,7 +278,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                   Register Account <ArrowRight size={16} />
                 </>
               )}
-            </button>
+            </motion.button>
           </form>
 
           {/* Toggle to Login */}
@@ -261,7 +295,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
             </p>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
