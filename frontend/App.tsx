@@ -12,6 +12,7 @@ import { DashboardView } from '../frontend/src/features/dashboard/DashboardView'
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
 import { TasksView } from '../frontend/src/features/tasks/TasksView';
+import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -108,6 +109,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'projects' && <ProjectsView />}
 
           {currentTab === 'tasks' && <TasksView />}
+
+          {currentTab === 'kanban' && <KanbanView />}
 
           {currentTab === 'profile' && <ProfileView />}
 

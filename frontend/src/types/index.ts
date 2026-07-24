@@ -91,6 +91,21 @@ export interface ControlledEditRequest {
   createdAt: string;
 }
 
+// Project Board (Kanban) status-change audit trail. Mirrors work.TaskStatusHistory
+// in the PostgreSQL schema (see database/04_work_tables.sql) so a future write-path
+// can persist these entries without reshaping them.
+export interface TaskStatusHistoryEntry {
+  id: string;
+  fromStatus: TaskStatus;
+  toStatus: TaskStatus;
+  note: string;
+  changedBy: string; // User ID
+  changedByName: string;
+  timestamp: string;
+}
+
+export type ReviewApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
+
 export interface Task {
   id: string;
   taskNumber: string;
@@ -114,6 +129,9 @@ export interface Task {
   completionSummary?: string;
   reopenReason?: string;
   createdAt: string;
+  // Project Board fields — populated by AppContext.updateTaskStatus (Kanban & task details).
+  statusHistory?: TaskStatusHistoryEntry[];
+  reviewApproval?: ReviewApprovalStatus;
 }
 
 export type BreakType = 'Lunch' | 'Short Break' | 'Other';
