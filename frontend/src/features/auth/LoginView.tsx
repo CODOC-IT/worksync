@@ -64,13 +64,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
 
       onLoginSuccess();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Login failed.');
-      const matchedUser = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-      if (matchedUser) {
-        setRole(matchedUser.role);
-        setTimeout(() => {
-          onLoginSuccess();
-        }, 1000);
+      // If the API responded with a valid JSON body, show that message
+      if (err.message && err.message !== 'Login failed.') {
+        setErrorMsg(err.message);
+      } else {
+        // Network error or empty response — backend is likely not running
+        setErrorMsg('Cannot reach the server. Make sure the backend is running on port 5000.');
       }
     } finally {
       setLoading(false);
