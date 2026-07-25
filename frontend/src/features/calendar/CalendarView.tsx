@@ -10,7 +10,8 @@ import {
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { Project, Task } from '../../types';
+import { Project, Task, User } from '../../types';
+import { CalendarEntryTooltip } from './CalendarEntryTooltip';
 import {
   buildCalendarEntries,
   groupEntriesByDate,
@@ -29,7 +30,7 @@ type CalendarViewMode = 'month' | 'week' | 'year';
 
 const VIEW_MODES: CalendarViewMode[] = ['month', 'week', 'year'];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const LEGEND_KINDS: CalendarEntryKind[] = ['Deadline', 'Milestone', 'Task Due', 'Meeting', 'Review', 'Leave'];
+const LEGEND_KINDS: CalendarEntryKind[] = ['Deadline', 'Milestone', 'Task Due', 'Review'];
 
 const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1): Date => {
   const next = new Date(date);
@@ -44,7 +45,7 @@ const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1):
 };
 
 export const CalendarView: React.FC = () => {
-  const { projects, tasks, calendarEvents } = useApp();
+  const { projects, tasks, users, calendarEvents } = useApp();
 
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
@@ -191,6 +192,9 @@ export const CalendarView: React.FC = () => {
           anchorMonth={anchorDate.getMonth()}
           entriesByDate={entriesByDate}
           todayKey={todayKey}
+          projects={projects}
+          tasks={tasks}
+          users={users}
           onSelectDay={openDay}
           onSelectEntry={openEntry}
         />
@@ -201,6 +205,9 @@ export const CalendarView: React.FC = () => {
           dates={weekDates}
           entriesByDate={entriesByDate}
           todayKey={todayKey}
+          projects={projects}
+          tasks={tasks}
+          users={users}
           onSelectEntry={openEntry}
         />
       )}
@@ -235,9 +242,12 @@ const MonthGrid: React.FC<{
   anchorMonth: number;
   entriesByDate: Map<string, CalendarEntry[]>;
   todayKey: string;
+  projects: Project[];
+  tasks: Task[];
+  users: User[];
   onSelectDay: (dateKey: string) => void;
   onSelectEntry: (entry: CalendarEntry) => void;
-}> = ({ dates, anchorMonth, entriesByDate, todayKey, onSelectDay, onSelectEntry }) => (
+}> = ({ dates, anchorMonth, entriesByDate, todayKey, projects, tasks, users, onSelectDay, onSelectEntry }) => (
   <div className="glass-panel p-3 sm:p-4">
     <div className="grid grid-cols-7 gap-1 sm:gap-1.5 mb-1.5">
       {WEEKDAY_LABELS.map((label) => (
@@ -276,18 +286,25 @@ const MonthGrid: React.FC<{
               {visibleEntries.map((entry) => {
                 const tone = entryToneClasses(entry.kind);
                 return (
-                  <button
+                  <CalendarEntryTooltip
                     key={entry.id}
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSelectEntry(entry);
-                    }}
-                    title={entry.title}
-                    className={`w-full text-left truncate px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium border ${tone.badgeClass}`}
+                    entry={entry}
+                    projects={projects}
+                    tasks={tasks}
+                    users={users}
                   >
-                    {entry.title}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelectEntry(entry);
+                      }}
+                      title={entry.title}
+                      className={`w-full text-left truncate px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium border ${tone.badgeClass}`}
+                    >
+                      {entry.title}
+                    </button>
+                  </CalendarEntryTooltip>
                 );
               })}
               {overflowCount > 0 && (
@@ -305,8 +322,11 @@ const WeekGrid: React.FC<{
   dates: Date[];
   entriesByDate: Map<string, CalendarEntry[]>;
   todayKey: string;
+  projects: Project[];
+  tasks: Task[];
+  users: User[];
   onSelectEntry: (entry: CalendarEntry) => void;
-}> = ({ dates, entriesByDate, todayKey, onSelectEntry }) => (
+}> = ({ dates, entriesByDate, todayKey, projects, tasks, users, onSelectEntry }) => (
   <div className="glass-panel p-3 sm:p-4">
     <div className="grid grid-cols-1 sm:grid-cols-7 gap-2">
       {dates.map((date) => {
@@ -338,15 +358,22 @@ const WeekGrid: React.FC<{
                 dayEntries.map((entry) => {
                   const tone = entryToneClasses(entry.kind);
                   return (
-                    <button
+                    <CalendarEntryTooltip
                       key={entry.id}
-                      type="button"
-                      onClick={() => onSelectEntry(entry)}
-                      className={`w-full text-left px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass}`}
+                      entry={entry}
+                      projects={projects}
+                      tasks={tasks}
+                      users={users}
                     >
-                      {entry.time && <span className="font-mono opacity-80 mr-1">{entry.time}</span>}
-                      {entry.title}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => onSelectEntry(entry)}
+                        className={`w-full text-left px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass}`}
+                      >
+                        {entry.time && <span className="font-mono opacity-80 mr-1">{entry.time}</span>}
+                        {entry.title}
+                      </button>
+                    </CalendarEntryTooltip>
                   );
                 })
               )}
