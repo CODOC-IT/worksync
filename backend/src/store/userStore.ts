@@ -183,6 +183,14 @@ class UserStore {
     const { passwordHash, ...sanitized } = user;
     return sanitized;
   }
+
+  public updatePassword(email: string, newPasswordHash: string): void {
+    const user = this.users.get(email.toLowerCase());
+    if (!user) throw new Error('User not found.');
+    user.passwordHash = newPasswordHash;
+    this.persistToDisk();
+    console.log(`[Database] Password updated for ${email} ✓`);
+  }
 }
 
 export const userStore = new UserStore();
