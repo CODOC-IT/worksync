@@ -1,7 +1,9 @@
 import { Router, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { otpStore } from '../store/otpStore.js';
 import { sendOTPEmail, isEmailConfigured } from '../services/emailService.js';
 import { userStore } from '../store/userStore.js';
+import { getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { UserRole } from '../types.js';
 
 const router = Router();
@@ -135,20 +137,16 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           title
         });
 
-        import('../middleware/authMiddleware.js').then(({ getJwtSecret, JWT_EXPIRES_IN }) => {
-          import('jsonwebtoken').then((jwt) => {
-            const token = jwt.default.sign(
-              { id: newUser.id, email: newUser.email, role: newUser.role },
-              getJwtSecret(),
-              { expiresIn: JWT_EXPIRES_IN as any }
-            );
-            res.status(201).json({
-              success: true,
-              message: 'Email verified and account created successfully.',
-              token,
-              user: userStore.sanitizeUser(newUser)
-            });
-          });
+        const token = jwt.sign(
+          { id: newUser.id, email: newUser.email, role: newUser.role },
+          getJwtSecret(),
+          { expiresIn: JWT_EXPIRES_IN as any }
+        );
+        res.status(201).json({
+          success: true,
+          message: 'Email verified and account created successfully.',
+          token,
+          user: userStore.sanitizeUser(newUser)
         });
         return;
       } catch (err: any) {
