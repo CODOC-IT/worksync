@@ -359,7 +359,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recipientIds: resolveTaskRecipients({ task, project }),
           type: 'task_due_tomorrow',
           title: 'Task Due Tomorrow',
-          message: `"${task.title}" is due tomorrow (${task.dueDate}).`,
+          message: `"${task.title}" in ${project?.title || 'the project'} is due tomorrow (${task.dueDate}).`,
           linkRoute: 'tasks',
           projectId: task.projectId,
           taskId: task.id
@@ -646,7 +646,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recipientIds: resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id }),
       type: 'task_assigned',
       title: 'New Task Assigned',
-      message: `${currentUser.name} assigned you "${result.task.title}".`,
+      message: `${currentUser.name} assigned you "${result.task.title}" in ${project?.title || 'the project'}.`,
       actorId: currentUser.id,
       actorName: currentUser.name,
       linkRoute: 'tasks',
@@ -683,6 +683,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (assigneesChanged) {
         const addedAssignees = afterAssignees.filter((id) => !beforeAssignees.includes(id));
+        const newAssigneeNames = afterAssignees
+          .map((id) => users.find((user) => user.id === id)?.name)
+          .filter((name): name is string => Boolean(name))
+          .join(', ') || 'Unassigned';
         dispatchNotifications({
           recipientIds: [
             ...addedAssignees.filter((id) => id !== currentUser.id),
@@ -690,7 +694,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ],
           type: 'task_reassigned',
           title: 'Task Reassigned',
-          message: `${currentUser.name} reassigned "${after.title}".`,
+          message: `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -702,7 +706,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recipientIds: baseRecipients,
           type: 'task_priority_changed',
           title: 'Task Priority Changed',
-          message: `${currentUser.name} changed "${after.title}" priority to ${after.priority}.`,
+          message: `${currentUser.name} changed "${after.title}" priority from ${before.priority} to ${after.priority} in ${project?.title || 'the project'}.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -714,7 +718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recipientIds: baseRecipients,
           type: 'task_due_date_changed',
           title: 'Due Date Changed',
-          message: `${currentUser.name} changed the due date for "${after.title}" to ${after.dueDate}.`,
+          message: `${currentUser.name} changed the due date for "${after.title}" from ${before.dueDate} to ${after.dueDate} in ${project?.title || 'the project'}.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -726,7 +730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recipientIds: baseRecipients,
           type: 'task_updated',
           title: 'Task Updated',
-          message: `${currentUser.name} updated "${after.title}".`,
+          message: `${currentUser.name} updated "${after.title}" in ${project?.title || 'the project'}.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -742,7 +746,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           recipientIds: baseRecipients,
           type: 'checklist_completed',
           title: 'Checklist Completed',
-          message: `All checklist items are complete on "${after.title}".`,
+          message: `${currentUser.name} completed the checklist on "${after.title}" in ${project?.title || 'the project'}.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -774,7 +778,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: resolveTaskRecipients({ task, project, excludeUserId: currentUser.id }),
         type: 'task_deleted',
         title: 'Task Deleted',
-        message: `${currentUser.name} deleted "${task.title}".`,
+        message: `${currentUser.name} deleted "${task.title}" from ${project?.title || 'the project'}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'tasks',
@@ -857,7 +861,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: baseRecipients,
         type: 'task_review_approved',
         title: 'Task Approved',
-        message: `${currentUser.name} approved "${task.title}".`,
+        message: `${currentUser.name} approved "${task.title}" — moved from Review to Done in ${project?.title || 'the project'}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'kanban',
@@ -869,7 +873,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: baseRecipients,
         type: 'task_review_rejected',
         title: 'Task Returned for Revision',
-        message: `${currentUser.name} rejected "${task.title}" — back to In Progress.`,
+        message: `${currentUser.name} rejected "${task.title}" — moved from Review back to In Progress in ${project?.title || 'the project'}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'kanban',
@@ -881,7 +885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: resolveSingleRecipient(project?.teamLeadId, currentUser.id),
         type: 'task_review_requested',
         title: 'Review Requested',
-        message: `${currentUser.name} moved "${task.title}" to Review.`,
+        message: `${currentUser.name} moved "${task.title}" from ${task.status} to Review in ${project?.title || 'the project'}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'kanban',
@@ -893,7 +897,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: baseRecipients,
         type: 'task_completed',
         title: 'Task Completed',
-        message: `"${task.title}" was marked Done.`,
+        message: `${currentUser.name} marked "${task.title}" as Done in ${project?.title || 'the project'} (was ${task.status}).`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'kanban',
@@ -905,7 +909,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recipientIds: baseRecipients,
         type: 'task_status_changed',
         title: 'Task Status Changed',
-        message: `"${task.title}" moved to ${newStatus}.`,
+        message: `${currentUser.name} moved "${task.title}" from ${task.status} to ${newStatus} in ${project?.title || 'the project'}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'kanban',
@@ -970,7 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ],
       type: 'approval',
       title: 'Controlled Edit Requested',
-      message: `${currentUser.name} requested a ${field} change on "${task.title}".`,
+      message: `${currentUser.name} requested to change ${field} on "${task.title}" (${project?.title || 'the project'}) from "${(task as any)[field] || '—'}" to "${newValue}".`,
       actorId: currentUser.id,
       actorName: currentUser.name,
       linkRoute: 'approvals',
@@ -1004,15 +1008,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Approved' } : sa))
       );
+      const relatedTask = tasks.find((t) => t.id === item.targetId);
+      const relatedProject = relatedTask ? projects.find((p) => p.id === relatedTask.projectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
         type: 'approval',
         title: 'Request Approved',
-        message: `${currentUser.name} approved your ${field} change on "${item.targetTitle}".`,
+        message: `${currentUser.name} approved your ${field} change on "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'tasks',
-        taskId: item.targetId
+        taskId: item.targetId,
+        projectId: relatedProject?.id
       });
     }
     pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
@@ -1026,11 +1033,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (item) {
+      const relatedProjectId =
+        item.type === 'Project_Creation' ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
         type: 'approval',
         title: 'Request Rejected',
-        message: `${currentUser.name} rejected your request for "${item.targetTitle}".`,
+        message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: item.type === 'Project_Creation' ? 'projects' : 'tasks',
@@ -1199,12 +1209,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChatMessages((prev) => [...prev, newMsg]);
     pushActivity('Posted project chat message', 'Project', projectId, 'Project Chat');
 
+    const chatProject = projects.find((p) => p.id === projectId);
     mentionedUsers.forEach((user) => {
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(user.id, currentUser.id),
         type: 'mention',
         title: 'You were mentioned',
-        message: `${currentUser.name} mentioned you in project chat: "${message.slice(0, 80)}"`,
+        message: `${currentUser.name} mentioned you in ${chatProject?.title || 'project'} chat: "${message.slice(0, 80)}"`,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'chat',
