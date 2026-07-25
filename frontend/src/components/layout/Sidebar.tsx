@@ -5,6 +5,7 @@ import {
   FolderKanban,
   CheckSquare,
   KanbanSquare,
+  Users,
   Calendar,
   BarChart3,
   Activity,
@@ -46,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'projects', label: 'Projects', icon: FolderKanban },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'kanban', label: 'Kanban Board', icon: KanbanSquare },
+    { id: 'members', label: 'Team Members', icon: Users },
     { id: 'attendance', label: 'Attendance & Breaks', icon: Clock, badge: currentRole === 'HR' && pendingHrCount > 0 ? pendingHrCount : undefined },
     {
       id: 'approvals',
