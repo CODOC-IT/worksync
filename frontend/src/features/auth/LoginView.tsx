@@ -348,7 +348,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-slate-300 block">Password</label>
-                    <span onClick={() => setShowForgotPassword(true)} className="text-[11px] text-cyan-400 hover:underline cursor-pointer">Forgot password?</span>
+                    {emailCheck.exists === false ? (
+                      <span className="text-[11px] text-slate-600 cursor-not-allowed" title="No account found with this email">Forgot password?</span>
+                    ) : (
+                      <span onClick={() => setShowForgotPassword(true)} className="text-[11px] text-cyan-400 hover:underline cursor-pointer">Forgot password?</span>
+                    )}
                   </div>
                   <div className="relative">
                     <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
