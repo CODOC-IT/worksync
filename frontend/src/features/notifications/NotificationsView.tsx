@@ -26,27 +26,10 @@ import { NotificationAnalyticsPanel } from './NotificationAnalyticsPanel';
 
 // "Remind me later" only makes sense for time-sensitive or decision-pending events — a snoozed
 // `project_deleted` notification, for instance, wouldn't mean anything (there's no future
-// moment where it becomes more actionable). One default duration per type keeps the feature
-// genuinely small, per how it was scoped: due-date reminders come back the next morning
-// (closest to "remind me tomorrow"), approval requests come back in a few hours (still same
-// working day for most cases).
-const SNOOZE_RULES: Partial<Record<NotificationType, () => Date>> = {
-  task_due_tomorrow: () => nextMorning(),
-  task_due_today: () => nextMorning(),
-  task_overdue: () => nextMorning(),
-  approval: () => hoursFromNow(4)
-};
-
-function hoursFromNow(hours: number): Date {
-  return new Date(Date.now() + hours * 60 * 60 * 1000);
-}
-
-function nextMorning(): Date {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  date.setHours(9, 0, 0, 0);
-  return date;
-}
+// moment where it becomes more actionable). The user picks the actual duration from a preset
+// menu (see NotificationListItem's SNOOZE_PRESETS); this set only gates which notification
+// types get the clock button in the first place.
+const SNOOZABLE_TYPES = new Set<NotificationType>(['task_due_tomorrow', 'task_due_today', 'task_overdue', 'approval']);
 
 const inputClass =
   'w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10';
@@ -138,10 +121,8 @@ export const NotificationsView: React.FC = () => {
     });
   };
 
-  const handleSnooze = (notification: NotificationItem) => {
-    const rule = SNOOZE_RULES[notification.type];
-    if (!rule) return;
-    snoozeNotification(notification.id, rule().toISOString());
+  const handleSnooze = (notification: NotificationItem, until: Date) => {
+    snoozeNotification(notification.id, until.toISOString());
   };
 
   const hasActiveFilters = Boolean(search || unreadOnly || typeFilter !== 'All' || priorityFilter !== 'All' || dateRange !== 'All');
@@ -346,7 +327,7 @@ export const NotificationsView: React.FC = () => {
               const representative = group.items[0];
               const isGroup = group.items.length > 1;
               const isExpanded = expandedGroups.has(group.key);
-              const canSnooze = Boolean(SNOOZE_RULES[representative.type]);
+              const canSnooze = SNOOZABLE_TYPES.has(representative.type);
 
               return (
                 <div key={group.key}>
@@ -383,7 +364,7 @@ export const NotificationsView: React.FC = () => {
                               notification={notification}
                               onOpen={handleOpen}
                               onClear={clearNotification}
-                              onSnooze={SNOOZE_RULES[notification.type] ? handleSnooze : undefined}
+                              onSnooze={SNOOZABLE_TYPES.has(notification.type) ? handleSnooze : undefined}
                               compact
                             />
                           </div>
