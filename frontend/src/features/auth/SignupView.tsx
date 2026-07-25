@@ -79,37 +79,6 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
     return { label: 'Strong', color: 'bg-emerald-500', text: 'text-emerald-400', percent: 100 };
   }, [password, strengthScore]);
 
-  // Check if role requires Department & Job Title fields
-  const isLeadOrMember = role === 'Team_Lead' || role === 'Team_Member';
-
-  // Password Strength Criteria Calculation
-  const passwordCriteria = useMemo(() => {
-    return {
-      hasMinLength: password.length >= 8,
-      hasUpper: /[A-Z]/.test(password),
-      hasLower: /[a-z]/.test(password),
-      hasNumber: /[0-9]/.test(password),
-      hasSpecial: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]/.test(password)
-    };
-  }, [password]);
-
-  const strengthScore = useMemo(() => {
-    let score = 0;
-    if (passwordCriteria.hasMinLength) score++;
-    if (passwordCriteria.hasUpper) score++;
-    if (passwordCriteria.hasLower) score++;
-    if (passwordCriteria.hasNumber) score++;
-    if (passwordCriteria.hasSpecial) score++;
-    return score;
-  }, [passwordCriteria]);
-
-  const strengthConfig = useMemo(() => {
-    if (!password) return { label: 'Empty', color: 'bg-slate-700', text: 'text-slate-500', percent: 0 };
-    if (strengthScore <= 2) return { label: 'Weak', color: 'bg-rose-500', text: 'text-rose-400', percent: 33 };
-    if (strengthScore <= 4) return { label: 'Medium', color: 'bg-amber-500', text: 'text-amber-400', percent: 66 };
-    return { label: 'Strong', color: 'bg-emerald-500', text: 'text-emerald-400', percent: 100 };
-  }, [password, strengthScore]);
-
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
