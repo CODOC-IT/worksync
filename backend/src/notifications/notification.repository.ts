@@ -124,10 +124,17 @@ export const insertNotificationWithFanout = async (
       const deliveryStatus: 'Delivered' | 'Suppressed' = suppressedUserIds.has(recipientUserId)
         ? 'Suppressed'
         : 'Delivered';
+      // Computed in JS rather than a SQL CASE re-using the same parameter twice — real Postgres
+      // (via node-postgres's extended query protocol) rejects that with "inconsistent types
+      // deduced for parameter $3", since the parameter appears in two different implicit-cast
+      // contexts (a plain column value vs. a comparison operand). pg-mem didn't catch this since
+      // it doesn't enforce parameter type consistency the way a real Postgres prepared
+      // statement does.
+      const deliveredAtUtc = deliveryStatus === 'Delivered' ? new Date() : null;
       await runQuery(
         `INSERT INTO notify.usernotifications (notificationid, recipientuserid, deliverystatus, deliveredatutc)
-         VALUES ($1, $2, $3, CASE WHEN $3 = 'Delivered' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
-        [notificationId, recipientUserId, deliveryStatus]
+         VALUES ($1, $2, $3, $4)`,
+        [notificationId, recipientUserId, deliveryStatus, deliveredAtUtc]
       );
       recipients.push({ recipientUserId, deliveryStatus });
     }
@@ -332,13 +339,15 @@ export const findEmailCandidates = async (priorities: DbPriority[]): Promise<Ema
   return result.rows;
 };
 
+// Takes the raw DB id (EmailCandidateRow.notificationid, a bare numeric string straight from
+// Postgres) — NOT a "notif-N" DTO id, unlike markRead/clearOne/snoozeOne. This is always called
+// with rows fetched directly from findEmailCandidates, never with a frontend-supplied id.
 export const markEmailProcessed = async (recipientUserId: number, notificationId: string | number): Promise<void> => {
-  const id = typeof notificationId === 'string' ? parseNotificationId(notificationId) : notificationId;
   await query(
     `UPDATE notify.usernotifications
      SET emailedatutc = CURRENT_TIMESTAMP
      WHERE notificationid = $1 AND recipientuserid = $2`,
-    [id, recipientUserId]
+    [Number(notificationId), recipientUserId]
   );
 };
 
