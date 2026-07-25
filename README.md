@@ -1,0 +1,320 @@
+<div align="center">
+
+# WORKSYNC
+
+### Enterprise Office and Task Management System
+
+![WorkSync Banner](https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=220&section=header&text=WorkSync%20Core&fontSize=52&animation=twinkling&fontColor=ffffff)
+
+[![Vite](https://img.shields.io/badge/Vite-6.4.3-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![React](https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5.3-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-3.4.1-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License](https://img.shields.io/badge/License-MIT-22c55e.svg?style=for-the-badge)](LICENSE)
+
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=22&pause=1000&color=00F2FE&center=true&vCenter=true&width=650&lines=Team+Members+Management;Personal+Profile+%26+Settings;Dashboard+%2B+Login+%2B+Frontend;Project+Management+%2B+Calendar;Task+Creation+%2B+Comments;Kanban+Board+%2B+Notifications;Reports+%2B+Activity+Log;Prompt+Builder+%2B+Attendance" alt="Typing SVG" />
+
+<p align="center">
+  <a href="#-about-worksync"><b>About</b></a> |
+  <a href="#-team-and-module-assignments"><b>Team Modules</b></a> |
+  <a href="#-all-10-interns-module-showcase"><b>Module Showcase</b></a> |
+  <a href="#-database-architecture"><b>Database</b></a> |
+  <a href="#-role-access-matrix"><b>Role Access</b></a> |
+  <a href="#-tech-stack"><b>Tech Stack</b></a> |
+  <a href="#-getting-started"><b>Getting Started</b></a>
+</p>
+
+</div>
+
+---
+
+## 🌟 About WorkSync
+
+**WorkSync** is a Cyberpunk Glassmorphism Enterprise Office Management System built for modern software engineering teams. It delivers real-time task orchestration, granular role-based access control (RBAC), attendance tracking, AI-powered prompt generation, Kanban boards, project calendars, and complete audit trail logging.
+
+> Built by a team of **10 active interns** each owning a dedicated module, following a **70-table PostgreSQL 3NF schema** and a functional specification that covers permanent and temporary access roles, approval workflows, and full notification routing.
+
+---
+
+## 👥 Team and Module Assignments
+
+```text
++-------+-----------------------+------------------------------+--------------+
+|  No.  | Intern                | Assigned Module              | Status       |
++-------+-----------------------+------------------------------+--------------+
+|  01   | Salman-ahmed-2        | Dashboard / Login / Frontend | In Progress  |
+|  02   | TahaSohail-Goat       | Dashboard / Frontend         | In Progress  |
+|  03   | laibainqilab-ds       | Project Management / Calendar| In Progress  |
+|  04   | abihajibbran1-lang    | Task Creation / Comments     | In Progress  |
+|  05   | Bilalmughal-07        | Kanban Board / Notifications | In Progress  |
+|  06   | meowryam              | Reports                      | In Progress  |
+|  07   | AbdulAzeemHashmi      | Team Members / Profile /     | Completed    |
+|       |                       | Settings                     |              |
+|  08   | hassaanahmed-dev      | Prompt Builder               | In Progress  |
+|  09   | inshrahmumtaz         | Attendance and Breaks        | In Progress  |
+|  10   | muhammad-haris2       | Activity Log                 | In Progress  |
++-------+-----------------------+------------------------------+--------------+
+```
+
+---
+
+## 🏆 All 10 Interns Module Showcase
+
+### 1. 🖥️ Dashboard / Login / Frontend
+**Assigned to**: [`@Salman-ahmed-2`](https://github.com/Salman-ahmed-2) + [`@TahaSohail-Goat`](https://github.com/TahaSohail-Goat)
+
+* 🏠 Central workspace dashboard with project, task, and attendance overview cards.
+* 🔐 Role-selector login screen for Admin, Team Lead, HR, and Team Member access.
+* 🎨 Glassmorphism dark mode UI with cyan/purple gradient design system.
+* 📱 Responsive sidebar with collapsible navigation and keyboard shortcuts.
+
+---
+
+### 2. 📅 Project Management and Calendar
+**Assigned to**: [`@laibainqilab-ds`](https://github.com/laibainqilab-ds)
+
+* 📁 Full project CRUD operations with approval workflows.
+* 🗓️ Calendar view showing deadlines, milestones, meetings, and leave events.
+* 📊 Progress tracking with milestone completion and task status distribution.
+* 🔒 Admin activation requirement configuration per project.
+
+---
+
+### 3. ✅ Task Creation and Comments
+**Assigned to**: [`@abihajibbran1-lang`](https://github.com/abihajibbran1-lang)
+
+* 📝 Protected task creation with approval routing through Team Lead.
+* 💬 Asynchronous discussion threads on tasks with @mentions.
+* 🚧 Blocker reporting with mandatory explanation requirement.
+* 🔄 Status workflow: Todo, In Progress, Review, Done, Blocked.
+* 📎 File attachment upload for tasks and completion evidence.
+
+---
+
+### 4. 📋 Kanban Board and Notifications
+**Assigned to**: [`@Bilalmughal-07`](https://github.com/Bilalmughal-07)
+
+* 🎯 Drag and drop Kanban board with column-based task flow management.
+* 🔔 Real-time notification inbox with read/unread state management.
+* 🏷️ Priority and status filters on the Kanban view.
+* 📲 Push notification routing matrix for all workspace events.
+
+---
+
+### 5. 📈 Reports
+**Assigned to**: [`@meowryam`](https://github.com/meowryam)
+
+* 📊 Project progress, overdue tasks, workload distribution, and completion trends.
+* 💾 Saved report filters with scheduled generation support.
+* 📤 Report export in multiple formats.
+* 🔐 Role-scoped report access (Admin: all, Team Lead: assigned projects, HR: attendance).
+
+---
+
+### 6. 👥 Team Members / Personal Profile / Settings
+**Assigned to**: [`@AbdulAzeemHashmi`](https://github.com/AbdulAzeemHashmi)
+
+**Team Members**
+
+* 📊 Member Hub with grid card and compact table dual view modes.
+* 🔍 Live search by Name, Email, GitHub handle, Department, and Title.
+* ✏️ Add, Edit, and Delete member modals with full form validation.
+* 🚨 Task Reassignment Safety Check blocks deletion when active tasks exist.
+* 💾 LocalStorage persistence for all user state across browser refreshes.
+
+**Personal Profile**
+
+* 🎨 Role-aware profile hero banner with status indicator and GitHub link.
+* ✏️ Edit Profile modal covering name, email, title, department, status, and GitHub handle.
+* 🔴 Admin panel: System stats strip showing Active Users, Open Tasks, and Active Projects.
+* 🟣 Team Lead panel: My Team tab showing reporting members with task counts.
+* 🩷 HR panel: My HR Requests tab for submitted and reviewed HR requests.
+
+**Settings**
+
+* 🌙 Dark/Light mode theme toggle.
+* 🔔 Email, In-App, and Weekly Digest notification preference toggles.
+* 🔒 Password update interface with inline validation feedback.
+* ⏰ Office hours configuration (Admin/HR: edit, Team Lead: read only, Member: hidden).
+* 🛡️ Admin Safeguards: Masked AI API key, JSON Vault export, and Sole Admin protection check.
+
+---
+
+### 7. 🤖 Prompt Builder
+**Assigned to**: [`@hassaanahmed-dev`](https://github.com/hassaanahmed-dev)
+
+* 💡 AI-powered prompt generation for project and task context.
+* 📝 Editable generated output with version history tracking.
+* 🗃️ Saved prompts library organized by category.
+* 🔐 Prompt Builder scoped to data accessible by the current user role.
+
+---
+
+### 8. 🕐 Attendance and Breaks
+**Assigned to**: [`@inshrahmumtaz`](https://github.com/inshrahmumtaz)
+
+* ✅ Daily check-in and check-out with working hours calculation.
+* ☕ Break timer with Lunch, Short Break, and Other break type categorization.
+* 📋 Leave request submission (Casual, Sick, Annual, Unpaid) with HR review routing.
+* 🩷 Attendance correction requests with HR approval workflow.
+* 🚫 HR self-approval prevention and Administrator fallback routing.
+
+---
+
+### 9. 📋 Activity Log
+**Assigned to**: [`@muhammad-haris2`](https://github.com/muhammad-haris2)
+
+* 📜 Append-only activity log for all workspace operations.
+* 🔍 Filter by actor, action type, target entity, and date range.
+* 🏷️ Scope-filtered views per role (Admin: all activity, others: scoped).
+* 🔗 Action entries linked to target projects, tasks, attendance, and settings records.
+
+---
+
+## 🗄️ Database Architecture
+
+The system runs on **PostgreSQL 16+** normalized to **Third Normal Form (3NF)** with **70 tables** across **11 business schemas**.
+
+```text
+                 +-----------------------------------------+
+                 |        POSTGRESQL 16+ DATABASE          |
+                 |     70 Tables / 11 Business Schemas     |
+                 +-----------------------------------------+
+                                    |
+    +-------+-------+-------+-------+-------+-------+-------+-------+
+    v       v       v       v       v       v       v       v       v
+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +----+
+ | org | | iam | |work | |collab| | hr | | cal | | rpt | |audit| | ai |
+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +-----+ +----+
+  3 tbl  10 tbl  18 tbl   8 tbl  13 tbl   3 tbl   4 tbl   2 tbl  2 tbl
+```
+
+<details>
+<summary><b>🔍 Click to Expand: All 11 Schemas</b></summary>
+
+| # | Schema | Tables | Responsibility |
+|---|---|:---:|---|
+| 1 | `org` | 3 | Organizations, Departments, Teams |
+| 2 | `iam` | 10 | Users, Roles, Permissions, Scopes, History |
+| 3 | `work` | 18 | Projects, Tasks, Blockers, Change Requests |
+| 4 | `collab` | 8 | Files, Discussions, Comments, Mentions |
+| 5 | `hr` | 13 | Attendance, Corrections, Leave, Schedules |
+| 6 | `calendar` | 3 | Events, EventTypes, EventAttendees |
+| 7 | `reporting` | 4 | Report Definitions, Runs, Exports |
+| 8 | `ai` | 2 | Prompt Output Types and Generation History |
+| 9 | `notify` | 4 | Notification Types, Preferences, Inbox |
+| 10 | `config` | 3 | Organization and User Settings |
+| 11 | `audit` | 2 | Append-only Audit Events and Field Changes |
+
+</details>
+
+---
+
+## 🔐 Role Access Matrix
+
+<details>
+<summary><b>🔍 Click to Expand Role Permissions</b></summary>
+
+| Feature | 🔴 Admin | 🟣 Team Lead | 🩷 HR | 🔵 Team Member |
+|---|:---:|:---:|:---:|:---:|
+| Create/Edit/Delete Projects | ✅ | Assigned only | ❌ | ❌ |
+| Create/Assign Tasks | ✅ | Assigned projects | ❌ | ❌ |
+| Approve Protected Changes | ✅ Override | Assigned projects | ❌ | ❌ |
+| View All Reports | ✅ | Assigned scope | Attendance only | Personal only |
+| Manage All Attendance | ✅ | ❌ | Within HR scope | ❌ |
+| Grant/Revoke Temp Roles | ✅ | ❌ | ❌ | ❌ |
+| Edit Own Profile | ✅ | ✅ | ✅ | ✅ |
+| View Team Members Tab | ✅ | ✅ | ✅ | ✅ |
+| View Admin Quick Stats | ✅ | ❌ | ❌ | ❌ |
+| View My Team Tab | ❌ | ✅ | ❌ | ❌ |
+| View HR Requests Tab | ❌ | ❌ | ✅ | ❌ |
+| Edit Office Hours | ✅ | Read only | ✅ | Hidden |
+| Export System Backup | ✅ | ❌ | ❌ | ❌ |
+| View Masked AI Key | ✅ | ❌ | ❌ | ❌ |
+| Admin Safeguard Test | ✅ | ❌ | ❌ | ❌ |
+
+</details>
+
+---
+
+## 💻 Tech Stack
+
+| Category | Technology |
+|---|---|
+| Framework | React 18 + TypeScript 5.5 |
+| Build Tool | Vite 6.4 |
+| Styling | Vanilla CSS + Tailwind CSS 3.4 + Custom Glassmorphism |
+| Icons | Lucide React |
+| State | React Context API + LocalStorage Persistence |
+| Database | PostgreSQL 16+ (70 tables, 11 schemas, 163 FK relations) |
+
+---
+
+## ⚡ Getting Started
+
+### Prerequisites
+
+* Node.js v18.0.0 or higher
+* npm v9.0.0 or higher
+
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/Salman-ahmed-2/worksync.git
+   cd worksync
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
+
+4. **Open in browser**:
+   ```
+   http://localhost:5173
+   ```
+
+### Build Verification
+
+```bash
+npm run build
+```
+
+Expected output:
+```text
+vite v6.4.3 building for production...
+transforming...
+2088 modules transformed.
+dist/index.html                   0.87 kB
+dist/assets/index.css            73.73 kB
+dist/assets/index.js            471.38 kB
+built in 8.15s
+```
+
+---
+
+## 📂 Specification Documents
+
+| Document | Format | Description |
+|---|:---:|---|
+| `Office_Management_System_Roles_Permissions_and_Workflows.docx` | DOCX | Roles, permissions, approval workflows, and notification routing functional spec |
+| `OfficeManagementDB_PostgreSQL_Schema_and_ERD_Report.docx` | DOCX | 70-table PostgreSQL 3NF schema design and full ERD report |
+| `docs/Office_Management_System_Roles_Permissions_and_Workflows_content.txt` | TXT | Plaintext extracted content for direct reading |
+| `docs/OfficeManagementDB_PostgreSQL_Schema_and_ERD_Report_content.txt` | TXT | Plaintext schema dictionary, integrity rules, and deployment guidance |
+
+---
+
+<div align="center">
+
+Built with ❤️ by the **WorkSync Intern Team**
+
+[![GitHub Org](https://img.shields.io/badge/Repository-Salman--ahmed--2%2Fworksync-181717?style=flat-square&logo=github)](https://github.com/Salman-ahmed-2/worksync)
+
+</div>
