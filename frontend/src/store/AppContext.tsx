@@ -324,6 +324,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Confirms to the person who just performed an action that it actually went through — a
+  // success toast for the actor themselves, independent of dispatchNotifications above. The
+  // actor is almost always excluded from a trigger's own recipient list (nobody needs to be
+  // told about the action they just took), so without this they'd get no feedback at all that
+  // e.g. their status change or task edit succeeded. Respects the same toast preference toggle
+  // as every other notification toast.
+  const confirmActionSuccess = (title: string, message: string) => {
+    if (notificationPreferences.toast) {
+      pushToast('success', title, message);
+    }
+  };
+
   // Due-date reminder scanner (FR-18: "Due Tomorrow" — 24 hours before deadline).
   // There is no backend scheduler in this prototype (see docs/Notification_Module_Guide.md
   // §9), so this is a frontend stopgap: it scans `tasks` for anything exactly one calendar
@@ -432,17 +444,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         linkRoute: 'approvals',
         projectId: newProjId
       });
-    } else if (newProject.teamLeadId !== currentUser.id) {
+      confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
+    } else {
+      // Notify the Team Lead AND every project member — previously only the Team Lead was
+      // notified (as "assigned you as Team Lead"), so members added to a brand-new project got
+      // no notification at all that it existed. resolveProjectRecipients already excludes the
+      // acting Admin, so this is a no-op if the Admin assigned only themselves.
+      const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
       dispatchNotifications({
-        recipientIds: resolveSingleRecipient(newProject.teamLeadId, currentUser.id),
+        recipientIds: projectCreatedRecipients,
         type: 'project_created',
-        title: 'New Project Assigned',
-        message: `${currentUser.name} assigned you as Team Lead for "${newProject.title}".`,
+        title: 'New Project Created',
+        message: `${currentUser.name} created the new project "${newProject.title}".`,
+        recipientMessages: {
+          [newProject.teamLeadId]: `${currentUser.name} created the new project "${newProject.title}" and assigned you as Team Lead.`
+        },
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'projects',
         projectId: newProjId
       });
+      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
     }
 
     pushActivity('Created project', 'Project', newProjId, newProject.title);
@@ -474,6 +496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
+    if (project) confirmActionSuccess('Project Approved', `"${project.title}" was approved successfully.`);
     pushActivity('Approved project proposal', 'Project', projectId, 'Project Approval');
   };
 
@@ -503,6 +526,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
+    if (project) confirmActionSuccess('Project Rejected', `"${project.title}" was rejected successfully.`);
     pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
   };
 
@@ -586,6 +610,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
       );
     }
+
+    confirmActionSuccess('Project Updated', `Your changes to "${data.title || project.title}" were saved successfully.`);
   };
 
   const deleteProject = (projectId: string) => {
@@ -609,6 +635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       projectId
     });
 
+    confirmActionSuccess('Project Deleted', `"${project.title}" was deleted successfully.`);
     pushActivity('Deleted project', 'Project', projectId, project.title);
   };
 
@@ -669,6 +696,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       taskId: result.task.id
     });
 
+    confirmActionSuccess('Task Created', `"${result.task.title}" was created successfully.`);
     return result;
   };
 
@@ -777,6 +805,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           taskId
         });
       }
+
+      confirmActionSuccess('Task Updated', `Your changes to "${after.title}" were saved successfully.`);
     }
 
     return result;
@@ -810,6 +840,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
+    if (task) confirmActionSuccess('Task Deleted', `"${task.title}" was deleted successfully.`);
     return result;
   };
 
@@ -891,6 +922,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectId: task.projectId,
         taskId
       });
+      confirmActionSuccess('Task Approved', `You approved "${task.title}" successfully. It has been moved to Done.`);
     } else if (extraInfo?.reviewDecision === 'Reject') {
       dispatchNotifications({
         recipientIds: baseRecipients,
@@ -903,6 +935,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectId: task.projectId,
         taskId
       });
+      confirmActionSuccess('Task Rejected', `You rejected "${task.title}" successfully. It has been returned to In Progress.`);
     } else if (newStatus === 'Review') {
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(project?.teamLeadId, currentUser.id),
@@ -915,6 +948,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectId: task.projectId,
         taskId
       });
+      confirmActionSuccess('Review Requested', `You moved "${task.title}" to Review successfully.`);
     } else if (newStatus === 'Done') {
       dispatchNotifications({
         recipientIds: baseRecipients,
@@ -927,6 +961,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectId: task.projectId,
         taskId
       });
+      confirmActionSuccess('Task Completed', `You marked "${task.title}" as Done successfully.`);
     } else {
       dispatchNotifications({
         recipientIds: baseRecipients,
@@ -939,6 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectId: task.projectId,
         taskId
       });
+      confirmActionSuccess('Status Updated', `You moved "${task.title}" to ${newStatus} successfully.`);
     }
 
     return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
@@ -1005,6 +1041,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       taskId
     });
 
+    confirmActionSuccess('Request Submitted', `Your ${field} change request for "${task.title}" was submitted successfully.`);
     pushActivity(`Proposed controlled edit on ${field}`, 'Task', taskId, task.title);
   };
 
@@ -1044,6 +1081,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         taskId: item.targetId,
         projectId: relatedProject?.id
       });
+      confirmActionSuccess('Request Approved', `You approved the ${field} change on "${item.targetTitle}" successfully.`);
     }
     pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
   };
@@ -1070,6 +1108,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         taskId: item.type === 'Project_Creation' ? undefined : item.targetId,
         projectId: item.type === 'Project_Creation' ? item.targetId : undefined
       });
+      confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
     }
   };
 

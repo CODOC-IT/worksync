@@ -113,6 +113,14 @@ dispatchNotifications(input: SendNotificationInput)
    └─▶ pushToast(...) for any created item addressed to the current viewer
             └─▶ setToasts(prev => [...prev, toast])
 
+confirmActionSuccess(title, message)   ← called separately, right after dispatchNotifications,
+   │                                     by the SAME action that just ran
+   └─▶ pushToast('success', title, message)
+            (the actor is almost always excluded from their own event's recipientIds — nobody
+            needs to be told about the action they just took — so without this the person who
+            just changed a status, created a task, approved a request, etc. would get no
+            feedback at all that it succeeded)
+
 NotificationBell / NotificationsView
    │
    └─▶ notificationService.getNotificationsByUser(notifications, currentUser.id, currentRole)
@@ -196,7 +204,7 @@ regardless of role.
 | Checklist completed | `AppContext.updateTask` | Fires when `subtasks` transitions from not-all-complete to all-complete |
 | Task deleted | `AppContext.deleteTask` | |
 | Task status changed / Review requested / Review approved / Review rejected / Task completed | `AppContext.updateTaskStatus` | Same action the Project Board module already calls; this branch only adds the notification dispatch, no board logic changed |
-| Project created | `AppContext.createProject` | Admin-created project assigning a different Team Lead → notifies that Team Lead. Team-Lead-created (needs approval) → notifies Admins (`approval` type) |
+| Project created | `AppContext.createProject` | Admin-created → notifies the Team Lead **and every project member** via `resolveProjectRecipients` (previously only the Team Lead was notified, as "assigned you as Team Lead" — members added to a brand-new project got nothing). The Team Lead's copy is personalized via `recipientMessages` to also say "and assigned you as Team Lead"; everyone else just reads "created the new project". Team-Lead-created (needs approval) → notifies Admins (`approval` type) |
 | Project approved / rejected | `AppContext.approveProject` / `rejectProject` | Notifies the original requester |
 | Project updated / archived / restored | `AppContext.updateProject` | Detected via `status` transitions in/out of `'Archived'` |
 | User added to / removed from project | `AppContext.updateProject` | Diffs `memberIds` before/after |
