@@ -446,25 +446,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
     } else {
-      // Notify the Team Lead AND every project member — previously only the Team Lead was
-      // notified (as "assigned you as Team Lead"), so members added to a brand-new project got
-      // no notification at all that it existed. resolveProjectRecipients already excludes the
-      // acting Admin, so this is a no-op if the Admin assigned only themselves.
-      const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
+      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
+    }
+
+    // Notify the Team Lead AND every project member that the project now exists — regardless
+    // of whether it's Active (Admin-created) or Pending Approval (Team-Lead-created; members
+    // can already see it in the Projects list either way). Previously: Admin-created projects
+    // only notified the Team Lead ("assigned you as Team Lead"), leaving members with no
+    // notification at all; Team-Lead-created projects notified nobody but Admins. Both gaps
+    // are fixed here in one shared block instead of two near-duplicate ones.
+    const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
+    if (projectCreatedRecipients.length > 0) {
+      const projectCreatedMessages: Record<string, string> = {};
+      projectCreatedRecipients.forEach((recipientId) => {
+        projectCreatedMessages[recipientId] =
+          recipientId === newProject.teamLeadId
+            ? `${currentUser.name} created the new project "${newProject.title}" and assigned you as Team Lead.`
+            : `${currentUser.name} created the new project "${newProject.title}" and added you as a member.`;
+      });
+
       dispatchNotifications({
         recipientIds: projectCreatedRecipients,
         type: 'project_created',
         title: 'New Project Created',
         message: `${currentUser.name} created the new project "${newProject.title}".`,
-        recipientMessages: {
-          [newProject.teamLeadId]: `${currentUser.name} created the new project "${newProject.title}" and assigned you as Team Lead.`
-        },
+        recipientMessages: projectCreatedMessages,
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: 'projects',
         projectId: newProjId
       });
-      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
     }
 
     pushActivity('Created project', 'Project', newProjId, newProject.title);
