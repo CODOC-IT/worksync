@@ -99,6 +99,8 @@ interface AppState {
   };
   // Actions
   setRole: (role: UserRole) => void;
+  refreshUsers: () => void;
+  onUserRegistered: (user: User) => void;
   toggleTheme: () => void;
   createProject: (data: Partial<Project>) => void;
   approveProject: (projectId: string) => void;
@@ -211,8 +213,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Fetch persisted database users on mount
-  useEffect(() => {
+  const refreshUsers = () => {
     fetch('/api/auth/users')
       .then((res) => res.json())
       .then((data) => {
@@ -223,6 +224,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch(() => {
         // Silently keep default users if offline
       });
+  };
+
+  const onUserRegistered = (newUser: User) => {
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.email.toLowerCase() === newUser.email.toLowerCase());
+      if (exists) return prev;
+      return [...prev, newUser];
+    });
+    setCurrentUser(newUser);
+    setCurrentRole(newUser.role);
+    refreshUsers();
+  };
+
+  // Fetch persisted database users on mount
+  useEffect(() => {
+    refreshUsers();
   }, []);
 
   useEffect(() => {
@@ -1445,6 +1462,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeBreak,
         settings,
         setRole,
+        refreshUsers,
+        onUserRegistered,
         toggleTheme,
         createProject,
         approveProject,

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
@@ -11,7 +11,7 @@ interface SignupViewProps {
 }
 
 export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitchToLogin }) => {
-  const { setRole } = useApp();
+  const { setRole, onUserRegistered } = useApp();
 
   const [name, setName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
@@ -25,6 +25,28 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showOTP, setShowOTP] = useState<boolean>(false);
+  const [roleStatus, setRoleStatus] = useState<{ hasAdmin: boolean; hasHR: boolean }>({
+    hasAdmin: false,
+    hasHR: false
+  });
+
+  // Fetch role occupancy on mount
+  useEffect(() => {
+    fetch('/api/auth/role-status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setRoleStatus({ hasAdmin: Boolean(data.hasAdmin), hasHR: Boolean(data.hasHR) });
+          // If currently selected role is occupied, fallback to Team_Member
+          if ((role === 'Admin' && data.hasAdmin) || (role === 'HR' && data.hasHR)) {
+            setRoleState('Team_Member');
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback silently if offline
+      });
+  }, []);
 
   // Check if role requires Department & Job Title fields
   const isLeadOrMember = role === 'Team_Lead' || role === 'Team_Member';
@@ -99,6 +121,16 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       return;
     }
 
+    // 5. Singleton Role Guard (Admin & HR)
+    if (role === 'Admin' && roleStatus.hasAdmin) {
+      setErrorMsg('An Administrator account already exists in this organization. Only one Admin is permitted.');
+      return;
+    }
+    if (role === 'HR' && roleStatus.hasHR) {
+      setErrorMsg('An HR Specialist account already exists in this organization. Only one HR is permitted.');
+      return;
+    }
+
     setLoading(true);
 
     // Determine final department & title based on role
@@ -119,7 +151,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       const res = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), name: name.trim() })
+        body: JSON.stringify({ email: email.trim(), name: name.trim(), role })
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || 'Failed to send verification code.');
@@ -134,6 +166,9 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   const handleOTPSuccess = (_token: string, user: any) => {
     const userRole: UserRole = user?.role || role;
     setRole(userRole);
+    if (user && onUserRegistered) {
+      onUserRegistered(user);
+    }
     onSignupSuccess();
   };
 
@@ -321,8 +356,20 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                   >
                     <option value="Team_Member" className="bg-slate-900">Team Member</option>
                     <option value="Team_Lead" className="bg-slate-900">Team Lead</option>
-                    <option value="HR" className="bg-slate-900">HR Specialist</option>
-                    <option value="Admin" className="bg-slate-900">Administrator</option>
+                    <option
+                      value="HR"
+                      disabled={roleStatus.hasHR}
+                      className={roleStatus.hasHR ? 'bg-slate-900 text-slate-500 line-through' : 'bg-slate-900'}
+                    >
+                      {roleStatus.hasHR ? 'HR Specialist (Occupied - 1 Max)' : 'HR Specialist'}
+                    </option>
+                    <option
+                      value="Admin"
+                      disabled={roleStatus.hasAdmin}
+                      className={roleStatus.hasAdmin ? 'bg-slate-900 text-slate-500 line-through' : 'bg-slate-900'}
+                    >
+                      {roleStatus.hasAdmin ? 'Administrator (Occupied - 1 Max)' : 'Administrator'}
+                    </option>
                   </select>
                 </div>
               </div>

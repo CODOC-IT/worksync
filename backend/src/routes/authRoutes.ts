@@ -45,6 +45,15 @@ router.post('/login', async (req, res: Response): Promise<void> => {
   }
 });
 
+// GET /api/auth/role-status
+router.get('/role-status', (_req, res: Response): void => {
+  res.status(200).json({
+    success: true,
+    hasAdmin: userStore.hasRole('Admin'),
+    hasHR: userStore.hasRole('HR')
+  });
+});
+
 // POST /api/auth/register
 router.post('/register', async (req, res: Response): Promise<void> => {
   try {
@@ -54,6 +63,22 @@ router.post('/register', async (req, res: Response): Promise<void> => {
       res.status(400).json({
         success: false,
         message: 'Name, email, password, role, and department are required.'
+      });
+      return;
+    }
+
+    if (role === 'Admin' && userStore.hasRole('Admin')) {
+      res.status(409).json({
+        success: false,
+        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
+      });
+      return;
+    }
+
+    if (role === 'HR' && userStore.hasRole('HR')) {
+      res.status(409).json({
+        success: false,
+        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
       });
       return;
     }

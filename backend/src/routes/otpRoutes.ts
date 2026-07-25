@@ -48,6 +48,23 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    const requestedRole = req.body.role as UserRole | undefined;
+    if (requestedRole === 'Admin' && userStore.hasRole('Admin')) {
+      res.status(409).json({
+        success: false,
+        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
+      });
+      return;
+    }
+
+    if (requestedRole === 'HR' && userStore.hasRole('HR')) {
+      res.status(409).json({
+        success: false,
+        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
+      });
+      return;
+    }
+
     // Email format check
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email.trim())) {

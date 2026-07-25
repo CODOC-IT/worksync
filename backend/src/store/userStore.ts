@@ -135,6 +135,10 @@ class UserStore {
     return Array.from(this.users.values());
   }
 
+  public hasRole(role: UserRole): boolean {
+    return Array.from(this.users.values()).some((user) => user.role === role);
+  }
+
   public createUser(userData: {
     name: string;
     email: string;
@@ -146,6 +150,14 @@ class UserStore {
     const existing = this.findByEmail(userData.email);
     if (existing) {
       throw new Error('User with this email already exists.');
+    }
+
+    if (userData.role === 'Admin' && this.hasRole('Admin')) {
+      throw new Error('An Administrator account already exists in this organization. Only one Admin is permitted.');
+    }
+
+    if (userData.role === 'HR' && this.hasRole('HR')) {
+      throw new Error('An HR Specialist account already exists in this organization. Only one HR is permitted.');
     }
 
     const newUser: UserRecord = {
