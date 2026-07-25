@@ -3,13 +3,15 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
+import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 
 const router = Router();
 
 // POST /api/auth/login
-router.post('/login', async (req, res: Response): Promise<void> => {
+router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
     if (!email || !password) {
       res.status(400).json({ success: false, message: 'Email and password are required.' });
@@ -22,11 +24,18 @@ router.post('/login', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    if (user.status !== 'active') {
+      res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
+      return;
+    }
+
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     if (!isValidPassword) {
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
+
+    resetLoginAttempts(ip);
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
@@ -67,6 +76,38 @@ router.post('/register', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
+
+    if (sanitizedName.length < 4) {
+      res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
+      return;
+    }
+
+    const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
+    if (nameParts.length < 2) {
+      res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
+      return;
+    }
+
+    if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
+      res.status(400).json({ success: false, message: 'First name and last name cannot be the same.' });
+      return;
+    }
+
+    if (userStore.findByName(sanitizedName)) {
+      res.status(409).json({
+        success: false,
+        message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
+      });
+      return;
+    }
+
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(email)) {
+      res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
+      return;
+    }
+
     if (role === 'Admin' && userStore.hasRole('Admin')) {
       res.status(409).json({
         success: false,
@@ -91,7 +132,7 @@ router.post('/register', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const newUser = userStore.createUser({ name, email, password, role, department, title });
+    const newUser = userStore.createUser({ name: sanitizedName, email, password, role, department, title });
 
     const token = jwt.sign(
       { id: newUser.id, email: newUser.email, role: newUser.role },
