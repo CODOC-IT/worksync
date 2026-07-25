@@ -407,7 +407,7 @@ built-in `node:test` runner (`npx tsx --test backend/src/notifications/notificat
 matching this repo's only existing test file's convention (`assistantRoutes.test.ts`) — no
 Jest/Vitest.
 
-Two pg-mem-specific gotchas worth knowing if you extend these tests:
+Three pg-mem-specific gotchas worth knowing if you extend these tests:
 
 - **Don't use `db.backup()`/`.restore()` for per-test cleanup.** It looked correct in isolation
   but left the `Pool` (created once via `db.adapters.createPg()` in `before()`) out of sync with
@@ -421,6 +421,18 @@ Two pg-mem-specific gotchas worth knowing if you extend these tests:
   against the same column without `UNIQUE`). `notify.NotificationTypes.TypeCode` is `UNIQUE` in
   the real schema, so the test DDL deliberately omits that constraint — a documented test-only
   simplification, not a production behavior change.
+- **`COUNT(*) FILTER (WHERE ...)` is silently ignored** — pg-mem returns the unfiltered total for
+  every aggregate in the same `SELECT`, rather than erroring or applying the filter (confirmed
+  with a minimal reproduction: `COUNT(*), COUNT(*) FILTER (WHERE x)` returned the same number for
+  both). `notification.repository.ts`'s `getDeliveryAnalytics` uses
+  `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` instead — functionally identical on real Postgres, and
+  portable rather than a test-only workaround, so no test DDL simplification was needed here.
+- **`CURRENT_TIMESTAMP` compared against a `timestamptz` column via `<=`/`>=` inside a
+  parenthesized `OR` can throw `cannot cast type timestamp to timestamptz`** — pg-mem's type
+  inference for the bare `CURRENT_TIMESTAMP` keyword doesn't always resolve to `timestamptz` the
+  way real Postgres does. `now()` (a real function call, unambiguously `timestamptz`) works
+  correctly in the same position — used for the `SnoozedUntilUtc` comparisons in `findByUser`/
+  `findUnreadByUser`.
 
 ## 11. Database Integration (Implemented)
 
