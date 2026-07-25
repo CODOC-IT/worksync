@@ -281,6 +281,17 @@ router.get('/users', (_req, res: Response): void => {
   res.status(200).json({ success: true, users });
 });
 
+// GET /api/auth/check-email?email=...
+router.get('/check-email', (req, res: Response): void => {
+  const email = req.query.email as string;
+  if (!email) {
+    res.status(400).json({ success: false, message: 'Email query parameter required.' });
+    return;
+  }
+  const user = userStore.findByEmail(email.trim().toLowerCase());
+  res.status(200).json({ success: true, exists: !!user });
+});
+
 // POST /api/auth/logout
 router.post('/logout', authenticateJWT, (_req, res: Response): void => {
   res.status(200).json({ success: true, message: 'Logout successful.' });
