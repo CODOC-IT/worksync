@@ -27,6 +27,7 @@ const Toast: React.FC<{ toast: ToastItem; onDismiss: (id: string) => void }> = (
   return (
     <div
       role="status"
+      title={`${toast.title}: ${toast.message}`}
       className={`glass-panel-glow pointer-events-auto flex w-80 max-w-[90vw] items-start gap-3 border p-3.5 shadow-2xl animate-in fade-in slide-in-from-right-4 duration-200 ${TOAST_TONE_CLASSES[toast.tone]}`}
     >
       <Icon size={18} className="mt-0.5 shrink-0" />
