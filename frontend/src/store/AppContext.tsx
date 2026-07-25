@@ -324,6 +324,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Due-date reminder scanner (FR-18: "Due Tomorrow" — 24 hours before deadline).
+  // There is no backend scheduler in this prototype (see docs/Notification_Module_Guide.md
+  // §9), so this is a frontend stopgap: it scans `tasks` for anything exactly one calendar
+  // day from its due date and fires a `task_due_tomorrow` reminder automatically, with no
+  // user action required. Recipients follow the same rule as every other task notification
+  // (resolveTaskRecipients: assignee(s) + creator + the project's Team Lead) since the PRD's
+  // Due Tomorrow recipients are "Assigned Members + Team Lead", not the assignee alone.
+  // `dueReminderSentRef` deduplicates by task+day so re-scans (interval tick, task list
+  // change) never re-notify for a date already covered — it resets on page reload along with
+  // the rest of this in-memory prototype's state.
+  const dueReminderSentRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const checkDueTomorrowReminders = () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const today = new Date(`${todayStr}T00:00:00`);
+
+      tasks.forEach((task) => {
+        if (task.status === 'Done') return;
+
+        const dueDate = new Date(`${task.dueDate}T00:00:00`);
+        if (Number.isNaN(dueDate.getTime())) return;
+
+        const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays !== 1) return;
+
+        const dedupeKey = `${task.id}:due_tomorrow:${todayStr}`;
+        if (dueReminderSentRef.current.has(dedupeKey)) return;
+        dueReminderSentRef.current.add(dedupeKey);
+
+        const project = projects.find((p) => p.id === task.projectId);
+        dispatchNotifications({
+          recipientIds: resolveTaskRecipients({ task, project }),
+          type: 'task_due_tomorrow',
+          title: 'Task Due Tomorrow',
+          message: `"${task.title}" is due tomorrow (${task.dueDate}).`,
+          linkRoute: 'tasks',
+          projectId: task.projectId,
+          taskId: task.id
+        });
+      });
+    };
+
+    checkDueTomorrowReminders();
+    const interval = setInterval(checkDueTomorrowReminders, 60 * 60 * 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, projects]);
+
   // Create Project (Role Enforcement: TL creation needs Admin approval)
   const createProject = (data: Partial<Project>) => {
     const isAdmin = currentRole === 'Admin';

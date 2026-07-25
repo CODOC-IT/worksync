@@ -202,17 +202,33 @@ regardless of role.
 | Mention | `AppContext.sendChatMessage` | Simple `@Full Name` substring match against `users` — see §11 limitations |
 | User deactivated | `AppContext.deactivateUser` | Notifies Admins + the affected user |
 | Backup completed | `AppContext.exportBackup` | Notifies Admins including the acting Admin (self-notification doubles as an in-app success confirmation) |
+| Task due tomorrow | `AppContext`'s due-date reminder scanner (`useEffect` + `setInterval`, next to `dispatchNotifications`) | Frontend-only stopgap scheduler — see below |
+
+### Due-date reminder scanner (task_due_tomorrow)
+
+There is no backend job runner in this prototype, so "24 hours before deadline" (FR-18) is
+approximated by a `useEffect` in `AppProvider` that runs once on mount and then every hour
+(`setInterval(..., 60 * 60 * 1000)`), plus whenever `tasks`/`projects` change. On each run it
+scans every non-`Done` task; any task exactly one calendar day from its `dueDate` gets a
+`task_due_tomorrow` notification via the normal `dispatchNotifications` → `resolveTaskRecipients`
+path (assignee(s) + creator + the project's Team Lead — matching the PRD's stated "Assigned
+Members + Team Lead" recipients, not the assignee alone).
+
+A `dueReminderSentRef` (`useRef<Set<string>>`, key `${taskId}:due_tomorrow:${todayStr}`)
+deduplicates so the hourly re-scan — or a task/project list change — never re-fires the same
+task's reminder twice on the same calendar day. Like the rest of this prototype's state, the
+dedupe set resets on page reload.
 
 **Defined in the taxonomy but not wired to a live trigger** (no underlying feature exists yet
 to call them from — adding one would be out of this module's scope):
 
 - `comment_added`, `attachment_uploaded` — there is no Comments/Attachments mutation module in
   `AppContext` yet (`TaskComment`/`TaskAttachment` types exist but nothing creates instances).
-- `task_due_today` / `task_due_tomorrow` / `task_overdue` — the PRD wants these on a 9am /
-  24h-before schedule; there is no scheduler/cron in this frontend-only prototype. A future
-  backend job (or a `setInterval`-based check against `task.dueDate` on app load, if a
-  frontend-only stopgap is wanted) would call `sendNotification` with these types exactly the
-  way every other trigger does.
+- `task_due_today` / `task_overdue` — not yet wired, but trivial to add: the due-date reminder
+  scanner above already computes `diffDays` per task each pass; a `diffDays === 0` branch
+  (Due Today) or `diffDays < 0` branch (Overdue) would reuse the exact same
+  dispatchNotifications/resolveTaskRecipients/dedupe-by-day pattern already in place for
+  `task_due_tomorrow`.
 - `user_registered`, `workspace_created/deleted`, `security_alert`, `audit_alert`,
   `system_maintenance` — no signup-to-AppContext wiring exists (Authentication was explicitly
   out of scope for this branch) and there is no workspace entity, security monitor, or
@@ -279,8 +295,9 @@ triggered the event. A real multi-user deployment would need:
   `users`, not a proper `@`-autocomplete/tokenized mention UI. Good enough to prove the
   trigger → notification → RBAC pipeline end-to-end; a real mentions UI is Project Chat
   module territory, out of scope here.
-- **No due-date reminder scheduler** (`task_due_today`/`task_due_tomorrow`/`task_overdue`) —
-  see §9's "not wired" list.
+- **Due-date reminders only cover "due tomorrow"** — `task_due_today`/`task_overdue` are
+  defined in the taxonomy but not yet wired (§9); the scanner that fires `task_due_tomorrow`
+  is a frontend `setInterval` approximation, not the PRD's precise 9am-scheduled server job.
 - **Email channel is a preference toggle only** — `NotificationPreferences.email` exists and
   renders (disabled) in the Preferences panel, but nothing sends email; that's explicitly a
   backend concern (SMTP/Brevo, already used elsewhere in this repo for OTP — see
