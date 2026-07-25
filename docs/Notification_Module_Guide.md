@@ -47,7 +47,10 @@ frontend/src/features/notifications/
 │                               # type, plus the per-role deny-lists (RBAC safety net)
 ├── notificationService.ts     # NotificationService — see §7 for the full function list
 ├── NotificationListItem.tsx   # Shared row markup used by BOTH the bell dropdown and the
-│                               # full Notification Center (so they can't visually drift)
+│                               # full Notification Center (so they can't visually drift).
+│                               # Row text is single-line-truncated for layout; hovering (or
+│                               # clicking the info icon) opens a portal-rendered popover with
+│                               # the full untruncated title/message/actor/priority/timestamp
 ├── NotificationBell.tsx       # Bell icon + unread badge + dropdown preview (mounted in TopNav)
 ├── ToastContainer.tsx         # Bottom-right toast stack (mounted once in App.tsx)
 └── NotificationsView.tsx      # Full Notification Center screen (search/filter/paginate/prefs)
@@ -148,7 +151,7 @@ requirement ("UI components should never manipulate notification data directly")
 | Function | Purpose |
 |---|---|
 | `createNotification(input)` | Builds one `NotificationItem` (id, timestamps, priority default) |
-| `sendNotification(input)` | The main entry point — builds one notification per unique recipient id |
+| `sendNotification(input)` | The main entry point — builds one notification per unique recipient id. Accepts an optional `recipientMessages: Record<recipientId, string>` so the same event can read differently per recipient (e.g. the assignee reads "assigned **you**"; their Team Lead reading the same event reads "assigned **Priya**" — never "you", since it wasn't them). Falls back to the shared `message` for any recipient not in the map |
 | `resolveTaskRecipients({ task, project, excludeUserId })` | Assignees + task creator + project's Team Lead, deduped, actor excluded |
 | `resolveProjectRecipients({ project, includeMembers, excludeUserId })` | Team Lead (+ members), actor excluded |
 | `resolveAdminRecipients(users, excludeUserId?)` | Every `Admin`-role user |

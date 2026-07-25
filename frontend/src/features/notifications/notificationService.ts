@@ -63,6 +63,11 @@ export const createNotification = (input: CreateNotificationInput): Notification
 
 export interface SendNotificationInput extends Omit<CreateNotificationInput, 'recipientId'> {
   recipientIds: string[];
+  // Per-recipient message override. The same event reads differently depending on who's
+  // reading it — the assignee should see "assigned you", but their Team Lead reading the
+  // same event should see "assigned Priya" (never "assigned you", since it wasn't them).
+  // Falls back to `message` for any recipient not present in this map.
+  recipientMessages?: Record<string, string>;
 }
 
 // The single entry point AppContext calls after every trigger event. Builds one
@@ -71,7 +76,11 @@ export interface SendNotificationInput extends Omit<CreateNotificationInput, 're
 export const sendNotification = (input: SendNotificationInput): NotificationItem[] => {
   const uniqueRecipients = Array.from(new Set(input.recipientIds.filter(Boolean)));
   return uniqueRecipients.map((recipientId) =>
-    createNotification({ ...input, recipientId })
+    createNotification({
+      ...input,
+      recipientId,
+      message: input.recipientMessages?.[recipientId] ?? input.message
+    })
   );
 };
 

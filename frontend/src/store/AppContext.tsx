@@ -642,11 +642,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Created task', 'Task', result.task.id, result.task.title);
 
     const project = projects.find((p) => p.id === result.task!.projectId);
+    const taskRecipients = resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id });
+    const newTaskAssigneeIds = getTaskAssigneeIds(result.task);
+    const newTaskAssigneeNames = newTaskAssigneeIds
+      .map((id) => users.find((user) => user.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+      .join(', ') || 'a team member';
+
+    const taskAssignedMessages: Record<string, string> = {};
+    taskRecipients.forEach((recipientId) => {
+      taskAssignedMessages[recipientId] = newTaskAssigneeIds.includes(recipientId)
+        ? `${currentUser.name} assigned you "${result.task!.title}" in ${project?.title || 'the project'}.`
+        : `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task!.title}" in ${project?.title || 'the project'}.`;
+    });
+
     dispatchNotifications({
-      recipientIds: resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id }),
+      recipientIds: taskRecipients,
       type: 'task_assigned',
       title: 'New Task Assigned',
-      message: `${currentUser.name} assigned you "${result.task.title}" in ${project?.title || 'the project'}.`,
+      message: `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task.title}" in ${project?.title || 'the project'}.`,
+      recipientMessages: taskAssignedMessages,
       actorId: currentUser.id,
       actorName: currentUser.name,
       linkRoute: 'tasks',
@@ -687,14 +702,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .map((id) => users.find((user) => user.id === id)?.name)
           .filter((name): name is string => Boolean(name))
           .join(', ') || 'Unassigned';
+        const reassignRecipients = [
+          ...addedAssignees.filter((id) => id !== currentUser.id),
+          ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
+        ];
+        const genericReassignMessage = `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`;
+        const reassignMessages: Record<string, string> = {};
+        addedAssignees.forEach((recipientId) => {
+          reassignMessages[recipientId] = `${currentUser.name} assigned you "${after.title}" in ${project?.title || 'the project'}.`;
+        });
+
         dispatchNotifications({
-          recipientIds: [
-            ...addedAssignees.filter((id) => id !== currentUser.id),
-            ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
-          ],
+          recipientIds: reassignRecipients,
           type: 'task_reassigned',
           title: 'Task Reassigned',
-          message: `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`,
+          message: genericReassignMessage,
+          recipientMessages: reassignMessages,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'tasks',
@@ -1302,6 +1325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'user_deactivated',
       title: 'User Deactivated',
       message: `${currentUser.name} deactivated ${targetUser.name}'s account.`,
+      recipientMessages: { [userId]: `${currentUser.name} deactivated your account.` },
       actorId: currentUser.id,
       actorName: currentUser.name,
       linkRoute: 'settings'
