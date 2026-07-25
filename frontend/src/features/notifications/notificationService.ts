@@ -153,6 +153,18 @@ export const clearNotification = (
 export const getUnreadNotifications = (notifications: NotificationItem[], userId: string): NotificationItem[] =>
   notifications.filter((notification) => notification.userId === userId && !notification.read);
 
+// Local-fallback-only "remind me later": the backend tracks a real SnoozedUntilUtc and
+// re-surfaces the notification automatically once it passes (see
+// notification.repository.ts). This in-memory prototype has no persistent scheduler to bring an
+// item back later, so the closest honest approximation is to drop it the same way
+// clearNotification does — same ownership check, same silent no-op for a mismatched owner.
+export const snoozeNotification = (
+  notifications: NotificationItem[],
+  id: string,
+  requestingUserId: string
+): NotificationItem[] =>
+  notifications.filter((notification) => !(notification.id === id && notification.userId === requestingUserId));
+
 export const sortNotifications = (
   notifications: NotificationItem[],
   sortBy: 'newest' | 'oldest' | 'priority' | 'unreadFirst' = 'newest'
@@ -232,6 +244,42 @@ export const filterNotifications = (
     }
     return true;
   });
+};
+
+export interface NotificationGroup {
+  key: string;
+  // Newest-first, matching the ordering of the array passed in. items[0] is the representative
+  // shown when the group is collapsed (e.g. "5 new comments on Task X" using its title/message).
+  items: NotificationItem[];
+}
+
+// Collapses same-type, same-target notifications (e.g. 5 separate `comment_added` events on the
+// same task) into one group, so the UI can render "5 new comments on Task X" instead of 5 rows —
+// cuts noise on busy tasks/projects without losing any individual notification (NotificationsView
+// can still expand a group to show every item). Only groups items that share a real target
+// (taskId or projectId); anything without one (most System/Approval/AI events) is never grouped,
+// since "5 unrelated system alerts" collapsing into one row would hide information, not noise.
+//
+// Applied to whatever page of results is currently displayed, not the full unfiltered list —
+// simple and correct for the common case, though a group can in principle be split across two
+// pages at a page-size boundary (rare in practice, and purely cosmetic when it happens).
+export const groupNotifications = (notifications: NotificationItem[]): NotificationGroup[] => {
+  const order: string[] = [];
+  const buckets = new Map<string, NotificationItem[]>();
+
+  notifications.forEach((notification) => {
+    const hasTarget = Boolean(notification.taskId || notification.projectId);
+    const key = hasTarget
+      ? `${notification.type}:${notification.projectId ?? ''}:${notification.taskId ?? ''}`
+      : `__single__:${notification.id}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      order.push(key);
+    }
+    buckets.get(key)!.push(notification);
+  });
+
+  return order.map((key) => ({ key, items: buckets.get(key)! }));
 };
 
 export const paginateNotifications = (

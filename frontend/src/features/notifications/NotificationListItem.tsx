@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Info, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Clock, Info, X } from 'lucide-react';
 import { NotificationItem } from '../../types';
 import { getNotificationTypeMeta, NOTIFICATION_ICON_CLASSES, PRIORITY_CLASSES } from './notificationTypes';
 
@@ -9,6 +9,16 @@ interface NotificationListItemProps {
   onOpen: (notification: NotificationItem) => void;
   onClear?: (id: string) => void;
   compact?: boolean;
+  // Grouping (see notificationService.groupNotifications): when groupCount > 1, this row
+  // represents a collapsed group rather than a single notification. Clicking it toggles
+  // expansion instead of navigating — see NotificationsView for the expanded child rows.
+  groupCount?: number;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  onMarkAllRead?: () => void;
+  // "Remind me later" — only rendered when the parent decides this notification is eligible
+  // (due-date reminders and approval requests — see NotificationsView's SNOOZE_RULES).
+  onSnooze?: (notification: NotificationItem) => void;
 }
 
 const formatRelativeTime = (createdAt?: string, fallback?: string): string => {
@@ -34,10 +44,16 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
   notification,
   onOpen,
   onClear,
-  compact = false
+  compact = false,
+  groupCount,
+  expanded = false,
+  onToggleExpand,
+  onMarkAllRead,
+  onSnooze
 }) => {
   const meta = getNotificationTypeMeta(notification.type);
   const Icon = meta.icon;
+  const isGroup = (groupCount ?? 1) > 1;
 
   const [showDetail, setShowDetail] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -71,7 +87,7 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
     >
       <button
         type="button"
-        onClick={() => onOpen(notification)}
+        onClick={() => (isGroup && onToggleExpand ? onToggleExpand() : onOpen(notification))}
         className="flex min-w-0 flex-1 items-start gap-3 text-left"
       >
         <span className={`mt-0.5 shrink-0 rounded-lg border p-1.5 ${NOTIFICATION_ICON_CLASSES[meta.tone]}`}>
@@ -86,6 +102,11 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
             >
               {notification.title}
             </span>
+            {isGroup && (
+              <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] font-bold text-slate-300">
+                ×{groupCount}
+              </span>
+            )}
             {!notification.read && (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(0,242,254,0.8)]" />
             )}
@@ -98,6 +119,36 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
       </button>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        {isGroup && onToggleExpand && (
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-label={expanded ? 'Collapse group' : 'Expand group'}
+            className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-cyan-300"
+          >
+            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+        {isGroup && onMarkAllRead && (
+          <button
+            type="button"
+            onClick={onMarkAllRead}
+            className="rounded-lg px-1.5 py-1 text-[10px] font-semibold text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-cyan-300 group-hover:opacity-100"
+          >
+            Mark all read
+          </button>
+        )}
+        {onSnooze && (
+          <button
+            type="button"
+            onClick={() => onSnooze(notification)}
+            aria-label="Remind me later"
+            title="Remind me later"
+            className="rounded-lg p-1 text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-amber-300 group-hover:opacity-100"
+          >
+            <Clock size={13} />
+          </button>
+        )}
         <button
           type="button"
           onClick={(event) => {

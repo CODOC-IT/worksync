@@ -1,4 +1,10 @@
-import { NotificationItem, NotificationPreferences, NotificationPriority, NotificationType } from '../../types';
+import {
+  NotificationAnalyticsRow,
+  NotificationItem,
+  NotificationPreferences,
+  NotificationPriority,
+  NotificationType
+} from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // notificationApiClient — thin fetch wrapper over the backend's /api/notifications REST
@@ -146,4 +152,19 @@ export const clearAllNotificationsApi = async (): Promise<number> => {
   const result = await apiFetch<{ message: string }>('/clear', { method: 'DELETE' });
   const match = /^(\d+)/.exec(result.message || '');
   return match ? Number(match[1]) : 0;
+};
+
+// "Remind me later" — hides the notification until `untilIso` passes (see
+// backend/src/notifications/notification.repository.ts's SnoozedUntilUtc column).
+export const snoozeNotificationApi = async (id: string, untilIso: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(id)}/snooze`, {
+    method: 'PATCH',
+    body: JSON.stringify({ until: untilIso })
+  });
+};
+
+// Admin-only delivery analytics (read rates / suppressed counts per notification type).
+export const fetchNotificationAnalytics = async (): Promise<NotificationAnalyticsRow[]> => {
+  const { data } = await apiFetch<{ data: NotificationAnalyticsRow[] }>('/analytics');
+  return data;
 };

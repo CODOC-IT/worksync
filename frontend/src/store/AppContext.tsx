@@ -58,6 +58,7 @@ import {
   markAsRead,
   markAllAsRead as markAllAsReadInList,
   clearNotification as removeNotificationFromList,
+  snoozeNotification as snoozeNotificationInList,
   resolveAdminRecipients,
   resolveProjectRecipients,
   resolveSingleRecipient,
@@ -71,7 +72,8 @@ import {
   updateNotificationPreferencesApi,
   markNotificationReadApi,
   markAllNotificationsReadApi,
-  clearNotificationApi
+  clearNotificationApi,
+  snoozeNotificationApi
 } from '../features/notifications/notificationApiClient';
 
 interface AppState {
@@ -152,6 +154,7 @@ interface AppState {
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   clearNotification: (id: string) => void;
+  snoozeNotification: (id: string, untilIso: string) => void;
   updateNotificationPreferences: (data: Partial<NotificationPreferences>) => void;
   dismissToast: (id: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
@@ -1552,6 +1555,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  // "Remind me later". The API tracks a real SnoozedUntilUtc and re-surfaces the notification
+  // automatically once it passes; the local fallback (used only if the API call fails) has no
+  // such scheduler, so it approximates snooze as a dismiss — see notificationService.ts's
+  // snoozeNotification for why.
+  const snoozeNotification = (id: string, untilIso: string) => {
+    setNotifications((prev) => snoozeNotificationInList(prev, id, currentUser.id));
+    snoozeNotificationApi(id, untilIso).catch((error) => {
+      console.warn('Failed to persist notification snooze to the backend.', error);
+    });
+  };
+
   const updateNotificationPreferences = (data: Partial<NotificationPreferences>) => {
     setNotificationPreferences((prev) => ({ ...prev, ...data }));
     updateNotificationPreferencesApi(data).catch((error) => {
@@ -1686,6 +1700,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markNotificationRead,
         markAllNotificationsRead,
         clearNotification,
+        snoozeNotification,
         updateNotificationPreferences,
         dismissToast,
         deactivateUser,

@@ -408,6 +408,18 @@ export interface NotificationPreferences {
   email: boolean;
 }
 
+// One row per NotificationType — delivery/read/suppression counts for the Admin-only analytics
+// panel (backend/src/notifications/notification.repository.ts's getDeliveryAnalytics).
+export interface NotificationAnalyticsRow {
+  type: NotificationType;
+  category: string;
+  total: number;
+  delivered: number;
+  suppressed: number;
+  read: number;
+  readRate: number; // percentage, 0-100
+}
+
 export type ToastTone = 'success' | 'info' | 'warning' | 'error';
 
 export interface ToastItem {
