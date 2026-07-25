@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
+import { NotificationBell } from '../../features/notifications/NotificationBell';
 import {
   Search,
-  Bell,
   Sun,
   Moon,
   HelpCircle,
@@ -15,21 +15,17 @@ import {
 
 interface TopNavProps {
   onOpenSearch: () => void;
-  onOpenNotifs: () => void;
   onOpenShortcuts: () => void;
   onSelectTab: (tab: string) => void;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
   onOpenSearch,
-  onOpenNotifs,
   onOpenShortcuts,
   onSelectTab
 }) => {
-  const { currentRole, setRole, currentUser, theme, toggleTheme, notifications } = useApp();
+  const { currentRole, setRole, currentUser, theme, toggleTheme } = useApp();
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
-
-  const unreadNotifs = notifications.filter((n) => !n.read);
 
   const rolesList: { role: UserRole; desc: string }[] = [
     { role: 'Admin', desc: 'Full System Authority & Approvals' },
@@ -120,18 +116,7 @@ export const TopNav: React.FC<TopNavProps> = ({
         </button>
 
         {/* Notifications Trigger */}
-        <button
-          onClick={onOpenNotifs}
-          className="relative p-2 rounded-xl bg-slate-900/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40 transition-all"
-          title="Notifications"
-        >
-          <Bell size={17} className="text-slate-300" />
-          {unreadNotifs.length > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center animate-pulse shadow-[0_0_10px_rgba(244,63,94,0.8)]">
-              {unreadNotifs.length}
-            </span>
-          )}
-        </button>
+        <NotificationBell onSelectTab={onSelectTab} />
 
         {/* User Profile Pill */}
         <button
