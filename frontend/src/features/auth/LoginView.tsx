@@ -11,7 +11,7 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchToSignup }) => {
-  const { setRole, users } = useApp();
+  const { loginUser, users } = useApp();
 
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [email, setEmail] = useState<string>('fazal.k@codoc.com');
@@ -104,11 +104,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
         localStorage.setItem('worksync_auth_token', data.token);
       }
 
-      // Sync role to global App Context
+      // Sync logged-in user to global App Context
       if (data.user && data.user.role) {
-        setRole(data.user.role as UserRole);
+        loginUser(data.user);
       } else {
-        setRole(selectedDemoRole);
+        const matchedUser = users.find((u) => u.role === selectedDemoRole) || users[0];
+        loginUser(matchedUser);
       }
 
       onLoginSuccess();
