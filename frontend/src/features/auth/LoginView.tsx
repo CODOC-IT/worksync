@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
@@ -21,27 +21,44 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedDemoRole, setSelectedDemoRole] = useState<UserRole>('Admin');
   const [emailCheck, setEmailCheck] = useState<{ checking: boolean; exists: boolean | null; msg: string | null }>({ checking: false, exists: null, msg: null });
+  const emailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check if email is registered on blur
-  const handleEmailBlur = useCallback(() => {
+  // Real-time email check with debounce
+  useEffect(() => {
+    const trimmed = email.trim();
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email.trim())) {
+
+    if (emailTimer.current) clearTimeout(emailTimer.current);
+
+    if (!trimmed) {
       setEmailCheck({ checking: false, exists: null, msg: null });
       return;
     }
-    setEmailCheck((prev) => ({ ...prev, checking: true }));
-    fetch(`/api/auth/check-email?email=${encodeURIComponent(email.trim())}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          setEmailCheck({
-            checking: false,
-            exists: data.exists,
-            msg: data.exists ? null : 'No account found with this email.'
-          });
-        }
-      })
-      .catch(() => setEmailCheck({ checking: false, exists: null, msg: null }));
+
+    if (!emailRegex.test(trimmed)) {
+      setEmailCheck({ checking: false, exists: null, msg: 'Invalid email format.' });
+      return;
+    }
+
+    setEmailCheck((prev) => ({ ...prev, checking: true, msg: null }));
+    emailTimer.current = setTimeout(() => {
+      fetch(`/api/auth/check-email?email=${encodeURIComponent(trimmed)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setEmailCheck({
+              checking: false,
+              exists: data.exists,
+              msg: data.exists ? null : 'No account found with this email.'
+            });
+          }
+        })
+        .catch(() => setEmailCheck({ checking: false, exists: null, msg: null }));
+    }, 300);
+
+    return () => {
+      if (emailTimer.current) clearTimeout(emailTimer.current);
+    };
   }, [email]);
 
   // One-click quick demo preset handler
@@ -292,10 +309,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                       type="email"
                       required
                       value={email}
-                      onChange={(e) => { setEmail(e.target.value); setEmailCheck({ checking: false, exists: null, msg: null }); }}
-                      onBlur={handleEmailBlur}
+                      onChange={(e) => setEmail(e.target.value)}
                       placeholder="name@codoc.com"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-100 focus:outline-none focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/60 transition-all"
+                      className={`w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/40 border text-sm text-slate-100 focus:outline-none focus:ring-1 transition-all ${
+                        emailCheck.exists === true ? 'border-emerald-500/60 focus:border-emerald-500 focus:ring-emerald-500/60' :
+                        emailCheck.msg === 'Invalid email format.' ? 'border-rose-500/60 focus:border-rose-500 focus:ring-rose-500/60' :
+                        emailCheck.msg ? 'border-amber-500/60 focus:border-amber-500 focus:ring-amber-500/60' :
+                        'border-white/10 focus:border-cyan-500/60 focus:ring-cyan-500/60'
+                      }`}
                     />
                     {emailCheck.checking && (
                       <div className="flex items-center gap-1.5 mt-1.5">
@@ -303,10 +324,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                         <span className="text-[11px] text-slate-400">Checking...</span>
                       </div>
                     )}
-                    {emailCheck.msg && (
+                    {!emailCheck.checking && emailCheck.exists === true && (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
+                        <span className="text-[11px] text-emerald-400">Account found</span>
+                      </div>
+                    )}
+                    {!emailCheck.checking && emailCheck.exists === false && (
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <AlertCircle size={12} className="text-amber-400 shrink-0" />
-                        <span className="text-[11px] text-amber-400">{emailCheck.msg}</span>
+                        <span className="text-[11px] text-amber-400">No account found with this email.</span>
+                      </div>
+                    )}
+                    {emailCheck.msg === 'Invalid email format.' && (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <AlertCircle size={12} className="text-rose-400 shrink-0" />
+                        <span className="text-[11px] text-rose-400">{emailCheck.msg}</span>
                       </div>
                     )}
                   </div>
