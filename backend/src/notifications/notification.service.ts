@@ -1,12 +1,23 @@
 import * as repo from './notification.repository.js';
 import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.js';
 import { toUserPk, fromUserPk } from './idMapping.js';
+import { processEmailCandidates } from './notification.email.js';
 import {
   NotificationDTO,
   NotificationEvent,
   NotificationListQuery,
   NotificationPreferencesDTO
 } from './notification.types.js';
+
+export interface NotificationAnalyticsDTO {
+  type: string;
+  category: string;
+  total: number;
+  delivered: number;
+  suppressed: number;
+  read: number;
+  readRate: number; // read / delivered, 0 when nothing has been delivered yet
+}
 
 // Notification Service — the one place business logic lives (Service Layer / Clean
 // Architecture). No SQL here (that's notification.repository.ts); no Express req/res here
@@ -137,7 +148,36 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
     }
   }
 
+  // Critical-priority notifications get an immediate email attempt rather than waiting for the
+  // periodic digest (see notification.email.ts) — fire-and-forget so a slow/failed SMTP send
+  // never delays the HTTP response this publishEvent call is part of. High-priority items are
+  // left for the scheduled digest job in server.ts to pick up on its next run.
+  if (priority === 'Critical' && created.length > 0) {
+    processEmailCandidates(['Critical']).catch((error) => {
+      console.warn('[notification.service] Immediate Critical email dispatch failed.', error);
+    });
+  }
+
   return created;
+};
+
+export const snoozeNotification = (
+  userId: string,
+  notificationId: string,
+  untilIso: string
+): Promise<boolean> => repo.snoozeOne(toUserPk(userId), notificationId, new Date(untilIso));
+
+export const getDeliveryAnalytics = async (): Promise<NotificationAnalyticsDTO[]> => {
+  const rows = await repo.getDeliveryAnalytics();
+  return rows.map((row) => ({
+    type: row.typecode,
+    category: row.categorycode,
+    total: row.total,
+    delivered: row.delivered,
+    suppressed: row.suppressed,
+    read: row.read,
+    readRate: row.delivered > 0 ? Math.round((row.read / row.delivered) * 1000) / 10 : 0
+  }));
 };
 
 export const getNotificationsForUser = async (

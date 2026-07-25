@@ -64,3 +64,21 @@ export const validatePreferencesBody = (body: unknown): ValidationResult => {
 };
 
 export const isValidFrontendId = (value: string): boolean => FRONTEND_ID_PATTERN.test(value);
+
+export const validateSnoozeBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, message: 'Request body is required.' };
+  }
+  const { until } = body as { until?: unknown };
+  if (!until || typeof until !== 'string') {
+    return { valid: false, message: '"until" (an ISO date string) is required.' };
+  }
+  const parsed = new Date(until);
+  if (Number.isNaN(parsed.getTime())) {
+    return { valid: false, message: '"until" must be a valid date.' };
+  }
+  if (parsed.getTime() <= Date.now()) {
+    return { valid: false, message: '"until" must be in the future.' };
+  }
+  return { valid: true };
+};

@@ -127,6 +127,8 @@ const SCHEMA_DDL = `
     ReadAtUtc TIMESTAMPTZ NULL,
     OpenedAtUtc TIMESTAMPTZ NULL,
     ClearedAtUtc TIMESTAMPTZ NULL,
+    SnoozedUntilUtc TIMESTAMPTZ NULL,
+    EmailedAtUtc TIMESTAMPTZ NULL,
     PRIMARY KEY (NotificationId, RecipientUserId)
   );
 `;
@@ -148,7 +150,8 @@ const SEED_DML = `
     ('system', 'System', 'Low'),
     ('mention', 'Chat', 'Normal'),
     ('comment_added', 'Task', 'Normal'),
-    ('task_due_tomorrow', 'Task', 'Normal');
+    ('task_due_tomorrow', 'Task', 'Normal'),
+    ('security_alert', 'System', 'Critical');
 `;
 
 let db: ReturnType<typeof newDb>;
@@ -331,4 +334,85 @@ test('getPreferences: defaults to enabled in-app / disabled email with no prior 
   assert.equal(prefs.inApp, true);
   assert.equal(prefs.assignments, true);
   assert.equal(prefs.email, false);
+});
+
+test('snoozeNotification: hides a notification until the snoozed time passes', async () => {
+  const service = await import('./notification.service.js');
+  const created = await service.publishEvent({
+    type: 'task_due_tomorrow',
+    title: 'Due tomorrow',
+    message: 'Reminder.',
+    recipientIds: ['usr-2']
+  });
+
+  const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const snoozed = await service.snoozeNotification('usr-2', created[0].id, future);
+  assert.equal(snoozed, true);
+
+  const { items: whileSnoozed } = await service.getNotificationsForUser('usr-2');
+  assert.equal(whileSnoozed.length, 0, 'a notification snoozed into the future should be hidden');
+
+  const past = new Date(Date.now() - 1000).toISOString();
+  await service.snoozeNotification('usr-2', created[0].id, past);
+  const { items: afterExpiry } = await service.getNotificationsForUser('usr-2');
+  assert.equal(afterExpiry.length, 1, 'a snooze time in the past should behave like un-snoozed');
+});
+
+test('snoozeNotification: enforces ownership like markRead/clearOne', async () => {
+  const service = await import('./notification.service.js');
+  const created = await service.publishEvent({
+    type: 'task_due_tomorrow',
+    title: 'Due tomorrow',
+    message: 'Reminder.',
+    recipientIds: ['usr-2']
+  });
+
+  const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const result = await service.snoozeNotification('usr-3', created[0].id, future);
+  assert.equal(result, false, 'usr-3 has no row for usr-2\'s notification and cannot snooze it');
+});
+
+test('findEmailCandidates: reflects the recipient\'s email preference and stops after markEmailProcessed', async () => {
+  const service = await import('./notification.service.js');
+  const repo = await import('./notification.repository.js');
+
+  await service.updatePreferences('usr-2', { email: true }); // usr-3 leaves it at the default (off)
+  await service.publishEvent({
+    type: 'security_alert',
+    title: 'Security Alert',
+    message: 'Suspicious login detected.',
+    recipientIds: ['usr-2', 'usr-3']
+  });
+
+  const candidates = await repo.findEmailCandidates(['Critical']);
+  const byRecipient = new Map(candidates.map((row) => [row.recipientuserid, row]));
+  assert.equal(byRecipient.get(2)?.emailenabled, true, 'usr-2 opted into email');
+  assert.equal(byRecipient.get(3)?.emailenabled, false, 'usr-3 never enabled email — defaults off');
+
+  await Promise.all(candidates.map((row) => repo.markEmailProcessed(row.recipientuserid, row.notificationid)));
+  const afterProcessing = await repo.findEmailCandidates(['Critical']);
+  assert.equal(afterProcessing.length, 0, 'processed rows must not be returned again');
+});
+
+test('getDeliveryAnalytics: aggregates total/delivered/suppressed/read per type', async () => {
+  const service = await import('./notification.service.js');
+
+  await service.updatePreferences('usr-3', { assignments: false });
+  const created = await service.publishEvent({
+    type: 'task_assigned',
+    title: 'Analytics fixture',
+    message: 'usr-2 delivered, usr-3 suppressed.',
+    recipientIds: ['usr-2', 'usr-3']
+  });
+  const usr2Notification = created.find((n) => n.userId === 'usr-2')!;
+  await service.markNotificationRead('usr-2', usr2Notification.id);
+
+  const analytics = await service.getDeliveryAnalytics();
+  const row = analytics.find((a) => a.type === 'task_assigned');
+  assert.ok(row, 'expected a task_assigned analytics row');
+  assert.equal(row!.total, 2);
+  assert.equal(row!.delivered, 1);
+  assert.equal(row!.suppressed, 1);
+  assert.equal(row!.read, 1);
+  assert.equal(row!.readRate, 100, 'the one delivered row was also read -> 100%');
 });

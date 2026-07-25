@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './notification.service.js';
-import { validatePreferencesBody, validatePublishEventBody } from './notification.validation.js';
+import { validatePreferencesBody, validatePublishEventBody, validateSnoozeBody } from './notification.validation.js';
 import { ApiPriority, NotificationEvent, NotificationType } from './notification.types.js';
 
 // Controller = thin HTTP adapter (Controller layer). Every handler here does: read req, call
@@ -164,5 +164,52 @@ export const clearAll = async (req: AuthenticatedRequest, res: Response): Promis
     res.json({ success: true, message: `${count} notification(s) cleared.` });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message || 'Failed to clear notifications.' });
+  }
+};
+
+// PATCH /notifications/:id/snooze — "remind me later". Ownership is enforced the same way as
+// markRead/clearOne (the repository's UPDATE...WHERE clause), so a 404 here means either the
+// notification doesn't exist or doesn't belong to this recipient — never distinguished, per the
+// same "don't leak existence of other users' data" reasoning as markRead/remove above.
+export const snooze = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const validation = validateSnoozeBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const snoozed = await service.snoozeNotification(userId, req.params.id, (req.body as { until: string }).until);
+    if (!snoozed) {
+      res.status(404).json({ success: false, message: 'Notification not found.' });
+      return;
+    }
+    res.json({ success: true, message: 'Notification snoozed.' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to snooze notification.' });
+  }
+};
+
+// GET /notifications/analytics — Admin-only delivery analytics (read rates / suppressed counts
+// per type). Authorization check lives here rather than in a shared middleware since this is
+// the module's only admin-restricted route; a real second admin-only route would be the signal
+// to extract a requireRole() middleware instead.
+export const getAnalytics = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  if (req.user!.role !== 'Admin') {
+    res.status(403).json({ success: false, message: 'Only Admins can view notification delivery analytics.' });
+    return;
+  }
+
+  try {
+    const data = await service.getDeliveryAnalytics();
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load analytics.' });
   }
 };

@@ -23,5 +23,6 @@ SET TIME ZONE 'UTC';
 \ir 16_views.sql
 \ir 17_seed.sql
 \ir 18_notify_seed.sql
+\ir 19_notify_enhancements.sql
 
 COMMIT;

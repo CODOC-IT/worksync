@@ -143,6 +143,10 @@ export interface FindByUserFilters {
   page?: number;
   pageSize?: number;
   includeCleared?: boolean;
+  // A snoozed notification is hidden from the default view until SnoozedUntilUtc passes — same
+  // "hide without deleting" shape as ClearedAtUtc, just time-bound. Set true to see snoozed
+  // items anyway (e.g. an "explicitly show snoozed" filter in the UI).
+  includeSnoozed?: boolean;
 }
 
 export const findByUser = async (
@@ -154,6 +158,9 @@ export const findByUser = async (
 
   if (!filters.includeCleared) {
     conditions.push('un.clearedatutc IS NULL');
+  }
+  if (!filters.includeSnoozed) {
+    conditions.push('(un.snoozeduntilutc IS NULL OR un.snoozeduntilutc <= now())');
   }
   if (filters.unreadOnly) {
     conditions.push('un.readatutc IS NULL');
@@ -203,6 +210,7 @@ export const findUnreadByUser = async (recipientUserId: number): Promise<Notific
        AND un.deliverystatus <> 'Suppressed'
        AND un.clearedatutc IS NULL
        AND un.readatutc IS NULL
+       AND (un.snoozeduntilutc IS NULL OR un.snoozeduntilutc <= now())
      ORDER BY n.createdatutc DESC`,
     [recipientUserId]
   );
@@ -259,6 +267,120 @@ export const clearAllForUser = async (recipientUserId: number): Promise<number> 
     [recipientUserId]
   );
   return result.rowCount ?? 0;
+};
+
+// "Remind me later" — ownership enforced the same way as markRead/clearOne (the WHERE clause
+// itself). `untilUtc` in the past effectively un-snoozes immediately (findByUser's snooze
+// condition is `> CURRENT_TIMESTAMP`), which is the same behavior a "cancel snooze" action
+// would want, so no separate unsnooze endpoint is needed.
+export const snoozeOne = async (
+  recipientUserId: number,
+  dtoId: string,
+  untilUtc: Date
+): Promise<boolean> => {
+  const result = await query(
+    `UPDATE notify.usernotifications
+     SET snoozeduntilutc = $3
+     WHERE notificationid = $1 AND recipientuserid = $2 AND clearedatutc IS NULL`,
+    [parseNotificationId(dtoId), recipientUserId, untilUtc]
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
+// --- Email delivery (digest + immediate-Critical) ---------------------------------------
+// See notification.email.ts for the business logic that consumes these. EmailedAtUtc means
+// "the email job has finished evaluating this row" (sent, or skipped because the recipient has
+// email disabled) — not strictly "an email was sent" — see the column's comment in
+// database/19_notify_enhancements.sql for why one column covers both cases.
+
+export interface EmailCandidateRow {
+  notificationid: string;
+  recipientuserid: number;
+  title: string;
+  safepreviewtext: string | null;
+  typecode: string;
+  prioritycode: DbPriority;
+  createdatutc: Date;
+  recipientemail: string;
+  recipientname: string;
+  emailenabled: boolean;
+}
+
+// Finds not-yet-processed, non-suppressed, non-cleared notifications at the given priorities,
+// alongside whether that recipient currently has the single global "Email" preference toggle on
+// (see notification.service.ts's REPRESENTATIVE_TYPE_CODES.email — keyed off the 'system' type,
+// since the frontend has no per-category email control).
+export const findEmailCandidates = async (priorities: DbPriority[]): Promise<EmailCandidateRow[]> => {
+  const result = await query<EmailCandidateRow>(
+    `SELECT un.notificationid, un.recipientuserid, n.title, n.safepreviewtext, nt.typecode,
+            n.prioritycode, n.createdatutc, u.email AS recipientemail, u.displayname AS recipientname,
+            COALESCE(pref.emailenabled, FALSE) AS emailenabled
+     FROM notify.usernotifications un
+     JOIN notify.notifications n ON n.notificationid = un.notificationid
+     JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
+     JOIN iam.users u ON u.userid = un.recipientuserid
+     LEFT JOIN notify.usernotificationpreferences pref
+       ON pref.userid = un.recipientuserid
+      AND pref.notificationtypeid = (SELECT notificationtypeid FROM notify.notificationtypes WHERE typecode = 'system')
+     WHERE un.emailedatutc IS NULL
+       AND un.deliverystatus <> 'Suppressed'
+       AND un.clearedatutc IS NULL
+       AND n.prioritycode = ANY($1::text[])
+     ORDER BY un.recipientuserid, n.createdatutc`,
+    [priorities]
+  );
+  return result.rows;
+};
+
+export const markEmailProcessed = async (recipientUserId: number, notificationId: string | number): Promise<void> => {
+  const id = typeof notificationId === 'string' ? parseNotificationId(notificationId) : notificationId;
+  await query(
+    `UPDATE notify.usernotifications
+     SET emailedatutc = CURRENT_TIMESTAMP
+     WHERE notificationid = $1 AND recipientuserid = $2`,
+    [id, recipientUserId]
+  );
+};
+
+// --- Admin delivery analytics ------------------------------------------------------------
+
+export interface NotificationAnalyticsRow {
+  typecode: string;
+  categorycode: string;
+  total: number;
+  delivered: number;
+  suppressed: number;
+  read: number;
+}
+
+export const getDeliveryAnalytics = async (): Promise<NotificationAnalyticsRow[]> => {
+  const result = await query<{
+    typecode: string;
+    categorycode: string;
+    total: string;
+    delivered: string;
+    suppressed: string;
+    read: string;
+  }>(
+    `SELECT nt.typecode, nt.categorycode,
+            COUNT(*)::text AS total,
+            SUM(CASE WHEN un.deliverystatus = 'Delivered' THEN 1 ELSE 0 END)::text AS delivered,
+            SUM(CASE WHEN un.deliverystatus = 'Suppressed' THEN 1 ELSE 0 END)::text AS suppressed,
+            SUM(CASE WHEN un.readatutc IS NOT NULL THEN 1 ELSE 0 END)::text AS read
+     FROM notify.usernotifications un
+     JOIN notify.notifications n ON n.notificationid = un.notificationid
+     JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
+     GROUP BY nt.typecode, nt.categorycode
+     ORDER BY total DESC`
+  );
+  return result.rows.map((row) => ({
+    typecode: row.typecode,
+    categorycode: row.categorycode,
+    total: Number(row.total),
+    delivered: Number(row.delivered),
+    suppressed: Number(row.suppressed),
+    read: Number(row.read)
+  }));
 };
 
 // --- Preferences -------------------------------------------------------------------------

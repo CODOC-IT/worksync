@@ -18,6 +18,11 @@ router.get('/unread', controller.listUnread);
 // GET /api/notifications/preferences
 router.get('/preferences', controller.getPreferences);
 
+// GET /api/notifications/analytics — Admin-only, registered before /:id-shaped routes for the
+// same reason /clear is registered before DELETE /:id below (Express matches in registration
+// order; a literal segment must win over a param segment it could otherwise be captured by).
+router.get('/analytics', controller.getAnalytics);
+
 // PUT /api/notifications/preferences
 router.put('/preferences', controller.updatePreferences);
 
@@ -29,6 +34,9 @@ router.patch('/read-all', controller.markAllRead);
 
 // PATCH /api/notifications/:id/read
 router.patch('/:id/read', controller.markRead);
+
+// PATCH /api/notifications/:id/snooze — body: { until: ISO date string }
+router.patch('/:id/snooze', controller.snooze);
 
 // DELETE /api/notifications/clear
 router.delete('/clear', controller.clearAll);
