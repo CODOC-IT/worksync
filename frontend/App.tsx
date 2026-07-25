@@ -9,6 +9,7 @@ import { ShortcutsModal } from '../frontend/src/components/common/ShortcutsModal
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
+import { LoginView } from '../frontend/src/features/auth/LoginView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
