@@ -302,15 +302,90 @@ export interface AIUsageAudit {
   lastUsed: string;
 }
 
+// Notification taxonomy. Legacy values ('approval' | 'task' | 'attendance' | 'mention' |
+// 'system') are kept so notifications created before this module (e.g. HR requests, the
+// original Project Approval Requested notice) remain valid without reshaping. New events
+// use the more specific PRD taxonomy so the Notification Center can render distinct
+// icons/copy and NotificationService can apply per-type RBAC recipient rules.
+export type NotificationType =
+  | 'task_assigned'
+  | 'task_reassigned'
+  | 'task_updated'
+  | 'task_status_changed'
+  | 'task_priority_changed'
+  | 'task_due_date_changed'
+  | 'task_review_requested'
+  | 'task_review_approved'
+  | 'task_review_rejected'
+  | 'task_completed'
+  | 'task_deleted'
+  | 'task_due_today'
+  | 'task_due_tomorrow'
+  | 'task_overdue'
+  | 'checklist_completed'
+  | 'comment_added'
+  | 'mention'
+  | 'attachment_uploaded'
+  | 'project_created'
+  | 'project_updated'
+  | 'project_archived'
+  | 'project_restored'
+  | 'project_deleted'
+  | 'project_member_added'
+  | 'project_member_removed'
+  | 'approval'
+  | 'user_registered'
+  | 'user_role_changed'
+  | 'user_deactivated'
+  | 'workspace_created'
+  | 'workspace_deleted'
+  | 'backup_completed'
+  | 'backup_failed'
+  | 'security_alert'
+  | 'audit_alert'
+  | 'system_maintenance'
+  | 'attendance'
+  | 'task'
+  | 'system';
+
+export type NotificationPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+
 export interface NotificationItem {
   id: string;
-  userId: string;
+  userId: string; // recipient
+  actorId?: string; // who triggered the event (absent for system-generated notifications)
+  actorName?: string;
+  title: string;
+  message: string; // preview / body text
+  type: NotificationType;
+  priority?: NotificationPriority;
+  read: boolean;
+  timestamp: string; // legacy display string (kept for backward compatibility)
+  createdAt?: string; // ISO-ish sortable timestamp ("YYYY-MM-DD HH:mm"); new notifications always set this
+  readAt?: string;
+  linkRoute: string;
+  projectId?: string;
+  taskId?: string;
+  metadata?: Record<string, string | number | boolean | undefined>;
+}
+
+export interface NotificationPreferences {
+  toast: boolean;
+  inApp: boolean;
+  dueReminders: boolean;
+  mentions: boolean;
+  comments: boolean;
+  assignments: boolean;
+  email: boolean;
+}
+
+export type ToastTone = 'success' | 'info' | 'warning' | 'error';
+
+export interface ToastItem {
+  id: string;
+  tone: ToastTone;
   title: string;
   message: string;
-  type: 'approval' | 'task' | 'attendance' | 'mention' | 'system';
-  read: boolean;
-  timestamp: string;
-  linkRoute: string;
 }
 
 export interface ActivityLogItem {
