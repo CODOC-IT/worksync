@@ -304,7 +304,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-slate-300 block">Work Email</label>
                   <div className="relative">
-                    <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Mail size={16} className="absolute left-3.5 top-[20px] -translate-y-1/2 text-slate-400 pointer-events-none" />
                     <input
                       type="email"
                       required
@@ -318,31 +318,31 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                         'border-white/10 focus:border-cyan-500/60 focus:ring-cyan-500/60'
                       }`}
                     />
-                    {emailCheck.checking && (
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-[11px] text-slate-400">Checking...</span>
-                      </div>
-                    )}
-                    {!emailCheck.checking && emailCheck.exists === true && (
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
-                        <span className="text-[11px] text-emerald-400">Account found</span>
-                      </div>
-                    )}
-                    {!emailCheck.checking && emailCheck.exists === false && (
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <AlertCircle size={12} className="text-amber-400 shrink-0" />
-                        <span className="text-[11px] text-amber-400">No account found with this email.</span>
-                      </div>
-                    )}
-                    {emailCheck.msg === 'Invalid email format.' && (
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <AlertCircle size={12} className="text-rose-400 shrink-0" />
-                        <span className="text-[11px] text-rose-400">{emailCheck.msg}</span>
-                      </div>
-                    )}
                   </div>
+                  {emailCheck.checking && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="text-[11px] text-slate-400">Checking...</span>
+                    </div>
+                  )}
+                  {!emailCheck.checking && emailCheck.exists === true && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
+                      <span className="text-[11px] text-emerald-400">Account found</span>
+                    </div>
+                  )}
+                  {!emailCheck.checking && emailCheck.exists === false && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <AlertCircle size={12} className="text-amber-400 shrink-0" />
+                      <span className="text-[11px] text-amber-400">No account found with this email.</span>
+                    </div>
+                  )}
+                  {emailCheck.msg === 'Invalid email format.' && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <AlertCircle size={12} className="text-rose-400 shrink-0" />
+                      <span className="text-[11px] text-rose-400">{emailCheck.msg}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
