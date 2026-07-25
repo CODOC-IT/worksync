@@ -16,6 +16,8 @@ import { AttendanceView } from '../frontend/src/features/attendance/AttendanceVi
 import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssistantView';
 import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
+import { NotificationsView } from '../frontend/src/features/notifications/NotificationsView';
+import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -82,7 +84,6 @@ const AppContent: React.FC = () => {
         {/* Top Header Navigation */}
         <TopNav
           onOpenSearch={() => setSearchOpen(true)}
-          onOpenNotifs={() => setCurrentTab('notifications')}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectTab={(tab) => setCurrentTab(tab)}
         />
@@ -121,6 +122,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'kanban' && <KanbanView />}
 
           {currentTab === 'approvals' && <ApprovalsInboxView />}
+
+          {currentTab === 'notifications' && <NotificationsView />}
 
           {currentTab === 'profile' && <ProfileView />}
 
@@ -209,6 +212,7 @@ const AppContent: React.FC = () => {
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
+      <ToastContainer />
     </div>
   );
 };
