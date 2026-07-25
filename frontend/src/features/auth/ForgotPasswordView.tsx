@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mail, Shield, ArrowLeft, CheckCircle, AlertCircle, RefreshCw, Lock, Eye, EyeOff, KeyRound } from 'lucide-react';
 
@@ -18,6 +18,32 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onBackTo
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  // Password Strength
+  const passwordCriteria = useMemo(() => ({
+    hasMinLength: newPassword.length >= 8,
+    hasUpper: /[A-Z]/.test(newPassword),
+    hasLower: /[a-z]/.test(newPassword),
+    hasNumber: /[0-9]/.test(newPassword),
+    hasSpecial: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]/.test(newPassword)
+  }), [newPassword]);
+
+  const strengthScore = useMemo(() => {
+    let score = 0;
+    if (passwordCriteria.hasMinLength) score++;
+    if (passwordCriteria.hasUpper) score++;
+    if (passwordCriteria.hasLower) score++;
+    if (passwordCriteria.hasNumber) score++;
+    if (passwordCriteria.hasSpecial) score++;
+    return score;
+  }, [passwordCriteria]);
+
+  const strengthConfig = useMemo(() => {
+    if (!newPassword) return { label: 'Empty', color: 'bg-slate-700', text: 'text-slate-500', percent: 0 };
+    if (strengthScore <= 2) return { label: 'Weak', color: 'bg-rose-500', text: 'text-rose-400', percent: 33 };
+    if (strengthScore <= 4) return { label: 'Medium', color: 'bg-amber-500', text: 'text-amber-400', percent: 66 };
+    return { label: 'Strong', color: 'bg-emerald-500', text: 'text-emerald-400', percent: 100 };
+  }, [newPassword, strengthScore]);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
@@ -132,8 +158,8 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onBackTo
     e.preventDefault();
     setErrorMsg(null);
 
-    if (newPassword.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long.');
+    if (strengthScore < 3) {
+      setErrorMsg('Password is too weak. Please meet at least 3 of the strength criteria.');
       return;
     }
 
@@ -351,6 +377,42 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onBackTo
                         {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                     </div>
+                    {/* Password Strength Bar */}
+                    {newPassword && (
+                      <div className="mt-2 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex gap-1 flex-1 mr-3">
+                            {[1, 2, 3, 4, 5].map((level) => (
+                              <div
+                                key={level}
+                                className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
+                                  strengthScore >= level ? strengthConfig.color : 'bg-slate-700'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                          <span className={`text-[10px] font-semibold ${strengthConfig.text}`}>
+                            {strengthConfig.label}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                          {[
+                            { label: '8+ characters', met: passwordCriteria.hasMinLength },
+                            { label: 'Uppercase', met: passwordCriteria.hasUpper },
+                            { label: 'Lowercase', met: passwordCriteria.hasLower },
+                            { label: 'Number', met: passwordCriteria.hasNumber },
+                            { label: 'Special char', met: passwordCriteria.hasSpecial }
+                          ].map((criterion) => (
+                            <div key={criterion.label} className="flex items-center gap-1.5">
+                              <div className={`w-1.5 h-1.5 rounded-full ${criterion.met ? 'bg-emerald-500' : 'bg-slate-600'}`} />
+                              <span className={`text-[10px] ${criterion.met ? 'text-emerald-400' : 'text-slate-500'}`}>
+                                {criterion.label}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
