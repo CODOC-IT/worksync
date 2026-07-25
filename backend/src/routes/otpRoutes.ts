@@ -109,10 +109,11 @@ router.post('/send', async (req, res: Response): Promise<void> => {
 });
 
 // POST /api/otp/verify
-// Body: { email, otp, name, password, role, department, title }
+// Body: { email, otp, name, password, role, department, title, purpose }
+// When purpose='password_reset', returns a resetToken instead of creating user
 router.post('/verify', async (req, res: Response): Promise<void> => {
   try {
-    const { email, otp, name, password, role, department, title } = req.body;
+    const { email, otp, name, password, role, department, title, purpose } = req.body;
 
     if (!email || !otp) {
       res.status(400).json({ success: false, message: 'Email and OTP are required.' });
@@ -122,6 +123,21 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
     const result = otpStore.verify(email, otp);
     if (!result.valid) {
       res.status(400).json({ success: false, message: result.reason });
+      return;
+    }
+
+    // Password reset flow — return a short-lived reset token
+    if (purpose === 'password_reset') {
+      const resetToken = jwt.sign(
+        { email: email.toLowerCase(), purpose: 'password_reset' },
+        getJwtSecret(),
+        { expiresIn: '10m' }
+      );
+      res.status(200).json({
+        success: true,
+        message: 'Email verified successfully.',
+        resetToken
+      });
       return;
     }
 
