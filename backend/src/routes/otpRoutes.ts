@@ -128,8 +128,69 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
     // If registration data provided, create the user account now
     if (name && password && role && department) {
       try {
+        const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
+
+        if (sanitizedName.length < 4) {
+          res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
+          return;
+        }
+
+        const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
+        if (nameParts.length < 2) {
+          res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
+          return;
+        }
+
+        if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
+          res.status(400).json({ success: false, message: 'First name and last name cannot be the same.' });
+          return;
+        }
+
+        if (userStore.findByName(sanitizedName)) {
+          res.status(409).json({
+            success: false,
+            message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
+          });
+          return;
+        }
+
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!emailRegex.test(email)) {
+          res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
+          return;
+        }
+
+        if (userStore.findByEmail(email)) {
+          res.status(409).json({
+            success: false,
+            message: `An account with the email "${email}" already exists. Please sign in instead.`
+          });
+          return;
+        }
+
+        if (role === 'Admin' && userStore.hasRole('Admin')) {
+          res.status(409).json({
+            success: false,
+            message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
+          });
+          return;
+        }
+
+        if (role === 'HR' && userStore.hasRole('HR')) {
+          res.status(409).json({
+            success: false,
+            message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
+          });
+          return;
+        }
+
+        if (!password || password.length < 6) {
+          res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+          return;
+        }
+
         const newUser = userStore.createUser({
-          name,
+          name: sanitizedName,
           email,
           password,
           role: role as UserRole,
