@@ -103,6 +103,9 @@ interface AppState {
   deleteTeamMember: (userId: string, targetReassignUserId?: string) => { success: boolean; message: string };
   reassignMemberTasks: (sourceUserId: string, targetUserId: string) => { success: boolean; count: number };
   getMemberAssignedTasksCount: (userId: string) => number;
+  // Personal Profile & Settings Module Actions (Module 09: AbdulAzeemHashmi)
+  updateCurrentUserProfile: (data: Partial<Pick<User, 'name' | 'email' | 'title' | 'department' | 'status' | 'githubUsername'>>) => void;
+  updateSettings: (data: Partial<{ workingHours: { start: string; end: string }; breakLimitMinutes: number }>) => void;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -134,7 +137,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     elapsedSeconds: number;
   } | null>(null);
 
-  const [settings] = useState({
+  const [settings, setSettings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
     breakLimitMinutes: 60,
     maskedAiKey: 'sk-proj-••••••••••••••••38FA',
@@ -756,6 +759,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
   };
 
+  // --- Module 09: Profile & Settings Actions (AbdulAzeemHashmi) ---
+  const updateCurrentUserProfile = (data: Partial<Pick<User, 'name' | 'email' | 'title' | 'department' | 'status' | 'githubUsername'>>) => {
+    setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? { ...u, ...data } : u)));
+    setCurrentUser((prev) => ({ ...prev, ...data }));
+    pushActivity('Updated personal profile', 'Settings', currentUser.id, currentUser.name);
+  };
+
+  const updateSettings = (data: Partial<{ workingHours: { start: string; end: string }; breakLimitMinutes: number }>) => {
+    setSettings((prev) => ({ ...prev, ...data }));
+    pushActivity('Updated system settings', 'Settings', 'settings', 'System Settings');
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -807,7 +822,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateTeamMember,
         deleteTeamMember,
         reassignMemberTasks,
-        getMemberAssignedTasksCount
+        getMemberAssignedTasksCount,
+        updateCurrentUserProfile,
+        updateSettings
       }}
     >
       {children}
