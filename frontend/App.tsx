@@ -17,6 +17,7 @@ import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssista
 import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 import { NotificationsView } from '../frontend/src/features/notifications/NotificationsView';
+import { CalendarView } from '../frontend/src/features/calendar/CalendarView';
 import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
@@ -124,6 +125,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'approvals' && <ApprovalsInboxView />}
 
           {currentTab === 'notifications' && <NotificationsView />}
+
+          {currentTab === 'calendar' && <CalendarView />}
 
           {currentTab === 'profile' && <ProfileView />}
 
