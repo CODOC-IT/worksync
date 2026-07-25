@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
@@ -20,6 +20,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedDemoRole, setSelectedDemoRole] = useState<UserRole>('Admin');
+  const [emailCheck, setEmailCheck] = useState<{ checking: boolean; exists: boolean | null; msg: string | null }>({ checking: false, exists: null, msg: null });
+
+  // Check if email is registered on blur
+  const handleEmailBlur = useCallback(() => {
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(email.trim())) {
+      setEmailCheck({ checking: false, exists: null, msg: null });
+      return;
+    }
+    setEmailCheck((prev) => ({ ...prev, checking: true }));
+    fetch(`/api/auth/check-email?email=${encodeURIComponent(email.trim())}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setEmailCheck({
+            checking: false,
+            exists: data.exists,
+            msg: data.exists ? null : 'No account found with this email.'
+          });
+        }
+      })
+      .catch(() => setEmailCheck({ checking: false, exists: null, msg: null }));
+  }, [email]);
 
   // One-click quick demo preset handler
   const handleQuickDemoSelect = (role: UserRole) => {
@@ -269,10 +292,23 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                       type="email"
                       required
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => { setEmail(e.target.value); setEmailCheck({ checking: false, exists: null, msg: null }); }}
+                      onBlur={handleEmailBlur}
                       placeholder="name@codoc.com"
                       className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-100 focus:outline-none focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/60 transition-all"
                     />
+                    {emailCheck.checking && (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-[11px] text-slate-400">Checking...</span>
+                      </div>
+                    )}
+                    {emailCheck.msg && (
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <AlertCircle size={12} className="text-amber-400 shrink-0" />
+                        <span className="text-[11px] text-amber-400">{emailCheck.msg}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
