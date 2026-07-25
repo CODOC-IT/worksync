@@ -101,6 +101,7 @@ interface AppState {
   setRole: (role: UserRole) => void;
   refreshUsers: () => void;
   onUserRegistered: (user: User) => void;
+  loginUser: (user: User) => void;
   toggleTheme: () => void;
   createProject: (data: Partial<Project>) => void;
   approveProject: (projectId: string) => void;
@@ -234,6 +235,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(newUser);
     setCurrentRole(newUser.role);
+    refreshUsers();
+  };
+
+  const loginUser = (user: User) => {
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.email.toLowerCase() === user.email.toLowerCase());
+      if (exists) return prev;
+      return [...prev, user];
+    });
+    setCurrentUser(user);
+    setCurrentRole(user.role);
     refreshUsers();
   };
 
@@ -1464,6 +1476,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRole,
         refreshUsers,
         onUserRegistered,
+        loginUser,
         toggleTheme,
         createProject,
         approveProject,
