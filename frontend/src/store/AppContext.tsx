@@ -1600,15 +1600,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  const exportBackup = () => {
+    const backupData = {
+      exportedAt: new Date().toISOString(),
+      users,
+      projects,
+      tasks,
+      attendanceRecords,
+      hrRequests,
+      systemApprovals,
+      chatMessages,
+      aiLogs
+    };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `office-management-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    dispatchNotifications({
+      recipientIds: resolveAdminRecipients(users),
+      type: 'backup_completed',
+      title: 'Backup Completed',
+      message: `${currentUser.name} exported a full system backup.`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'settings'
+    });
+
+    pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
+  };
+
   return (
     <AppContext.Provider
       value={{
         currentRole,
         currentUser,
-    const exportBackup = () => {
-      const backupData = {
-        exportedAt: new Date().toISOString(),
         users,
+        theme,
         projects,
         tasks,
         attendanceRecords,
@@ -1677,102 +1708,3 @@ export const useApp = () => {
   }
   return context;
 };
-        aiLogs
-      };
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `office-management-backup-${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      // Includes the acting Admin (no excludeUserId) — a self-notification here doubles as an
-      // in-app confirmation that the export actually completed.
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users),
-        type: 'backup_completed',
-        title: 'Backup Completed',
-        message: `${currentUser.name} exported a full system backup.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'settings'
-      });
-
-      pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
-    };
-
-    return (
-      <AppContext.Provider
-        value={{
-          currentRole,
-          currentUser,
-          users,
-          theme,
-          projects,
-          tasks,
-          attendanceRecords,
-          hrRequests,
-          systemApprovals,
-          chatMessages,
-          aiLogs,
-          aiAudits,
-          notifications,
-          toasts,
-          notificationPreferences,
-          activityLogs,
-          calendarEvents,
-          savedPrompts,
-          weeklySummaryDraft,
-          activeBreak,
-          settings,
-          setRole,
-          refreshUsers,
-          onUserRegistered,
-          loginUser,
-          toggleTheme,
-          createProject,
-          approveProject,
-          rejectProject,
-          updateProject,
-          deleteProject,
-          createTask,
-          updateTask,
-          deleteTask,
-          updateTaskStatus,
-          proposeControlledEdit,
-          approveApprovalItem,
-          rejectApprovalItem,
-          checkIn,
-          checkOut,
-          startBreak,
-          endBreak,
-          updateAttendanceRecord,
-          submitHRRequest,
-          approveHRRequest,
-          rejectHRRequest,
-          sendChatMessage,
-          togglePinMessage,
-          addAIQueryLog,
-          updateWeeklySummaryDraft,
-          markNotificationRead,
-          markAllNotificationsRead,
-          clearNotification,
-          updateNotificationPreferences,
-          dismissToast,
-          deactivateUser,
-          exportBackup
-        }}
-      >
-        {children}
-      </AppContext.Provider>
-    );
-  };
-
-  export const useApp = () => {
-    const context = useContext(AppContext);
-    if (!context) {
-      throw new Error('useApp must be used within an AppProvider');
-    }
-    return context;
-  };
