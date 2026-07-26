@@ -138,7 +138,6 @@ const AppContent: React.FC = () => {
 
           {currentTab === "calendar" && <CalendarView />}
 
-          {currentTab === "profile" && <ProfileView />}
 
           {/* Settings Tab */}
           {currentTab === "settings" && (
@@ -160,29 +159,6 @@ const AppContent: React.FC = () => {
                 </div>
 
                 <div className="space-y-6 text-xs">
-                  {/* API Key Configuration */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white flex items-center gap-2">
-                        <Key size={16} className="text-cyan-400" /> Masked AI
-                        API Key
-                      </span>
-                      <span className="text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
-                        Active & Injected
-                      </span>
-                    </div>
-                    <p className="text-slate-400">
-                      Injected securely via environment variables. Key is never
-                      exposed client-side.
-                    </p>
-                    <input
-                      type="text"
-                      readOnly
-                      value={settings.maskedAiKey}
-                      className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-300 font-mono"
-                    />
-                  </div>
-
                   {/* Backup & Export Data */}
                   <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-3">
                     <div className="flex items-center justify-between">
@@ -203,27 +179,6 @@ const AppContent: React.FC = () => {
                         <Download size={14} /> Export Backup
                       </button>
                     </div>
-                  </div>
-
-                  {/* Admin Safeguard Check */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-rose-500/20 space-y-3">
-                    <span className="font-bold text-rose-400 block">
-                      Sole Active Admin Account Safeguard Check
-                    </span>
-                    <p className="text-slate-400">
-                      The system blocks deactivating the sole active Admin
-                      account (`usr-1`). Try deactivating Alexander Wright below
-                      to test the safeguard logic.
-                    </p>
-                    <button
-                      onClick={() => {
-                        const res = deactivateUser("usr-1");
-                        alert(res.message);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-semibold"
-                    >
-                      Attempt Sole Admin Deactivation
-                    </button>
                   </div>
                 </div>
               </div>
