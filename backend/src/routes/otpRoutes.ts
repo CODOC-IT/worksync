@@ -15,7 +15,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
     const { email, name } = req.body;
 
     if (!isEmailConfigured()) {
-      res.status(503).json({ success: false, message: 'Email service is not configured. Please add a valid RESEND_API_KEY to your .env file.' });
+      res.status(503).json({ success: false, message: 'Email service is not configured. Please set SMTP_USER and SMTP_PASS in your .env file.' });
       return;
     }
 

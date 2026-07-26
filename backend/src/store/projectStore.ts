@@ -175,6 +175,14 @@ class ProjectStore {
     if (!task) return false;
     return this.isProjectAccessible(task.projectId, userId, role);
   }
+
+  getAllProjects(): BackendProject[] {
+    return Array.from(this.projects.values());
+  }
+
+  getAllTasks(): BackendTask[] {
+    return Array.from(this.tasks.values());
+  }
 }
 
 export const projectStore = new ProjectStore();

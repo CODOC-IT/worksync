@@ -1,11 +1,41 @@
 
 @import "tailwindcss";
 
+@theme {
+  --color-slate-50: var(--shade-slate-50);
+  --color-slate-100: var(--shade-slate-100);
+  --color-slate-200: var(--shade-slate-200);
+  --color-slate-300: var(--shade-slate-300);
+  --color-slate-400: var(--shade-slate-400);
+  --color-slate-500: var(--shade-slate-500);
+  --color-slate-600: var(--shade-slate-600);
+  --color-slate-700: var(--shade-slate-700);
+  --color-slate-800: var(--shade-slate-800);
+  --color-slate-900: var(--shade-slate-900);
+  --color-slate-950: var(--shade-slate-950);
+  --color-white: var(--shade-white);
+}
+
 @layer base {
   :root {
     color-scheme: dark;
     --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+
+    /* Slate palette — dark mode */
+    --shade-slate-50: #f8fafc;
+    --shade-slate-100: #f1f5f9;
+    --shade-slate-200: #e2e8f0;
+    --shade-slate-300: #cbd5e1;
+    --shade-slate-400: #94a3b8;
+    --shade-slate-500: #64748b;
+    --shade-slate-600: #475569;
+    --shade-slate-700: #334155;
+    --shade-slate-800: #1e293b;
+    --shade-slate-900: #0f172a;
+    --shade-slate-950: #020617;
+    --shade-white: #ffffff;
+
     --bg-canvas: #090a0f;
     --surface-glass: rgba(15, 18, 28, 0.85);
     --surface-glass-border: rgba(255, 255, 255, 0.1);
@@ -18,6 +48,21 @@
 
   .light {
     color-scheme: light;
+
+    /* Slate palette — inverted for light mode */
+    --shade-slate-50: #0f172a;
+    --shade-slate-100: #1e293b;
+    --shade-slate-200: #334155;
+    --shade-slate-300: #475569;
+    --shade-slate-400: #64748b;
+    --shade-slate-500: #94a3b8;
+    --shade-slate-600: #cbd5e1;
+    --shade-slate-700: #e2e8f0;
+    --shade-slate-800: #f1f5f9;
+    --shade-slate-900: #f8fafc;
+    --shade-slate-950: #ffffff;
+    --shade-white: #0f172a;
+
     --bg-canvas: #f1f4f9;
     --surface-glass: rgba(255, 255, 255, 0.92);
     --surface-glass-border: rgba(0, 0, 0, 0.12);
@@ -28,55 +73,45 @@
 
   body {
     background-color: var(--bg-canvas);
-    color: #e2e8f0;
+    color: var(--shade-slate-300);
     font-family: var(--font-sans);
     overflow-x: hidden;
     font-size: 13px;
     line-height: 1.4;
     letter-spacing: -0.01em;
   }
-
-  .light body {
-    color: #0f172a;
-  }
 }
 
 /* High Density Compact Layout Overrides & Utilities */
 .glass-panel {
-  background: rgba(15, 18, 28, 0.75);
+  background: var(--surface-glass);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--surface-glass-border);
   box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.35);
   border-radius: 10px;
 }
 
-.light .glass-panel {
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.06);
-}
-
 .glass-panel-glow {
-  background: rgba(15, 18, 28, 0.82);
+  background: var(--surface-glass);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(0, 242, 254, 0.3);
-  box-shadow: 0 0 20px rgba(0, 242, 254, 0.1), inset 0 0 10px rgba(138, 43, 226, 0.06);
+  border: 1px solid var(--neon-cyan);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--neon-cyan) 10%, transparent), inset 0 0 10px color-mix(in srgb, var(--neon-violet) 6%, transparent);
   border-radius: 10px;
 }
 
 .glass-button-neon {
-  background: linear-gradient(135deg, rgba(0, 242, 254, 0.22) 0%, rgba(138, 43, 226, 0.32) 100%);
-  border: 1px solid rgba(0, 242, 254, 0.55);
-  box-shadow: 0 0 12px rgba(0, 242, 254, 0.2);
-  color: #ffffff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--neon-cyan) 22%, transparent) 0%, color-mix(in srgb, var(--neon-violet) 32%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--neon-cyan) 55%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--neon-cyan) 20%, transparent);
+  color: var(--shade-white);
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glass-button-neon:hover {
-  background: linear-gradient(135deg, rgba(0, 242, 254, 0.38) 0%, rgba(138, 43, 226, 0.55) 100%);
-  border-color: rgba(0, 242, 254, 0.85);
-  box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--neon-cyan) 38%, transparent) 0%, color-mix(in srgb, var(--neon-violet) 55%, transparent) 100%);
+  border-color: color-mix(in srgb, var(--neon-cyan) 85%, transparent);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--neon-cyan) 40%, transparent);
   transform: translateY(-1px);
 }
 
@@ -100,18 +135,18 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-weight: 600;
-  color: #94a3b8;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--shade-slate-400);
+  border-bottom: 1px solid var(--surface-glass-border);
 }
 
 .density-table td {
   padding: 7px 10px;
   font-size: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid color-mix(in srgb, var(--shade-slate-200) 10%, transparent);
 }
 
 .density-table tr:hover td {
-  background-color: rgba(255, 255, 255, 0.03);
+  background-color: color-mix(in srgb, var(--shade-slate-200) 6%, transparent);
 }
 
 /* Cursor Glow Radial Helper */
@@ -127,7 +162,7 @@
   left: var(--mouse-x, -100px);
   width: 220px;
   height: 220px;
-  background: radial-gradient(circle, rgba(0, 242, 254, 0.15) 0%, rgba(138, 43, 226, 0.05) 50%, transparent 70%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--neon-cyan) 15%, transparent) 0%, color-mix(in srgb, var(--neon-violet) 5%, transparent) 50%, transparent 70%);
   transform: translate(-50%, -50%);
   pointer-events: none;
   transition: opacity 0.25s ease;
@@ -157,14 +192,24 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(9, 10, 15, 0.6);
+  background: color-mix(in srgb, var(--shade-slate-950) 60%, transparent);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--shade-white) 18%, transparent);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 242, 254, 0.5);
+  background: color-mix(in srgb, var(--neon-cyan) 50%, transparent);
+}
+
+/* Mobile sidebar overlay animation */
+@keyframes sidebarFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.sidebar-overlay {
+  animation: sidebarFadeIn 0.2s ease-out;
 }

@@ -8,6 +8,7 @@ import {
   FolderKanban,
   Pencil,
   Plus,
+  Trash2,
   X,
   XCircle
 } from 'lucide-react';
@@ -20,18 +21,19 @@ type TypeFilter = 'All' | SystemApproval['type'];
 
 const TYPE_META: Record<SystemApproval['type'], { label: string; icon: React.ReactNode }> = {
   Project_Creation: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
+  Project_Deletion: { label: 'Project Deletion', icon: <Trash2 size={13} /> },
   Task_Creation: { label: 'Task Creation', icon: <Plus size={13} /> },
   Controlled_Edit: { label: 'Controlled Edit', icon: <Pencil size={13} /> }
 };
 
-// The approval a request targets: a Project id directly for Project_Creation, or the
-// project owning the task for Task_Creation / Controlled_Edit (whose targetId is a taskId).
+// The approval a request targets: a Project id directly for Project_Creation / Project_Deletion,
+// or the project owning the task for Task_Creation / Controlled_Edit (whose targetId is a taskId).
 const getApprovalProject = (
   approval: SystemApproval,
   projects: Project[],
   tasks: Task[]
 ): Project | undefined => {
-  if (approval.type === 'Project_Creation') {
+  if (approval.type === 'Project_Creation' || approval.type === 'Project_Deletion') {
     return projects.find((project) => project.id === approval.targetId);
   }
   const task = tasks.find((item) => item.id === approval.targetId);
@@ -39,8 +41,8 @@ const getApprovalProject = (
 };
 
 // Admin can decide anything. A Team Lead can only decide requests tied to a project they
-// lead, and never their own project-creation proposals (those route to Admin by design —
-// see AppContext.createProject).
+// lead, and never their own project-creation or project-deletion proposals (those route to
+// Admin by design — see AppContext.createProject / AppContext.deleteProject).
 const canDecide = (
   role: 'Admin' | 'Team_Lead',
   userId: string,
@@ -48,7 +50,7 @@ const canDecide = (
   project: Project | undefined
 ): boolean => {
   if (role === 'Admin') return true;
-  if (approval.type === 'Project_Creation') return false;
+  if (approval.type === 'Project_Creation' || approval.type === 'Project_Deletion') return false;
   return Boolean(project && project.teamLeadId === userId);
 };
 
@@ -168,7 +170,7 @@ export const ApprovalsInboxView: React.FC = () => {
           </button>
         ))}
         <span className="mx-1 h-4 w-px bg-white/10" />
-        {(['All', 'Project_Creation', 'Task_Creation', 'Controlled_Edit'] as TypeFilter[]).map((type) => (
+        {(['All', 'Project_Creation', 'Project_Deletion', 'Task_Creation', 'Controlled_Edit'] as TypeFilter[]).map((type) => (
           <button
             key={type}
             type="button"

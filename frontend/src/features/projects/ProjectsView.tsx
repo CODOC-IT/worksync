@@ -87,13 +87,20 @@ export const ProjectsView: React.FC = () => {
   const [fileError, setFileError] = useState('');
 
   const teamLeads = users.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
+  const assignableMembers = users.filter((u) => u.role === 'Team_Member');
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const canCreate = currentRole === 'Admin' || currentRole === 'Team_Lead';
+  const canCreate = currentRole === 'Team_Lead';
   const canManage = (project: Project) =>
     currentRole === 'Admin' || (currentRole === 'Team_Lead' && project.teamLeadId === currentUser.id);
 
-  const filteredProjects = projects.filter((p) => {
+  // Team members only see projects they've been assigned to; other roles see everything.
+  const visibleProjects =
+    currentRole === 'Team_Member'
+      ? projects.filter((p) => p.memberIds.includes(currentUser.id))
+      : projects;
+
+  const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
@@ -275,8 +282,8 @@ export const ProjectsView: React.FC = () => {
     };
 
     if (formMode === 'create') {
-      // Only Admin gets to choose the initial status; Team Lead creation stays fully automatic (Pending Approval)
-      createProject(currentRole === 'Admin' ? { ...data, status: form.status } : data);
+      // Team Lead creation is fully automatic: always created as Pending Approval
+      createProject(data);
     } else if (editingProjectId) {
       updateProject(editingProjectId, { ...data, status: form.status });
     }
@@ -513,7 +520,7 @@ export const ProjectsView: React.FC = () => {
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Project Members</label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-2 rounded-lg bg-black/30 border border-white/10">
-                  {users.map((u) => (
+                  {assignableMembers.map((u) => (
                     <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
@@ -539,20 +546,6 @@ export const ProjectsView: React.FC = () => {
                     <option value="Active">Active</option>
                     <option value="Completed">Completed</option>
                     <option value="Archived">Archived</option>
-                  </select>
-                </div>
-              )}
-
-              {formMode === 'create' && currentRole === 'Admin' && (
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Status</label>
-                  <select
-                    value={form.status === 'Pending Approval' ? 'Pending Approval' : 'Active'}
-                    onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as ProjectStatus }))}
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
-                  >
-                    <option value="Active">Active (activate immediately)</option>
-                    <option value="Pending Approval">Pending Approval (hold as draft)</option>
                   </select>
                 </div>
               )}
@@ -643,9 +636,7 @@ export const ProjectsView: React.FC = () => {
               <div>
                 <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
                   <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
-                  <span className="text-slate-500 font-normal">
-                    ({currentRole === 'Admin' ? 'optional' : 'recommended for Admin review'})
-                  </span>
+                  <span className="text-slate-500 font-normal">(recommended for Admin review)</span>
                 </label>
                 <textarea
                   value={form.creationReason}
@@ -659,11 +650,7 @@ export const ProjectsView: React.FC = () => {
               {formMode === 'create' && (
                 <p className="text-slate-500 flex items-center gap-1.5">
                   <CheckCircle2 size={12} className="text-cyan-400 shrink-0" />
-                  {currentRole === 'Admin'
-                    ? form.status === 'Pending Approval'
-                      ? 'This project will be saved as Pending Approval (draft) instead of activating immediately.'
-                      : 'As Admin, this project activates immediately upon creation.'
-                    : 'As Team Lead, this project will be created as Pending Approval until an Admin approves it.'}
+                  This project will be created as Pending Approval until an Admin approves it.
                 </p>
               )}
             </div>
@@ -686,25 +673,34 @@ export const ProjectsView: React.FC = () => {
           <div className="w-full max-w-md glass-panel-glow border border-rose-500/40 shadow-2xl p-5 space-y-4">
             <div className="flex items-center gap-2 text-rose-400">
               <AlertTriangle size={18} />
-              <h2 className="text-sm font-bold text-white">Delete "{deleteTarget.title}"?</h2>
+              <h2 className="text-sm font-bold text-white">
+                {currentRole === 'Admin' ? `Delete "${deleteTarget.title}"?` : `Request deletion of "${deleteTarget.title}"?`}
+              </h2>
             </div>
 
-            {relatedTasks.length > 0 ? (
-              <div className="space-y-2 text-xs">
-                <p className="text-amber-300 font-semibold">
-                  This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                  Deleting it will permanently delete {relatedTasks.length !== 1 ? 'them' : 'it'} too.
-                </p>
-                <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
-                  {relatedTasks.map((t) => (
-                    <li key={t.id} className="text-slate-400 flex items-center gap-1.5">
-                      <span className="w-1 h-1 rounded-full bg-rose-400 shrink-0" /> {t.taskNumber} — {t.title}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {currentRole === 'Admin' ? (
+              relatedTasks.length > 0 ? (
+                <div className="space-y-2 text-xs">
+                  <p className="text-amber-300 font-semibold">
+                    This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
+                    Deleting it will permanently delete {relatedTasks.length !== 1 ? 'them' : 'it'} too.
+                  </p>
+                  <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
+                    {relatedTasks.map((t) => (
+                      <li key={t.id} className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-1 h-1 rounded-full bg-rose-400 shrink-0" /> {t.taskNumber} — {t.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">This action cannot be undone.</p>
+              )
             ) : (
-              <p className="text-xs text-slate-400">This action cannot be undone.</p>
+              <p className="text-xs text-slate-400">
+                This project will not be deleted immediately. A deletion request will be submitted for Admin approval,
+                and the project stays unchanged unless an Admin approves it.
+              </p>
             )}
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
@@ -712,7 +708,11 @@ export const ProjectsView: React.FC = () => {
                 Cancel
               </button>
               <button onClick={confirmDelete} className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40">
-                {relatedTasks.length > 0 ? `Delete Project & ${relatedTasks.length} Task${relatedTasks.length !== 1 ? 's' : ''}` : 'Delete Project'}
+                {currentRole === 'Admin'
+                  ? relatedTasks.length > 0
+                    ? `Delete Project & ${relatedTasks.length} Task${relatedTasks.length !== 1 ? 's' : ''}`
+                    : 'Delete Project'
+                  : 'Request Deletion'}
               </button>
             </div>
           </div>
