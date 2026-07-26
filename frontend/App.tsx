@@ -17,23 +17,9 @@ import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssista
 import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 import { NotificationsView } from '../frontend/src/features/notifications/NotificationsView';
+import { CalendarView } from "../frontend/src/features/calendar/CalendarView";
 import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
 import { ReportsView } from '../frontend/src/features/reports/ReportsView';
-
-import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
-import { LoginView } from "../frontend/src/features/auth/LoginView";
-import { SignupView } from "../frontend/src/features/auth/SignupView";
-import { DashboardView } from "../frontend/src/features/dashboard/DashboardView";
-import { ProfileView } from "../frontend/src/features/profile/ProfileView";
-import { ProjectsView } from "../frontend/src/features/projects/ProjectsView";
-import { TasksView } from "../frontend/src/features/tasks/TasksView";
-import { AttendanceView } from "../frontend/src/features/attendance/AttendanceView";
-import { AIAssistantView } from "../frontend/src/features/ai-assistant/AIAssistantView";
-import { KanbanView } from "../frontend/src/features/kanban/KanbanView";
-import { ApprovalsInboxView } from "../frontend/src/features/approvals/ApprovalsInboxView";
-import { NotificationsView } from "../frontend/src/features/notifications/NotificationsView";
-import { CalendarView } from "../frontend/src/features/calendar/CalendarView";
-import { ToastContainer } from "../frontend/src/features/notifications/ToastContainer";
 
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
