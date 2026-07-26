@@ -104,7 +104,7 @@
   background: linear-gradient(135deg, color-mix(in srgb, var(--neon-cyan) 22%, transparent) 0%, color-mix(in srgb, var(--neon-violet) 32%, transparent) 100%);
   border: 1px solid color-mix(in srgb, var(--neon-cyan) 55%, transparent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--neon-cyan) 20%, transparent);
-  color: var(--shade-slate-950);
+  color: var(--shade-white);
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
