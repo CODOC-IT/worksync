@@ -4,6 +4,7 @@ import { projectStore } from '../store/projectStore.js';
 import { promptStore } from '../store/promptStore.js';
 import { userStore } from '../store/userStore.js';
 import { generatePrompt } from '../services/aiService.js';
+import * as notificationService from '../notifications/notification.service.js';
 
 const router = Router();
 
@@ -187,6 +188,31 @@ router.post('/prompts', (req: AuthenticatedRequest, res: Response): void => {
       content,
       isAiGenerated: isAiGenerated !== false,
     });
+
+    // Minimal integration hook (per the notification backend spec — this module is not being
+    // redesigned): the AI Assistant has no team-visibility concept of its own, saved prompts are
+    // private to their author (see promptStore.getPromptsForUser above), so this is a
+    // self-notification confirming generation completed, the same "confirm to the actor" pattern
+    // already used by the frontend's confirmActionSuccess for other modules. ProjectBreakdown is
+    // the one category that produces an actual task breakdown; every other category maps to the
+    // generic "recommendation available" type. The other AI type codes seeded in
+    // database/18_notify_seed.sql (sprint/meeting/deadline/overdue) have no producing feature in
+    // this codebase yet — they stay reserved for when those AI features are built, per "minimal
+    // hook, no new subsystems."
+    const latestVersion = prompt.versions[prompt.versions.length - 1];
+    if (latestVersion?.isAiGenerated && req.user) {
+      notificationService
+        .publishEvent({
+          type: category === 'ProjectBreakdown' ? 'ai_tasks_generated' : 'ai_recommendation_available',
+          title: category === 'ProjectBreakdown' ? 'AI task breakdown generated' : 'AI content generated',
+          message: `Your AI-generated "${title}" is ready to review.`,
+          recipientIds: [req.user.id],
+          actorId: req.user.id,
+          projectId: projectId || undefined,
+          taskId: taskId || undefined
+        })
+        .catch((error) => console.error('[assistantRoutes] Failed to publish AI notification event:', error));
+    }
 
     res.status(201).json({ success: true, data: prompt });
   } catch (error: any) {

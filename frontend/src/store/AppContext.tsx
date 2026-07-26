@@ -61,12 +61,23 @@ import {
   markAsRead,
   markAllAsRead as markAllAsReadInList,
   clearNotification as removeNotificationFromList,
+  snoozeNotification as snoozeNotificationInList,
   resolveAdminRecipients,
   resolveProjectRecipients,
   resolveSingleRecipient,
   resolveTaskRecipients
 } from '../features/notifications/notificationService';
 import { getNotificationTypeMeta } from '../features/notifications/notificationTypes';
+import {
+  publishNotificationEvent,
+  fetchNotifications as fetchNotificationsApi,
+  fetchNotificationPreferences,
+  updateNotificationPreferencesApi,
+  markNotificationReadApi,
+  markAllNotificationsReadApi,
+  clearNotificationApi,
+  snoozeNotificationApi
+} from '../features/notifications/notificationApiClient';
 
 interface AppState {
   currentRole: UserRole;
@@ -151,6 +162,7 @@ interface AppState {
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   clearNotification: (id: string) => void;
+  snoozeNotification: (id: string, untilIso: string) => void;
   updateNotificationPreferences: (data: Partial<NotificationPreferences>) => void;
   dismissToast: (id: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
@@ -358,8 +370,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
-  const dispatchNotifications = (input: SendNotificationInput) => {
-    const created = sendNotification(input);
+  // Fetches this session's persisted notifications + preferences from the backend
+  // (backend/src/notifications) on mount and whenever the authenticated identity changes.
+  // Both calls fail silently (console.warn only) whenever there's no backend/DATABASE_URL
+  // reachable — e.g. running the Vite dev server alone, or no real login has happened yet
+  // (see notificationApiClient.ts's module comment) — leaving the pre-existing in-memory mock
+  // data (INITIAL_NOTIFICATIONS / the default preferences above) exactly as before.
+  useEffect(() => {
+    let isActive = true;
+
+    fetchNotificationsApi({ pageSize: 200 })
+      .then(({ items }) => {
+        if (isActive) setNotifications(items);
+      })
+      .catch((error) => {
+        console.warn('Notification API unavailable; using local notification data.', error);
+      });
+
+    fetchNotificationPreferences()
+      .then((prefs) => {
+        if (isActive) setNotificationPreferences(prefs);
+      })
+      .catch((error) => {
+        console.warn('Notification preferences API unavailable; using local defaults.', error);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser.id]);
+
+  const applyCreatedNotifications = (created: NotificationItem[]) => {
     if (created.length === 0) return;
     setNotifications((prev) => [...created, ...prev]);
 
@@ -374,6 +415,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           pushToast(meta.tone, notification.title, notification.message);
         });
     }
+  };
+
+  const dispatchNotifications = (input: SendNotificationInput) => {
+    // Real persistence is the primary path; the pure local sendNotification() below is only a
+    // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
+    // the acting demo-role-switcher identity has no matching backend session — see
+    // notificationApiClient.ts). Every one of this function's ~20 call sites is unaffected by
+    // which path actually wrote the notification: they only ever describe *what happened*.
+    publishNotificationEvent(input)
+      .then(applyCreatedNotifications)
+      .catch((error) => {
+        console.warn('Notification publish API failed; recording locally instead.', error);
+        applyCreatedNotifications(sendNotification(input));
+      });
   };
 
   // Confirms to the person who just performed an action that it actually went through — a
@@ -1251,9 +1306,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Attendance & Breaks
+    // Minimal integration hook (Attendance/Break Management modules are not being redesigned —
+    // see the notification backend spec): every trigger below only describes what happened and
+    // calls dispatchNotifications, exactly like every other module's hooks in this file.
+    // Recipients are the HR-role users, mirroring the pre-existing "Notify HR" convention already
+    // used by submitHRRequest below (HR is this app's attendance-oversight role, per
+    // frontend/src/types/index.ts's UserRole).
+    const resolveHRRecipients = () =>
+      users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
+
     const checkIn = () => {
       const todayStr = new Date().toISOString().split('T')[0];
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const isLate = nowTime > settings.workingHours.start;
 
       setAttendanceRecords((prev) => {
         const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
@@ -1270,6 +1335,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [newRec, ...prev];
       });
 
+      dispatchNotifications({
+        recipientIds: resolveHRRecipients(),
+        type: isLate ? 'attendance_late_check_in' : 'attendance_check_in',
+        title: isLate ? 'Late Check-In' : 'Employee Checked In',
+        message: isLate
+          ? `${currentUser.name} checked in late at ${nowTime} (shift starts ${settings.workingHours.start}).`
+          : `${currentUser.name} checked in at ${nowTime}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'attendance'
+      });
+      confirmActionSuccess('Checked In', `You checked in at ${nowTime} successfully.`);
       pushActivity('Checked in for work', 'Attendance', currentUser.id, currentUser.name);
     };
 
@@ -1301,6 +1378,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         endBreak();
       }
 
+      dispatchNotifications({
+        recipientIds: resolveHRRecipients(),
+        type: 'attendance_check_out',
+        title: 'Employee Checked Out',
+        message: `${currentUser.name} checked out at ${nowTime}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'attendance'
+      });
+      confirmActionSuccess('Checked Out', `You checked out at ${nowTime} successfully.`);
       pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
     };
 
@@ -1324,6 +1411,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startTime: nowTime,
         elapsedSeconds: 0
       });
+      dispatchNotifications({
+        recipientIds: resolveHRRecipients(),
+        type: 'break_started',
+        title: 'Break Started',
+        message: `${currentUser.name} started a ${breakType} at ${nowTime}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'attendance'
+      });
       pushActivity(`Started ${breakType}`, 'Attendance', currentUser.id, currentUser.name);
     };
 
@@ -1332,6 +1428,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const todayStr = new Date().toISOString().split('T')[0];
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
+      const exceeded = durationMin > settings.breakLimitMinutes;
 
       const newBreak: WorkBreak = {
         id: `brk-${Date.now()}`,
@@ -1354,6 +1451,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       setActiveBreak(null);
+      dispatchNotifications({
+        recipientIds: resolveHRRecipients(),
+        type: exceeded ? 'break_exceeded' : 'break_ended',
+        title: exceeded ? 'Break Time Exceeded' : 'Break Ended',
+        message: exceeded
+          ? `${currentUser.name}'s ${activeBreak.breakType} lasted ${durationMin} minutes, over the ${settings.breakLimitMinutes}-minute limit.`
+          : `${currentUser.name} ended their ${activeBreak.breakType} after ${durationMin} minutes.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'attendance'
+      });
       pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
     };
 
@@ -1420,6 +1528,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // HR Requests
+    // 'Correction' has its own dedicated notification type; 'Leave' and 'Break_Exception' reuse
+    // the generic 'approval' type already used elsewhere in this file for every other
+    // pending-decision flow (project creation, controlled edits) — see approveApprovalItem/
+    // rejectApprovalItem above for the same convention.
     const submitHRRequest = (type: HRRequest['type'], reason: string, details: HRRequest['details']) => {
       const newReq: HRRequest = {
         id: `hrq-${Date.now()}`,
@@ -1434,23 +1546,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setHrRequests((prev) => [newReq, ...prev]);
 
-      // Notify HR
-      const notif: NotificationItem = {
-        id: `notif-${Date.now()}`,
-        userId: 'usr-3', // Marcus Vance (HR)
+      dispatchNotifications({
+        recipientIds: resolveHRRecipients(),
+        type: type === 'Correction' ? 'attendance_correction_submitted' : 'approval',
         title: `New ${type.replace('_', ' ')} Request`,
-        message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request.`,
-        type: 'attendance',
-        read: false,
-        timestamp: 'Just now',
+        message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
         linkRoute: 'attendance'
-      };
-      setNotifications((prev) => [notif, ...prev]);
-
+      });
+      confirmActionSuccess('Request Submitted', `Your ${type.toLowerCase().replace('_', ' ')} request was submitted successfully.`);
       pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
     };
 
     const approveHRRequest = (requestId: string, decisionReason?: string) => {
+      const request = hrRequests.find((r) => r.id === requestId);
       setHrRequests((prev) =>
         prev.map((r) =>
           r.id === requestId
@@ -1458,10 +1568,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : r
         )
       );
+      if (request) {
+        const notifType =
+          request.type === 'Correction'
+            ? 'attendance_correction_approved'
+            : request.type === 'Break_Exception'
+              ? 'break_approved'
+              : 'approval';
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(request.userId, currentUser.id),
+          type: notifType,
+          title: `${request.type.replace('_', ' ')} Request Approved`,
+          message: `${currentUser.name} approved your ${request.type.toLowerCase().replace('_', ' ')} request.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
+        confirmActionSuccess('Request Approved', `You approved the ${request.type.toLowerCase().replace('_', ' ')} request successfully.`);
+      }
       pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
     };
 
     const rejectHRRequest = (requestId: string, decisionReason?: string) => {
+      const request = hrRequests.find((r) => r.id === requestId);
       setHrRequests((prev) =>
         prev.map((r) =>
           r.id === requestId
@@ -1469,6 +1598,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : r
         )
       );
+      if (request) {
+        const notifType =
+          request.type === 'Correction'
+            ? 'attendance_correction_rejected'
+            : request.type === 'Break_Exception'
+              ? 'break_rejected'
+              : 'approval';
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(request.userId, currentUser.id),
+          type: notifType,
+          title: `${request.type.replace('_', ' ')} Request Rejected`,
+          message: `${currentUser.name} rejected your ${request.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
+        confirmActionSuccess('Request Rejected', `You rejected the ${request.type.toLowerCase().replace('_', ' ')} request successfully.`);
+      }
       pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
     };
 
@@ -1491,6 +1638,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Posted project chat message', 'Project', projectId, 'Project Chat');
 
       const chatProject = projects.find((p) => p.id === projectId);
+      const mentionedIds = new Set(mentionedUsers.map((user) => user.id));
       mentionedUsers.forEach((user) => {
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(user.id, currentUser.id),
@@ -1503,6 +1651,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           projectId
         });
       });
+
+      // Everyone else on the project hears about the new message at the generic 'chat_new_message'
+      // level (mentioned users already got the more specific, higher-signal 'mention' above, so
+      // they're excluded here to avoid a duplicate notification for the same message).
+      if (chatProject) {
+        const otherRecipients = resolveProjectRecipients({ project: chatProject, excludeUserId: currentUser.id }).filter(
+          (id) => !mentionedIds.has(id)
+        );
+        if (otherRecipients.length > 0) {
+          dispatchNotifications({
+            recipientIds: otherRecipients,
+            type: 'chat_new_message',
+            title: 'New Chat Message',
+            message: `${currentUser.name} posted a new message in ${chatProject.title} chat: "${message.slice(0, 80)}"`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'chat',
+            projectId
+          });
+        }
+      }
     };
 
     const togglePinMessage = (projectId: string, messageId: string) => {
@@ -1540,20 +1709,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setWeeklySummaryDraft((prev) => ({ ...prev, ...data }));
     };
 
+    // Each of these applies the change to local state immediately (so the UI never waits on a
+    // round-trip) and fires the real API call in the background — see dispatchNotifications'
+    // comment above for why every notification action follows this same "local UX, backend as
+    // best-effort persistence" shape rather than blocking on the network.
     const markNotificationRead = (id: string) => {
       setNotifications((prev) => markAsRead(prev, id));
+      markNotificationReadApi(id).catch((error) => {
+        console.warn('Failed to persist "mark as read" to the backend.', error);
+      });
     };
 
     const markAllNotificationsRead = () => {
       setNotifications((prev) => markAllAsReadInList(prev, currentUser.id));
+      markAllNotificationsReadApi().catch((error) => {
+        console.warn('Failed to persist "mark all as read" to the backend.', error);
+      });
     };
 
     const clearNotification = (id: string) => {
       setNotifications((prev) => removeNotificationFromList(prev, id, currentUser.id));
+      clearNotificationApi(id).catch((error) => {
+        console.warn('Failed to persist notification clear to the backend.', error);
+      });
+    };
+
+    // "Remind me later". The API tracks a real SnoozedUntilUtc and re-surfaces the notification
+    // automatically once it passes; the local fallback (used only if the API call fails) has no
+    // such scheduler, so it approximates snooze as a dismiss — see notificationService.ts's
+    // snoozeNotification for why.
+    const snoozeNotification = (id: string, untilIso: string) => {
+      setNotifications((prev) => snoozeNotificationInList(prev, id, currentUser.id));
+      snoozeNotificationApi(id, untilIso).catch((error) => {
+        console.warn('Failed to persist notification snooze to the backend.', error);
+      });
     };
 
     const updateNotificationPreferences = (data: Partial<NotificationPreferences>) => {
       setNotificationPreferences((prev) => ({ ...prev, ...data }));
+      updateNotificationPreferencesApi(data).catch((error) => {
+        console.warn('Failed to persist notification preferences to the backend.', error);
+      });
     };
 
     // Deactivate Admin Safeguard Check
@@ -1689,6 +1885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markNotificationRead,
         markAllNotificationsRead,
         clearNotification,
+        snoozeNotification,
         updateNotificationPreferences,
         dismissToast,
         deactivateUser,

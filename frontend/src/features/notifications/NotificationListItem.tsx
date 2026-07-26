@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Info, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Clock, Info, X } from 'lucide-react';
 import { NotificationItem } from '../../types';
 import { getNotificationTypeMeta, NOTIFICATION_ICON_CLASSES, PRIORITY_CLASSES } from './notificationTypes';
 
@@ -9,7 +9,34 @@ interface NotificationListItemProps {
   onOpen: (notification: NotificationItem) => void;
   onClear?: (id: string) => void;
   compact?: boolean;
+  // Grouping (see notificationService.groupNotifications): when groupCount > 1, this row
+  // represents a collapsed group rather than a single notification. Clicking it toggles
+  // expansion instead of navigating — see NotificationsView for the expanded child rows.
+  groupCount?: number;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  onMarkAllRead?: () => void;
+  // "Remind me later" — only rendered when the parent decides this notification is eligible
+  // (due-date reminders and approval requests — see NotificationsView's SNOOZABLE_TYPES).
+  // Clicking the clock button opens a small preset menu (below); the chosen preset's computed
+  // time is passed back here.
+  onSnooze?: (notification: NotificationItem, until: Date) => void;
 }
+
+const SNOOZE_PRESETS: { label: string; getUntil: () => Date }[] = [
+  { label: 'In 1 hour', getUntil: () => new Date(Date.now() + 60 * 60 * 1000) },
+  { label: 'In 3 hours', getUntil: () => new Date(Date.now() + 3 * 60 * 60 * 1000) },
+  {
+    label: 'Tomorrow, 9:00 AM',
+    getUntil: () => {
+      const date = new Date();
+      date.setDate(date.getDate() + 1);
+      date.setHours(9, 0, 0, 0);
+      return date;
+    }
+  },
+  { label: 'Next week', getUntil: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }
+];
 
 const formatRelativeTime = (createdAt?: string, fallback?: string): string => {
   if (!createdAt) return fallback || '';
@@ -34,14 +61,50 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
   notification,
   onOpen,
   onClear,
-  compact = false
+  compact = false,
+  groupCount,
+  expanded = false,
+  onToggleExpand,
+  onMarkAllRead,
+  onSnooze
 }) => {
   const meta = getNotificationTypeMeta(notification.type);
   const Icon = meta.icon;
+  const isGroup = (groupCount ?? 1) > 1;
 
   const [showDetail, setShowDetail] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
+
+  const [showSnoozeMenu, setShowSnoozeMenu] = useState(false);
+  const [snoozeCoords, setSnoozeCoords] = useState<{ top: number; left: number } | null>(null);
+  const snoozeButtonRef = useRef<HTMLButtonElement>(null);
+  const snoozeMenuRef = useRef<HTMLDivElement>(null);
+
+  const SNOOZE_MENU_WIDTH = 180;
+
+  const openSnoozeMenu = () => {
+    const rect = snoozeButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setSnoozeCoords({
+      top: rect.bottom + 6,
+      left: Math.min(rect.left - SNOOZE_MENU_WIDTH + rect.width, window.innerWidth - SNOOZE_MENU_WIDTH - 12)
+    });
+    setShowSnoozeMenu(true);
+  };
+
+  // Closes the preset menu on any click outside it (unlike the hover-driven detail popover,
+  // this one needs to stay open while the user reads the options and picks one).
+  useEffect(() => {
+    if (!showSnoozeMenu) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (snoozeMenuRef.current?.contains(target) || snoozeButtonRef.current?.contains(target)) return;
+      setShowSnoozeMenu(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSnoozeMenu]);
 
   // Full title/message/actor/priority/timestamp in a portal-rendered popover — the row's own
   // text is truncated to one line for layout, so this is the only place the complete,
@@ -71,7 +134,7 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
     >
       <button
         type="button"
-        onClick={() => onOpen(notification)}
+        onClick={() => (isGroup && onToggleExpand ? onToggleExpand() : onOpen(notification))}
         className="flex min-w-0 flex-1 items-start gap-3 text-left"
       >
         <span className={`mt-0.5 shrink-0 rounded-lg border p-1.5 ${NOTIFICATION_ICON_CLASSES[meta.tone]}`}>
@@ -86,6 +149,11 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
             >
               {notification.title}
             </span>
+            {isGroup && (
+              <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] font-bold text-slate-300">
+                ×{groupCount}
+              </span>
+            )}
             {!notification.read && (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(0,242,254,0.8)]" />
             )}
@@ -98,6 +166,39 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
       </button>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        {isGroup && onToggleExpand && (
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-label={expanded ? 'Collapse group' : 'Expand group'}
+            className="rounded-lg p-1 text-slate-400 transition hover:bg-white/10 hover:text-cyan-300"
+          >
+            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+        {isGroup && onMarkAllRead && (
+          <button
+            type="button"
+            onClick={onMarkAllRead}
+            className="rounded-lg px-1.5 py-1 text-[10px] font-semibold text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-cyan-300 group-hover:opacity-100"
+          >
+            Mark all read
+          </button>
+        )}
+        {onSnooze && (
+          <button
+            ref={snoozeButtonRef}
+            type="button"
+            onClick={() => (showSnoozeMenu ? setShowSnoozeMenu(false) : openSnoozeMenu())}
+            aria-label="Remind me later"
+            title="Remind me later"
+            className={`rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-amber-300 ${
+              showSnoozeMenu ? 'bg-white/10 text-amber-300' : 'opacity-0 group-hover:opacity-100'
+            }`}
+          >
+            <Clock size={13} />
+          </button>
+        )}
         <button
           type="button"
           onClick={(event) => {
@@ -156,6 +257,35 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
                 {notification.createdAt ? new Date(notification.createdAt).toLocaleString() : notification.timestamp}
               </div>
             </div>
+          </div>,
+          document.body
+        )}
+
+      {showSnoozeMenu &&
+        snoozeCoords &&
+        onSnooze &&
+        createPortal(
+          <div
+            ref={snoozeMenuRef}
+            style={{ position: 'fixed', top: snoozeCoords.top, left: snoozeCoords.left, width: SNOOZE_MENU_WIDTH }}
+            className="glass-panel-glow z-50 overflow-hidden p-1 text-xs shadow-2xl"
+          >
+            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Remind me later
+            </div>
+            {SNOOZE_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => {
+                  onSnooze(notification, preset.getUntil());
+                  setShowSnoozeMenu(false);
+                }}
+                className="block w-full rounded-lg px-2 py-1.5 text-left text-slate-200 transition hover:bg-white/10 hover:text-amber-300"
+              >
+                {preset.label}
+              </button>
+            ))}
           </div>,
           document.body
         )}

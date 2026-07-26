@@ -16,25 +16,39 @@ projects they lead, and Team Members see only what's directly relevant to their 
 
 ## 2. Architecture
 
-Three layers, kept strictly separate per the PRD's extensibility/maintainability goals:
-
 ```
 UI                    frontend/src/features/notifications/
                        NotificationBell.tsx, NotificationsView.tsx,
                        NotificationListItem.tsx, ToastContainer.tsx
-                       (call AppContext actions only — never touch state directly)
+                       (call AppContext actions only — never touch state or the API directly)
         │
         ▼
 Business Logic         frontend/src/features/notifications/notificationService.ts
-(NotificationService)  + notificationTypes.ts (taxonomy/RBAC deny-lists)
-                        (pure functions: no React, no fetch, no side effects)
+(local fallback)       + notificationTypes.ts (taxonomy/RBAC deny-lists)
+                        (pure functions: no React, no fetch, no side effects — used only when
+                        the real API call below fails, see §10)
         │
         ▼
-Data Layer              frontend/src/store/AppContext.tsx
-                         `notifications: NotificationItem[]` state + the `dispatchNotifications`
-                         helper every trigger point calls. This is today's in-memory
-                         "database" — see §10 for what a real backend/DB replaces here.
+API Client              frontend/src/features/notifications/notificationApiClient.ts
+                         Thin fetch wrapper over /api/notifications (Bearer JWT from
+                         localStorage, same convention as features/ai-assistant's apiFetch).
+        │  HTTP
+        ▼
+Backend                 backend/src/notifications/
+                         notification.routes.ts → notification.controller.ts →
+                         notification.service.ts → notification.repository.ts → Postgres
+                         (Controller / Service / Repository layering — see §10)
+        │
+        ▼
+Data Layer              PostgreSQL notify.* schema (database/10_notify_tables.sql),
+                         reused as-is — this branch did not redesign it (see §11).
 ```
+
+`frontend/src/store/AppContext.tsx` still holds `notifications: NotificationItem[]` React
+state and the `dispatchNotifications` helper every trigger point calls — but that state is now
+a **cache hydrated from the API** (fetched on mount, updated from each call's response) rather
+than the system of record. Every one of AppContext's ~20+ trigger call sites is unchanged: they
+still just describe *what happened* and call `dispatchNotifications`/`confirmActionSuccess`.
 
 This mirrors the existing codebase convention (`taskRules.ts` is the same shape: pure
 business-logic functions consumed by `AppContext.tsx`, never called straight from a view).
@@ -53,24 +67,54 @@ frontend/src/features/notifications/
 │                               # the full untruncated title/message/actor/priority/timestamp
 ├── NotificationBell.tsx       # Bell icon + unread badge + dropdown preview (mounted in TopNav)
 ├── ToastContainer.tsx         # Bottom-right toast stack (mounted once in App.tsx)
-└── NotificationsView.tsx      # Full Notification Center screen (search/filter/paginate/prefs)
+├── NotificationsView.tsx      # Full Notification Center screen (search/filter/paginate/prefs)
+└── notificationApiClient.ts   # Fetch wrapper over /api/notifications — see §10
 ```
 
-Also touched (additively — see §12 for the exact diff shape):
+```
+backend/src/notifications/
+├── notification.types.ts        # NotificationType/NotificationEvent/DTO/preferences types
+│                                  # (duplicated from the frontend on purpose — separate TS
+│                                  # projects, same convention as backend/src/types.ts's UserRole)
+├── notification.mapper.ts       # DB row → NotificationDTO, DbPriority ↔ ApiPriority, link-route
+│                                  # derivation (CategoryCode/TypeCode → 'tasks'/'kanban'/...)
+├── notification.recipients.ts   # resolveAdminRecipients/resolveProjectRecipients/
+│                                  # resolveTaskRecipients/resolveSingleRecipient — server-side
+│                                  # equivalents of the frontend's identically-named helpers,
+│                                  # built on the existing projectStore/userStore (not new state)
+├── notification.repository.ts   # Repository layer — all raw SQL against notify.* (only file
+│                                  # that imports backend/src/db/pool.ts's query/withTransaction)
+├── notification.service.ts      # Service layer — recipient/priority/preference resolution,
+│                                  # publishEvent() (the event-bus entry point every module calls)
+├── notification.validation.ts   # Manual request-body validators (matches repo convention: no
+│                                  # zod/joi anywhere else in the backend either)
+├── notification.controller.ts   # Thin HTTP adapters — req/res only, no SQL, no business logic
+├── notification.routes.ts       # Express Router, mounted at /api/notifications in server.ts
+└── notification.repository.test.ts  # pg-mem-backed tests against the real notify.* DDL — §10
+```
+
+Also touched (additively — see §12 for the frontend diff shape, and §10 for the backend one):
 
 | File | Change |
 |---|---|
-| `frontend/src/types/index.ts` | Extended `NotificationItem`; added `NotificationType`, `NotificationPriority`, `NotificationPreferences`, `ToastItem`/`ToastTone` |
-| `frontend/src/store/AppContext.tsx` | Added `notifications`-adjacent state (`toasts`, `notificationPreferences`) + `dispatchNotifications` helper; added one `dispatchNotifications(...)` call inside each existing trigger action (see §9) |
+| `frontend/src/types/index.ts` | Extended `NotificationItem`; added `NotificationType` (now also covering Attendance/Break/Report/Chat/AI codes — see §6), `NotificationPriority`, `NotificationPreferences`, `ToastItem`/`ToastTone` |
+| `frontend/src/store/AppContext.tsx` | Added `notifications`-adjacent state (`toasts`, `notificationPreferences`) + `dispatchNotifications` helper; added one `dispatchNotifications(...)` call inside each existing trigger action (see §9), now backed by the real API with a local fallback (§10) |
 | `frontend/src/components/layout/TopNav.tsx` | Swapped the inline bell `<button>` for `<NotificationBell />`; removed the now-unused `onOpenNotifs` prop |
 | `frontend/App.tsx` | Added the `currentTab === 'notifications'` render case (was an empty stub, unreachable — same situation Kanban/Approvals were in before their branches); mounted `<ToastContainer />` once at the app-shell level |
+| `backend/src/server.ts` | Mounted `notification.routes.ts` at `/api/notifications` |
+| `backend/src/routes/assistantRoutes.ts` | Minimal integration hook: calls `notification.service.publishEvent()` in-process after a saved prompt (see §9) |
+| `database/18_notify_seed.sql` (new) | Seed data only — `iam.Users`/`work.Projects`/`work.Tasks` rows to satisfy `notify.*`'s FK constraints, plus every `notify.NotificationTypes` row (existing + new Attendance/Break/Report/Chat/AI codes). No `CREATE TABLE`/`ALTER TABLE` — the schema itself is untouched, per the explicit "do not redesign the schema" constraint |
+| `backend/src/db/pool.ts` (new) | Shared `pg` connection pool + `withTransaction`, with a `setPoolForTesting`/`resetPoolForTesting` seam used only by `notification.repository.test.ts` |
 
 **Not modified**: Authentication, Project Management (`ProjectsView.tsx`), Task Creation
 (`TasksView.tsx`, `taskRules.ts`, `taskMutations.ts`), the Project Board's own UI
-(`KanbanView.tsx`, `boardAccess.ts`). `AppContext.tsx` is shared state, not a "module" — the
-same file every prior module (Board, Approvals) already added its own action functions to;
-this branch only *adds* a notification-dispatch call inside each existing action, it does not
-change any of those actions' existing behavior or signatures.
+(`KanbanView.tsx`, `boardAccess.ts`), the `notify.*` Postgres schema DDL, Attendance/Break/
+Reports/Activity Log/Project Chat/AI Assistant's own business logic — each of those modules
+only gained the minimal trigger-point hook described in §9, never a redesign of the module
+itself. `AppContext.tsx` is shared state, not a "module" — the same file every prior module
+(Board, Approvals) already added its own action functions to; this branch only *adds* a
+notification-dispatch call inside each existing (or, for Attendance/Break, newly
+hook-equipped) action — it does not change those actions' core behavior or signatures.
 
 ## 4. Notification Lifecycle
 
@@ -149,6 +193,25 @@ Categories, matching PRD §7 / Step 6:
 - **Admin/system**: `user_registered`, `user_role_changed`, `user_deactivated`,
   `workspace_created`, `workspace_deleted`, `backup_completed`, `backup_failed`,
   `security_alert`, `audit_alert`, `system_maintenance`
+- **Attendance**: `attendance_check_in`, `attendance_check_out`, `attendance_late_check_in`,
+  `attendance_absent`, `attendance_correction_submitted`, `attendance_correction_approved`,
+  `attendance_correction_rejected`
+- **Break Management**: `break_started`, `break_ended`, `break_exceeded`, `break_reminder`,
+  `break_approved`, `break_rejected`
+- **Reports**: `report_weekly_generated`, `report_monthly_generated`, `report_sprint_ready`,
+  `report_productivity_ready`, `report_project_completion`
+- **Project Chat**: `chat_reply`, `chat_new_message`, `chat_file_shared`, `chat_thread_reply`,
+  `chat_announcement` (`mention`, above, predates this list and stays under Collaboration)
+- **AI Assistant**: `ai_sprint_generated`, `ai_tasks_generated`, `ai_meeting_summarized`,
+  `ai_deadline_suggested`, `ai_overdue_detected`, `ai_recommendation_available`
+
+The last five groups were added for the backend integration branch (see §10) alongside the
+`notify.NotificationTypes` seed rows in `database/18_notify_seed.sql` — every `NotificationType`
+string is shared 1:1 with its `TypeCode` row so the mapper never has to translate codes, only
+casing/vocabulary (`Normal` ↔ `Medium`, see `notification.mapper.ts`). **Per the "minimal
+integration hook, not a new subsystem" rule**, not every seeded type has a live trigger yet —
+see §9's "reserved" list for exactly which ones and why (mostly: the producing feature, e.g. a
+Reports view or an AI sprint generator, doesn't exist in this codebase yet).
 
 ## 7. NotificationService API
 
@@ -214,6 +277,30 @@ regardless of role.
 | User deactivated | `AppContext.deactivateUser` | Notifies Admins + the affected user |
 | Backup completed | `AppContext.exportBackup` | Notifies Admins including the acting Admin (self-notification doubles as an in-app success confirmation) |
 | Task due tomorrow | `AppContext`'s due-date reminder scanner (`useEffect` + `setInterval`, next to `dispatchNotifications`) | Frontend-only stopgap scheduler — see below |
+| Check-in / late check-in | `AppContext.checkIn` | Recipients: HR-role users (`resolveHRRecipients`, mirrors the pre-existing "Notify HR" pattern in `submitHRRequest`). "Late" = check-in time after `settings.workingHours.start` |
+| Check-out | `AppContext.checkOut` | Recipients: HR |
+| Break started / ended / exceeded | `AppContext.startBreak` / `endBreak` | "Exceeded" = duration over `settings.breakLimitMinutes`; recipients: HR |
+| Attendance correction / leave / break-exception requested | `AppContext.submitHRRequest` | `type === 'Correction'` → `attendance_correction_submitted`; `'Leave'`/`'Break_Exception'` → the existing generic `approval` type (no dedicated Leave notification type was requested — reuses the same convention as `proposeControlledEdit`'s `approval` events) |
+| Attendance correction / leave / break-exception approved or rejected | `AppContext.approveHRRequest` / `rejectHRRequest` | Notifies the original requester; type follows the same per-`HRRequest.type` mapping as submission (`break_approved`/`break_rejected` for `'Break_Exception'`) — previously these two actions sent no notification at all |
+| New chat message | `AppContext.sendChatMessage` | `chat_new_message` to the rest of the project (`resolveProjectRecipients`), excluding anyone who already got the more specific `mention` notification for the same message |
+| AI prompt generated | `backend/src/routes/assistantRoutes.ts`'s `POST /prompts` | Self-notification to the author confirming generation completed (AI Assistant has no team-visibility concept — saved prompts are private per user); `category === 'ProjectBreakdown'` → `ai_tasks_generated`, everything else → `ai_recommendation_available` |
+
+**Seeded in `notify.NotificationTypes` but intentionally not wired to a trigger** (per "minimal
+hook, no new subsystems" — the producing feature doesn't exist in this codebase):
+
+- `attendance_absent` — no absence-detection scanner exists (would be new scheduling logic, not
+  a notification hook).
+- `report_weekly_generated`/`monthly_generated`/`sprint_ready`/`productivity_ready`/
+  `project_completion` — `frontend/src/features/reports/ReportsView.tsx` and
+  `frontend/src/features/weekly-summary/WeeklySummaryView.tsx` are both empty stub files with no
+  "generate" action anywhere to hook into (`AppContext.updateWeeklySummaryDraft` only edits a
+  draft buffer, never fires a completion event).
+- `chat_reply`, `chat_file_shared`, `chat_thread_reply`, `chat_announcement` — `ChatMessage` has
+  no reply/thread/announcement concept and its `attachments` field is never populated by any UI;
+  building those would mean designing new Project Chat features, out of scope here.
+- `ai_sprint_generated`, `ai_meeting_summarized`, `ai_deadline_suggested`, `ai_overdue_detected`
+  — no sprint/meeting/deadline-suggestion/overdue-scanning feature exists in the AI Assistant
+  today (it only generates prompt text for a handful of categories — see `assistantRoutes.ts`).
 
 ### Due-date reminder scanner (task_due_tomorrow)
 
@@ -245,37 +332,132 @@ to call them from — adding one would be out of this module's scope):
   out of scope for this branch) and there is no workspace entity, security monitor, or
   maintenance scheduler in the app to call from.
 
-## 10. Future Backend Integration
+## 10. Backend Integration (Implemented)
 
-Nothing here writes to a server or database (Step 4 constraint) — but every layer was shaped
-so that becomes a drop-in swap:
+The Notification Module now has a real, production-shaped backend — Controller → Service →
+Repository, exactly the layering `docs/ProjectAnalysis.md` prescribes for a future module:
 
-- `notificationService.sendNotification()` today returns `NotificationItem[]` synchronously.
-  A backend-connected version would be `async sendNotification(input): Promise<NotificationItem[]>`
-  wrapping `POST /notifications`; `dispatchNotifications` in `AppContext.tsx` is the **only**
-  caller, so only that one function needs to become `await`-aware — no UI component changes.
-- `markAsRead` / `markAllAsRead` / `clearNotification` map 1:1 onto
-  `PATCH /notifications/:id/read`, `PATCH /notifications/read-all`, `DELETE /notifications/:id`.
-- `getNotificationsByUser` / `filterNotifications` / `paginateNotifications` map onto a single
-  `GET /notifications?userId=&type=&priority=&unreadOnly=&page=` — the filter/pagination
-  parameter shapes were designed to translate directly into query params.
-- Recipient resolution (`resolveTaskRecipients` etc.) is the one piece that should **move
-  server-side** in production (never trust the client to compute who's allowed to see what) —
-  it would become authorization logic inside the API route instead of a pure frontend
-  function, matching the same "client-side prototype boundary" pattern already called out
-  above `AppContext.createTask`.
+- **`notification.repository.ts`** — the only file that writes SQL. `insertNotificationWithFanout`
+  inserts one `notify.Notifications` row plus one `notify.UserNotifications` row per recipient,
+  inside a single transaction (`withTransaction` from `backend/src/db/pool.ts`). `findByUser`
+  builds its `WHERE` clause dynamically from filters (unreadOnly/type/priority/search/page).
+  `markRead`/`clearOne` enforce ownership **in the `UPDATE ... WHERE` clause itself** (never a
+  separate check-then-act), so there's no window where a caller could probe another user's
+  notification (FR-24 "Secure Notification Access").
+- **`notification.service.ts`** — `publishEvent(event)` is the single entry point every module
+  (existing or new) calls: it resolves the `NotificationType`'s category/default priority,
+  evaluates each recipient's `notify.UserNotificationPreferences` row to decide
+  delivered-vs-suppressed (suppressed rows are still written, just excluded from `findByUser` —
+  the event is never silently lost, per NFR-19 Auditability), and returns the created rows as
+  frontend-ready `NotificationDTO[]`.
+- **`notification.recipients.ts`** — server-side `resolveAdminRecipients`/
+  `resolveProjectRecipients`/`resolveTaskRecipients`/`resolveSingleRecipient`, built on the
+  existing `projectStore`/`userStore` (not new state) — this is recipient resolution actually
+  moved server-side, which §10 of the pre-backend version of this doc called out as the one
+  piece that shouldn't be trusted to the client. The frontend's identically-named
+  `resolveXRecipients` helpers in `notificationService.ts` still run too (see the fallback
+  path below) so a recipient list is always computed even if the API is unreachable.
+- **id mapping (`idMapping.ts`)** — the frontend's prefixed string ids (`usr-4`, `prj-1`,
+  `tsk-101`) are converted to/from the schema's integer primary keys at the repository
+  boundary only, mirroring the exact convention `frontend/src/features/tasks/taskRepository.ts`
+  already established (`frontendId()`), just in the opposite direction.
 
-## 11. Future Database Integration
+**Frontend wiring** (`notificationApiClient.ts` + `AppContext.tsx`): every notification action
+now tries the real API first and falls back to the original pure, in-memory
+`notificationService.ts` logic if that call fails — no backend running, no `DATABASE_URL`
+configured, a network error, or (see §13) a demo-role-switched identity with no matching
+backend session. This means the app is fully usable both with and without a live Postgres
+instance: `dispatchNotifications`/`markNotificationRead`/`markAllNotificationsRead`/
+`clearNotification`/`updateNotificationPreferences` all follow this same
+"real API, local fallback" shape, and `notifications`/`notificationPreferences` state is
+hydrated from `GET /notifications` and `GET /notifications/preferences` on mount (falling back
+to `INITIAL_NOTIFICATIONS`/local defaults on failure). No UI component changed — the same
+`NotificationItem[]`/`NotificationPreferences` shapes flow through `AppContext` either way.
 
-`NotificationItem`'s fields were chosen to map cleanly onto a normalized `notify` schema (the
-PRD's own FR-02 field list): `id`→`NotificationId`, `userId`→`RecipientUserId`,
-`actorId`→`ActorUserId`, `type`→`NotificationTypeCode` (lookup table, same pattern as
-`work.TaskStatuses`), `priority`→`PriorityCode`, `createdAt`→`CreatedAtUtc`,
-`readAt`→`ReadAtUtc`, `projectId`/`taskId`→FKs into `work.Projects`/`work.Tasks`,
-`metadata`→a `jsonb` column for anything type-specific that doesn't deserve its own column.
-`database/00_schemas.sql` already reserves a `notify` schema (see
-`docs/ProjectAnalysis.md` §5) for exactly this, though no tables exist in it yet — this
-module's job was the frontend contract, not the migration.
+### REST API
+
+All routes are mounted at `/api/notifications` (`backend/src/notifications/notification.routes.ts`)
+and require a JWT (`authenticateJWT`, applied via `router.use()`) — the notification identity
+is always the verified `req.user.id`, never a client-supplied id.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/notifications` | List (filters: `unreadOnly`, `type`, `priority`, `search`, `page`, `pageSize`) |
+| `GET` | `/notifications/unread` | Unread only, no pagination |
+| `GET` | `/notifications/preferences` | Current user's preferences (defaults if no row yet) |
+| `PUT` | `/notifications/preferences` | Partial update of one or more preference toggles |
+| `POST` | `/notifications` | Publish an event (the event-bus HTTP entry point) |
+| `PATCH` | `/notifications/read-all` | Mark every unread, uncleared notification read |
+| `PATCH` | `/notifications/:id/read` | Mark one notification read |
+| `DELETE` | `/notifications/clear` | Soft-delete (clear) every notification |
+| `DELETE` | `/notifications/:id` | Soft-delete (clear) one notification |
+
+`DELETE /clear` is registered before `DELETE /:id` deliberately — Express matches routes in
+registration order, and `/:id` would otherwise swallow `/clear` as if `"clear"` were an id.
+
+### Testing (pg-mem)
+
+No live Postgres was available while building this branch, so
+`notification.repository.test.ts` runs the repository/service layer against
+[pg-mem](https://github.com/oguimbal/pg-mem), an in-memory Postgres emulator, executing the
+**real** `notify.*`/`iam.*`/`work.*`/`hr.*` DDL (trimmed to the columns these tests exercise —
+e.g. `SERIAL` stands in for `GENERATED BY DEFAULT AS IDENTITY`, which pg-mem doesn't fully
+support) via `backend/src/db/pool.ts`'s `setPoolForTesting()` injection seam. Uses Node's
+built-in `node:test` runner (`npx tsx --test backend/src/notifications/notification.repository.test.ts`),
+matching this repo's only existing test file's convention (`assistantRoutes.test.ts`) — no
+Jest/Vitest.
+
+Three pg-mem-specific gotchas worth knowing if you extend these tests:
+
+- **Don't use `db.backup()`/`.restore()` for per-test cleanup.** It looked correct in isolation
+  but left the `Pool` (created once via `db.adapters.createPg()` in `before()`) out of sync with
+  the restored snapshot, so rows silently accumulated across tests. Explicit
+  `DELETE FROM notify.usernotifications; DELETE FROM notify.notifications; DELETE FROM
+  notify.usernotificationpreferences;` in `beforeEach` is what's used instead — deterministic,
+  no snapshot/connection-identity interaction to worry about.
+- **A `UNIQUE` constraint on a column breaks `WHERE col = ANY($::text[])` combined with a
+  `LEFT JOIN`** — pg-mem silently returns zero rows instead of the matching ones (confirmed with
+  a minimal reproduction outside this suite; the same query works fine against real Postgres, or
+  against the same column without `UNIQUE`). `notify.NotificationTypes.TypeCode` is `UNIQUE` in
+  the real schema, so the test DDL deliberately omits that constraint — a documented test-only
+  simplification, not a production behavior change.
+- **`COUNT(*) FILTER (WHERE ...)` is silently ignored** — pg-mem returns the unfiltered total for
+  every aggregate in the same `SELECT`, rather than erroring or applying the filter (confirmed
+  with a minimal reproduction: `COUNT(*), COUNT(*) FILTER (WHERE x)` returned the same number for
+  both). `notification.repository.ts`'s `getDeliveryAnalytics` uses
+  `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` instead — functionally identical on real Postgres, and
+  portable rather than a test-only workaround, so no test DDL simplification was needed here.
+- **`CURRENT_TIMESTAMP` compared against a `timestamptz` column via `<=`/`>=` inside a
+  parenthesized `OR` can throw `cannot cast type timestamp to timestamptz`** — pg-mem's type
+  inference for the bare `CURRENT_TIMESTAMP` keyword doesn't always resolve to `timestamptz` the
+  way real Postgres does. `now()` (a real function call, unambiguously `timestamptz`) works
+  correctly in the same position — used for the `SnoozedUntilUtc` comparisons in `findByUser`/
+  `findUnreadByUser`.
+
+## 11. Database Integration (Implemented)
+
+The Notification Module reuses the existing `notify` schema **as-is** —
+`database/10_notify_tables.sql`'s `NotificationTypes`/`Notifications`/`UserNotifications`/
+`UserNotificationPreferences` were already fully designed; this branch's only database change
+is `database/18_notify_seed.sql` (data only, no `CREATE`/`ALTER TABLE`), which seeds:
+
+- `iam.Users`/`work.Projects`/`work.Tasks` reference rows mirroring the frontend's mock data
+  (`usr-1`..`usr-8`, `prj-1`..`prj-6`, `tsk-101`..`tsk-108`) — these exist solely to satisfy
+  `notify.*`'s FK constraints (`Notifications.ActorUserId`/`ProjectId`/`TaskId` →
+  `iam.Users`/`work.Projects`/`work.Tasks`), not as a live mirror of app state. Role/membership
+  lookups for recipient resolution still go through the existing `projectStore`/`userStore`
+  in-memory stores, not these rows.
+- Every `notify.NotificationTypes` row — the pre-existing Task/Project/Approval/System codes
+  plus the new Attendance/Break/Report/Chat/AI codes (§6), each with its `CategoryCode` (used
+  for link-route derivation, see `notification.mapper.ts`) and `DefaultPriority`.
+
+`NotificationDTO`'s fields map onto the schema exactly as this doc originally predicted:
+`id`→`NotificationId` (prefixed `notif-`), `userId`→`RecipientUserId`, `actorId`→`ActorUserId`,
+`type`→`NotificationTypes.TypeCode`, `priority`→`PriorityCode` (`Normal` ↔ `Medium`),
+`createdAt`→`CreatedAtUtc`, `readAt`→`ReadAtUtc`, `projectId`/`taskId`→FKs into
+`work.Projects`/`work.Tasks`. There is no `metadata` column (the schema was deliberately not
+redesigned to add one) — `NotificationItem.metadata` stays a frontend-only, non-persisted field
+for anything type-specific; nothing currently sets it.
 
 ## 12. Future WebSocket Integration
 
@@ -297,9 +479,20 @@ triggered the event. A real multi-user deployment would need:
 
 ## 13. Known Limitations
 
-- **In-memory only.** Like every other module in this prototype, `notifications` lives in
-  `AppContext` React state — a refresh loses everything (including read/unread state) back to
-  `INITIAL_NOTIFICATIONS`. See §10/§11 for the intended production path.
+- **Falls back to in-memory state whenever the API is unreachable.** If there's no backend
+  running, no `DATABASE_URL` configured, or a network error, every notification action falls
+  back to the original pure, in-memory `notificationService.ts` logic (see §10) — which behaves
+  exactly like this module did before it had a backend, including losing state on refresh. This
+  is a deliberate resilience choice, not an oversight: the app must stay usable without a live
+  Postgres instance (true of this sandbox throughout development).
+- **The demo Role Switcher can diverge from the real authenticated identity.** `TopNav`'s Demo
+  Role switcher (§14) swaps `currentUser`/`currentRole` to a different local mock profile
+  without re-authenticating against the backend — it predates this module's backend and is
+  unrelated to it. Since the notification API always trusts the JWT's `req.user.id` (never a
+  client-supplied id, per FR-24), publishing an event while `currentUser` doesn't match the
+  actual logged-in JWT identity gets rejected server-side (`actorId must match the authenticated
+  user`) and silently falls back to the local path above. Real per-role testing of the backend
+  path requires actually logging in as that role (`LoginView`), not the demo switcher.
 - **Single-session toasts.** Toasts only ever appear for the person currently driving the one
   open browser tab — see the note in the Notification Flow (§5) and Trigger Points.
 - **Mention detection is a plain substring match** (`message.includes('@Full Name')`) against

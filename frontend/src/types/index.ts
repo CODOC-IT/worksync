@@ -346,7 +346,36 @@ export type NotificationType =
   | 'system_maintenance'
   | 'attendance'
   | 'task'
-  | 'system';
+  | 'system'
+  | 'attendance_check_in'
+  | 'attendance_check_out'
+  | 'attendance_late_check_in'
+  | 'attendance_absent'
+  | 'attendance_correction_submitted'
+  | 'attendance_correction_approved'
+  | 'attendance_correction_rejected'
+  | 'break_started'
+  | 'break_ended'
+  | 'break_exceeded'
+  | 'break_reminder'
+  | 'break_approved'
+  | 'break_rejected'
+  | 'report_weekly_generated'
+  | 'report_monthly_generated'
+  | 'report_sprint_ready'
+  | 'report_productivity_ready'
+  | 'report_project_completion'
+  | 'chat_reply'
+  | 'chat_new_message'
+  | 'chat_file_shared'
+  | 'chat_thread_reply'
+  | 'chat_announcement'
+  | 'ai_sprint_generated'
+  | 'ai_tasks_generated'
+  | 'ai_meeting_summarized'
+  | 'ai_deadline_suggested'
+  | 'ai_overdue_detected'
+  | 'ai_recommendation_available';
 
 export type NotificationPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 
@@ -377,6 +406,18 @@ export interface NotificationPreferences {
   comments: boolean;
   assignments: boolean;
   email: boolean;
+}
+
+// One row per NotificationType — delivery/read/suppression counts for the Admin-only analytics
+// panel (backend/src/notifications/notification.repository.ts's getDeliveryAnalytics).
+export interface NotificationAnalyticsRow {
+  type: NotificationType;
+  category: string;
+  total: number;
+  delivered: number;
+  suppressed: number;
+  read: number;
+  readRate: number; // percentage, 0-100
 }
 
 export type ToastTone = 'success' | 'info' | 'warning' | 'error';

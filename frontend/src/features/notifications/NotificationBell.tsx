@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { NotificationItem } from '../../types';
-import { getNotificationsByUser } from './notificationService';
+import { getNotificationsByUser, groupNotifications } from './notificationService';
 import { NotificationListItem } from './NotificationListItem';
 
 interface NotificationBellProps {
@@ -21,7 +21,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onSelectTab 
 
   const myNotifications = getNotificationsByUser(notifications, currentUser.id, currentRole);
   const unreadCount = myNotifications.filter((notification) => !notification.read).length;
-  const preview = myNotifications.slice(0, DROPDOWN_PREVIEW_COUNT);
+  // Grouped for display only (same-type/same-target collapsed into one row with a ×N badge) —
+  // this compact preview has no room for the full expand/collapse UI the Notification Center
+  // gets, so clicking a grouped row here just opens its newest item, same as any other row.
+  const preview = groupNotifications(myNotifications.slice(0, DROPDOWN_PREVIEW_COUNT));
 
   useEffect(() => {
     if (!open) return;
@@ -76,10 +79,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onSelectTab 
             {preview.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-slate-500">You're all caught up.</div>
             ) : (
-              preview.map((notification) => (
+              preview.map((group) => (
                 <NotificationListItem
-                  key={notification.id}
-                  notification={notification}
+                  key={group.key}
+                  notification={group.items[0]}
+                  groupCount={group.items.length}
                   onOpen={handleOpenNotification}
                   compact
                 />
