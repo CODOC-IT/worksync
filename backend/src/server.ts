@@ -6,6 +6,7 @@ import assistantRoutes from './routes/assistantRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import taskRoutes from './routes/taskRoutes.js';
+import projectChatRoutes from './routes/projectChatRoutes.js';
 import notificationRoutes from './notifications/notification.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured } from './db/pool.js';
@@ -28,6 +29,7 @@ app.use('/api/assistant', assistantRoutes);
 app.use('/api/otp', otpRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/project-chats', projectChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 app.get('/api/health', (_req, res) => {
