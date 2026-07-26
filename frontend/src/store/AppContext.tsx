@@ -430,27 +430,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Create Project (Role Enforcement: TL creation needs Admin approval)
+  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  const eligibleProjectMemberIds = (ids: string[]): string[] =>
+    ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
+
   const createProject = (data: Partial<Project>) => {
-    const isAdmin = currentRole === 'Admin';
+    if (currentRole !== 'Team_Lead') return;
+
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-
-    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
-    // Team Lead creation always routes to Pending Approval for Admin review.
-    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
-    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
 
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status,
-      approvalStatus,
+      status: 'Pending Approval',
+      approvalStatus: 'Pending Approval',
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
-      memberIds: data.memberIds || [currentUser.id],
+      memberIds: eligibleProjectMemberIds(data.memberIds || []),
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       priority: data.priority || 'Medium',
@@ -464,42 +463,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProjects((prev) => [newProject, ...prev]);
 
-    if (!isAdmin) {
-      // Create System Approval for Admin
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Creation',
-        targetId: newProjId,
-        targetTitle: newProject.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
+    // Create System Approval for Admin
+    const approval: SystemApproval = {
+      id: `app-${Date.now()}`,
+      type: 'Project_Creation',
+      targetId: newProjId,
+      targetTitle: newProject.title,
+      requestedBy: currentUser.id,
+      requestedRole: currentRole,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
+      status: 'Pending'
+    };
+    setSystemApprovals((prev) => [approval, ...prev]);
 
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Approval Requested',
-        message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId: newProjId
-      });
-      confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
-    } else {
-      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
-    }
+    dispatchNotifications({
+      recipientIds: resolveAdminRecipients(users, currentUser.id),
+      type: 'approval',
+      title: 'Project Approval Requested',
+      message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'approvals',
+      projectId: newProjId
+    });
+    confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
 
-    // Notify the Team Lead AND every project member that the project now exists — regardless
-    // of whether it's Active (Admin-created) or Pending Approval (Team-Lead-created; members
-    // can already see it in the Projects list either way). Previously: Admin-created projects
-    // only notified the Team Lead ("assigned you as Team Lead"), leaving members with no
-    // notification at all; Team-Lead-created projects notified nobody but Admins. Both gaps
-    // are fixed here in one shared block instead of two near-duplicate ones.
+    // Notify the Team Lead AND every project member that the project now exists.
     const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
     if (projectCreatedRecipients.length > 0) {
       const projectCreatedMessages: Record<string, string> = {};
@@ -527,6 +517,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const approveProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -557,6 +549,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -590,8 +584,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    const sanitizedData = data.memberIds
+      ? { ...data, memberIds: eligibleProjectMemberIds(data.memberIds) }
+      : data;
+
     setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+      prev.map((p) => (p.id === projectId ? { ...p, ...sanitizedData } : p))
     );
     pushActivity('Updated project', 'Project', projectId, data.title || project.title);
 
@@ -674,6 +672,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    // Team Leads cannot delete immediately: their delete action files a Project Deletion
+    // approval request instead, mirroring the Project Creation approval flow. Only Admin
+    // deletes immediately, since Admin is also the sole approver of these requests.
+    if (currentRole !== 'Admin') {
+      const approval: SystemApproval = {
+        id: `app-${Date.now()}`,
+        type: 'Project_Deletion',
+        targetId: projectId,
+        targetTitle: project.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        details: `Team Lead ${currentUser.name} requested deletion of project "${project.title}". Pending Admin approval.`,
+        status: 'Pending'
+      };
+      setSystemApprovals((prev) => [approval, ...prev]);
+
+      dispatchNotifications({
+        recipientIds: resolveAdminRecipients(users, currentUser.id),
+        type: 'approval',
+        title: 'Project Deletion Requested',
+        message: `${currentUser.name} requested deletion of project "${project.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId
+      });
+      confirmActionSuccess('Deletion Requested', `Your request to delete "${project.title}" was submitted for Admin approval.`);
+      pushActivity('Requested project deletion', 'Project', projectId, project.title);
+      return;
+    }
+
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
 
@@ -693,6 +723,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     confirmActionSuccess('Project Deleted', `"${project.title}" was deleted successfully.`);
     pushActivity('Deleted project', 'Project', projectId, project.title);
+  };
+
+  // Admin decision on a Project Deletion request. Approving performs the actual deletion;
+  // rejecting is handled entirely by rejectApprovalItem, which never touches project/task state.
+  const approveProjectDeletion = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    setSystemApprovals((prev) =>
+      prev.map((sa) =>
+        sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
+      )
+    );
+
+    dispatchNotifications({
+      recipientIds: [
+        ...resolveAdminRecipients(users, currentUser.id),
+        ...resolveSingleRecipient(project.teamLeadId, currentUser.id)
+      ],
+      type: 'project_deleted',
+      title: 'Project Deleted',
+      message: `${currentUser.name} approved deletion of project "${project.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'projects',
+      projectId
+    });
+
+    confirmActionSuccess('Deletion Approved', `"${project.title}" was deleted successfully.`);
+    pushActivity('Approved project deletion', 'Project', projectId, project.title);
   };
 
   // Client-side prototype data boundary. The future API must repeat every
@@ -1107,6 +1171,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (item.type === 'Project_Creation') {
       approveProject(item.targetId);
+    } else if (item.type === 'Project_Deletion') {
+      approveProjectDeletion(item.targetId);
     } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
       const { field, newValue } = item.proposedDiff;
       setTasks((prev) =>
@@ -1145,13 +1211,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectApprovalItem = (approvalId: string) => {
     const item = systemApprovals.find((sa) => sa.id === approvalId);
 
+    // Only Admin may reject a Project Deletion request; the project remains unchanged either way
+    // since this function never touches `projects`/`tasks` state.
+    if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
+
     setSystemApprovals((prev) =>
       prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
     );
 
     if (item) {
-      const relatedProjectId =
-        item.type === 'Project_Creation' ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
+      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
@@ -1160,9 +1230,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
-        linkRoute: item.type === 'Project_Creation' ? 'projects' : 'tasks',
-        taskId: item.type === 'Project_Creation' ? undefined : item.targetId,
-        projectId: item.type === 'Project_Creation' ? item.targetId : undefined
+        linkRoute: targetsProject ? 'projects' : 'tasks',
+        taskId: targetsProject ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : undefined
       });
       confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
     }
