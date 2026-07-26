@@ -424,27 +424,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Create Project (Role Enforcement: TL creation needs Admin approval)
+  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  const eligibleProjectMemberIds = (ids: string[]): string[] =>
+    ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
+
   const createProject = (data: Partial<Project>) => {
-    const isAdmin = currentRole === 'Admin';
+    if (currentRole !== 'Team_Lead') return;
+
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-
-    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
-    // Team Lead creation always routes to Pending Approval for Admin review.
-    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
-    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
 
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status,
-      approvalStatus,
+      status: 'Pending Approval',
+      approvalStatus: 'Pending Approval',
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
-      memberIds: data.memberIds || [currentUser.id],
+      memberIds: eligibleProjectMemberIds(data.memberIds || []),
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       priority: data.priority || 'Medium',
@@ -458,42 +457,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProjects((prev) => [newProject, ...prev]);
 
-    if (!isAdmin) {
-      // Create System Approval for Admin
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Creation',
-        targetId: newProjId,
-        targetTitle: newProject.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
+    // Create System Approval for Admin
+    const approval: SystemApproval = {
+      id: `app-${Date.now()}`,
+      type: 'Project_Creation',
+      targetId: newProjId,
+      targetTitle: newProject.title,
+      requestedBy: currentUser.id,
+      requestedRole: currentRole,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
+      status: 'Pending'
+    };
+    setSystemApprovals((prev) => [approval, ...prev]);
 
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Approval Requested',
-        message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId: newProjId
-      });
-      confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
-    } else {
-      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
-    }
+    dispatchNotifications({
+      recipientIds: resolveAdminRecipients(users, currentUser.id),
+      type: 'approval',
+      title: 'Project Approval Requested',
+      message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'approvals',
+      projectId: newProjId
+    });
+    confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
 
-    // Notify the Team Lead AND every project member that the project now exists — regardless
-    // of whether it's Active (Admin-created) or Pending Approval (Team-Lead-created; members
-    // can already see it in the Projects list either way). Previously: Admin-created projects
-    // only notified the Team Lead ("assigned you as Team Lead"), leaving members with no
-    // notification at all; Team-Lead-created projects notified nobody but Admins. Both gaps
-    // are fixed here in one shared block instead of two near-duplicate ones.
+    // Notify the Team Lead AND every project member that the project now exists.
     const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
     if (projectCreatedRecipients.length > 0) {
       const projectCreatedMessages: Record<string, string> = {};
@@ -521,6 +511,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const approveProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -551,6 +543,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -584,8 +578,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    const sanitizedData = data.memberIds
+      ? { ...data, memberIds: eligibleProjectMemberIds(data.memberIds) }
+      : data;
+
     setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+      prev.map((p) => (p.id === projectId ? { ...p, ...sanitizedData } : p))
     );
     pushActivity('Updated project', 'Project', projectId, data.title || project.title);
 
