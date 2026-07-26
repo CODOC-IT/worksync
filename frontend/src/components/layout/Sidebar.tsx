@@ -59,7 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       hidden: currentRole === 'Team_Member' || currentRole === 'HR'
     },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
-    { id: 'chat', label: 'Project Chat', icon: MessageSquare },
+    { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
     { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },

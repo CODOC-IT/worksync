@@ -20,6 +20,7 @@ import { NotificationsView } from '../frontend/src/features/notifications/Notifi
 import { CalendarView } from "../frontend/src/features/calendar/CalendarView";
 import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
 import { ReportsView } from '../frontend/src/features/reports/ReportsView';
+import { ProjectChatsView } from '../frontend/src/features/project-chats/ProjectChatsView';
 
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
@@ -130,6 +131,7 @@ const AppContent: React.FC = () => {
           {currentTab === 'approvals' && <ApprovalsInboxView />}
           {currentTab === 'notifications' && <NotificationsView />}
           {currentTab === 'reports' && <ReportsView />}
+          {currentTab === 'project-chats' && <ProjectChatsView />}
           
          
 
