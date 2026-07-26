@@ -44,11 +44,13 @@ export interface Project {
   memberIds: string[];
   startDate: string;
   targetDate: string;
+  priority?: TaskPriority;
   progress: number; // 0-100
   milestones: Milestone[];
   files: ProjectFile[];
   pinnedMessagesCount?: number;
   tags: string[];
+  creationReason?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
@@ -90,6 +92,21 @@ export interface ControlledEditRequest {
   createdAt: string;
 }
 
+// Project Board (Kanban) status-change audit trail. Mirrors work.TaskStatusHistory
+// in the PostgreSQL schema (see database/04_work_tables.sql) so a future write-path
+// can persist these entries without reshaping them.
+export interface TaskStatusHistoryEntry {
+  id: string;
+  fromStatus: TaskStatus;
+  toStatus: TaskStatus;
+  note: string;
+  changedBy: string; // User ID
+  changedByName: string;
+  timestamp: string;
+}
+
+export type ReviewApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
+
 export interface Task {
   id: string;
   taskNumber: string;
@@ -113,6 +130,9 @@ export interface Task {
   completionSummary?: string;
   reopenReason?: string;
   createdAt: string;
+  // Project Board fields — populated by AppContext.updateTaskStatus (Kanban & task details).
+  statusHistory?: TaskStatusHistoryEntry[];
+  reviewApproval?: ReviewApprovalStatus;
 }
 
 export type BreakType = 'Lunch' | 'Short Break' | 'Other';
@@ -185,11 +205,79 @@ export interface ChatMessage {
   mentions?: string[];
 }
 
+export interface PromptVersion {
+  versionId: string;
+  versionNumber: number;
+  content: string;
+  isAiGenerated: boolean;
+  createdByUserId: string;
+  createdByName: string;
+  createdAtUtc: string;
+}
+
 export interface SavedPrompt {
   id: string;
   title: string;
   promptText: string;
   category: string;
+}
+
+export interface SavedPromptDetail {
+  id: string;
+  userId: string;
+  projectId: string | null;
+  taskId: string | null;
+  category: string;
+  title: string;
+  style: string;
+  additionalInstructions: string | null;
+  isArchived: boolean;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+  versions: PromptVersion[];
+}
+
+export interface PromptSummary {
+  id: string;
+  title: string;
+  category: string;
+  style: string;
+  isArchived: boolean;
+  versionCount: number;
+  latestContent: string;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface PromptCategory {
+  code: string;
+  name: string;
+  requiresProject: boolean;
+  requiresTask: boolean;
+}
+
+export interface ProjectSummary {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  startDate: string;
+  endDate: string;
+  milestoneCount: number;
+}
+
+export interface TaskSummary {
+  id: string;
+  taskNumber: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  assigneeId: string;
+  dueDate: string;
+  dependencies: string[];
 }
 
 export interface AIQueryLog {
@@ -215,15 +303,90 @@ export interface AIUsageAudit {
   lastUsed: string;
 }
 
+// Notification taxonomy. Legacy values ('approval' | 'task' | 'attendance' | 'mention' |
+// 'system') are kept so notifications created before this module (e.g. HR requests, the
+// original Project Approval Requested notice) remain valid without reshaping. New events
+// use the more specific PRD taxonomy so the Notification Center can render distinct
+// icons/copy and NotificationService can apply per-type RBAC recipient rules.
+export type NotificationType =
+  | 'task_assigned'
+  | 'task_reassigned'
+  | 'task_updated'
+  | 'task_status_changed'
+  | 'task_priority_changed'
+  | 'task_due_date_changed'
+  | 'task_review_requested'
+  | 'task_review_approved'
+  | 'task_review_rejected'
+  | 'task_completed'
+  | 'task_deleted'
+  | 'task_due_today'
+  | 'task_due_tomorrow'
+  | 'task_overdue'
+  | 'checklist_completed'
+  | 'comment_added'
+  | 'mention'
+  | 'attachment_uploaded'
+  | 'project_created'
+  | 'project_updated'
+  | 'project_archived'
+  | 'project_restored'
+  | 'project_deleted'
+  | 'project_member_added'
+  | 'project_member_removed'
+  | 'approval'
+  | 'user_registered'
+  | 'user_role_changed'
+  | 'user_deactivated'
+  | 'workspace_created'
+  | 'workspace_deleted'
+  | 'backup_completed'
+  | 'backup_failed'
+  | 'security_alert'
+  | 'audit_alert'
+  | 'system_maintenance'
+  | 'attendance'
+  | 'task'
+  | 'system';
+
+export type NotificationPriority = 'Critical' | 'High' | 'Medium' | 'Low';
+
 export interface NotificationItem {
   id: string;
-  userId: string;
+  userId: string; // recipient
+  actorId?: string; // who triggered the event (absent for system-generated notifications)
+  actorName?: string;
+  title: string;
+  message: string; // preview / body text
+  type: NotificationType;
+  priority?: NotificationPriority;
+  read: boolean;
+  timestamp: string; // legacy display string (kept for backward compatibility)
+  createdAt?: string; // ISO-ish sortable timestamp ("YYYY-MM-DD HH:mm"); new notifications always set this
+  readAt?: string;
+  linkRoute: string;
+  projectId?: string;
+  taskId?: string;
+  metadata?: Record<string, string | number | boolean | undefined>;
+}
+
+export interface NotificationPreferences {
+  toast: boolean;
+  inApp: boolean;
+  dueReminders: boolean;
+  mentions: boolean;
+  comments: boolean;
+  assignments: boolean;
+  email: boolean;
+}
+
+export type ToastTone = 'success' | 'info' | 'warning' | 'error';
+
+export interface ToastItem {
+  id: string;
+  tone: ToastTone;
   title: string;
   message: string;
-  type: 'approval' | 'task' | 'attendance' | 'mention' | 'system';
-  read: boolean;
-  timestamp: string;
-  linkRoute: string;
 }
 
 export interface ActivityLogItem {

@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { AppProvider, useApp } from '../frontend/src/store/AppContext';
-import { Sidebar } from '../frontend/src/components/layout/Sidebar';
-import { TopNav } from '../frontend/src/components/layout/TopNav';
-import { GlobalSearchModal } from '../frontend/src/components/common/GlobalSearchModal';
-import { ShortcutsModal } from '../frontend/src/components/common/ShortcutsModal';
+import React, { useState, useEffect } from "react";
+import { AppProvider, useApp } from "../frontend/src/store/AppContext";
+import { Sidebar } from "../frontend/src/components/layout/Sidebar";
+import { TopNav } from "../frontend/src/components/layout/TopNav";
+import { GlobalSearchModal } from "../frontend/src/components/common/GlobalSearchModal";
+import { ShortcutsModal } from "../frontend/src/components/common/ShortcutsModal";
 
 // Features
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
@@ -15,33 +15,51 @@ import { LoginView } from '../frontend/src/features/auth/LoginView';
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
 const AppContent: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
 
-  const { currentRole, activeBreak, settings, deactivateUser, exportBackup } = useApp();
+  const { currentRole, activeBreak, settings, deactivateUser, exportBackup } =
+    useApp();
 
   // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName);
+      const isInput = ["INPUT", "TEXTAREA"].includes(
+        (e.target as HTMLElement)?.tagName,
+      );
       if (!isInput) {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        if ((e.metaKey || e.ctrlKey) && e.key === "k") {
           e.preventDefault();
           setSearchOpen(true);
-        } else if (e.key === '?') {
+        } else if (e.key === "?") {
           e.preventDefault();
           setShortcutsOpen(true);
         }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  if (currentTab === 'login') {
-    return <LoginView onLoginSuccess={() => setCurrentTab('dashboard')} />;
+  if (currentTab === "login") {
+    return (
+      <LoginView
+        onLoginSuccess={() => setCurrentTab("dashboard")}
+        onSwitchToSignup={() => setCurrentTab("signup")}
+      />
+    );
+  }
+
+  if (currentTab === "signup") {
+    return (
+      <SignupView
+        onSignupSuccess={() => setCurrentTab("dashboard")}
+        onSwitchToLogin={() => setCurrentTab("login")}
+      />
+    );
   }
 
   const handleNavigate = (tab: string, _filterId?: string) => {
@@ -49,13 +67,15 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#090a0f] text-slate-100 font-sans cursor-glow-container">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-canvas)] text-slate-300 font-sans cursor-glow-container">
       {/* Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
         onTabChange={(tab) => setCurrentTab(tab)}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={() => setMobileSidebarOpen(false)}
       />
 
       {/* Main Content Area */}
@@ -63,9 +83,10 @@ const AppContent: React.FC = () => {
         {/* Top Header Navigation */}
         <TopNav
           onOpenSearch={() => setSearchOpen(true)}
-          onOpenNotifs={() => setCurrentTab('notifications')}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectTab={(tab) => setCurrentTab(tab)}
+          onToggleMobileSidebar={() => setMobileSidebarOpen((prev) => !prev)}
+          mobileSidebarOpen={mobileSidebarOpen}
         />
 
         {/* Active Break Alert Bar */}
@@ -74,11 +95,13 @@ const AppContent: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-400" />
               <span>
-                <strong>ACTIVE BREAK TIMER:</strong> {activeBreak.breakType} ({Math.floor(activeBreak.elapsedSeconds / 60)}m {activeBreak.elapsedSeconds % 60}s elapsed)
+                <strong>ACTIVE BREAK TIMER:</strong> {activeBreak.breakType} (
+                {Math.floor(activeBreak.elapsedSeconds / 60)}m{" "}
+                {activeBreak.elapsedSeconds % 60}s elapsed)
               </span>
             </div>
             <button
-              onClick={() => setCurrentTab('attendance')}
+              onClick={() => setCurrentTab("attendance")}
               className="underline hover:text-white font-bold"
             >
               Manage Break →
@@ -105,6 +128,7 @@ const AppContent: React.FC = () => {
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
+      <ToastContainer />
     </div>
   );
 };

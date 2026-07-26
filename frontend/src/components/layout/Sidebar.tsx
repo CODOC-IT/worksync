@@ -28,13 +28,17 @@ interface SidebarProps {
   onTabChange: (tab: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onTabChange,
   collapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  mobileOpen,
+  onMobileClose
 }) => {
   const { currentRole, currentUser, systemApprovals, hrRequests, notifications } = useApp();
 
@@ -67,12 +71,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'settings', label: 'Settings', icon: Settings }
   ];
 
-  return (
-    <aside
-      className={`relative z-30 h-screen flex flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-all duration-300 ${
-        collapsed ? 'w-20' : 'w-64'
-      }`}
-    >
+const sidebarContent = (
+    <>
       {/* Brand Header */}
       <div className="h-16 px-4 flex items-center justify-between border-b border-white/10 shrink-0">
         {!collapsed && (
@@ -138,7 +138,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             return (
               <button
                 key={item.id}
-                onClick={() => onTabChange(item.id)}
+                onClick={() => {
+                  onTabChange(item.id);
+                  onMobileClose();
+                }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group relative ${
                   isActive
                     ? 'bg-gradient-to-r from-cyan-500/20 to-purple-600/20 text-white border border-cyan-500/40 shadow-[0_0_15px_rgba(0,242,254,0.15)]'
@@ -195,6 +198,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {!collapsed && <span>Switch Account / Logout</span>}
         </button>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile Overlay Backdrop - visible only on small screens */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+          onClick={onMobileClose}
+        />
+      )}
+
+      {/* Mobile Drawer (fixed, slides in from left) - visible only on mobile when open */}
+      <aside
+        className={`
+          lg:hidden fixed left-0 top-0 z-50 h-screen flex flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-transform duration-300
+          ${collapsed ? 'w-20' : 'w-64'}
+          ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* Desktop Sidebar - always visible on large screens */}
+      <aside
+        className={`
+          hidden lg:flex relative z-30 h-screen flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-all duration-300 shrink-0
+          ${collapsed ? 'w-20' : 'w-64'}
+        `}
+      >
+        {sidebarContent}
+      </aside>
+    </>
   );
 };
