@@ -87,6 +87,7 @@ interface AppState {
   weeklySummaryDraft: WeeklySummaryDraft;
   activeBreak: {
     isBreaking: boolean;
+    userId: string;
     breakType: BreakType;
     startTime: string; // HH:mm
     elapsedSeconds: number;
@@ -133,6 +134,10 @@ interface AppState {
   checkOut: () => void;
   startBreak: (breakType: BreakType) => void;
   endBreak: () => void;
+  updateAttendanceRecord: (
+    recordId: string,
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
+  ) => { success: boolean; message: string };
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details']) => void;
   approveHRRequest: (requestId: string, decisionReason?: string) => void;
   rejectHRRequest: (requestId: string, decisionReason?: string) => void;
@@ -184,6 +189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [activeBreak, setActiveBreak] = useState<{
     isBreaking: boolean;
+    userId: string;
     breakType: BreakType;
     startTime: string;
     elapsedSeconds: number;
@@ -1188,10 +1194,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const checkOut = () => {
     const todayStr = new Date().toISOString().split('T')[0];
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const hasOpenAttendance = attendanceRecords.some(
+      (record) =>
+        record.userId === currentUser.id &&
+        record.date === todayStr &&
+        !record.checkOut
+    );
+    if (!hasOpenAttendance) return;
 
     setAttendanceRecords((prev) =>
       prev.map((a) => {
-        if (a.userId === currentUser.id && a.date === todayStr) {
+        if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
           return {
             ...a,
             checkOut: nowTime,
@@ -1202,7 +1215,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (activeBreak?.isBreaking) {
+    if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
       endBreak();
     }
 
@@ -1210,9 +1223,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startBreak = (breakType: BreakType) => {
+    if (activeBreak?.isBreaking) return;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const openAttendance = attendanceRecords.some(
+      (record) =>
+        record.userId === currentUser.id &&
+        record.date === todayStr &&
+        !record.checkOut
+    );
+    if (!openAttendance) return;
+
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     setActiveBreak({
       isBreaking: true,
+      userId: currentUser.id,
       breakType,
       startTime: nowTime,
       elapsedSeconds: 0
@@ -1221,7 +1246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const endBreak = () => {
-    if (!activeBreak) return;
+    if (!activeBreak || activeBreak.userId !== currentUser.id) return;
     const todayStr = new Date().toISOString().split('T')[0];
     const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
@@ -1248,6 +1273,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setActiveBreak(null);
     pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
+  };
+
+  const updateAttendanceRecord = (
+    recordId: string,
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
+  ) => {
+    const record = attendanceRecords.find((item) => item.id === recordId);
+    if (!record) {
+      return { success: false, message: 'Attendance record not found.' };
+    }
+
+    const isAdmin = currentRole === 'Admin';
+    const isOwnRecord = record.userId === currentUser.id;
+    const canEditRecord = isOwnRecord || isAdmin;
+    if (!canEditRecord) {
+      return {
+        success: false,
+        message: 'You are not authorized to edit another user’s attendance record.'
+      };
+    }
+
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
+      return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
+    }
+
+    const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
+      const duration = Number(workBreak.durationMinutes);
+      return {
+        ...workBreak,
+        id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
+        type: 'Other',
+        startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
+        endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
+        durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+      };
+    });
+
+    if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
+      return { success: false, message: 'Every saved break must have valid start and end times.' };
+    }
+
+    setAttendanceRecords((prev) =>
+      prev.map((item) =>
+        item.id === recordId
+          ? {
+              ...item,
+              checkIn: updates.checkIn,
+              checkOut: updates.checkOut || undefined,
+              breaks: normalizedBreaks
+            }
+          : item
+      )
+    );
+
+    pushActivity(
+      `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
+      'Attendance',
+      record.id,
+      currentUser.name
+    );
+    return { success: true, message: 'Attendance record updated.' };
   };
 
   // HR Requests
@@ -1504,6 +1591,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkOut,
         startBreak,
         endBreak,
+        updateAttendanceRecord,
         submitHRRequest,
         approveHRRequest,
         rejectHRRequest,
