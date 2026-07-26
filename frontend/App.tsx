@@ -130,28 +130,13 @@ const AppContent: React.FC = () => {
           {currentTab === 'approvals' && <ApprovalsInboxView />}
           {currentTab === 'notifications' && <NotificationsView />}
           {currentTab === 'reports' && <ReportsView />}
-          {currentTab === "dashboard" && (
-            <DashboardView onNavigate={handleNavigate} />
-          )}
-          {currentTab === "tasks" && <TasksView />}
-          {currentTab === "attendance" && <AttendanceView />}
+       
+ 
       
-        
-
-          {currentTab === "projects" && <ProjectsView />}
-
-          
-
-          {currentTab === "ai-assistant" && <AIAssistantView />}
-          {currentTab === "kanban" && <KanbanView />}
-
-          {currentTab === "approvals" && <ApprovalsInboxView />}
-
-          {currentTab === "notifications" && <NotificationsView />}
+      
 
           {currentTab === "calendar" && <CalendarView />}
 
-          {currentTab === "profile" && <ProfileView />}
 
           {/* Settings Tab */}
           {currentTab === "settings" && (
