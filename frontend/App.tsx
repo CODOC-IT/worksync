@@ -25,6 +25,7 @@ import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
 
@@ -81,6 +82,8 @@ const AppContent: React.FC = () => {
         onTabChange={(tab) => setCurrentTab(tab)}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={() => setMobileSidebarOpen(false)}
       />
 
       {/* Main Content Area */}
@@ -90,6 +93,8 @@ const AppContent: React.FC = () => {
           onOpenSearch={() => setSearchOpen(true)}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           onSelectTab={(tab) => setCurrentTab(tab)}
+          onToggleMobileSidebar={() => setMobileSidebarOpen((prev) => !prev)}
+          mobileSidebarOpen={mobileSidebarOpen}
         />
 
         {/* Active Break Alert Bar */}

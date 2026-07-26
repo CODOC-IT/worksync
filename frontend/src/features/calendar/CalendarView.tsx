@@ -113,14 +113,14 @@ export const CalendarView: React.FC = () => {
   const activeDayEntries = activeDayKey ? entriesByDate.get(activeDayKey) || [] : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-white flex items-center gap-2">
-            <CalendarIcon className="text-cyan-400" size={24} /> Calendar
+          <h1 className="text-xl sm:text-2xl font-extrabold text-white flex items-center gap-2">
+            <CalendarIcon className="text-cyan-400" size={22} /> Calendar
           </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
             Project deadlines, milestones, task due dates, and scheduled events in one place.
           </p>
         </div>
@@ -131,7 +131,7 @@ export const CalendarView: React.FC = () => {
               key={mode}
               type="button"
               onClick={() => setViewMode(mode)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition ${
+              className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold capitalize transition ${
                 viewMode === mode
                   ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_10px_rgba(0,242,254,0.15)]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
@@ -144,20 +144,20 @@ export const CalendarView: React.FC = () => {
       </div>
 
       {/* Navigation Controls */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 glass-panel px-4 py-3">
-        <div className="flex items-center gap-1.5">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3 glass-panel px-3 sm:px-4 py-2 sm:py-3">
+        <div className="flex items-center gap-1 sm:gap-1.5">
           <button
             type="button"
             onClick={goPrevious}
             aria-label="Previous"
-            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1.5 sm:p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <ChevronLeft size={16} />
+            <ChevronLeft size={14} />
           </button>
           <button
             type="button"
             onClick={goToday}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold glass-button-neon"
+            className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold glass-button-neon"
           >
             Today
           </button>
@@ -165,11 +165,11 @@ export const CalendarView: React.FC = () => {
             type="button"
             onClick={goNext}
             aria-label="Next"
-            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1.5 sm:p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <ChevronRight size={16} />
+            <ChevronRight size={14} />
           </button>
-          <h2 className="ml-2 text-sm font-bold text-white font-mono tracking-wide">{periodLabel}</h2>
+          <h2 className="ml-1 sm:ml-2 text-xs sm:text-sm font-bold text-white font-mono tracking-wide truncate max-w-[160px] sm:max-w-none">{periodLabel}</h2>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] text-slate-400">
@@ -455,21 +455,21 @@ const DayEntriesModal: React.FC<{
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
-      <div className="w-full max-w-lg glass-panel-glow border border-cyan-500/40 shadow-2xl relative overflow-hidden flex flex-col max-h-[70vh]">
-        <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/60 shrink-0">
-          <div>
-            <h3 className="text-sm font-bold text-white">{dateLabel}</h3>
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-10 sm:pt-20 p-2 sm:p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
+      <div className="w-full max-w-lg glass-panel-glow border border-cyan-500/40 shadow-2xl relative overflow-hidden flex flex-col max-h-[85vh] sm:max-h-[70vh] mx-2 sm:mx-0">
+        <div className="p-3 sm:p-4 border-b border-white/10 flex items-center justify-between bg-slate-900/60 shrink-0">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-bold text-white truncate">{dateLabel}</h3>
             <p className="text-[11px] text-slate-400">
               {entries.length} item{entries.length !== 1 ? 's' : ''}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white" aria-label="Close">
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white shrink-0" aria-label="Close">
             <X size={16} />
           </button>
         </div>
 
-        <div className="p-4 space-y-2 overflow-y-auto">
+        <div className="p-3 sm:p-4 space-y-2 overflow-y-auto">
           {entries.length === 0 && (
             <p className="text-xs text-slate-500 text-center py-6">No events scheduled for this day.</p>
           )}

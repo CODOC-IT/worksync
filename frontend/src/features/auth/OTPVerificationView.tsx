@@ -153,10 +153,10 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
         initial={{ opacity: 0, y: 32, scale: 0.97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.5, ease: 'easeOut' }}
-        className="relative z-10 w-full max-w-md mx-4"
+        className="relative z-10 w-full max-w-md mx-2 sm:mx-4"
       >
         {/* Card */}
-        <div className="bg-slate-900/80 backdrop-blur-2xl border border-cyan-500/20 rounded-2xl p-8 shadow-2xl shadow-cyan-500/5">
+        <div className="bg-slate-900/80 backdrop-blur-2xl border border-cyan-500/20 rounded-2xl p-5 sm:p-8 shadow-2xl shadow-cyan-500/5">
           {/* Icon */}
           <div className="flex justify-center mb-6">
             <motion.div
@@ -178,7 +178,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
           </div>
 
           {/* OTP Boxes */}
-          <div className="flex gap-3 justify-center mb-6" onPaste={handlePaste}>
+          <div className="flex gap-2 sm:gap-3 justify-center mb-6" onPaste={handlePaste}>
             {otp.map((digit, i) => (
               <motion.input
                 key={i}
@@ -191,7 +191,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
                 onKeyDown={(e) => handleKeyDown(i, e)}
                 whileFocus={{ scale: 1.08 }}
                 autoFocus={i === 0}
-                className={`w-12 h-14 text-center text-xl font-bold rounded-xl border-2 bg-slate-800/60 text-white outline-none transition-all duration-200
+                className={`w-10 h-12 sm:w-12 sm:h-14 text-lg sm:text-xl font-bold rounded-xl border-2 bg-slate-800/60 text-white outline-none transition-all duration-200
                   ${digit ? 'border-cyan-400 shadow-[0_0_12px_rgba(0,212,255,0.3)]' : 'border-slate-700'}
                   ${errorMsg ? 'border-red-500/60' : ''}
                   focus:border-cyan-400 focus:shadow-[0_0_12px_rgba(0,212,255,0.3)]`}
