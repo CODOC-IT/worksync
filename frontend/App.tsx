@@ -130,10 +130,11 @@ const AppContent: React.FC = () => {
           {currentTab === 'approvals' && <ApprovalsInboxView />}
           {currentTab === 'notifications' && <NotificationsView />}
           {currentTab === 'reports' && <ReportsView />}
-       
- 
-      
-      
+          
+         
+
+        
+
 
           {currentTab === "calendar" && <CalendarView />}
 
