@@ -6,8 +6,6 @@ import { GlobalSearchModal } from "../frontend/src/components/common/GlobalSearc
 import { ShortcutsModal } from "../frontend/src/components/common/ShortcutsModal";
 
 // Features
-import { LoginView } from '../frontend/src/features/auth/LoginView';
-import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
@@ -121,127 +119,9 @@ const AppContent: React.FC = () => {
         {/* Main Scrollable View Area */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-          {currentTab === 'projects' && <ProjectsView />}
-          {currentTab === 'tasks' && <TasksView />}
-          {currentTab === 'attendance' && <AttendanceView />}
+          {currentTab === 'members' && <TeamMembersView />}
           {currentTab === 'profile' && <ProfileView />}
-          {currentTab === 'ai-assistant' && <AIAssistantView />}
-          {currentTab === 'kanban' && <KanbanView />}
-          {currentTab === 'approvals' && <ApprovalsInboxView />}
-          {currentTab === 'notifications' && <NotificationsView />}
-          {currentTab === 'reports' && <ReportsView />}
-          {currentTab === "dashboard" && (
-            <DashboardView onNavigate={handleNavigate} />
-          )}
-          {currentTab === "tasks" && <TasksView />}
-          {currentTab === "attendance" && <AttendanceView />}
-      
-        
-
-          {currentTab === "projects" && <ProjectsView />}
-
-          
-
-          {currentTab === "ai-assistant" && <AIAssistantView />}
-          {currentTab === "kanban" && <KanbanView />}
-
-          {currentTab === "approvals" && <ApprovalsInboxView />}
-
-          {currentTab === "notifications" && <NotificationsView />}
-
-          {currentTab === "calendar" && <CalendarView />}
-
-          {currentTab === "profile" && <ProfileView />}
-
-          {/* Settings Tab */}
-          {currentTab === "settings" && (
-            <div className="space-y-6 max-w-4xl mx-auto">
-              <div className="glass-panel p-6 border border-cyan-500/30">
-                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-white/10">
-                  <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-                    <Shield size={22} />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-white">
-                      System Settings & Controls
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Manage workspace configurations, API keys, and account
-                      safeguards
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-6 text-xs">
-                  {/* API Key Configuration */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white flex items-center gap-2">
-                        <Key size={16} className="text-cyan-400" /> Masked AI
-                        API Key
-                      </span>
-                      <span className="text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
-                        Active & Injected
-                      </span>
-                    </div>
-                    <p className="text-slate-400">
-                      Injected securely via environment variables. Key is never
-                      exposed client-side.
-                    </p>
-                    <input
-                      type="text"
-                      readOnly
-                      value={settings.maskedAiKey}
-                      className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-300 font-mono"
-                    />
-                  </div>
-
-                  {/* Backup & Export Data */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-white flex items-center gap-2">
-                          <Database size={16} className="text-purple-400" />{" "}
-                          Export JSON Vault Backup
-                        </span>
-                        <p className="text-slate-400 mt-0.5">
-                          Download complete system state snapshot (users,
-                          projects, tasks, attendance, logs).
-                        </p>
-                      </div>
-                      <button
-                        onClick={exportBackup}
-                        className="px-4 py-2 rounded-xl glass-button-neon font-bold flex items-center gap-1.5 shrink-0"
-                      >
-                        <Download size={14} /> Export Backup
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Admin Safeguard Check */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-rose-500/20 space-y-3">
-                    <span className="font-bold text-rose-400 block">
-                      Sole Active Admin Account Safeguard Check
-                    </span>
-                    <p className="text-slate-400">
-                      The system blocks deactivating the sole active Admin
-                      account (`usr-1`). Try deactivating Alexander Wright below
-                      to test the safeguard logic.
-                    </p>
-                    <button
-                      onClick={() => {
-                        const res = deactivateUser("usr-1");
-                        alert(res.message);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-semibold"
-                    >
-                      Attempt Sole Admin Deactivation
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {currentTab === 'settings' && <SettingsView />}
         </main>
       </div>
 
