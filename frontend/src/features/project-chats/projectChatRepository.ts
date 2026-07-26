@@ -7,7 +7,12 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`/api/project-chats${path}`, init);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.success) {
-    const error = new Error(payload.message || 'The discussion service could not complete this request.') as Error & { fieldErrors?: Record<string, string> };
+    const message = response.status === 404
+      ? 'Project Chats is not available from the current backend. Restart the backend, then try again.'
+      : response.status === 401 || response.status === 403
+        ? 'Your session cannot perform this action. Sign in again or check your project access.'
+        : payload.message || 'We could not save your discussion. Please try again.';
+    const error = new Error(message) as Error & { fieldErrors?: Record<string, string> };
     error.fieldErrors = payload.fieldErrors;
     throw error;
   }
