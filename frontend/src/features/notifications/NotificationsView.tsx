@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  BarChart3,
   Bell,
   Check,
   ChevronDown,
@@ -15,11 +16,20 @@ import { NotificationItem, NotificationPreferences, NotificationPriority, Notifi
 import {
   filterNotifications,
   getNotificationsByUser,
+  groupNotifications,
   NotificationFilters,
   paginateNotifications
 } from './notificationService';
 import { getNotificationTypeMeta, PRIORITY_CLASSES } from './notificationTypes';
 import { NotificationListItem } from './NotificationListItem';
+import { NotificationAnalyticsPanel } from './NotificationAnalyticsPanel';
+
+// "Remind me later" only makes sense for time-sensitive or decision-pending events — a snoozed
+// `project_deleted` notification, for instance, wouldn't mean anything (there's no future
+// moment where it becomes more actionable). The user picks the actual duration from a preset
+// menu (see NotificationListItem's SNOOZE_PRESETS); this set only gates which notification
+// types get the clock button in the first place.
+const SNOOZABLE_TYPES = new Set<NotificationType>(['task_due_tomorrow', 'task_due_today', 'task_overdue', 'approval']);
 
 const inputClass =
   'w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10';
@@ -33,7 +43,11 @@ const PREFERENCE_LABELS: { key: keyof NotificationPreferences; label: string; de
   { key: 'mentions', label: 'Mentions', description: '@mentions in project chat' },
   { key: 'comments', label: 'Comments', description: 'New comments and replies' },
   { key: 'dueReminders', label: 'Due Reminders', description: 'Due today, due tomorrow, and overdue alerts' },
-  { key: 'email', label: 'Email Digest', description: 'Not yet connected — reserved for future backend delivery' }
+  {
+    key: 'email',
+    label: 'Email Digest',
+    description: 'Critical alerts arrive immediately; High-priority events are batched into a periodic email digest'
+  }
 ];
 
 export const NotificationsView: React.FC = () => {
@@ -45,6 +59,7 @@ export const NotificationsView: React.FC = () => {
     markNotificationRead,
     markAllNotificationsRead,
     clearNotification,
+    snoozeNotification,
     updateNotificationPreferences
   } = useApp();
 
@@ -55,6 +70,8 @@ export const NotificationsView: React.FC = () => {
   const [dateRange, setDateRange] = useState<NotificationFilters['dateRange']>('All');
   const [page, setPage] = useState(1);
   const [showPreferences, setShowPreferences] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const myNotifications = useMemo(
     () => getNotificationsByUser(notifications, currentUser.id, currentRole),
@@ -75,6 +92,7 @@ export const NotificationsView: React.FC = () => {
 
   const { items: pageItems, totalPages } = paginateNotifications(filtered, page, PAGE_SIZE);
   const unreadCount = myNotifications.filter((notification) => !notification.read).length;
+  const groups = useMemo(() => groupNotifications(pageItems), [pageItems]);
 
   const presentTypes = useMemo(
     () => Array.from(new Set(myNotifications.map((notification) => notification.type))),
@@ -92,6 +110,19 @@ export const NotificationsView: React.FC = () => {
 
   const handleOpen = (notification: NotificationItem) => {
     markNotificationRead(notification.id);
+  };
+
+  const toggleGroupExpanded = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const handleSnooze = (notification: NotificationItem, until: Date) => {
+    snoozeNotification(notification.id, until.toISOString());
   };
 
   const hasActiveFilters = Boolean(search || unreadOnly || typeFilter !== 'All' || priorityFilter !== 'All' || dateRange !== 'All');
@@ -112,6 +143,20 @@ export const NotificationsView: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {currentRole === 'Admin' && (
+            <button
+              type="button"
+              onClick={() => setShowAnalytics((value) => !value)}
+              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                showAnalytics
+                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
+                  : 'border-white/10 text-slate-300 hover:bg-white/5'
+              }`}
+            >
+              <BarChart3 size={14} />
+              Analytics
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowPreferences((value) => !value)}
@@ -137,6 +182,8 @@ export const NotificationsView: React.FC = () => {
         </div>
       </header>
 
+      {showAnalytics && currentRole === 'Admin' && <NotificationAnalyticsPanel />}
+
       {showPreferences && (
         <div className="glass-panel-glow space-y-3 p-5">
           <h2 className="flex items-center gap-2 text-sm font-bold text-white">
@@ -144,8 +191,7 @@ export const NotificationsView: React.FC = () => {
             Notification Preferences
           </h2>
           <p className="text-xs text-slate-400">
-            Choose which events generate an in-app notification or toast for your account. Preferences are
-            stored per session in this prototype (see docs/Notification_Module_Guide.md for backend plans).
+            Choose which events generate an in-app notification, toast, or email for your account.
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {PREFERENCE_LABELS.map(({ key, label, description }) => (
@@ -157,7 +203,6 @@ export const NotificationsView: React.FC = () => {
                   type="checkbox"
                   checked={notificationPreferences[key]}
                   onChange={(event) => updateNotificationPreferences({ [key]: event.target.checked })}
-                  disabled={key === 'email'}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-cyan-500 disabled:opacity-40"
                 />
                 <span>
@@ -278,24 +323,65 @@ export const NotificationsView: React.FC = () => {
           </div>
         ) : (
           <div className="divide-y divide-white/5">
-            {pageItems.map((notification) => (
-              <div key={notification.id} className="flex items-center">
-                <div className="min-w-0 flex-1">
-                  <NotificationListItem
-                    notification={notification}
-                    onOpen={handleOpen}
-                    onClear={clearNotification}
-                  />
+            {groups.map((group) => {
+              const representative = group.items[0];
+              const isGroup = group.items.length > 1;
+              const isExpanded = expandedGroups.has(group.key);
+              const canSnooze = SNOOZABLE_TYPES.has(representative.type);
+
+              return (
+                <div key={group.key}>
+                  <div className="flex items-center">
+                    <div className="min-w-0 flex-1">
+                      <NotificationListItem
+                        notification={representative}
+                        onOpen={handleOpen}
+                        onClear={isGroup ? undefined : clearNotification}
+                        onSnooze={!isGroup && canSnooze ? handleSnooze : undefined}
+                        groupCount={group.items.length}
+                        expanded={isExpanded}
+                        onToggleExpand={isGroup ? () => toggleGroupExpanded(group.key) : undefined}
+                        onMarkAllRead={
+                          isGroup ? () => group.items.forEach((item) => markNotificationRead(item.id)) : undefined
+                        }
+                      />
+                    </div>
+                    {representative.priority && (
+                      <span
+                        className={`mr-4 hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold sm:inline-block ${PRIORITY_CLASSES[representative.priority]}`}
+                      >
+                        {representative.priority}
+                      </span>
+                    )}
+                  </div>
+
+                  {isGroup && isExpanded && (
+                    <div className="divide-y divide-white/5 bg-slate-950/30 pl-6">
+                      {group.items.slice(1).map((notification) => (
+                        <div key={notification.id} className="flex items-center">
+                          <div className="min-w-0 flex-1">
+                            <NotificationListItem
+                              notification={notification}
+                              onOpen={handleOpen}
+                              onClear={clearNotification}
+                              onSnooze={SNOOZABLE_TYPES.has(notification.type) ? handleSnooze : undefined}
+                              compact
+                            />
+                          </div>
+                          {notification.priority && (
+                            <span
+                              className={`mr-4 hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold sm:inline-block ${PRIORITY_CLASSES[notification.priority]}`}
+                            >
+                              {notification.priority}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {notification.priority && (
-                  <span
-                    className={`mr-4 hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold sm:inline-block ${PRIORITY_CLASSES[notification.priority]}`}
-                  >
-                    {notification.priority}
-                  </span>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
