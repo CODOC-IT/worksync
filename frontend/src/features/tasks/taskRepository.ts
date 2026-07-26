@@ -99,3 +99,102 @@ export const createTaskViaApi = async (
     };
   }
 };
+
+export const updateTaskViaApi = async (
+  taskId: string,
+  data: TaskMutationData
+): Promise<TaskMutationResult> => {
+  const token = getAuthToken();
+  if (!token) {
+    return {
+      success: false,
+      message: 'Sign in before editing a task.'
+    };
+  }
+
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        title: data.title,
+        description: data.description,
+        priority: data.priority,
+        startDate: data.startDate,
+        dueDate: data.dueDate,
+        assigneeIds: data.assigneeIds?.length
+          ? data.assigneeIds
+          : data.assigneeId
+            ? [data.assigneeId]
+            : undefined,
+        status: data.status
+      })
+    });
+    const payload = await parseResponse(response);
+    const task = !Array.isArray(payload.data) ? payload.data : undefined;
+
+    if (!response.ok || !payload.success || !task) {
+      return {
+        success: false,
+        message: payload.message || 'Unable to update the task.',
+        fieldErrors: payload.fieldErrors
+      };
+    }
+
+    return {
+      success: true,
+      message: payload.message || 'Task updated successfully.',
+      task
+    };
+  } catch {
+    return {
+      success: false,
+      message: 'Unable to reach the task service. Please try again.'
+    };
+  }
+};
+
+export const deleteTaskViaApi = async (
+  taskId: string
+): Promise<TaskMutationResult> => {
+  const token = getAuthToken();
+  if (!token) {
+    return {
+      success: false,
+      message: 'Sign in before deleting a task.'
+    };
+  }
+
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    const payload = await parseResponse(response);
+    const task = !Array.isArray(payload.data) ? payload.data : undefined;
+
+    if (!response.ok || !payload.success) {
+      return {
+        success: false,
+        message: payload.message || 'Unable to delete the task.',
+        fieldErrors: payload.fieldErrors
+      };
+    }
+
+    return {
+      success: true,
+      message: payload.message || 'Task deleted.',
+      task
+    };
+  } catch {
+    return {
+      success: false,
+      message: 'Unable to reach the task service. Please try again.'
+    };
+  }
+};

@@ -132,7 +132,7 @@ export const prepareTaskUpdate = (
     if (restrictedFields.some((field) => data[field] !== undefined)) {
       return {
         success: false,
-        message: 'Team Members can only update task status until the protected-change workflow is available.'
+        message: 'You can only update the status for this task.'
       };
     }
   }
@@ -188,11 +188,9 @@ export const prepareTaskDeletion = (
 
   const project = context.projects.find((item) => item.id === task.projectId);
 
-  // The mock repository has no Team Lead scope-permission record. Keep delete
-  // denied for Team Leads until CanDeleteTasks is returned by the server.
   if (
     !project
-    || !canDeleteTask(context.currentRole, context.currentUserId, project, false)
+    || !canDeleteTask(context.currentRole, context.currentUserId, project)
   ) {
     return { success: false, message: 'You do not have permission to delete this task.' };
   }

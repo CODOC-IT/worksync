@@ -40,6 +40,16 @@ export interface CreateStoredTaskInput {
   dueDate: string;
 }
 
+export interface UpdateStoredTaskInput {
+  title?: string;
+  description?: string;
+  status?: StoredTaskStatus;
+  priority?: StoredTaskPriority;
+  startDate?: string;
+  assigneeIds?: string[];
+  dueDate?: string;
+}
+
 const TASK_DB_PATH = process.env.TASK_DB_PATH
   ? path.resolve(process.env.TASK_DB_PATH)
   : path.resolve(process.cwd(), 'database', 'tasks_db.json');
@@ -271,6 +281,39 @@ class TaskStore {
     this.tasks.set(task.id, task);
     this.persist();
     return cloneTask(task);
+  }
+
+  getById(taskId: string): StoredTask | undefined {
+    const task = this.tasks.get(taskId);
+    return task ? cloneTask(task) : undefined;
+  }
+
+  update(taskId: string, input: UpdateStoredTaskInput): StoredTask | undefined {
+    const existing = this.tasks.get(taskId);
+    if (!existing) return undefined;
+
+    const assigneeIds = input.assigneeIds?.length
+      ? [...input.assigneeIds]
+      : existing.assigneeIds;
+    const updated: StoredTask = {
+      ...existing,
+      ...input,
+      assigneeId: assigneeIds[0],
+      assigneeIds
+    };
+
+    this.tasks.set(taskId, updated);
+    this.persist();
+    return cloneTask(updated);
+  }
+
+  delete(taskId: string): StoredTask | undefined {
+    const existing = this.tasks.get(taskId);
+    if (!existing) return undefined;
+
+    this.tasks.delete(taskId);
+    this.persist();
+    return cloneTask(existing);
   }
 }
 

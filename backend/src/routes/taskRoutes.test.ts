@@ -68,7 +68,7 @@ test('GET /api/tasks returns tasks visible to the authenticated user', async () 
 });
 
 test('POST /api/tasks validates input and creates an authoritative task', async () => {
-  const token = tokenFor('usr-1', 'Admin');
+  const token = tokenFor('usr-2', 'Team_Lead');
   const invalidResponse = await request('/api/tasks', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -88,7 +88,7 @@ test('POST /api/tasks validates input and creates an authoritative task', async 
       title: 'Backend-connected task creation',
       description: 'Verify that the task API validates and persists new tasks.',
       priority: 'Critical',
-      startDate: '2026-07-24',
+      startDate: '2026-07-28',
       dueDate: '2026-08-01',
       assigneeIds: ['usr-4'],
       status: 'Todo'
@@ -112,16 +112,16 @@ test('POST /api/tasks validates input and creates an authoritative task', async 
 test('POST /api/tasks rejects users without task-creation permission', async () => {
   const response = await request(
     '/api/tasks',
-    tokenFor('usr-4', 'Team_Member'),
+    tokenFor('usr-1', 'Admin'),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         projectId: 'prj-1',
         title: 'Unauthorized task',
-        description: 'A team member must not create tasks directly.',
+        description: 'An admin can view tasks but must not create them directly.',
         priority: 'Medium',
-        startDate: '2026-07-24',
+        startDate: '2026-07-28',
         dueDate: '2026-08-01',
         assigneeIds: ['usr-4'],
         status: 'Todo'
@@ -144,7 +144,7 @@ test('POST /api/tasks allows a Team Lead within project scope', async () => {
         title: 'Team Lead task',
         description: 'A scoped Team Lead can create a task for an active project.',
         priority: 'High',
-        startDate: '2026-07-24',
+        startDate: '2026-07-28',
         dueDate: '2026-08-01',
         assigneeIds: ['usr-4'],
         status: 'Todo'
@@ -153,4 +153,73 @@ test('POST /api/tasks allows a Team Lead within project scope', async () => {
   );
 
   assert.equal(response.status, 201);
+});
+
+test('POST /api/tasks rejects start dates before today', async () => {
+  const response = await request(
+    '/api/tasks',
+    tokenFor('usr-2', 'Team_Lead'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: 'prj-1',
+        title: 'Past task',
+        description: 'Start dates must not be in the past.',
+        priority: 'Medium',
+        startDate: '2026-07-26',
+        dueDate: '2026-08-01',
+        assigneeIds: ['usr-4'],
+        status: 'Todo'
+      })
+    }
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.ok(payload.fieldErrors.startDate);
+});
+
+test('PATCH and DELETE /api/tasks/:taskId allow a scoped Team Lead', async () => {
+  const token = tokenFor('usr-2', 'Team_Lead');
+  const createResponse = await request('/api/tasks', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId: 'prj-1',
+      title: 'Editable task',
+      description: 'This task will be edited and deleted by a Team Lead.',
+      priority: 'Medium',
+      startDate: '2026-07-28',
+      dueDate: '2026-08-01',
+      assigneeIds: ['usr-4'],
+      status: 'Todo'
+    })
+  });
+  const created = await createResponse.json();
+
+  const patchResponse = await request(`/api/tasks/${created.data.id}`, token, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Edited task',
+      description: 'Updated from the API.',
+      priority: 'High',
+      startDate: '2026-07-28',
+      dueDate: '2026-08-02',
+      assigneeIds: ['usr-4'],
+      status: 'In Progress'
+    })
+  });
+  const patched = await patchResponse.json();
+
+  assert.equal(patchResponse.status, 200);
+  assert.equal(patched.data.title, 'Edited task');
+  assert.equal(patched.data.status, 'In Progress');
+
+  const deleteResponse = await request(`/api/tasks/${created.data.id}`, token, {
+    method: 'DELETE'
+  });
+
+  assert.equal(deleteResponse.status, 200);
 });
