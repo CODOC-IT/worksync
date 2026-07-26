@@ -81,6 +81,7 @@ export const TasksView: React.FC = () => {
   const [openMenuTaskId, setOpenMenuTaskId] = useState<string | null>(null);
   const [form, setForm] = useState<TaskFormInput>(emptyForm);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
@@ -93,6 +94,16 @@ export const TasksView: React.FC = () => {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
     return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    const closeTaskMenu = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('[data-task-actions]')) setOpenMenuTaskId(null);
+    };
+
+    document.addEventListener('pointerdown', closeTaskMenu);
+    return () => document.removeEventListener('pointerdown', closeTaskMenu);
   }, []);
 
   const availableProjects = useMemo(
@@ -142,6 +153,7 @@ export const TasksView: React.FC = () => {
     setForm(emptyForm());
     setEditingTaskId(null);
     setFieldErrors({});
+    setFormError(null);
     setIsFormOpen(false);
   };
 
@@ -156,6 +168,7 @@ export const TasksView: React.FC = () => {
       dueDate: initialProject ? getProjectEndDate(initialProject) : ''
     });
     setFieldErrors({});
+    setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
   };
@@ -173,6 +186,7 @@ export const TasksView: React.FC = () => {
       status: task.status
     });
     setFieldErrors({});
+    setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
   };
@@ -219,7 +233,7 @@ export const TasksView: React.FC = () => {
     );
     if (Object.keys(clientErrors).length > 0) {
       setFieldErrors(clientErrors);
-      setNotice({ type: 'error', message: 'Review the highlighted fields.' });
+      setFormError(null);
       return;
     }
 
@@ -261,7 +275,14 @@ export const TasksView: React.FC = () => {
 
       if (!result.success) {
         setFieldErrors(result.fieldErrors || {});
-        setNotice({ type: 'error', message: result.message });
+        const message = result.message.toLowerCase();
+        setFormError(
+          message.includes('invalid token') || message.includes('not authenticated')
+            ? 'Your sign-in session has expired. Please sign in again, then submit the task.'
+            : result.fieldErrors && Object.keys(result.fieldErrors).length > 0
+              ? null
+              : result.message
+        );
         return;
       }
 
@@ -291,13 +312,14 @@ export const TasksView: React.FC = () => {
   };
 
   const memberStatusOnly = editingTaskId !== null && currentRole === 'Team_Member';
+  const isCreatePage = isFormOpen && editingTaskId === null;
   const hasActiveFilters = Boolean(
     search || projectFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
   );
 
   return (
     <section className="mx-auto max-w-[1500px] space-y-5">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      {!isCreatePage && <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Tasks</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
@@ -316,9 +338,9 @@ export const TasksView: React.FC = () => {
             Create task
           </button>
         )}
-      </header>
+      </header>}
 
-      {notice && (
+      {!isCreatePage && notice && (
         <div
           role="status"
           className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
@@ -338,26 +360,25 @@ export const TasksView: React.FC = () => {
       )}
 
       {isFormOpen && (
-        <form onSubmit={handleSubmit} className="glass-panel-glow overflow-hidden">
+        <div
+          className={editingTaskId ? 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm' : ''}
+          onMouseDown={(event) => {
+            if (editingTaskId && event.target === event.currentTarget) resetForm();
+          }}
+        >
+        <form onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
-              <h2 className="font-bold text-white">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Tasks</p>
+              <h1 className="mt-1 text-2xl font-bold text-white">
                 {editingTaskId ? 'Edit task' : 'Create task'}
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-400">
+              </h1>
+              <p className="mt-1 text-sm text-slate-400">
                 {memberStatusOnly
                   ? 'Update progress for your assigned work.'
-                  : 'Add the work details, schedule, and assignees.'}
+                  : 'Add the work details, schedule, and assignees, then return to your task list.'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={resetForm}
-              className="rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
-              aria-label="Close form"
-            >
-              <X size={18} />
-            </button>
           </div>
 
           <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
@@ -428,7 +449,11 @@ export const TasksView: React.FC = () => {
               />
             </Field>
 
-            <Field label="Start date *" error={fieldErrors.startDate}>
+            <Field
+              label="Start date *"
+              error={fieldErrors.startDate}
+              hint={`Choose ${getLatestDate(today, selectedProject?.startDate) || 'today'} or a later date.`}
+            >
               <input
                 type="date"
                 value={form.startDate}
@@ -443,7 +468,11 @@ export const TasksView: React.FC = () => {
               />
             </Field>
 
-            <Field label="Due date *" error={fieldErrors.dueDate}>
+            <Field
+              label="Due date *"
+              error={fieldErrors.dueDate}
+              hint={`Choose the start date or later${selectedProject ? `, up to ${getProjectEndDate(selectedProject)}` : ''}.`}
+            >
               <input
                 type="date"
                 value={form.dueDate}
@@ -527,13 +556,19 @@ export const TasksView: React.FC = () => {
             )}
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-white/10 bg-black/10 px-5 py-4">
+          <div className="border-t border-white/10 bg-black/10 px-5 py-4">
+            {formError && (
+              <p role="alert" className="mb-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {formError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={resetForm}
               className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5"
             >
-              View Tasks
+              {editingTaskId ? 'Cancel' : 'View Tasks'}
             </button>
             <button
               type="submit"
@@ -547,11 +582,13 @@ export const TasksView: React.FC = () => {
                   ? 'Save changes'
                   : 'Create task'}
             </button>
+            </div>
           </div>
         </form>
+        </div>
       )}
 
-      <div className="glass-panel overflow-hidden">
+      {!isCreatePage && <div className="glass-panel overflow-hidden">
         <div className="border-b border-white/10 p-4">
           <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -690,7 +727,11 @@ export const TasksView: React.FC = () => {
                       <p className="mt-1 font-mono text-[10px] text-slate-500">{task.taskNumber}</p>
                     </div>
                     {(mayEdit || mayDelete) && (
-                      <div className="relative" onClick={(event) => event.stopPropagation()}>
+                      <div
+                        data-task-actions
+                        className="absolute right-3 top-3 z-10"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <button
                           type="button"
                           onClick={() =>
@@ -764,7 +805,7 @@ export const TasksView: React.FC = () => {
             })}
           </div>
         )}
-      </div>
+      </div>}
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
@@ -787,13 +828,15 @@ export const TasksView: React.FC = () => {
 const Field: React.FC<{
   label: string;
   error?: string;
+  hint?: string;
   className?: string;
   children: React.ReactNode;
-}> = ({ label, error, className = '', children }) => (
+}> = ({ label, error, hint, className = '', children }) => (
   <label className={`block space-y-1.5 ${className}`}>
     <span className="text-xs font-semibold text-slate-300">{label}</span>
     {children}
     {error && <span className="block text-[11px] text-rose-400">{error}</span>}
+    {!error && hint && <span className="block text-[11px] leading-4 text-slate-500">{hint}</span>}
   </label>
 );
 
