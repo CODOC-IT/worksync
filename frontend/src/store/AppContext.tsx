@@ -51,7 +51,10 @@ import {
   prepareTaskUpdate,
   toTaskFormInput
 } from '../features/tasks/taskMutations';
-import { loadTasksFromSupabase } from '../features/tasks/taskRepository';
+import {
+  createTaskViaApi,
+  loadTasksFromApi
+} from '../features/tasks/taskRepository';
 import {
   SendNotificationInput,
   sendNotification,
@@ -109,7 +112,7 @@ interface AppState {
   rejectProject: (projectId: string, reason?: string) => void;
   updateProject: (projectId: string, data: Partial<Project>) => void;
   deleteProject: (projectId: string) => void;
-  createTask: (data: TaskMutationData) => TaskMutationResult;
+  createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
   updateTask: (taskId: string, data: TaskMutationData) => TaskMutationResult;
   deleteTask: (taskId: string) => TaskMutationResult;
   updateTaskStatus: (
@@ -165,6 +168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(INITIAL_ATTENDANCE);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>(INITIAL_HR_REQUESTS);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>(INITIAL_SYSTEM_APPROVALS);
@@ -245,6 +249,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(newUser);
     setCurrentRole(newUser.role);
+    setTaskReloadVersion((version) => version + 1);
     refreshUsers();
   };
 
@@ -256,6 +261,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(user);
     setCurrentRole(user.role);
+    setTaskReloadVersion((version) => version + 1);
     refreshUsers();
   };
 
@@ -280,13 +286,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const hydrateTasks = async () => {
       try {
-        const remoteTasks = await loadTasksFromSupabase(projects);
+        const remoteTasks = await loadTasksFromApi();
         if (isActive && remoteTasks !== null) {
           setTasks(remoteTasks);
         }
       } catch (error) {
         console.warn(
-          'Supabase task query failed; continuing with local task data.',
+          'Task API request failed; continuing with local task data.',
           error
         );
       }
@@ -297,7 +303,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [currentUser.id, taskReloadVersion]);
 
   // Break Timer Interval Effect
   useEffect(() => {
@@ -762,7 +768,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Client-side prototype data boundary. The future API must repeat every
   // authorization and validation check inside a PostgreSQL transaction.
-  const createTask = (data: TaskMutationData): TaskMutationResult => {
+  const createTask = async (
+    data: TaskMutationData
+  ): Promise<TaskMutationResult> => {
     const input = toTaskFormInput(data);
     const signature = JSON.stringify(input);
     const now = Date.now();
@@ -776,13 +784,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const result = prepareTaskCreation(data, {
+    const validationResult = prepareTaskCreation(data, {
       currentRole,
       currentUserId: currentUser.id,
       projects,
       tasks,
       users
     }, now);
+    if (!validationResult.success) return validationResult;
+
+    const result = await createTaskViaApi(data);
     if (!result.success || !result.task) return result;
 
     recentTaskSubmission.current = { signature, submittedAt: now };
@@ -821,172 +832,172 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return result;
   };
 
-  const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
-    const before = tasks.find((item) => item.id === taskId);
-    const result = prepareTaskUpdate(taskId, data, {
-      currentRole,
-      currentUserId: currentUser.id,
-      projects,
-      tasks,
-      users
-    });
-    if (!result.success || !result.task) return result;
-
-    setTasks((prev) => prev.map((item) => item.id === taskId ? result.task! : item));
-    pushActivity('Updated task', 'Task', taskId, result.task.title);
-
-    if (before) {
-      const after = result.task;
-      const project = projects.find((p) => p.id === after.projectId);
-      const baseRecipients = resolveTaskRecipients({ task: after, project, excludeUserId: currentUser.id });
-
-      const beforeAssignees = getTaskAssigneeIds(before);
-      const afterAssignees = getTaskAssigneeIds(after);
-      const assigneesChanged =
-        JSON.stringify([...beforeAssignees].sort()) !== JSON.stringify([...afterAssignees].sort());
-
-      if (assigneesChanged) {
-        const addedAssignees = afterAssignees.filter((id) => !beforeAssignees.includes(id));
-        const newAssigneeNames = afterAssignees
-          .map((id) => users.find((user) => user.id === id)?.name)
-          .filter((name): name is string => Boolean(name))
-          .join(', ') || 'Unassigned';
-        const reassignRecipients = [
-          ...addedAssignees.filter((id) => id !== currentUser.id),
-          ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
-        ];
-        const genericReassignMessage = `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`;
-        const reassignMessages: Record<string, string> = {};
-        addedAssignees.forEach((recipientId) => {
-          reassignMessages[recipientId] = `${currentUser.name} assigned you "${after.title}" in ${project?.title || 'the project'}.`;
-        });
-
-        dispatchNotifications({
-          recipientIds: reassignRecipients,
-          type: 'task_reassigned',
-          title: 'Task Reassigned',
-          message: genericReassignMessage,
-          recipientMessages: reassignMessages,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: after.projectId,
-          taskId
-        });
-      } else if (before.priority !== after.priority) {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_priority_changed',
-          title: 'Task Priority Changed',
-          message: `${currentUser.name} changed "${after.title}" priority from ${before.priority} to ${after.priority} in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: after.projectId,
-          taskId
-        });
-      } else if (before.dueDate !== after.dueDate) {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_due_date_changed',
-          title: 'Due Date Changed',
-          message: `${currentUser.name} changed the due date for "${after.title}" from ${before.dueDate} to ${after.dueDate} in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: after.projectId,
-          taskId
-        });
-      } else {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_updated',
-          title: 'Task Updated',
-          message: `${currentUser.name} updated "${after.title}" in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: after.projectId,
-          taskId
-        });
-      }
-
-      const beforeAllComplete = Boolean(before.subtasks?.length) && before.subtasks.every((s) => s.completed);
-      const afterAllComplete = Boolean(after.subtasks?.length) && after.subtasks.every((s) => s.completed);
-      if (!beforeAllComplete && afterAllComplete) {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'checklist_completed',
-          title: 'Checklist Completed',
-          message: `${currentUser.name} completed the checklist on "${after.title}" in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: after.projectId,
-          taskId
-        });
-      }
-
-      confirmActionSuccess('Task Updated', `Your changes to "${after.title}" were saved successfully.`);
-    }
-
-    return result;
-  };
-
-  const deleteTask = (taskId: string): TaskMutationResult => {
-    const task = tasks.find((item) => item.id === taskId);
-    const result = prepareTaskDeletion(taskId, {
-      currentRole,
-      currentUserId: currentUser.id,
-      projects,
-      tasks,
-      users
-    });
-    if (!result.success || !result.task) return result;
-    setTasks((prev) => prev.filter((item) => item.id !== taskId));
-    pushActivity('Deleted task', 'Task', taskId, result.task.title);
-
-    if (task) {
-      const project = projects.find((p) => p.id === task.projectId);
-      dispatchNotifications({
-        recipientIds: resolveTaskRecipients({ task, project, excludeUserId: currentUser.id }),
-        type: 'task_deleted',
-        title: 'Task Deleted',
-        message: `${currentUser.name} deleted "${task.title}" from ${project?.title || 'the project'}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'tasks',
-        projectId: task.projectId,
-        taskId
+    const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
+      const before = tasks.find((item) => item.id === taskId);
+      const result = prepareTaskUpdate(taskId, data, {
+        currentRole,
+        currentUserId: currentUser.id,
+        projects,
+        tasks,
+        users
       });
-    }
+      if (!result.success || !result.task) return result;
 
-    if (task) confirmActionSuccess('Task Deleted', `"${task.title}" was deleted successfully.`);
-    return result;
-  };
+      setTasks((prev) => prev.map((item) => item.id === taskId ? result.task! : item));
+      pushActivity('Updated task', 'Task', taskId, result.task.title);
 
-  // Update Task Status (Kanban & Details) with mandatory reason/summary handlers.
-  // The Project Board module always supplies `extraInfo.note` (validated as non-empty by
-  // its own status-change modal); `reviewDecision` is set only when a Team Lead/Admin is
-  // resolving a task that's Pending review approval.
-  const updateTaskStatus = (
-    taskId: string,
-    newStatus: TaskStatus,
-    extraInfo?: {
-      workSummary?: string;
-      completionSummary?: string;
-      blockerReason?: string;
-      reopenReason?: string;
-      note?: string;
-      reviewDecision?: 'Approve' | 'Reject';
-    }
-  ): { success: boolean; message: string } => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return { success: false, message: 'Task not found.' };
+      if (before) {
+        const after = result.task;
+        const project = projects.find((p) => p.id === after.projectId);
+        const baseRecipients = resolveTaskRecipients({ task: after, project, excludeUserId: currentUser.id });
 
-    const note = extraInfo?.note?.trim();
-    const historyEntry: TaskStatusHistoryEntry | null = note
-      ? {
+        const beforeAssignees = getTaskAssigneeIds(before);
+        const afterAssignees = getTaskAssigneeIds(after);
+        const assigneesChanged =
+          JSON.stringify([...beforeAssignees].sort()) !== JSON.stringify([...afterAssignees].sort());
+
+        if (assigneesChanged) {
+          const addedAssignees = afterAssignees.filter((id) => !beforeAssignees.includes(id));
+          const newAssigneeNames = afterAssignees
+            .map((id) => users.find((user) => user.id === id)?.name)
+            .filter((name): name is string => Boolean(name))
+            .join(', ') || 'Unassigned';
+          const reassignRecipients = [
+            ...addedAssignees.filter((id) => id !== currentUser.id),
+            ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
+          ];
+          const genericReassignMessage = `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`;
+          const reassignMessages: Record<string, string> = {};
+          addedAssignees.forEach((recipientId) => {
+            reassignMessages[recipientId] = `${currentUser.name} assigned you "${after.title}" in ${project?.title || 'the project'}.`;
+          });
+
+          dispatchNotifications({
+            recipientIds: reassignRecipients,
+            type: 'task_reassigned',
+            title: 'Task Reassigned',
+            message: genericReassignMessage,
+            recipientMessages: reassignMessages,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: after.projectId,
+            taskId
+          });
+        } else if (before.priority !== after.priority) {
+          dispatchNotifications({
+            recipientIds: baseRecipients,
+            type: 'task_priority_changed',
+            title: 'Task Priority Changed',
+            message: `${currentUser.name} changed "${after.title}" priority from ${before.priority} to ${after.priority} in ${project?.title || 'the project'}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: after.projectId,
+            taskId
+          });
+        } else if (before.dueDate !== after.dueDate) {
+          dispatchNotifications({
+            recipientIds: baseRecipients,
+            type: 'task_due_date_changed',
+            title: 'Due Date Changed',
+            message: `${currentUser.name} changed the due date for "${after.title}" from ${before.dueDate} to ${after.dueDate} in ${project?.title || 'the project'}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: after.projectId,
+            taskId
+          });
+        } else {
+          dispatchNotifications({
+            recipientIds: baseRecipients,
+            type: 'task_updated',
+            title: 'Task Updated',
+            message: `${currentUser.name} updated "${after.title}" in ${project?.title || 'the project'}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: after.projectId,
+            taskId
+          });
+        }
+
+        const beforeAllComplete = Boolean(before.subtasks?.length) && before.subtasks.every((s) => s.completed);
+        const afterAllComplete = Boolean(after.subtasks?.length) && after.subtasks.every((s) => s.completed);
+        if (!beforeAllComplete && afterAllComplete) {
+          dispatchNotifications({
+            recipientIds: baseRecipients,
+            type: 'checklist_completed',
+            title: 'Checklist Completed',
+            message: `${currentUser.name} completed the checklist on "${after.title}" in ${project?.title || 'the project'}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: after.projectId,
+            taskId
+          });
+        }
+
+        confirmActionSuccess('Task Updated', `Your changes to "${after.title}" were saved successfully.`);
+      }
+
+      return result;
+    };
+
+    const deleteTask = (taskId: string): TaskMutationResult => {
+      const task = tasks.find((item) => item.id === taskId);
+      const result = prepareTaskDeletion(taskId, {
+        currentRole,
+        currentUserId: currentUser.id,
+        projects,
+        tasks,
+        users
+      });
+      if (!result.success || !result.task) return result;
+      setTasks((prev) => prev.filter((item) => item.id !== taskId));
+      pushActivity('Deleted task', 'Task', taskId, result.task.title);
+
+      if (task) {
+        const project = projects.find((p) => p.id === task.projectId);
+        dispatchNotifications({
+          recipientIds: resolveTaskRecipients({ task, project, excludeUserId: currentUser.id }),
+          type: 'task_deleted',
+          title: 'Task Deleted',
+          message: `${currentUser.name} deleted "${task.title}" from ${project?.title || 'the project'}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'tasks',
+          projectId: task.projectId,
+          taskId
+        });
+      }
+
+      if (task) confirmActionSuccess('Task Deleted', `"${task.title}" was deleted successfully.`);
+      return result;
+    };
+
+    // Update Task Status (Kanban & Details) with mandatory reason/summary handlers.
+    // The Project Board module always supplies `extraInfo.note` (validated as non-empty by
+    // its own status-change modal); `reviewDecision` is set only when a Team Lead/Admin is
+    // resolving a task that's Pending review approval.
+    const updateTaskStatus = (
+      taskId: string,
+      newStatus: TaskStatus,
+      extraInfo?: {
+        workSummary?: string;
+        completionSummary?: string;
+        blockerReason?: string;
+        reopenReason?: string;
+        note?: string;
+        reviewDecision?: 'Approve' | 'Reject';
+      }
+    ): { success: boolean; message: string } => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return { success: false, message: 'Task not found.' };
+
+      const note = extraInfo?.note?.trim();
+      const historyEntry: TaskStatusHistoryEntry | null = note
+        ? {
           id: `tsh-${Date.now()}`,
           fromStatus: task.status,
           toStatus: newStatus,
@@ -995,627 +1006,592 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           changedByName: currentUser.name,
           timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
         }
-      : null;
+        : null;
 
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== taskId) return t;
-        return {
-          ...t,
-          status: newStatus,
-          workSummary: extraInfo?.workSummary ?? t.workSummary,
-          completionSummary: extraInfo?.completionSummary ?? t.completionSummary,
-          blockerReason: extraInfo?.blockerReason ?? t.blockerReason,
-          reopenReason: extraInfo?.reopenReason ?? t.reopenReason,
-          // Entering Review always opens a pending approval decision; leaving Review by any
-          // path (drag, dropdown, or an Approve/Reject decision) resolves/clears it.
-          reviewApproval: newStatus === 'Review' ? 'Pending' : undefined,
-          statusHistory: historyEntry ? [...(t.statusHistory || []), historyEntry] : t.statusHistory
-        };
-      })
-    );
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== taskId) return t;
+          return {
+            ...t,
+            status: newStatus,
+            workSummary: extraInfo?.workSummary ?? t.workSummary,
+            completionSummary: extraInfo?.completionSummary ?? t.completionSummary,
+            blockerReason: extraInfo?.blockerReason ?? t.blockerReason,
+            reopenReason: extraInfo?.reopenReason ?? t.reopenReason,
+            // Entering Review always opens a pending approval decision; leaving Review by any
+            // path (drag, dropdown, or an Approve/Reject decision) resolves/clears it.
+            reviewApproval: newStatus === 'Review' ? 'Pending' : undefined,
+            statusHistory: historyEntry ? [...(t.statusHistory || []), historyEntry] : t.statusHistory
+          };
+        })
+      );
 
-    const activityAction =
-      extraInfo?.reviewDecision === 'Approve'
-        ? 'Approved task review'
-        : extraInfo?.reviewDecision === 'Reject'
-        ? 'Rejected task review'
-        : `Moved task to ${newStatus}`;
+      const activityAction =
+        extraInfo?.reviewDecision === 'Approve'
+          ? 'Approved task review'
+          : extraInfo?.reviewDecision === 'Reject'
+            ? 'Rejected task review'
+            : `Moved task to ${newStatus}`;
 
-    pushActivity(activityAction, 'Task', taskId, task.title, {
-      field: 'status',
-      oldVal: task.status,
-      newVal: newStatus
-    });
-
-    const project = projects.find((p) => p.id === task.projectId);
-    const baseRecipients = resolveTaskRecipients({ task, project, excludeUserId: currentUser.id });
-
-    if (extraInfo?.reviewDecision === 'Approve') {
-      dispatchNotifications({
-        recipientIds: baseRecipients,
-        type: 'task_review_approved',
-        title: 'Task Approved',
-        message: `${currentUser.name} approved "${task.title}" — moved from Review to Done in ${project?.title || 'the project'}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'kanban',
-        projectId: task.projectId,
-        taskId
+      pushActivity(activityAction, 'Task', taskId, task.title, {
+        field: 'status',
+        oldVal: task.status,
+        newVal: newStatus
       });
-      confirmActionSuccess('Task Approved', `You approved "${task.title}" successfully. It has been moved to Done.`);
-    } else if (extraInfo?.reviewDecision === 'Reject') {
-      dispatchNotifications({
-        recipientIds: baseRecipients,
-        type: 'task_review_rejected',
-        title: 'Task Returned for Revision',
-        message: `${currentUser.name} rejected "${task.title}" — moved from Review back to In Progress in ${project?.title || 'the project'}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'kanban',
-        projectId: task.projectId,
-        taskId
-      });
-      confirmActionSuccess('Task Rejected', `You rejected "${task.title}" successfully. It has been returned to In Progress.`);
-    } else if (newStatus === 'Review') {
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(project?.teamLeadId, currentUser.id),
-        type: 'task_review_requested',
-        title: 'Review Requested',
-        message: `${currentUser.name} moved "${task.title}" from ${task.status} to Review in ${project?.title || 'the project'}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'kanban',
-        projectId: task.projectId,
-        taskId
-      });
-      confirmActionSuccess('Review Requested', `You moved "${task.title}" to Review successfully.`);
-    } else if (newStatus === 'Done') {
-      dispatchNotifications({
-        recipientIds: baseRecipients,
-        type: 'task_completed',
-        title: 'Task Completed',
-        message: `${currentUser.name} marked "${task.title}" as Done in ${project?.title || 'the project'} (was ${task.status}).`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'kanban',
-        projectId: task.projectId,
-        taskId
-      });
-      confirmActionSuccess('Task Completed', `You marked "${task.title}" as Done successfully.`);
-    } else {
-      dispatchNotifications({
-        recipientIds: baseRecipients,
-        type: 'task_status_changed',
-        title: 'Task Status Changed',
-        message: `${currentUser.name} moved "${task.title}" from ${task.status} to ${newStatus} in ${project?.title || 'the project'}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'kanban',
-        projectId: task.projectId,
-        taskId
-      });
-      confirmActionSuccess('Status Updated', `You moved "${task.title}" to ${newStatus} successfully.`);
-    }
 
-    return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
-  };
+      const project = projects.find((p) => p.id === task.projectId);
+      const baseRecipients = resolveTaskRecipients({ task, project, excludeUserId: currentUser.id });
 
-  // Controlled Field Edits (Team Member submits -> TL/Admin approves)
-  const proposeControlledEdit = (
-    taskId: string,
-    field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status',
-    newValue: string,
-    reason: string
-  ) => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
+      if (extraInfo?.reviewDecision === 'Approve') {
+        dispatchNotifications({
+          recipientIds: baseRecipients,
+          type: 'task_review_approved',
+          title: 'Task Approved',
+          message: `${currentUser.name} approved "${task.title}" — moved from Review to Done in ${project?.title || 'the project'}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'kanban',
+          projectId: task.projectId,
+          taskId
+        });
+        confirmActionSuccess('Task Approved', `You approved "${task.title}" successfully. It has been moved to Done.`);
+      } else if (extraInfo?.reviewDecision === 'Reject') {
+        dispatchNotifications({
+          recipientIds: baseRecipients,
+          type: 'task_review_rejected',
+          title: 'Task Returned for Revision',
+          message: `${currentUser.name} rejected "${task.title}" — moved from Review back to In Progress in ${project?.title || 'the project'}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'kanban',
+          projectId: task.projectId,
+          taskId
+        });
+        confirmActionSuccess('Task Rejected', `You rejected "${task.title}" successfully. It has been returned to In Progress.`);
+      } else if (newStatus === 'Review') {
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(project?.teamLeadId, currentUser.id),
+          type: 'task_review_requested',
+          title: 'Review Requested',
+          message: `${currentUser.name} moved "${task.title}" from ${task.status} to Review in ${project?.title || 'the project'}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'kanban',
+          projectId: task.projectId,
+          taskId
+        });
+        confirmActionSuccess('Review Requested', `You moved "${task.title}" to Review successfully.`);
+      } else if (newStatus === 'Done') {
+        dispatchNotifications({
+          recipientIds: baseRecipients,
+          type: 'task_completed',
+          title: 'Task Completed',
+          message: `${currentUser.name} marked "${task.title}" as Done in ${project?.title || 'the project'} (was ${task.status}).`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'kanban',
+          projectId: task.projectId,
+          taskId
+        });
+        confirmActionSuccess('Task Completed', `You marked "${task.title}" as Done successfully.`);
+      } else {
+        dispatchNotifications({
+          recipientIds: baseRecipients,
+          type: 'task_status_changed',
+          title: 'Task Status Changed',
+          message: `${currentUser.name} moved "${task.title}" from ${task.status} to ${newStatus} in ${project?.title || 'the project'}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'kanban',
+          projectId: task.projectId,
+          taskId
+        });
+        confirmActionSuccess('Status Updated', `You moved "${task.title}" to ${newStatus} successfully.`);
+      }
 
-    const editReq: ControlledEditRequest = {
-      id: `ed-${Date.now()}`,
-      taskId,
-      requestedBy: currentUser.id,
-      field,
-      oldValue: (task as any)[field] || '',
-      newValue,
-      reason,
-      status: 'Pending',
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+      return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
     };
 
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, pendingEdit: editReq } : t))
-    );
+    // Controlled Field Edits (Team Member submits -> TL/Admin approves)
+    const proposeControlledEdit = (
+      taskId: string,
+      field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status',
+      newValue: string,
+      reason: string
+    ) => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return;
 
-    const approval: SystemApproval = {
-      id: `app-${Date.now()}`,
-      type: 'Controlled_Edit',
-      targetId: taskId,
-      targetTitle: task.title,
-      requestedBy: currentUser.id,
-      requestedRole: currentRole,
-      createdAt: editReq.createdAt,
-      details: `Proposed edit on ${field}: "${(task as any)[field]}" → "${newValue}". Reason: ${reason}`,
-      status: 'Pending',
-      proposedDiff: {
+      const editReq: ControlledEditRequest = {
+        id: `ed-${Date.now()}`,
+        taskId,
+        requestedBy: currentUser.id,
         field,
         oldValue: (task as any)[field] || '',
-        newValue
+        newValue,
+        reason,
+        status: 'Pending',
+        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+      };
+
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, pendingEdit: editReq } : t))
+      );
+
+      const approval: SystemApproval = {
+        id: `app-${Date.now()}`,
+        type: 'Controlled_Edit',
+        targetId: taskId,
+        targetTitle: task.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        createdAt: editReq.createdAt,
+        details: `Proposed edit on ${field}: "${(task as any)[field]}" → "${newValue}". Reason: ${reason}`,
+        status: 'Pending',
+        proposedDiff: {
+          field,
+          oldValue: (task as any)[field] || '',
+          newValue
+        }
+      };
+
+      setSystemApprovals((prev) => [approval, ...prev]);
+
+      const project = projects.find((p) => p.id === task.projectId);
+      dispatchNotifications({
+        recipientIds: [
+          ...resolveAdminRecipients(users, currentUser.id),
+          ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
+        ],
+        type: 'approval',
+        title: 'Controlled Edit Requested',
+        message: `${currentUser.name} requested to change ${field} on "${task.title}" (${project?.title || 'the project'}) from "${(task as any)[field] || '—'}" to "${newValue}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId: task.projectId,
+        taskId
+      });
+
+      confirmActionSuccess('Request Submitted', `Your ${field} change request for "${task.title}" was submitted successfully.`);
+      pushActivity(`Proposed controlled edit on ${field}`, 'Task', taskId, task.title);
+    };
+
+    const approveApprovalItem = (approvalId: string) => {
+      const item = systemApprovals.find((sa) => sa.id === approvalId);
+      if (!item) return;
+
+      if (item.type === 'Project_Creation') {
+        approveProject(item.targetId);
+      } else if (item.type === 'Project_Deletion') {
+        approveProjectDeletion(item.targetId);
+      } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
+        const { field, newValue } = item.proposedDiff;
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (t.id === item.targetId) {
+              return {
+                ...t,
+                [field]: newValue,
+                pendingEdit: undefined
+              };
+            }
+            return t;
+          })
+        );
+        setSystemApprovals((prev) =>
+          prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Approved' } : sa))
+        );
+        const relatedTask = tasks.find((t) => t.id === item.targetId);
+        const relatedProject = relatedTask ? projects.find((p) => p.id === relatedTask.projectId) : undefined;
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+          type: 'approval',
+          title: 'Request Approved',
+          message: `${currentUser.name} approved your ${field} change on "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'tasks',
+          taskId: item.targetId,
+          projectId: relatedProject?.id
+        });
+        confirmActionSuccess('Request Approved', `You approved the ${field} change on "${item.targetTitle}" successfully.`);
+      }
+      pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
+    };
+
+    const rejectApprovalItem = (approvalId: string) => {
+      const item = systemApprovals.find((sa) => sa.id === approvalId);
+
+      // Only Admin may reject a Project Deletion request; the project remains unchanged either way
+      // since this function never touches `projects`/`tasks` state.
+      if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
+
+      setSystemApprovals((prev) =>
+        prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
+      );
+
+      if (item) {
+        const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
+        const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+        const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+          type: 'approval',
+          title: 'Request Rejected',
+          message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: targetsProject ? 'projects' : 'tasks',
+          taskId: targetsProject ? undefined : item.targetId,
+          projectId: targetsProject ? item.targetId : undefined
+        });
+        confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
       }
     };
 
-    setSystemApprovals((prev) => [approval, ...prev]);
+    // Attendance & Breaks
+    const checkIn = () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-    const project = projects.find((p) => p.id === task.projectId);
-    dispatchNotifications({
-      recipientIds: [
-        ...resolveAdminRecipients(users, currentUser.id),
-        ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
-      ],
-      type: 'approval',
-      title: 'Controlled Edit Requested',
-      message: `${currentUser.name} requested to change ${field} on "${task.title}" (${project?.title || 'the project'}) from "${(task as any)[field] || '—'}" to "${newValue}".`,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'approvals',
-      projectId: task.projectId,
-      taskId
-    });
-
-    confirmActionSuccess('Request Submitted', `Your ${field} change request for "${task.title}" was submitted successfully.`);
-    pushActivity(`Proposed controlled edit on ${field}`, 'Task', taskId, task.title);
-  };
-
-  const approveApprovalItem = (approvalId: string) => {
-    const item = systemApprovals.find((sa) => sa.id === approvalId);
-    if (!item) return;
-
-    if (item.type === 'Project_Creation') {
-      approveProject(item.targetId);
-    } else if (item.type === 'Project_Deletion') {
-      approveProjectDeletion(item.targetId);
-    } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
-      const { field, newValue } = item.proposedDiff;
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id === item.targetId) {
-            return {
-              ...t,
-              [field]: newValue,
-              pendingEdit: undefined
-            };
-          }
-          return t;
-        })
-      );
-      setSystemApprovals((prev) =>
-        prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Approved' } : sa))
-      );
-      const relatedTask = tasks.find((t) => t.id === item.targetId);
-      const relatedProject = relatedTask ? projects.find((p) => p.id === relatedTask.projectId) : undefined;
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-        type: 'approval',
-        title: 'Request Approved',
-        message: `${currentUser.name} approved your ${field} change on "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'tasks',
-        taskId: item.targetId,
-        projectId: relatedProject?.id
+      setAttendanceRecords((prev) => {
+        const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
+        if (existing) return prev; // block duplicate checkin
+        const newRec: AttendanceRecord = {
+          id: `att-${Date.now()}`,
+          userId: currentUser.id,
+          date: todayStr,
+          checkIn: nowTime,
+          status: 'Present',
+          totalHours: 0,
+          breaks: []
+        };
+        return [newRec, ...prev];
       });
-      confirmActionSuccess('Request Approved', `You approved the ${field} change on "${item.targetTitle}" successfully.`);
-    }
-    pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
-  };
 
-  const rejectApprovalItem = (approvalId: string) => {
-    const item = systemApprovals.find((sa) => sa.id === approvalId);
-
-    // Only Admin may reject a Project Deletion request; the project remains unchanged either way
-    // since this function never touches `projects`/`tasks` state.
-    if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
-
-    setSystemApprovals((prev) =>
-      prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
-    );
-
-    if (item) {
-      const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
-      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
-      const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-        type: 'approval',
-        title: 'Request Rejected',
-        message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: targetsProject ? 'projects' : 'tasks',
-        taskId: targetsProject ? undefined : item.targetId,
-        projectId: targetsProject ? item.targetId : undefined
-      });
-      confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
-    }
-  };
-
-  // Attendance & Breaks
-  const checkIn = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
-    setAttendanceRecords((prev) => {
-      const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
-      if (existing) return prev; // block duplicate checkin
-      const newRec: AttendanceRecord = {
-        id: `att-${Date.now()}`,
-        userId: currentUser.id,
-        date: todayStr,
-        checkIn: nowTime,
-        status: 'Present',
-        totalHours: 0,
-        breaks: []
-      };
-      return [newRec, ...prev];
-    });
-
-    pushActivity('Checked in for work', 'Attendance', currentUser.id, currentUser.name);
-  };
-
-  const checkOut = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    const hasOpenAttendance = attendanceRecords.some(
-      (record) =>
-        record.userId === currentUser.id &&
-        record.date === todayStr &&
-        !record.checkOut
-    );
-    if (!hasOpenAttendance) return;
-
-    setAttendanceRecords((prev) =>
-      prev.map((a) => {
-        if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
-          return {
-            ...a,
-            checkOut: nowTime,
-            totalHours: 8.0
-          };
-        }
-        return a;
-      })
-    );
-
-    if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
-      endBreak();
-    }
-
-    pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
-  };
-
-  const startBreak = (breakType: BreakType) => {
-    if (activeBreak?.isBreaking) return;
-
-    const todayStr = new Date().toISOString().split('T')[0];
-    const openAttendance = attendanceRecords.some(
-      (record) =>
-        record.userId === currentUser.id &&
-        record.date === todayStr &&
-        !record.checkOut
-    );
-    if (!openAttendance) return;
-
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    setActiveBreak({
-      isBreaking: true,
-      userId: currentUser.id,
-      breakType,
-      startTime: nowTime,
-      elapsedSeconds: 0
-    });
-    pushActivity(`Started ${breakType}`, 'Attendance', currentUser.id, currentUser.name);
-  };
-
-  const endBreak = () => {
-    if (!activeBreak || activeBreak.userId !== currentUser.id) return;
-    const todayStr = new Date().toISOString().split('T')[0];
-    const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
-
-    const newBreak: WorkBreak = {
-      id: `brk-${Date.now()}`,
-      type: activeBreak.breakType,
-      startTime: activeBreak.startTime,
-      endTime: endTimeStr,
-      durationMinutes: durationMin
+      pushActivity('Checked in for work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    setAttendanceRecords((prev) =>
-      prev.map((a) => {
-        if (a.userId === currentUser.id && a.date === todayStr) {
-          return {
-            ...a,
-            breaks: [...a.breaks, newBreak]
-          };
-        }
-        return a;
-      })
-    );
+    const checkOut = () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const hasOpenAttendance = attendanceRecords.some(
+        (record) =>
+          record.userId === currentUser.id &&
+          record.date === todayStr &&
+          !record.checkOut
+      );
+      if (!hasOpenAttendance) return;
 
-    setActiveBreak(null);
-    pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
-  };
+      setAttendanceRecords((prev) =>
+        prev.map((a) => {
+          if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
+            return {
+              ...a,
+              checkOut: nowTime,
+              totalHours: 8.0
+            };
+          }
+          return a;
+        })
+      );
 
-  const updateAttendanceRecord = (
-    recordId: string,
-    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-  ) => {
-    const record = attendanceRecords.find((item) => item.id === recordId);
-    if (!record) {
-      return { success: false, message: 'Attendance record not found.' };
-    }
+      if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
+        endBreak();
+      }
 
-    const isAdmin = currentRole === 'Admin';
-    const isOwnRecord = record.userId === currentUser.id;
-    const canEditRecord = isOwnRecord || isAdmin;
-    if (!canEditRecord) {
-      return {
-        success: false,
-        message: 'You are not authorized to edit another user’s attendance record.'
+      pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
+    };
+
+    const startBreak = (breakType: BreakType) => {
+      if (activeBreak?.isBreaking) return;
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const openAttendance = attendanceRecords.some(
+        (record) =>
+          record.userId === currentUser.id &&
+          record.date === todayStr &&
+          !record.checkOut
+      );
+      if (!openAttendance) return;
+
+      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      setActiveBreak({
+        isBreaking: true,
+        userId: currentUser.id,
+        breakType,
+        startTime: nowTime,
+        elapsedSeconds: 0
+      });
+      pushActivity(`Started ${breakType}`, 'Attendance', currentUser.id, currentUser.name);
+    };
+
+    const endBreak = () => {
+      if (!activeBreak || activeBreak.userId !== currentUser.id) return;
+      const todayStr = new Date().toISOString().split('T')[0];
+      const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
+
+      const newBreak: WorkBreak = {
+        id: `brk-${Date.now()}`,
+        type: activeBreak.breakType,
+        startTime: activeBreak.startTime,
+        endTime: endTimeStr,
+        durationMinutes: durationMin
       };
-    }
 
-    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
-      return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
-    }
+      setAttendanceRecords((prev) =>
+        prev.map((a) => {
+          if (a.userId === currentUser.id && a.date === todayStr) {
+            return {
+              ...a,
+              breaks: [...a.breaks, newBreak]
+            };
+          }
+          return a;
+        })
+      );
 
-    const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
-      const duration = Number(workBreak.durationMinutes);
-      return {
-        ...workBreak,
-        id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
-        type: 'Other',
-        startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
-        endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
-        durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
-      };
-    });
+      setActiveBreak(null);
+      pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
+    };
 
-    if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
-      return { success: false, message: 'Every saved break must have valid start and end times.' };
-    }
+    const updateAttendanceRecord = (
+      recordId: string,
+      updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
+    ) => {
+      const record = attendanceRecords.find((item) => item.id === recordId);
+      if (!record) {
+        return { success: false, message: 'Attendance record not found.' };
+      }
 
-    setAttendanceRecords((prev) =>
-      prev.map((item) =>
-        item.id === recordId
-          ? {
+      const isAdmin = currentRole === 'Admin';
+      const isOwnRecord = record.userId === currentUser.id;
+      const canEditRecord = isOwnRecord || isAdmin;
+      if (!canEditRecord) {
+        return {
+          success: false,
+          message: 'You are not authorized to edit another user’s attendance record.'
+        };
+      }
+
+      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+      if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
+        return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
+      }
+
+      const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
+        const duration = Number(workBreak.durationMinutes);
+        return {
+          ...workBreak,
+          id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
+          type: 'Other',
+          startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
+          endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
+          durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+        };
+      });
+
+      if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
+        return { success: false, message: 'Every saved break must have valid start and end times.' };
+      }
+
+      setAttendanceRecords((prev) =>
+        prev.map((item) =>
+          item.id === recordId
+            ? {
               ...item,
               checkIn: updates.checkIn,
               checkOut: updates.checkOut || undefined,
               breaks: normalizedBreaks
             }
-          : item
-      )
-    );
+            : item
+        )
+      );
 
-    pushActivity(
-      `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
-      'Attendance',
-      record.id,
-      currentUser.name
-    );
-    return { success: true, message: 'Attendance record updated.' };
-  };
-
-  // HR Requests
-  const submitHRRequest = (type: HRRequest['type'], reason: string, details: HRRequest['details']) => {
-    const newReq: HRRequest = {
-      id: `hrq-${Date.now()}`,
-      userId: currentUser.id,
-      type,
-      date: new Date().toISOString().split('T')[0],
-      reason,
-      status: 'Pending',
-      details,
-      submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+      pushActivity(
+        `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
+        'Attendance',
+        record.id,
+        currentUser.name
+      );
+      return { success: true, message: 'Attendance record updated.' };
     };
 
-    setHrRequests((prev) => [newReq, ...prev]);
+    // HR Requests
+    const submitHRRequest = (type: HRRequest['type'], reason: string, details: HRRequest['details']) => {
+      const newReq: HRRequest = {
+        id: `hrq-${Date.now()}`,
+        userId: currentUser.id,
+        type,
+        date: new Date().toISOString().split('T')[0],
+        reason,
+        status: 'Pending',
+        details,
+        submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+      };
 
-    // Notify HR
-    const notif: NotificationItem = {
-      id: `notif-${Date.now()}`,
-      userId: 'usr-3', // Marcus Vance (HR)
-      title: `New ${type.replace('_', ' ')} Request`,
-      message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request.`,
-      type: 'attendance',
-      read: false,
-      timestamp: 'Just now',
-      linkRoute: 'attendance'
+      setHrRequests((prev) => [newReq, ...prev]);
+
+      // Notify HR
+      const notif: NotificationItem = {
+        id: `notif-${Date.now()}`,
+        userId: 'usr-3', // Marcus Vance (HR)
+        title: `New ${type.replace('_', ' ')} Request`,
+        message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request.`,
+        type: 'attendance',
+        read: false,
+        timestamp: 'Just now',
+        linkRoute: 'attendance'
+      };
+      setNotifications((prev) => [notif, ...prev]);
+
+      pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
     };
-    setNotifications((prev) => [notif, ...prev]);
 
-    pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
-  };
-
-  const approveHRRequest = (requestId: string, decisionReason?: string) => {
-    setHrRequests((prev) =>
-      prev.map((r) =>
-        r.id === requestId
-          ? { ...r, status: 'Approved', decidedBy: currentUser.id, decisionReason }
-          : r
-      )
-    );
-    pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
-  };
-
-  const rejectHRRequest = (requestId: string, decisionReason?: string) => {
-    setHrRequests((prev) =>
-      prev.map((r) =>
-        r.id === requestId
-          ? { ...r, status: 'Rejected', decidedBy: currentUser.id, decisionReason }
-          : r
-      )
-    );
-    pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
-  };
-
-  // Chat
-  const sendChatMessage = (projectId: string, message: string) => {
-    const mentionedUsers = users.filter(
-      (user) => user.id !== currentUser.id && message.includes(`@${user.name}`)
-    );
-
-    const newMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      projectId,
-      senderId: currentUser.id,
-      message,
-      timestamp: 'Just now',
-      isPinned: false,
-      mentions: mentionedUsers.map((user) => user.id)
+    const approveHRRequest = (requestId: string, decisionReason?: string) => {
+      setHrRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? { ...r, status: 'Approved', decidedBy: currentUser.id, decisionReason }
+            : r
+        )
+      );
+      pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
     };
-    setChatMessages((prev) => [...prev, newMsg]);
-    pushActivity('Posted project chat message', 'Project', projectId, 'Project Chat');
 
-    const chatProject = projects.find((p) => p.id === projectId);
-    mentionedUsers.forEach((user) => {
+    const rejectHRRequest = (requestId: string, decisionReason?: string) => {
+      setHrRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? { ...r, status: 'Rejected', decidedBy: currentUser.id, decisionReason }
+            : r
+        )
+      );
+      pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
+    };
+
+    // Chat
+    const sendChatMessage = (projectId: string, message: string) => {
+      const mentionedUsers = users.filter(
+        (user) => user.id !== currentUser.id && message.includes(`@${user.name}`)
+      );
+
+      const newMsg: ChatMessage = {
+        id: `msg-${Date.now()}`,
+        projectId,
+        senderId: currentUser.id,
+        message,
+        timestamp: 'Just now',
+        isPinned: false,
+        mentions: mentionedUsers.map((user) => user.id)
+      };
+      setChatMessages((prev) => [...prev, newMsg]);
+      pushActivity('Posted project chat message', 'Project', projectId, 'Project Chat');
+
+      const chatProject = projects.find((p) => p.id === projectId);
+      mentionedUsers.forEach((user) => {
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(user.id, currentUser.id),
+          type: 'mention',
+          title: 'You were mentioned',
+          message: `${currentUser.name} mentioned you in ${chatProject?.title || 'project'} chat: "${message.slice(0, 80)}"`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'chat',
+          projectId
+        });
+      });
+    };
+
+    const togglePinMessage = (projectId: string, messageId: string) => {
+      setChatMessages((prev) => {
+        const currentPinnedCount = prev.filter((m) => m.projectId === projectId && m.isPinned).length;
+        return prev.map((m) => {
+          if (m.id === messageId) {
+            if (!m.isPinned && currentPinnedCount >= settings.maxChatPins) {
+              alert(`Maximum pinned messages cap (${settings.maxChatPins}) reached for this project.`);
+              return m;
+            }
+            return { ...m, isPinned: !m.isPinned };
+          }
+          return m;
+        });
+      });
+    };
+
+    // AI Logs
+    const addAIQueryLog = (queryText: string, scopeTouched: string, responseSummary: string) => {
+      const newLog: AIQueryLog = {
+        id: `qlog-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentRole,
+        queryText,
+        scopeTouched,
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        responseSummary
+      };
+      setAiLogs((prev) => [newLog, ...prev]);
+    };
+
+    const updateWeeklySummaryDraft = (data: Partial<WeeklySummaryDraft>) => {
+      setWeeklySummaryDraft((prev) => ({ ...prev, ...data }));
+    };
+
+    const markNotificationRead = (id: string) => {
+      setNotifications((prev) => markAsRead(prev, id));
+    };
+
+    const markAllNotificationsRead = () => {
+      setNotifications((prev) => markAllAsReadInList(prev, currentUser.id));
+    };
+
+    const clearNotification = (id: string) => {
+      setNotifications((prev) => removeNotificationFromList(prev, id, currentUser.id));
+    };
+
+    const updateNotificationPreferences = (data: Partial<NotificationPreferences>) => {
+      setNotificationPreferences((prev) => ({ ...prev, ...data }));
+    };
+
+    // Deactivate Admin Safeguard Check
+    const deactivateUser = (userId: string) => {
+      const targetUser = users.find((u) => u.id === userId);
+      if (!targetUser) return { success: false, message: 'User not found.' };
+
+      if (targetUser.role === 'Admin') {
+        const activeAdminsCount = users.filter((u) => u.role === 'Admin' && u.status === 'active').length;
+        if (activeAdminsCount <= 1) {
+          return {
+            success: false,
+            message: 'Action Blocked: Cannot deactivate the sole active Admin account in the system.'
+          };
+        }
+      }
+
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, status: 'inactive' } : u))
+      );
+
       dispatchNotifications({
-        recipientIds: resolveSingleRecipient(user.id, currentUser.id),
-        type: 'mention',
-        title: 'You were mentioned',
-        message: `${currentUser.name} mentioned you in ${chatProject?.title || 'project'} chat: "${message.slice(0, 80)}"`,
+        recipientIds: [
+          ...resolveAdminRecipients(users, currentUser.id),
+          ...resolveSingleRecipient(userId, currentUser.id)
+        ],
+        type: 'user_deactivated',
+        title: 'User Deactivated',
+        message: `${currentUser.name} deactivated ${targetUser.name}'s account.`,
+        recipientMessages: { [userId]: `${currentUser.name} deactivated your account.` },
         actorId: currentUser.id,
         actorName: currentUser.name,
-        linkRoute: 'chat',
-        projectId
+        linkRoute: 'settings'
       });
-    });
-  };
 
-  const togglePinMessage = (projectId: string, messageId: string) => {
-    setChatMessages((prev) => {
-      const currentPinnedCount = prev.filter((m) => m.projectId === projectId && m.isPinned).length;
-      return prev.map((m) => {
-        if (m.id === messageId) {
-          if (!m.isPinned && currentPinnedCount >= settings.maxChatPins) {
-            alert(`Maximum pinned messages cap (${settings.maxChatPins}) reached for this project.`);
-            return m;
-          }
-          return { ...m, isPinned: !m.isPinned };
-        }
-        return m;
-      });
-    });
-  };
-
-  // AI Logs
-  const addAIQueryLog = (queryText: string, scopeTouched: string, responseSummary: string) => {
-    const newLog: AIQueryLog = {
-      id: `qlog-${Date.now()}`,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentRole,
-      queryText,
-      scopeTouched,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      responseSummary
+      pushActivity(`Deactivated user ${targetUser.name}`, 'Settings', userId, targetUser.name);
+      return { success: true, message: `User ${targetUser.name} has been deactivated.` };
     };
-    setAiLogs((prev) => [newLog, ...prev]);
-  };
-
-  const updateWeeklySummaryDraft = (data: Partial<WeeklySummaryDraft>) => {
-    setWeeklySummaryDraft((prev) => ({ ...prev, ...data }));
-  };
-
-  const markNotificationRead = (id: string) => {
-    setNotifications((prev) => markAsRead(prev, id));
-  };
-
-  const markAllNotificationsRead = () => {
-    setNotifications((prev) => markAllAsReadInList(prev, currentUser.id));
-  };
-
-  const clearNotification = (id: string) => {
-    setNotifications((prev) => removeNotificationFromList(prev, id, currentUser.id));
-  };
-
-  const updateNotificationPreferences = (data: Partial<NotificationPreferences>) => {
-    setNotificationPreferences((prev) => ({ ...prev, ...data }));
-  };
-
-  // Deactivate Admin Safeguard Check
-  const deactivateUser = (userId: string) => {
-    const targetUser = users.find((u) => u.id === userId);
-    if (!targetUser) return { success: false, message: 'User not found.' };
-
-    if (targetUser.role === 'Admin') {
-      const activeAdminsCount = users.filter((u) => u.role === 'Admin' && u.status === 'active').length;
-      if (activeAdminsCount <= 1) {
-        return {
-          success: false,
-          message: 'Action Blocked: Cannot deactivate the sole active Admin account in the system.'
-        };
-      }
-    }
-
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, status: 'inactive' } : u))
-    );
-
-    dispatchNotifications({
-      recipientIds: [
-        ...resolveAdminRecipients(users, currentUser.id),
-        ...resolveSingleRecipient(userId, currentUser.id)
-      ],
-      type: 'user_deactivated',
-      title: 'User Deactivated',
-      message: `${currentUser.name} deactivated ${targetUser.name}'s account.`,
-      recipientMessages: { [userId]: `${currentUser.name} deactivated your account.` },
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'settings'
-    });
-
-    pushActivity(`Deactivated user ${targetUser.name}`, 'Settings', userId, targetUser.name);
-    return { success: true, message: `User ${targetUser.name} has been deactivated.` };
-  };
-
-  const exportBackup = () => {
-    const backupData = {
-      exportedAt: new Date().toISOString(),
-      users,
-      projects,
-      tasks,
-      attendanceRecords,
-      hrRequests,
-      systemApprovals,
-      chatMessages,
-      aiLogs
-    };
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `office-management-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-
-    // Includes the acting Admin (no excludeUserId) — a self-notification here doubles as an
-    // in-app confirmation that the export actually completed.
-    dispatchNotifications({
-      recipientIds: resolveAdminRecipients(users),
-      type: 'backup_completed',
-      title: 'Backup Completed',
-      message: `${currentUser.name} exported a full system backup.`,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'settings'
-    });
-
-    pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
-  };
 
   const updateCurrentUser = (updates: Partial<User>) => {
     setCurrentUser((prev) => ({ ...prev, ...updates }));
@@ -1629,8 +1605,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentRole,
         currentUser,
+    const exportBackup = () => {
+      const backupData = {
+        exportedAt: new Date().toISOString(),
         users,
-        theme,
         projects,
         tasks,
         attendanceRecords,
@@ -1699,3 +1677,102 @@ export const useApp = () => {
   }
   return context;
 };
+        aiLogs
+      };
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `office-management-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      // Includes the acting Admin (no excludeUserId) — a self-notification here doubles as an
+      // in-app confirmation that the export actually completed.
+      dispatchNotifications({
+        recipientIds: resolveAdminRecipients(users),
+        type: 'backup_completed',
+        title: 'Backup Completed',
+        message: `${currentUser.name} exported a full system backup.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'settings'
+      });
+
+      pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
+    };
+
+    return (
+      <AppContext.Provider
+        value={{
+          currentRole,
+          currentUser,
+          users,
+          theme,
+          projects,
+          tasks,
+          attendanceRecords,
+          hrRequests,
+          systemApprovals,
+          chatMessages,
+          aiLogs,
+          aiAudits,
+          notifications,
+          toasts,
+          notificationPreferences,
+          activityLogs,
+          calendarEvents,
+          savedPrompts,
+          weeklySummaryDraft,
+          activeBreak,
+          settings,
+          setRole,
+          refreshUsers,
+          onUserRegistered,
+          loginUser,
+          toggleTheme,
+          createProject,
+          approveProject,
+          rejectProject,
+          updateProject,
+          deleteProject,
+          createTask,
+          updateTask,
+          deleteTask,
+          updateTaskStatus,
+          proposeControlledEdit,
+          approveApprovalItem,
+          rejectApprovalItem,
+          checkIn,
+          checkOut,
+          startBreak,
+          endBreak,
+          updateAttendanceRecord,
+          submitHRRequest,
+          approveHRRequest,
+          rejectHRRequest,
+          sendChatMessage,
+          togglePinMessage,
+          addAIQueryLog,
+          updateWeeklySummaryDraft,
+          markNotificationRead,
+          markAllNotificationsRead,
+          clearNotification,
+          updateNotificationPreferences,
+          dismissToast,
+          deactivateUser,
+          exportBackup
+        }}
+      >
+        {children}
+      </AppContext.Provider>
+    );
+  };
+
+  export const useApp = () => {
+    const context = useContext(AppContext);
+    if (!context) {
+      throw new Error('useApp must be used within an AppProvider');
+    }
+    return context;
+  };
