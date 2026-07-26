@@ -231,27 +231,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActivityLogs((prev) => [newAct, ...prev]);
   };
 
-  // Create Project (Role Enforcement: TL creation needs Admin approval)
+  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  const eligibleProjectMemberIds = (ids: string[]): string[] =>
+    ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
+
   const createProject = (data: Partial<Project>) => {
-    const isAdmin = currentRole === 'Admin';
+    if (currentRole !== 'Team_Lead') return;
+
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-
-    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
-    // Team Lead creation always routes to Pending Approval for Admin review.
-    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
-    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
 
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status,
-      approvalStatus,
+      status: 'Pending Approval',
+      approvalStatus: 'Pending Approval',
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
-      memberIds: data.memberIds || [currentUser.id],
+      memberIds: eligibleProjectMemberIds(data.memberIds || []),
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       priority: data.priority || 'Medium',
@@ -265,39 +264,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProjects((prev) => [newProject, ...prev]);
 
-    if (!isAdmin) {
-      // Create System Approval for Admin
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Creation',
-        targetId: newProjId,
-        targetTitle: newProject.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
-      
-      // Notify Admins
-      const notif: NotificationItem = {
-        id: `notif-${Date.now()}`,
-        userId: 'usr-1',
-        title: 'Project Approval Requested',
-        message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
-        type: 'approval',
-        read: false,
-        timestamp: 'Just now',
-        linkRoute: 'approvals'
-      };
-      setNotifications((prev) => [notif, ...prev]);
-    }
+    // Create System Approval for Admin
+    const approval: SystemApproval = {
+      id: `app-${Date.now()}`,
+      type: 'Project_Creation',
+      targetId: newProjId,
+      targetTitle: newProject.title,
+      requestedBy: currentUser.id,
+      requestedRole: currentRole,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
+      status: 'Pending'
+    };
+    setSystemApprovals((prev) => [approval, ...prev]);
+
+    // Notify Admins
+    const notif: NotificationItem = {
+      id: `notif-${Date.now()}`,
+      userId: 'usr-1',
+      title: 'Project Approval Requested',
+      message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
+      type: 'approval',
+      read: false,
+      timestamp: 'Just now',
+      linkRoute: 'approvals'
+    };
+    setNotifications((prev) => [notif, ...prev]);
 
     pushActivity('Created project', 'Project', newProjId, newProject.title);
   };
 
   const approveProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     setProjects((prev) =>
       prev.map((p) => (p.id === projectId ? { ...p, status: 'Active', approvalStatus: 'Approved' } : p))
     );
@@ -308,6 +307,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     setProjects((prev) =>
       prev.map((p) => (p.id === projectId ? { ...p, approvalStatus: 'Rejected' } : p))
     );
@@ -321,8 +322,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    const sanitizedData = data.memberIds
+      ? { ...data, memberIds: eligibleProjectMemberIds(data.memberIds) }
+      : data;
+
     setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+      prev.map((p) => (p.id === projectId ? { ...p, ...sanitizedData } : p))
     );
     pushActivity('Updated project', 'Project', projectId, data.title || project.title);
   };
