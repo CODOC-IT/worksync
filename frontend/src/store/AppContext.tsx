@@ -666,6 +666,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    // Team Leads cannot delete immediately: their delete action files a Project Deletion
+    // approval request instead, mirroring the Project Creation approval flow. Only Admin
+    // deletes immediately, since Admin is also the sole approver of these requests.
+    if (currentRole !== 'Admin') {
+      const approval: SystemApproval = {
+        id: `app-${Date.now()}`,
+        type: 'Project_Deletion',
+        targetId: projectId,
+        targetTitle: project.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        details: `Team Lead ${currentUser.name} requested deletion of project "${project.title}". Pending Admin approval.`,
+        status: 'Pending'
+      };
+      setSystemApprovals((prev) => [approval, ...prev]);
+
+      dispatchNotifications({
+        recipientIds: resolveAdminRecipients(users, currentUser.id),
+        type: 'approval',
+        title: 'Project Deletion Requested',
+        message: `${currentUser.name} requested deletion of project "${project.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId
+      });
+      confirmActionSuccess('Deletion Requested', `Your request to delete "${project.title}" was submitted for Admin approval.`);
+      pushActivity('Requested project deletion', 'Project', projectId, project.title);
+      return;
+    }
+
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
 
@@ -685,6 +717,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     confirmActionSuccess('Project Deleted', `"${project.title}" was deleted successfully.`);
     pushActivity('Deleted project', 'Project', projectId, project.title);
+  };
+
+  // Admin decision on a Project Deletion request. Approving performs the actual deletion;
+  // rejecting is handled entirely by rejectApprovalItem, which never touches project/task state.
+  const approveProjectDeletion = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    setSystemApprovals((prev) =>
+      prev.map((sa) =>
+        sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
+      )
+    );
+
+    dispatchNotifications({
+      recipientIds: [
+        ...resolveAdminRecipients(users, currentUser.id),
+        ...resolveSingleRecipient(project.teamLeadId, currentUser.id)
+      ],
+      type: 'project_deleted',
+      title: 'Project Deleted',
+      message: `${currentUser.name} approved deletion of project "${project.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'projects',
+      projectId
+    });
+
+    confirmActionSuccess('Deletion Approved', `"${project.title}" was deleted successfully.`);
+    pushActivity('Approved project deletion', 'Project', projectId, project.title);
   };
 
   // Client-side prototype data boundary. The future API must repeat every
@@ -1099,6 +1165,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (item.type === 'Project_Creation') {
       approveProject(item.targetId);
+    } else if (item.type === 'Project_Deletion') {
+      approveProjectDeletion(item.targetId);
     } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
       const { field, newValue } = item.proposedDiff;
       setTasks((prev) =>
@@ -1137,13 +1205,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectApprovalItem = (approvalId: string) => {
     const item = systemApprovals.find((sa) => sa.id === approvalId);
 
+    // Only Admin may reject a Project Deletion request; the project remains unchanged either way
+    // since this function never touches `projects`/`tasks` state.
+    if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
+
     setSystemApprovals((prev) =>
       prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
     );
 
     if (item) {
-      const relatedProjectId =
-        item.type === 'Project_Creation' ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
+      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
@@ -1152,9 +1224,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
-        linkRoute: item.type === 'Project_Creation' ? 'projects' : 'tasks',
-        taskId: item.type === 'Project_Creation' ? undefined : item.targetId,
-        projectId: item.type === 'Project_Creation' ? item.targetId : undefined
+        linkRoute: targetsProject ? 'projects' : 'tasks',
+        taskId: targetsProject ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : undefined
       });
       confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
     }

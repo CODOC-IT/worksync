@@ -673,25 +673,34 @@ export const ProjectsView: React.FC = () => {
           <div className="w-full max-w-md glass-panel-glow border border-rose-500/40 shadow-2xl p-5 space-y-4">
             <div className="flex items-center gap-2 text-rose-400">
               <AlertTriangle size={18} />
-              <h2 className="text-sm font-bold text-white">Delete "{deleteTarget.title}"?</h2>
+              <h2 className="text-sm font-bold text-white">
+                {currentRole === 'Admin' ? `Delete "${deleteTarget.title}"?` : `Request deletion of "${deleteTarget.title}"?`}
+              </h2>
             </div>
 
-            {relatedTasks.length > 0 ? (
-              <div className="space-y-2 text-xs">
-                <p className="text-amber-300 font-semibold">
-                  This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                  Deleting it will permanently delete {relatedTasks.length !== 1 ? 'them' : 'it'} too.
-                </p>
-                <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
-                  {relatedTasks.map((t) => (
-                    <li key={t.id} className="text-slate-400 flex items-center gap-1.5">
-                      <span className="w-1 h-1 rounded-full bg-rose-400 shrink-0" /> {t.taskNumber} — {t.title}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {currentRole === 'Admin' ? (
+              relatedTasks.length > 0 ? (
+                <div className="space-y-2 text-xs">
+                  <p className="text-amber-300 font-semibold">
+                    This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
+                    Deleting it will permanently delete {relatedTasks.length !== 1 ? 'them' : 'it'} too.
+                  </p>
+                  <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
+                    {relatedTasks.map((t) => (
+                      <li key={t.id} className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-1 h-1 rounded-full bg-rose-400 shrink-0" /> {t.taskNumber} — {t.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">This action cannot be undone.</p>
+              )
             ) : (
-              <p className="text-xs text-slate-400">This action cannot be undone.</p>
+              <p className="text-xs text-slate-400">
+                This project will not be deleted immediately. A deletion request will be submitted for Admin approval,
+                and the project stays unchanged unless an Admin approves it.
+              </p>
             )}
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
@@ -699,7 +708,11 @@ export const ProjectsView: React.FC = () => {
                 Cancel
               </button>
               <button onClick={confirmDelete} className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40">
-                {relatedTasks.length > 0 ? `Delete Project & ${relatedTasks.length} Task${relatedTasks.length !== 1 ? 's' : ''}` : 'Delete Project'}
+                {currentRole === 'Admin'
+                  ? relatedTasks.length > 0
+                    ? `Delete Project & ${relatedTasks.length} Task${relatedTasks.length !== 1 ? 's' : ''}`
+                    : 'Delete Project'
+                  : 'Request Deletion'}
               </button>
             </div>
           </div>
