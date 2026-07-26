@@ -152,6 +152,7 @@ interface AppState {
   dismissToast: (id: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
+  updateCurrentUser: (updates: Partial<User>) => void;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -1616,6 +1617,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
   };
 
+  const updateCurrentUser = (updates: Partial<User>) => {
+    setCurrentUser((prev) => ({ ...prev, ...updates }));
+    setUsers((prev) =>
+      prev.map((u) => (u.id === currentUser.id ? { ...u, ...updates } : u))
+    );
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1675,7 +1683,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateNotificationPreferences,
         dismissToast,
         deactivateUser,
-        exportBackup
+        exportBackup,
+        updateCurrentUser
       }}
     >
       {children}
