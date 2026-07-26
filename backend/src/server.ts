@@ -32,7 +32,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   res.status(500).json({ success: false, message: err?.message || 'Internal server error' });
 });
 
-if (process.env.NODE_ENV !== 'test') {
+// Skip listen on Vercel (serverless) and in test mode
+// Vercel uses the exported `app` directly via api/index.ts
+if (process.env.NODE_ENV !== 'test' && process.env.VERCEL !== '1') {
   app.listen(PORT, () => {
     console.log(`[WorkSync API] Server listening on http://localhost:${PORT}`);
   });
