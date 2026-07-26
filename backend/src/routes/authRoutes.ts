@@ -297,4 +297,74 @@ router.post('/logout', authenticateJWT, (_req, res: Response): void => {
   res.status(200).json({ success: true, message: 'Logout successful.' });
 });
 
+// PUT /api/auth/profile/display-name
+router.put('/profile/display-name', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    const { name } = req.body;
+
+    if (!name || typeof name !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Display name is required.' });
+    }
+
+    const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
+
+    if (sanitizedName.length < 2) {
+      return void res.status(400).json({ success: false, message: 'Display name must be at least 2 characters long.' });
+    }
+
+    if (sanitizedName.length > 100) {
+      return void res.status(400).json({ success: false, message: 'Display name must not exceed 100 characters.' });
+    }
+
+    const updatedUser = userStore.updateDisplayName(req.user.id, sanitizedName);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Display name updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    return void res.status(500).json({ success: false, message: error.message || 'Failed to update display name.' });
+  }
+});
+
+// PUT /api/auth/profile/avatar
+router.put('/profile/avatar', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    const { avatar } = req.body;
+
+    if (!avatar || typeof avatar !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Avatar data URL is required.' });
+    }
+
+    if (!avatar.startsWith('data:image/')) {
+      return void res.status(400).json({ success: false, message: 'Avatar must be a valid image data URL.' });
+    }
+
+    const maxSize = 2 * 1024 * 1024;
+    const base64Size = Math.ceil((avatar.length * 3) / 4);
+    if (base64Size > maxSize) {
+      return void res.status(400).json({ success: false, message: 'Avatar image must be smaller than 2 MB.' });
+    }
+
+    const updatedUser = userStore.updateAvatar(req.user.id, avatar);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Profile picture updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    return void res.status(500).json({ success: false, message: error.message || 'Failed to update profile picture.' });
+  }
+});
+
 export default router;

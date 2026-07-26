@@ -196,6 +196,24 @@ class UserStore {
     this.persistToDisk();
     console.log(`[Database] Password updated for ${email} ✓`);
   }
+
+  public updateDisplayName(userId: string, name: string): Omit<UserRecord, 'passwordHash'> {
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+    user.name = name;
+    this.persistToDisk();
+    console.log(`[Database] Display name updated for ${userId} → "${name}" ✓`);
+    return this.sanitizeUser(user);
+  }
+
+  public updateAvatar(userId: string, avatarUrl: string): Omit<UserRecord, 'passwordHash'> {
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+    user.avatar = avatarUrl;
+    this.persistToDisk();
+    console.log(`[Database] Avatar updated for ${userId} ✓`);
+    return this.sanitizeUser(user);
+  }
 }
 
 export const userStore = new UserStore();
