@@ -87,6 +87,7 @@ interface AppState {
   weeklySummaryDraft: WeeklySummaryDraft;
   activeBreak: {
     isBreaking: boolean;
+    userId: string;
     breakType: BreakType;
     startTime: string; // HH:mm
     elapsedSeconds: number;
@@ -133,6 +134,10 @@ interface AppState {
   checkOut: () => void;
   startBreak: (breakType: BreakType) => void;
   endBreak: () => void;
+  updateAttendanceRecord: (
+    recordId: string,
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
+  ) => { success: boolean; message: string };
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details']) => void;
   approveHRRequest: (requestId: string, decisionReason?: string) => void;
   rejectHRRequest: (requestId: string, decisionReason?: string) => void;
@@ -184,6 +189,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [activeBreak, setActiveBreak] = useState<{
     isBreaking: boolean;
+    userId: string;
     breakType: BreakType;
     startTime: string;
     elapsedSeconds: number;
@@ -207,10 +213,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
+    const root = document.documentElement;
     if (next === 'dark') {
-      document.documentElement.classList.add('dark');
+      root.classList.add('dark');
+      root.classList.remove('light');
     } else {
-      document.documentElement.classList.remove('dark');
+      root.classList.remove('dark');
+      root.classList.add('light');
     }
   };
 
@@ -255,8 +264,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
+    const root = document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+      root.classList.remove('light');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+  }, [theme]);
 
   useEffect(() => {
     let isActive = true;
@@ -414,27 +430,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Create Project (Role Enforcement: TL creation needs Admin approval)
+  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  const eligibleProjectMemberIds = (ids: string[]): string[] =>
+    ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
+
   const createProject = (data: Partial<Project>) => {
-    const isAdmin = currentRole === 'Admin';
+    if (currentRole !== 'Team_Lead') return;
+
     const newProjId = `prj-${Date.now()}`;
     const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-
-    // Admin may explicitly choose to hold a new project as Pending Approval (draft);
-    // Team Lead creation always routes to Pending Approval for Admin review.
-    const status = isAdmin ? (data.status || 'Active') : 'Pending Approval';
-    const approvalStatus = isAdmin ? (status === 'Active' ? 'Approved' : 'Pending Approval') : 'Pending Approval';
 
     const newProject: Project = {
       id: newProjId,
       code,
       title: data.title || 'Untitled Project',
       description: data.description || '',
-      status,
-      approvalStatus,
+      status: 'Pending Approval',
+      approvalStatus: 'Pending Approval',
       createdBy: currentUser.id,
       teamLeadId: data.teamLeadId || currentUser.id,
-      memberIds: data.memberIds || [currentUser.id],
+      memberIds: eligibleProjectMemberIds(data.memberIds || []),
       startDate: data.startDate || new Date().toISOString().split('T')[0],
       targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       priority: data.priority || 'Medium',
@@ -448,42 +463,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProjects((prev) => [newProject, ...prev]);
 
-    if (!isAdmin) {
-      // Create System Approval for Admin
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Creation',
-        targetId: newProjId,
-        targetTitle: newProject.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
+    // Create System Approval for Admin
+    const approval: SystemApproval = {
+      id: `app-${Date.now()}`,
+      type: 'Project_Creation',
+      targetId: newProjId,
+      targetTitle: newProject.title,
+      requestedBy: currentUser.id,
+      requestedRole: currentRole,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
+      status: 'Pending'
+    };
+    setSystemApprovals((prev) => [approval, ...prev]);
 
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Approval Requested',
-        message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId: newProjId
-      });
-      confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
-    } else {
-      confirmActionSuccess('Project Created', `"${newProject.title}" was created successfully.`);
-    }
+    dispatchNotifications({
+      recipientIds: resolveAdminRecipients(users, currentUser.id),
+      type: 'approval',
+      title: 'Project Approval Requested',
+      message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'approvals',
+      projectId: newProjId
+    });
+    confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
 
-    // Notify the Team Lead AND every project member that the project now exists — regardless
-    // of whether it's Active (Admin-created) or Pending Approval (Team-Lead-created; members
-    // can already see it in the Projects list either way). Previously: Admin-created projects
-    // only notified the Team Lead ("assigned you as Team Lead"), leaving members with no
-    // notification at all; Team-Lead-created projects notified nobody but Admins. Both gaps
-    // are fixed here in one shared block instead of two near-duplicate ones.
+    // Notify the Team Lead AND every project member that the project now exists.
     const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
     if (projectCreatedRecipients.length > 0) {
       const projectCreatedMessages: Record<string, string> = {};
@@ -511,6 +517,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const approveProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -541,6 +549,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectProject = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
     const project = projects.find((p) => p.id === projectId);
     const approvalItem = systemApprovals.find(
       (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
@@ -574,8 +584,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    const sanitizedData = data.memberIds
+      ? { ...data, memberIds: eligibleProjectMemberIds(data.memberIds) }
+      : data;
+
     setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...data } : p))
+      prev.map((p) => (p.id === projectId ? { ...p, ...sanitizedData } : p))
     );
     pushActivity('Updated project', 'Project', projectId, data.title || project.title);
 
@@ -658,6 +672,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
 
+    // Team Leads cannot delete immediately: their delete action files a Project Deletion
+    // approval request instead, mirroring the Project Creation approval flow. Only Admin
+    // deletes immediately, since Admin is also the sole approver of these requests.
+    if (currentRole !== 'Admin') {
+      const approval: SystemApproval = {
+        id: `app-${Date.now()}`,
+        type: 'Project_Deletion',
+        targetId: projectId,
+        targetTitle: project.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        details: `Team Lead ${currentUser.name} requested deletion of project "${project.title}". Pending Admin approval.`,
+        status: 'Pending'
+      };
+      setSystemApprovals((prev) => [approval, ...prev]);
+
+      dispatchNotifications({
+        recipientIds: resolveAdminRecipients(users, currentUser.id),
+        type: 'approval',
+        title: 'Project Deletion Requested',
+        message: `${currentUser.name} requested deletion of project "${project.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId
+      });
+      confirmActionSuccess('Deletion Requested', `Your request to delete "${project.title}" was submitted for Admin approval.`);
+      pushActivity('Requested project deletion', 'Project', projectId, project.title);
+      return;
+    }
+
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
 
@@ -677,6 +723,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     confirmActionSuccess('Project Deleted', `"${project.title}" was deleted successfully.`);
     pushActivity('Deleted project', 'Project', projectId, project.title);
+  };
+
+  // Admin decision on a Project Deletion request. Approving performs the actual deletion;
+  // rejecting is handled entirely by rejectApprovalItem, which never touches project/task state.
+  const approveProjectDeletion = (projectId: string) => {
+    if (currentRole !== 'Admin') return;
+
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    setSystemApprovals((prev) =>
+      prev.map((sa) =>
+        sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
+      )
+    );
+
+    dispatchNotifications({
+      recipientIds: [
+        ...resolveAdminRecipients(users, currentUser.id),
+        ...resolveSingleRecipient(project.teamLeadId, currentUser.id)
+      ],
+      type: 'project_deleted',
+      title: 'Project Deleted',
+      message: `${currentUser.name} approved deletion of project "${project.title}".`,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'projects',
+      projectId
+    });
+
+    confirmActionSuccess('Deletion Approved', `"${project.title}" was deleted successfully.`);
+    pushActivity('Approved project deletion', 'Project', projectId, project.title);
   };
 
   // Client-side prototype data boundary. The future API must repeat every
@@ -1091,6 +1171,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (item.type === 'Project_Creation') {
       approveProject(item.targetId);
+    } else if (item.type === 'Project_Deletion') {
+      approveProjectDeletion(item.targetId);
     } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
       const { field, newValue } = item.proposedDiff;
       setTasks((prev) =>
@@ -1129,13 +1211,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectApprovalItem = (approvalId: string) => {
     const item = systemApprovals.find((sa) => sa.id === approvalId);
 
+    // Only Admin may reject a Project Deletion request; the project remains unchanged either way
+    // since this function never touches `projects`/`tasks` state.
+    if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
+
     setSystemApprovals((prev) =>
       prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
     );
 
     if (item) {
-      const relatedProjectId =
-        item.type === 'Project_Creation' ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
+      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
@@ -1144,9 +1230,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
-        linkRoute: item.type === 'Project_Creation' ? 'projects' : 'tasks',
-        taskId: item.type === 'Project_Creation' ? undefined : item.targetId,
-        projectId: item.type === 'Project_Creation' ? item.targetId : undefined
+        linkRoute: targetsProject ? 'projects' : 'tasks',
+        taskId: targetsProject ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : undefined
       });
       confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
     }
@@ -1178,10 +1264,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const checkOut = () => {
     const todayStr = new Date().toISOString().split('T')[0];
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const hasOpenAttendance = attendanceRecords.some(
+      (record) =>
+        record.userId === currentUser.id &&
+        record.date === todayStr &&
+        !record.checkOut
+    );
+    if (!hasOpenAttendance) return;
 
     setAttendanceRecords((prev) =>
       prev.map((a) => {
-        if (a.userId === currentUser.id && a.date === todayStr) {
+        if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
           return {
             ...a,
             checkOut: nowTime,
@@ -1192,7 +1285,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (activeBreak?.isBreaking) {
+    if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
       endBreak();
     }
 
@@ -1200,9 +1293,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startBreak = (breakType: BreakType) => {
+    if (activeBreak?.isBreaking) return;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const openAttendance = attendanceRecords.some(
+      (record) =>
+        record.userId === currentUser.id &&
+        record.date === todayStr &&
+        !record.checkOut
+    );
+    if (!openAttendance) return;
+
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     setActiveBreak({
       isBreaking: true,
+      userId: currentUser.id,
       breakType,
       startTime: nowTime,
       elapsedSeconds: 0
@@ -1211,7 +1316,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const endBreak = () => {
-    if (!activeBreak) return;
+    if (!activeBreak || activeBreak.userId !== currentUser.id) return;
     const todayStr = new Date().toISOString().split('T')[0];
     const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
@@ -1238,6 +1343,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setActiveBreak(null);
     pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
+  };
+
+  const updateAttendanceRecord = (
+    recordId: string,
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
+  ) => {
+    const record = attendanceRecords.find((item) => item.id === recordId);
+    if (!record) {
+      return { success: false, message: 'Attendance record not found.' };
+    }
+
+    const isAdmin = currentRole === 'Admin';
+    const isOwnRecord = record.userId === currentUser.id;
+    const canEditRecord = isOwnRecord || isAdmin;
+    if (!canEditRecord) {
+      return {
+        success: false,
+        message: 'You are not authorized to edit another user’s attendance record.'
+      };
+    }
+
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
+      return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
+    }
+
+    const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
+      const duration = Number(workBreak.durationMinutes);
+      return {
+        ...workBreak,
+        id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
+        type: 'Other',
+        startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
+        endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
+        durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+      };
+    });
+
+    if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
+      return { success: false, message: 'Every saved break must have valid start and end times.' };
+    }
+
+    setAttendanceRecords((prev) =>
+      prev.map((item) =>
+        item.id === recordId
+          ? {
+              ...item,
+              checkIn: updates.checkIn,
+              checkOut: updates.checkOut || undefined,
+              breaks: normalizedBreaks
+            }
+          : item
+      )
+    );
+
+    pushActivity(
+      `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
+      'Attendance',
+      record.id,
+      currentUser.name
+    );
+    return { success: true, message: 'Attendance record updated.' };
   };
 
   // HR Requests
@@ -1494,6 +1661,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkOut,
         startBreak,
         endBreak,
+        updateAttendanceRecord,
         submitHRRequest,
         approveHRRequest,
         rejectHRRequest,

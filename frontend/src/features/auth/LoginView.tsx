@@ -132,7 +132,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
 
   return (
     <div
-      className="min-h-screen w-screen flex items-center justify-center bg-[#090a0f] text-slate-100 p-4 md:p-8 relative overflow-hidden cursor-glow-container bg-cover bg-center bg-no-repeat"
+      className="min-h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 p-4 md:p-8 relative overflow-hidden cursor-glow-container bg-cover bg-center bg-no-repeat"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.88), rgba(9, 10, 15, 0.95)), url('/assets/images/auth-bg.png')`
       }}
@@ -166,10 +166,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         className="w-full max-w-5xl glass-panel p-2 md:p-3 rounded-3xl border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.7)] z-10 overflow-hidden"
       >
-        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[560px] gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-0 gap-3">
           {/* LEFT COLUMN: Visual Showcase Panel with auth_bg.png */}
           <div
-            className="lg:col-span-5 relative rounded-2xl overflow-hidden p-6 md:p-8 flex flex-col justify-between bg-cover bg-center border border-white/10"
+            className="lg:col-span-5 relative rounded-2xl overflow-hidden p-5 sm:p-6 md:p-8 flex flex-col justify-between bg-cover bg-center border border-white/10 min-h-[200px] lg:min-h-[560px]"
             style={{
               backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.55), rgba(9, 10, 15, 0.90)), url('/assets/images/auth-bg.png')`
             }}
@@ -195,14 +195,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
             </div>
 
             {/* Middle Feature Hero Content */}
-            <div className="my-8 space-y-3">
-              <span className="px-3 py-1 rounded-full text-[11px] font-mono font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 inline-block shadow-[0_0_12px_rgba(0,242,254,0.2)]">
+            <div className="my-6 sm:my-8 space-y-2 sm:space-y-3">
+              <span className="px-2 sm:px-3 py-1 rounded-full text-[10px] sm:text-[11px] font-mono font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 inline-block shadow-[0_0_12px_rgba(0,242,254,0.2)]">
                 ENTERPRISE MANAGEMENT PLATFORM
               </span>
-              <h2 className="text-2xl md:text-3xl font-extrabold text-white leading-tight">
+              <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white leading-tight">
                 Streamline operations & collaborate with precision.
               </h2>
-              <p className="text-xs text-slate-300 leading-relaxed">
+              <p className="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
                 Role-based access control, task orchestration, attendance tracking, and AI-powered workflow analytics in one sleek workspace.
               </p>
             </div>
@@ -231,7 +231,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
           </div>
 
           {/* RIGHT COLUMN: Interactive Login Form Area */}
-          <div className="lg:col-span-7 p-6 md:p-10 flex flex-col justify-between space-y-6">
+          <div className="lg:col-span-7 p-5 sm:p-6 md:p-10 flex flex-col justify-between space-y-4 sm:space-y-6">
             {/* Top Navigation Row */}
             <div className="flex items-center justify-between pb-2 border-b border-white/5">
               <div className="flex items-center gap-2">
