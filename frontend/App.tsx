@@ -18,6 +18,7 @@ import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
 import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
 import { NotificationsView } from '../frontend/src/features/notifications/NotificationsView';
 import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
+import { ReportsView } from '../frontend/src/features/reports/ReportsView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -108,24 +109,16 @@ const AppContent: React.FC = () => {
 
         {/* Main Scrollable View Area */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
-         {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-{currentTab === 'tasks' && <TasksView />}
-{currentTab === 'attendance' && <AttendanceView />}
-{currentTab === 'profile' && <ProfileView />}
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-
           {currentTab === 'projects' && <ProjectsView />}
-
           {currentTab === 'tasks' && <TasksView />}
-
+          {currentTab === 'attendance' && <AttendanceView />}
+          {currentTab === 'profile' && <ProfileView />}
           {currentTab === 'ai-assistant' && <AIAssistantView />}
           {currentTab === 'kanban' && <KanbanView />}
-
           {currentTab === 'approvals' && <ApprovalsInboxView />}
-
           {currentTab === 'notifications' && <NotificationsView />}
-
-          {currentTab === 'profile' && <ProfileView />}
+          {currentTab === 'reports' && <ReportsView />}
 
           {/* Settings Tab */}
           {currentTab === 'settings' && (
