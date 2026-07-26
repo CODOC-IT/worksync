@@ -9,7 +9,12 @@ interface OTPRecord {
   createdAt: number;
 }
 
-const OTP_DB_PATH = path.resolve(process.cwd(), 'database', 'otp_store.json');
+// On Vercel the filesystem is read-only except for /tmp, so we persist
+// the OTP store under /tmp when running in a serverless environment.
+const DATA_ROOT = process.env.VERCEL === '1'
+  ? '/tmp/database'
+  : path.resolve(process.cwd(), 'database');
+const OTP_DB_PATH = path.resolve(DATA_ROOT, 'otp_store.json');
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
 class OTPStore {

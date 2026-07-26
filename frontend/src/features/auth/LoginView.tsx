@@ -132,7 +132,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
 
   return (
     <div
-      className="min-h-screen w-screen flex items-center justify-center bg-[#090a0f] text-slate-100 p-2 sm:p-4 md:p-8 relative overflow-hidden cursor-glow-container bg-cover bg-center bg-no-repeat"
+      className="min-h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 p-4 md:p-8 relative overflow-hidden cursor-glow-container bg-cover bg-center bg-no-repeat"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.88), rgba(9, 10, 15, 0.95)), url('/assets/images/auth-bg.png')`
       }}
