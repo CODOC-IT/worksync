@@ -6,7 +6,12 @@ import { UserRecord, UserRole } from '../types.js';
 // Pre-hashed default password for initial seed users: "password123"
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
 
-const DB_FILE_PATH = path.resolve(process.cwd(), 'database', 'users_db.json');
+// On Vercel the filesystem is read-only except for /tmp, so we persist
+// the user database under /tmp when running in a serverless environment.
+const DATA_ROOT = process.env.VERCEL === '1'
+  ? '/tmp/database'
+  : path.resolve(process.cwd(), 'database');
+const DB_FILE_PATH = path.resolve(DATA_ROOT, 'users_db.json');
 
 const INITIAL_USERS: UserRecord[] = [
   {
