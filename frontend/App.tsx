@@ -74,7 +74,7 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#090a0f] text-slate-100 font-sans cursor-glow-container">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-canvas)] text-slate-300 font-sans cursor-glow-container">
       {/* Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
