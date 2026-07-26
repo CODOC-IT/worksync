@@ -82,8 +82,8 @@ const validInput: TaskFormInput = {
   title: 'Create task module',
   description: 'Build and validate the task workflow.',
   priority: 'High',
-  startDate: '2026-07-10',
-  dueDate: '2026-07-20',
+  startDate: '2026-07-28',
+  dueDate: '2026-07-29',
   assigneeIds: ['member'],
   status: 'Todo'
 };
@@ -107,7 +107,7 @@ const task: TaskModuleTask = {
   tags: [],
   attachments: [],
   approvalStatus: 'Approved',
-  createdAt: '2026-07-10'
+  createdAt: '2026-07-28'
 };
 
 test('accepts a valid task creation request', () => {
@@ -123,17 +123,17 @@ test('creates a normalized task result with project-member assignees', () => {
       assigneeIds: ['member']
     },
     {
-      currentRole: 'Admin',
-      currentUserId: 'admin',
+      currentRole: 'Team_Lead',
+      currentUserId: 'lead',
       projects: [project],
       tasks: [],
       users
     },
-    Date.parse('2026-07-10T00:00:00Z')
+    Date.parse('2026-07-28T00:00:00Z')
   );
 
   assert.equal(result.success, true);
-  assert.equal(result.task?.creatorId, 'admin');
+  assert.equal(result.task?.creatorId, 'lead');
   assert.deepEqual(result.task?.assigneeIds, ['member']);
   assert.equal(result.task?.projectId, project.id);
 });
@@ -154,7 +154,9 @@ test('rejects invalid task and project date ranges', () => {
   const errors = validateTaskInput(
     { ...validInput, startDate: '2026-06-30', dueDate: '2026-08-01' },
     project,
-    users
+    users,
+    true,
+    '2026-07-27'
   );
   assert.ok(errors.startDate);
   assert.ok(errors.dueDate);
@@ -184,7 +186,7 @@ test('rejects archived projects', () => {
 });
 
 test('enforces task creation roles and Team Lead project scope', () => {
-  assert.equal(canCreateTaskForProject('Admin', 'admin', project), true);
+  assert.equal(canCreateTaskForProject('Admin', 'admin', project), false);
   assert.equal(canCreateTaskForProject('Team_Lead', 'lead', project), true);
   assert.equal(canCreateTaskForProject('Team_Lead', 'outsider', project), false);
   assert.equal(canCreateTaskForProject('Team_Member', 'member', project), false);
@@ -192,7 +194,7 @@ test('enforces task creation roles and Team Lead project scope', () => {
 });
 
 test('filters task lists and sorts by due date', () => {
-  const later = { ...task, id: 'task-2', title: 'Later task', dueDate: '2026-07-25' };
+  const later = { ...task, id: 'task-2', title: 'Later task', dueDate: '2026-07-30' };
   const result = filterAndSortTasks([later, task], [project], {
     search: 'task',
     projectId: project.id,
@@ -207,12 +209,12 @@ test('filters task lists and sorts by due date', () => {
 });
 
 test('enforces edit and delete permission checks', () => {
-  assert.equal(canEditTask('Admin', 'admin', project, task), true);
+  assert.equal(canEditTask('Admin', 'admin', project, task), false);
   assert.equal(canEditTask('Team_Lead', 'lead', project, task), true);
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
   assert.equal(canEditTask('Team_Member', 'outsider', project, task), false);
-  assert.equal(canDeleteTask('Admin', 'admin', project), true);
-  assert.equal(canDeleteTask('Team_Lead', 'lead', project), false);
+  assert.equal(canDeleteTask('Admin', 'admin', project), false);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project), true);
   assert.equal(canDeleteTask('Team_Lead', 'lead', project, true), true);
 
   const deniedEdit = prepareTaskUpdate(task.id, { status: 'Done' }, {

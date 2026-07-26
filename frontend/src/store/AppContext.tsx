@@ -53,7 +53,9 @@ import {
 } from '../features/tasks/taskMutations';
 import {
   createTaskViaApi,
-  loadTasksFromApi
+  deleteTaskViaApi,
+  loadTasksFromApi,
+  updateTaskViaApi
 } from '../features/tasks/taskRepository';
 import {
   SendNotificationInput,
@@ -113,8 +115,8 @@ interface AppState {
   updateProject: (projectId: string, data: Partial<Project>) => void;
   deleteProject: (projectId: string) => void;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
-  updateTask: (taskId: string, data: TaskMutationData) => TaskMutationResult;
-  deleteTask: (taskId: string) => TaskMutationResult;
+  updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
+  deleteTask: (taskId: string) => Promise<TaskMutationResult>;
   updateTaskStatus: (
     taskId: string,
     newStatus: TaskStatus,
@@ -765,8 +767,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Approved project deletion', 'Project', projectId, project.title);
   };
 
-  // Client-side prototype data boundary. The future API must repeat every
-  // authorization and validation check inside a PostgreSQL transaction.
   const createTask = async (
     data: TaskMutationData
   ): Promise<TaskMutationResult> => {
@@ -831,15 +831,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return result;
   };
 
-    const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
+    const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
       const before = tasks.find((item) => item.id === taskId);
-      const result = prepareTaskUpdate(taskId, data, {
+      const validationResult = prepareTaskUpdate(taskId, data, {
         currentRole,
         currentUserId: currentUser.id,
         projects,
         tasks,
         users
       });
+      if (!validationResult.success || !validationResult.task) return validationResult;
+
+      const result = await updateTaskViaApi(taskId, data);
       if (!result.success || !result.task) return result;
 
       setTasks((prev) => prev.map((item) => item.id === taskId ? result.task! : item));
@@ -943,18 +946,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return result;
     };
 
-    const deleteTask = (taskId: string): TaskMutationResult => {
+    const deleteTask = async (taskId: string): Promise<TaskMutationResult> => {
       const task = tasks.find((item) => item.id === taskId);
-      const result = prepareTaskDeletion(taskId, {
+      const validationResult = prepareTaskDeletion(taskId, {
         currentRole,
         currentUserId: currentUser.id,
         projects,
         tasks,
         users
       });
-      if (!result.success || !result.task) return result;
+      if (!validationResult.success || !validationResult.task) return validationResult;
+
+      const result = await deleteTaskViaApi(taskId);
+      if (!result.success) return result;
+
       setTasks((prev) => prev.filter((item) => item.id !== taskId));
-      pushActivity('Deleted task', 'Task', taskId, result.task.title);
+      pushActivity('Deleted task', 'Task', taskId, validationResult.task.title);
 
       if (task) {
         const project = projects.find((p) => p.id === task.projectId);
