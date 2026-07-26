@@ -767,70 +767,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Client-side prototype data boundary. The future API must repeat every
   // authorization and validation check inside a PostgreSQL transaction.
-  const createTask = (data: TaskMutationData): TaskMutationResult => {
-    const createTask = async (
-      data: TaskMutationData
-    ): Promise<TaskMutationResult> => {
-      const input = toTaskFormInput(data);
-      const signature = JSON.stringify(input);
-      const now = Date.now();
-      if (
-        recentTaskSubmission.current?.signature === signature
-        && now - recentTaskSubmission.current.submittedAt < 2000
-      ) {
-        return {
-          success: false,
-          message: 'This task was already submitted. Please wait before trying again.'
-        };
-      }
+  const createTask = async (
+    data: TaskMutationData
+  ): Promise<TaskMutationResult> => {
+    const input = toTaskFormInput(data);
+    const signature = JSON.stringify(input);
+    const now = Date.now();
+    if (
+      recentTaskSubmission.current?.signature === signature
+      && now - recentTaskSubmission.current.submittedAt < 2000
+    ) {
+      return {
+        success: false,
+        message: 'This task was already submitted. Please wait before trying again.'
+      };
+    }
 
-      const validationResult = prepareTaskCreation(data, {
-        currentRole,
-        currentUserId: currentUser.id,
-        projects,
-        tasks,
-        users
-      }, now);
-      if (!validationResult.success) return validationResult;
+    const validationResult = prepareTaskCreation(data, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    }, now);
+    if (!validationResult.success) return validationResult;
 
-      const result = await createTaskViaApi(data);
-      if (!result.success || !result.task) return result;
+    const result = await createTaskViaApi(data);
+    if (!result.success || !result.task) return result;
 
-      recentTaskSubmission.current = { signature, submittedAt: now };
-      setTasks((prev) => [result.task!, ...prev]);
-      pushActivity('Created task', 'Task', result.task.id, result.task.title);
+    recentTaskSubmission.current = { signature, submittedAt: now };
+    setTasks((prev) => [result.task!, ...prev]);
+    pushActivity('Created task', 'Task', result.task.id, result.task.title);
 
-      const project = projects.find((p) => p.id === result.task!.projectId);
-      const taskRecipients = resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id });
-      const newTaskAssigneeIds = getTaskAssigneeIds(result.task);
-      const newTaskAssigneeNames = newTaskAssigneeIds
-        .map((id) => users.find((user) => user.id === id)?.name)
-        .filter((name): name is string => Boolean(name))
-        .join(', ') || 'a team member';
+    const project = projects.find((p) => p.id === result.task!.projectId);
+    const taskRecipients = resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id });
+    const newTaskAssigneeIds = getTaskAssigneeIds(result.task);
+    const newTaskAssigneeNames = newTaskAssigneeIds
+      .map((id) => users.find((user) => user.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+      .join(', ') || 'a team member';
 
-      const taskAssignedMessages: Record<string, string> = {};
-      taskRecipients.forEach((recipientId) => {
-        taskAssignedMessages[recipientId] = newTaskAssigneeIds.includes(recipientId)
-          ? `${currentUser.name} assigned you "${result.task!.title}" in ${project?.title || 'the project'}.`
-          : `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task!.title}" in ${project?.title || 'the project'}.`;
-      });
+    const taskAssignedMessages: Record<string, string> = {};
+    taskRecipients.forEach((recipientId) => {
+      taskAssignedMessages[recipientId] = newTaskAssigneeIds.includes(recipientId)
+        ? `${currentUser.name} assigned you "${result.task!.title}" in ${project?.title || 'the project'}.`
+        : `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task!.title}" in ${project?.title || 'the project'}.`;
+    });
 
-      dispatchNotifications({
-        recipientIds: taskRecipients,
-        type: 'task_assigned',
-        title: 'New Task Assigned',
-        message: `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task.title}" in ${project?.title || 'the project'}.`,
-        recipientMessages: taskAssignedMessages,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'tasks',
-        projectId: result.task.projectId,
-        taskId: result.task.id
-      });
+    dispatchNotifications({
+      recipientIds: taskRecipients,
+      type: 'task_assigned',
+      title: 'New Task Assigned',
+      message: `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task.title}" in ${project?.title || 'the project'}.`,
+      recipientMessages: taskAssignedMessages,
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      linkRoute: 'tasks',
+      projectId: result.task.projectId,
+      taskId: result.task.id
+    });
 
-      confirmActionSuccess('Task Created', `"${result.task.title}" was created successfully.`);
-      return result;
-    };
+    confirmActionSuccess('Task Created', `"${result.task.title}" was created successfully.`);
+    return result;
+  };
 
     const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
       const before = tasks.find((item) => item.id === taskId);
