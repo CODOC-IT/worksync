@@ -461,7 +461,7 @@ This project was built by **10 interns** at a collaborative sprint. To contribut
 
 ### ⭐ If WorkSync impressed you, give it a star!
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=18&pause=2000&color=FFD700&center=true&vCenter=true&width=500&lines=Built+with+%E2%9D%A4%EF%B8%8F+by+10+Interns;WorkSync+Intern+Team+2025+%F0%9F%9A%80" alt="Footer Typing"/>
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=18&pause=2000&color=FFD700&center=true&vCenter=true&width=500&lines=Built+with+%E2%9D%A4%EF%B8%8F+by+10+Interns;WorkSync+Intern+Team+2026+%F0%9F%9A%80" alt="Footer Typing"/>
 
 <br/>
 
