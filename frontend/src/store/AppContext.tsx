@@ -91,6 +91,7 @@ import {
   clearNotificationApi,
   snoozeNotificationApi
 } from '../features/notifications/notificationApiClient';
+import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
 
 interface AppState {
   currentRole: UserRole;
@@ -438,6 +439,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isActive = false;
     };
   }, [currentUser.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const channel = subscribeToChannel(
+      'worksync-notifications',
+      (payload) => {
+        if (payload?.notification) {
+          const notif = payload.notification as NotificationItem;
+          if (notif.userId === currentUser.id) {
+            setNotifications((prev) => [notif, ...prev]);
+            if (notificationPreferences.toast) {
+              const meta = getNotificationTypeMeta(notif.type);
+              pushToast(meta.tone, notif.title, notif.message);
+            }
+          }
+        }
+      }
+    );
+
+    return () => {
+      if (channel) supabase?.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id, isSupabaseConfigured]);
 
   const applyCreatedNotifications = (created: NotificationItem[]) => {
     if (created.length === 0) return;

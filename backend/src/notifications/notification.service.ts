@@ -2,6 +2,7 @@ import * as repo from './notification.repository.js';
 import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.js';
 import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
+import { getSupabaseClient } from '../db/pool.js';
 import {
   NotificationDTO,
   NotificationEvent,
@@ -155,6 +156,23 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
   if (priority === 'Critical' && created.length > 0) {
     processEmailCandidates(['Critical']).catch((error) => {
       console.warn('[notification.service] Immediate Critical email dispatch failed.', error);
+    });
+  }
+
+  // Broadcast via Supabase Realtime so the frontend receives notifications instantly
+  // without polling. Fire-and-forget — a broadcast failure must never break the HTTP response.
+  const supabaseClient = getSupabaseClient();
+  if (supabaseClient) {
+    created.forEach((notification) => {
+      supabaseClient
+        .channel('worksync-notifications')
+        .send({ type: 'broadcast', event: 'notification', payload: { notification } })
+        .then(() => {
+          // Successfully broadcast
+        })
+        .catch((err) => {
+          console.warn('[notification.service] Supabase broadcast failed.', err.message);
+        });
     });
   }
 
