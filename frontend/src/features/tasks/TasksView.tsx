@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowDownAZ,
   Check,
+  CheckSquare,
   ChevronDown,
   ClipboardList,
   Filter,
@@ -333,7 +334,10 @@ export const TasksView: React.FC = () => {
     <section className="mx-auto max-w-[1500px] space-y-5">
       {!isCreatePage && <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Tasks</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
+            <CheckSquare size={23} className="text-cyan-400" />
+            Tasks
+          </h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
             Track project work, ownership, and due dates in one focused workspace.
           </p>
@@ -605,7 +609,7 @@ export const TasksView: React.FC = () => {
           <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="flex items-center gap-2 font-bold text-white">
-                <ClipboardList size={17} className="text-cyan-400" />
+                <CheckSquare size={17} className="text-cyan-400" />
                 Task list
                 <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
                   {filteredTasks.length}
