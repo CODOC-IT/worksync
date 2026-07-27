@@ -217,10 +217,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       />
 
       {/* Main Glassmorphism Split-Screen Container */}
-      <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.45, ease: 'easeOut' }}
+      <div
         className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 max-h-[90vh] sm:max-h-none sm:h-auto lg:min-h-[600px]"
       >
         {/* LEFT COLUMN: Visual Showcase Panel (40% width) */}
@@ -550,7 +547,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
             </p>
           </div>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 };
