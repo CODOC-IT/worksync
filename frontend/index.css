@@ -20,7 +20,7 @@
 @layer base {
   :root {
     color-scheme: dark;
-    --font-sans: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Google Sans', 'Google Sans Text', 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
     /* Slate palette — dark mode */
