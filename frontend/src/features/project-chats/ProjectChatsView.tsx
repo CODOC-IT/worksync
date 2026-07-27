@@ -77,7 +77,7 @@ export const ProjectChatsView: React.FC = () => {
   };
 
   return (
-    <section className="mx-auto max-w-[1550px] space-y-4">
+    <section data-project-chats className="mx-auto max-w-[1550px] space-y-4">
       <header className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div><h1 className="text-2xl font-bold text-white">Project Chats</h1><p className="mt-1 text-sm text-slate-400">Asynchronous project and task discussions, decisions, and follow-ups.</p></div>
         <div className="flex w-full gap-2 xl:w-auto"><label className="relative min-w-0 flex-1 xl:w-72"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input aria-label="Search discussions" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className={`${inputClass} pl-9`} placeholder="Search discussions" /></label><button type="button" onClick={() => setComposerOpen(true)} className="glass-button-neon inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold"><Plus size={16} />Start Discussion</button></div>

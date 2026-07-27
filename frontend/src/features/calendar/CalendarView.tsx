@@ -113,7 +113,7 @@ export const CalendarView: React.FC = () => {
   const activeDayEntries = activeDayKey ? entriesByDate.get(activeDayKey) || [] : [];
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div data-calendar className="space-y-4 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4">
         <div>

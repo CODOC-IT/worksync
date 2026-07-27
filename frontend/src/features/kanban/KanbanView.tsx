@@ -157,7 +157,7 @@ export const KanbanView: React.FC = () => {
       : 'View your project context and move your own tasks through the workflow.';
 
   return (
-    <section className="mx-auto max-w-[1600px] space-y-5">
+    <section data-kanban className="mx-auto max-w-[1600px] space-y-5">
       <header>
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
           <ListTodo size={15} />
@@ -326,6 +326,7 @@ const BoardColumn: React.FC<{
   renderCard: (task: Task) => React.ReactNode;
 }> = ({ status, tasks, isDragOver, onDragEnter, onDragLeave, onDrop, renderCard }) => (
   <div
+    data-kanban-column={status.toLowerCase().replace(' ', '-')}
     onDragOver={(event) => {
       event.preventDefault();
       onDragEnter();

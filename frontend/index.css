@@ -373,6 +373,284 @@
   border-color: #293E49;
 }
 
+/* Final light-mode refinements for dense feature-specific controls. */
+.light input:focus,
+.light select:focus,
+.light textarea:focus {
+  border-color: #3F684F !important;
+  box-shadow: 0 0 0 2px rgba(63, 104, 79, 0.20);
+}
+
+.light [data-ai-assistant] .glass-panel {
+  border-color: #AEBDB3 !important;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > button {
+  background: #F8FAF9;
+  border: 1px solid #87998E;
+  border-radius: 0.5rem;
+  color: #26322B;
+  box-shadow: none;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > button:hover {
+  border-color: #56735F;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > button:focus-visible {
+  border-color: #3F684F;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute {
+  background: #202622 !important;
+  border-color: #59675E !important;
+  box-shadow: 0 4px 12px rgba(25, 40, 31, 0.18) !important;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute input {
+  background: #202622;
+  border-color: #59675E;
+  color: #FFFFFF;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute .text-slate-300,
+.light [data-ai-assistant] [data-searchable-select] > .absolute .text-slate-200 {
+  color: #FFFFFF;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute .text-slate-400,
+.light [data-ai-assistant] [data-searchable-select] > .absolute .text-slate-500 {
+  color: #CDD5CF;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute button:hover {
+  background: #344239;
+  color: #FFFFFF;
+}
+
+.light [data-ai-assistant] [data-searchable-select] > .absolute .bg-purple-500\/20 {
+  background: #405345;
+  border-color: #6A8472;
+  color: #FFFFFF;
+}
+
+.light [data-ai-assistant] .bg-purple-500\/20,
+.light [data-ai-assistant] .bg-cyan-500\/15,
+.light [data-ai-assistant] .bg-cyan-500\/20 {
+  background-color: #E5EDE7;
+}
+
+.light [data-ai-assistant] .border-purple-500\/20,
+.light [data-ai-assistant] .border-purple-500\/30,
+.light [data-ai-assistant] .border-purple-500\/40,
+.light [data-ai-assistant] .border-purple-500\/50,
+.light [data-ai-assistant] .border-cyan-500\/20,
+.light [data-ai-assistant] .border-cyan-500\/30,
+.light [data-ai-assistant] .border-cyan-500\/40 {
+  border-color: #3F684F;
+}
+
+.light [data-ai-assistant] .text-purple-300,
+.light [data-ai-assistant] .text-purple-400,
+.light [data-ai-assistant] .text-cyan-300,
+.light [data-ai-assistant] .text-cyan-400 {
+  color: #26322B;
+}
+
+.light [data-ai-assistant] .glass-button-neon {
+  background: #3F684F;
+  border-color: #31543F;
+  color: #FFFFFF;
+  font-weight: 600;
+  box-shadow: 0 3px 8px rgba(25, 40, 31, 0.18);
+}
+
+.light [data-ai-assistant] .glass-button-neon:hover,
+.light [data-ai-assistant] .glass-button-neon:focus-visible {
+  background: #31543F;
+  border-color: #31543F;
+  color: #FFFFFF;
+}
+
+.light [data-status] {
+  font-weight: 600;
+  box-shadow: none !important;
+}
+
+.light [data-status="todo"] {
+  background: #DDE7E0;
+  border-color: #789281;
+  color: #334E3D;
+}
+
+.light [data-status="in progress"],
+.light [data-status="pending"],
+.light [data-status="pending approval"],
+.light [data-status="late"] {
+  background: #F2DFAD;
+  border-color: #B88A2C;
+  color: #624300;
+}
+
+.light [data-status="review"] {
+  background: #F2CECB;
+  border-color: #C35A53;
+  color: #7F211D;
+}
+
+.light [data-status="done"],
+.light [data-status="completed"],
+.light [data-status="approved"] {
+  background: #CFE4D5;
+  border-color: #679B76;
+  color: #245B36;
+}
+
+.light [data-status="blocked"],
+.light [data-status="rejected"],
+.light [data-status="failed"],
+.light [data-status="urgent"],
+.light [data-status="high"] {
+  background: #F3D1CE;
+  border-color: #BD5B54;
+  color: #7D211D;
+}
+
+.light [data-kanban] .glass-panel {
+  background: #F8FAF9;
+  border-color: #B8C5BD !important;
+}
+
+.light [data-kanban] [data-kanban-column] .border-dashed {
+  background: #F1F5F2;
+  border-color: #C5D0C9;
+}
+
+.light [data-kanban] [data-kanban-column="review"] {
+  background: #F8F1F0;
+  border-color: #C56A64 !important;
+}
+
+.light [data-kanban] [data-kanban-column="review"] .text-violet-400,
+.light [data-kanban] [data-kanban-column="review"] .text-purple-400 {
+  color: #9C312B;
+}
+
+.light [data-kanban] .text-cyan-300,
+.light [data-kanban] .text-cyan-400,
+.light [data-kanban] .text-violet-400,
+.light [data-kanban] .text-fuchsia-300,
+.light [data-kanban] .text-fuchsia-400 {
+  color: #334E3D;
+}
+
+.light [data-calendar] .glass-panel {
+  border-color: #BEC9C2 !important;
+}
+
+.light [data-calendar] .text-slate-300 {
+  color: #202A24;
+}
+
+.light [data-calendar] .text-slate-500 {
+  color: #46534B;
+}
+
+.light [data-calendar] .text-slate-600,
+.light [data-calendar] .opacity-40 {
+  color: #87938B;
+  opacity: 1;
+}
+
+.light [data-calendar] .border-white\/5 {
+  border-color: #BEC9C2;
+}
+
+.light [data-calendar] .bg-white\/\[0\.02\] {
+  background: #F8FAF9;
+}
+
+.light [data-calendar] .bg-cyan-500\/10,
+.light [data-calendar] .bg-cyan-500\/20,
+.light [data-calendar] .bg-cyan-500\/30 {
+  background: #3F684F;
+  border-color: #56735F;
+  box-shadow: none !important;
+}
+
+.light [data-calendar] .bg-cyan-500\/10 .text-cyan-300,
+.light [data-calendar] .bg-cyan-500\/20 .text-cyan-300,
+.light [data-calendar] .bg-cyan-500\/30 .text-cyan-200 {
+  color: #FFFFFF;
+}
+
+.light [data-calendar] button.bg-cyan-500\/15,
+.light [data-calendar] button.bg-cyan-500\/10 {
+  background: #E8E0D6;
+  border-color: #967A60;
+  color: #503D2D;
+}
+
+.light [data-calendar] button.bg-purple-500\/15 {
+  background: #DCE8DF;
+  border-color: #6E9279;
+  color: #294A35;
+}
+
+.light [data-calendar] button.bg-amber-500\/15 {
+  background: #F1DFB5;
+  border-color: #B68A31;
+  color: #614400;
+}
+
+.light [data-calendar] button.bg-rose-500\/15,
+.light [data-calendar] button.bg-fuchsia-500\/15 {
+  background: #EFCBC8;
+  border-color: #BA514A;
+  color: #76221E;
+}
+
+.light [data-project-chats] .glass-panel,
+.light [data-project-chats] .glass-panel-glow {
+  border-color: #AEBDB3 !important;
+  box-shadow: 0 3px 10px rgba(25, 40, 31, 0.10);
+}
+
+.light [data-project-chats] .border-white\/10,
+.light [data-project-chats] .divide-white\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #BDC8C0;
+}
+
+.light [data-project-chats] .border-white\/5 {
+  border-color: #C4CEC7;
+}
+
+.light [data-project-chats] .bg-cyan-500\/10 {
+  background: #E4ECE6;
+  border-color: #56735F;
+}
+
+.light [data-project-chats] .text-white,
+.light [data-project-chats] .text-slate-100 {
+  color: #202A24;
+  font-weight: 600;
+}
+
+.light [data-project-chats] .text-slate-300 {
+  color: #354139;
+}
+
+.light [data-project-chats] .text-slate-400,
+.light [data-project-chats] .text-slate-500 {
+  color: #68766D;
+}
+
+.light [data-project-chats] .text-cyan-200,
+.light [data-project-chats] .text-cyan-300,
+.light [data-project-chats] .hover\:text-cyan-300:hover {
+  color: #334E3D;
+}
+
 /* Sidebar is deliberately warmer and darker than the light workspace, giving
    navigation a stable visual anchor without gradients, glow, or heavy shadow. */
 .light [data-app-sidebar] {
