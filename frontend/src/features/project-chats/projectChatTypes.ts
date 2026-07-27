@@ -1,5 +1,5 @@
 export type DiscussionType = 'General' | 'Progress Update' | 'Blocker' | 'Review Feedback' | 'Clarification' | 'Decision';
-export type DiscussionSort = 'active' | 'newest' | 'oldest' | 'replies';
+export type DiscussionSort = '' | 'newest' | 'oldest' | 'replies';
 
 export interface ChatAttachment {
   id: string;
@@ -43,7 +43,7 @@ export interface DiscussionFilters {
   taskId: string;
   type: string;
   authorId: string;
-  state: 'all' | 'resolved' | 'unresolved';
+  state: '' | 'resolved' | 'unresolved';
   mentionedOnly: boolean;
   mineOnly: boolean;
   from: string;

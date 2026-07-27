@@ -3,6 +3,7 @@ import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddlew
 import { discussionStore, DiscussionType, StoredAttachment } from '../store/discussionStore.js';
 import { projectStore } from '../store/projectStore.js';
 import { userStore } from '../store/userStore.js';
+import * as notificationService from '../notifications/notification.service.js';
 
 const router = Router();
 const TYPES = new Set<DiscussionType>(['General', 'Progress Update', 'Blocker', 'Review Feedback', 'Clarification', 'Decision']);
@@ -42,6 +43,17 @@ const validMentions = (value: unknown, projectId: string, errors: Record<string,
   return ids;
 };
 
+// Fire-and-forget, same convention as project.service.ts/task.service.ts's notifyRecipients --
+// never blocks the HTTP response on notification delivery, and a publish failure is logged, not
+// surfaced to the caller (the discussion/comment/mention itself already succeeded).
+const notify = (recipientIds: string[], event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds'>) => {
+  const ids = Array.from(new Set(recipientIds));
+  if (ids.length === 0) return;
+  notificationService.publishEvent({ ...event, recipientIds: ids }).catch((error) => {
+    console.warn('[projectChatRoutes] Failed to publish notification event.', error);
+  });
+};
+
 router.use(authenticateJWT);
 
 router.get('/', (req: AuthenticatedRequest, res: Response) => {
@@ -74,6 +86,32 @@ router.post('/', (req: AuthenticatedRequest, res: Response) => {
   const checkedAttachments = validAttachments(attachments, errors);
   if (Object.keys(errors).length) return res.status(400).json({ success: false, message: 'Review the highlighted discussion fields.', fieldErrors: errors });
   const thread = discussionStore.createThread({ projectId, taskId, title, type, creatorId: req.user.id, body, mentionIds: checkedMentions, attachments: checkedAttachments });
+
+  const actorName = userStore.findById(req.user.id)?.name || 'Someone';
+  const mentioned = new Set(checkedMentions.filter((id) => id !== req.user!.id));
+  // Everyone else on the project (owner + members) hears a discussion started; anyone
+  // specifically @mentioned gets the more specific "you were mentioned" notification instead,
+  // so nobody gets both for the same message.
+  notify(
+    (project!.memberIds || []).filter((id) => id !== req.user!.id && !mentioned.has(id)),
+    {
+      type: 'chat_new_message',
+      title: 'New Discussion Started',
+      message: `${actorName} started a discussion "${title}" in ${project!.title}.`,
+      actorId: req.user.id,
+      projectId,
+      taskId: taskId || undefined
+    }
+  );
+  notify([...mentioned], {
+    type: 'mention',
+    title: 'You Were Mentioned',
+    message: `${actorName} mentioned you in a new discussion "${title}" in ${project!.title}.`,
+    actorId: req.user.id,
+    projectId,
+    taskId: taskId || undefined
+  });
+
   res.status(201).json({ success: true, data: { ...thread, comments: discussionStore.comments(thread.id) }, notifiedUserIds: checkedMentions.filter((id) => id !== req.user!.id) });
 });
 
@@ -92,6 +130,30 @@ router.post('/:threadId/comments', (req: AuthenticatedRequest, res: Response) =>
   if (Object.keys(errors).length) return res.status(400).json({ success: false, message: 'Review the highlighted reply fields.', fieldErrors: errors });
   const comment = discussionStore.addComment({ threadId: thread.id, parentCommentId, authorId: req.user.id, body, mentionIds: checkedMentions, attachments: checkedAttachments });
   const notifiedUserIds = [...new Set([...checkedMentions, ...(parent && parent.authorId !== req.user.id ? [parent.authorId] : [])])];
+
+  const actorName = userStore.findById(req.user.id)?.name || 'Someone';
+  const mentioned = new Set(checkedMentions.filter((id) => id !== req.user!.id));
+  notify([...mentioned], {
+    type: 'mention',
+    title: 'You Were Mentioned',
+    message: `${actorName} mentioned you in a reply on "${thread.title}".`,
+    actorId: req.user.id,
+    projectId: thread.projectId,
+    taskId: thread.taskId || undefined
+  });
+  // The comment being directly replied to hears about it too, unless they're already covered
+  // by the mention notification above.
+  if (parent && parent.authorId !== req.user.id && !mentioned.has(parent.authorId)) {
+    notify([parent.authorId], {
+      type: 'chat_thread_reply',
+      title: 'New Reply',
+      message: `${actorName} replied to your comment on "${thread.title}".`,
+      actorId: req.user.id,
+      projectId: thread.projectId,
+      taskId: thread.taskId || undefined
+    });
+  }
+
   res.status(201).json({ success: true, data: comment, notifiedUserIds });
 });
 
