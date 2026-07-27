@@ -25,18 +25,20 @@ export const INITIAL_USERS: User[] = [
     avatar: '/assets/images/fazal.png',
     title: 'Managing Director & Operations Oversight',
     status: 'active',
-    lastActive: 'Just now'
+    lastActive: 'Just now',
+    githubUsername: 'FazalKhan-MD'
   },
   {
     id: 'usr-2',
-    name: 'Adolf',
-    email: 'Adolf.h@codoc.com',
+    name: 'Salman Ahmed',
+    email: 'salmanahmed32121@gmail.com',
     role: 'Team_Lead',
-    department: 'IT',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-    title: 'Lead Software Architect',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    title: 'Project Setup & Team Lead',
     status: 'active',
-    lastActive: '2 mins ago'
+    lastActive: 'Just now',
+    githubUsername: 'Salman-ahmed-2'
   },
   {
     id: 'usr-3',
@@ -45,64 +47,106 @@ export const INITIAL_USERS: User[] = [
     role: 'HR',
     department: 'Human Resources & People Ops',
     avatar: '/assets/images/maryam.png',
-    title: 'Head of People Operations',
+    title: 'Authentication & User Selector Specialist',
     status: 'active',
-    lastActive: '10 mins ago'
+    lastActive: '10 mins ago',
+    githubUsername: 'meowryam'
   },
   {
     id: 'usr-4',
-    name: 'Salman Ahmed',
-    email: 'salmanc@codoc.com',
+    name: 'Laiba Inqilab',
+    email: 'laiba.inqilab@codoc.com',
     role: 'Team_Member',
     department: 'Engineering',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-    title: 'Senior Frontend Engineer',
+    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    title: 'Project Management Specialist',
     status: 'active',
-    lastActive: 'Just now'
+    lastActive: '5 mins ago',
+    githubUsername: 'laibainqilab-ds'
   },
   {
     id: 'usr-5',
-    name: 'Liam Gallagher',
-    email: 'liam.g@cyberoffice.io',
+    name: 'Abihaj Ibbran',
+    email: 'abihajibbran1@gmail.com',
     role: 'Team_Member',
-    department: 'Product Design',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    title: 'Lead Product Designer',
-    status: 'away',
-    lastActive: '25 mins ago'
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    title: 'Task Creation Specialist',
+    status: 'active',
+    lastActive: '12 mins ago',
+    githubUsername: 'abihajibbran1-lang'
   },
   {
     id: 'usr-6',
-    name: 'Priya Sharma',
-    email: 'priya.s@cyberoffice.io',
-    role: 'Team_Lead',
-    department: 'AI Research',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-    title: 'AI Product Lead',
+    name: 'Bilal Mughal',
+    email: 'bilal.mughal@codoc.com',
+    role: 'Team_Member',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+    title: 'Task Board Specialist',
     status: 'active',
-    lastActive: '1 hr ago'
+    lastActive: '3 mins ago',
+    githubUsername: 'Bilalmughal-07'
   },
   {
     id: 'usr-7',
-    name: 'Derrick Miller',
-    email: 'derrick.m@cyberoffice.io',
+    name: 'Abdul Azeem Hashmi',
+    email: 'abdulazeemhashmi29@gmail.com',
     role: 'Team_Member',
-    department: 'QA & Infrastructure',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-    title: 'DevOps & Reliability Engineer',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    title: 'Team Members Module Lead (Intern 6)',
     status: 'active',
-    lastActive: 'Just now'
+    lastActive: 'Just now',
+    githubUsername: 'AbdulAzeemHashmi'
   },
   {
     id: 'usr-8',
-    name: 'Aisha Omar',
-    email: 'aisha.o@cyberoffice.io',
-    role: 'HR',
-    department: 'Human Resources & People Ops',
-    avatar: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=150&auto=format&fit=crop&q=80',
-    title: 'HR Compliance Officer',
-    status: 'inactive',
-    lastActive: 'Yesterday'
+    name: 'Taha Sohail',
+    email: 'taha.sohail@codoc.com',
+    role: 'Team_Member',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
+    title: 'Search, Filter & Sorting Specialist',
+    status: 'active',
+    lastActive: '20 mins ago',
+    githubUsername: 'TahaSohail-Goat'
+  },
+  {
+    id: 'usr-9',
+    name: 'Hassaan Ahmed',
+    email: 'hassaan.ahmed@codoc.com',
+    role: 'Team_Member',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
+    title: 'Activity Log Specialist',
+    status: 'active',
+    lastActive: '15 mins ago',
+    githubUsername: 'hassaanahmed-dev'
+  },
+  {
+    id: 'usr-10',
+    name: 'Inshrah Mumtaz',
+    email: 'inshrah.mumtaz@codoc.com',
+    role: 'Team_Member',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+    title: 'Reports Dashboard Specialist',
+    status: 'active',
+    lastActive: '8 mins ago',
+    githubUsername: 'inshrahmumtaz'
+  },
+  {
+    id: 'usr-11',
+    name: 'Muhammad Haris',
+    email: 'muhammad.haris@codoc.com',
+    role: 'Team_Member',
+    department: 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?w=150&auto=format&fit=crop&q=80',
+    title: 'Prompt Builder & Release Specialist',
+    status: 'active',
+    lastActive: '1 hr ago',
+    githubUsername: 'muhammad-haris2'
   }
 ];
 
