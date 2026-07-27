@@ -1210,21 +1210,21 @@
 
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Milestone"],
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Meeting"] {
-  background-color: #466E55;
-  border-color: #31543F;
+  background-color: #2F6689;
+  border-color: #1F4D6B;
   color: #FFFFFF;
 }
 
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Task Due"] {
-  background-color: #8D6F50;
-  border-color: #685038;
+  background-color: #2F6689;
+  border-color: #1F4D6B;
   color: #FFFFFF;
 }
 
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Review"] {
-  background-color: #D3A33D;
-  border-color: #9C6E16;
-  color: #2D2100;
+  background-color: #D19A2D;
+  border-color: #9B6D14;
+  color: #241A00;
 }
 
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Leave"] {
@@ -1240,16 +1240,16 @@
 
 .light [data-calendar-tooltip] [data-status="planning"],
 .light [data-calendar-tooltip] [data-status="low"] {
-  background-color: #5F6B63;
-  border-color: #465149;
+  background-color: #596873;
+  border-color: #3F4D56;
   color: #FFFFFF;
 }
 
 .light [data-calendar-tooltip] [data-status="active"],
 .light [data-calendar-tooltip] [data-status="todo"],
 .light [data-calendar-tooltip] [data-status="medium"] {
-  background-color: #466E55;
-  border-color: #31543F;
+  background-color: #2F6689;
+  border-color: #1F4D6B;
   color: #FFFFFF;
 }
 
@@ -1258,12 +1258,17 @@
 .light [data-calendar-tooltip] [data-status="pending approval"],
 .light [data-calendar-tooltip] [data-status="on hold"],
 .light [data-calendar-tooltip] [data-status="high"] {
-  background-color: #D3A33D;
-  border-color: #9C6E16;
-  color: #2D2100;
+  background-color: #D19A2D;
+  border-color: #9B6D14;
+  color: #241A00;
 }
 
-.light [data-calendar-tooltip] [data-status="review"],
+.light [data-calendar-tooltip] [data-status="review"] {
+  background-color: #D19A2D;
+  border-color: #9B6D14;
+  color: #241A00;
+}
+
 .light [data-calendar-tooltip] [data-status="blocked"],
 .light [data-calendar-tooltip] [data-status="rejected"],
 .light [data-calendar-tooltip] [data-status="failed"],
@@ -1277,7 +1282,7 @@
 .light [data-calendar-tooltip] [data-status="done"],
 .light [data-calendar-tooltip] [data-status="completed"],
 .light [data-calendar-tooltip] [data-status="approved"] {
-  background-color: #4F8C63;
-  border-color: #346847;
+  background-color: #397A51;
+  border-color: #275B3A;
   color: #FFFFFF;
 }
