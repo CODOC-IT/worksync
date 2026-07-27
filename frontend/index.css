@@ -1237,3 +1237,47 @@
   font-weight: 600;
   box-shadow: none !important;
 }
+
+.light [data-calendar-tooltip] [data-status="planning"],
+.light [data-calendar-tooltip] [data-status="low"] {
+  background-color: #5F6B63;
+  border-color: #465149;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-status="active"],
+.light [data-calendar-tooltip] [data-status="todo"],
+.light [data-calendar-tooltip] [data-status="medium"] {
+  background-color: #466E55;
+  border-color: #31543F;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-status="in progress"],
+.light [data-calendar-tooltip] [data-status="pending"],
+.light [data-calendar-tooltip] [data-status="pending approval"],
+.light [data-calendar-tooltip] [data-status="on hold"],
+.light [data-calendar-tooltip] [data-status="high"] {
+  background-color: #D3A33D;
+  border-color: #9C6E16;
+  color: #2D2100;
+}
+
+.light [data-calendar-tooltip] [data-status="review"],
+.light [data-calendar-tooltip] [data-status="blocked"],
+.light [data-calendar-tooltip] [data-status="rejected"],
+.light [data-calendar-tooltip] [data-status="failed"],
+.light [data-calendar-tooltip] [data-status="cancelled"],
+.light [data-calendar-tooltip] [data-status="urgent"] {
+  background-color: #A9322D;
+  border-color: #82241F;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-status="done"],
+.light [data-calendar-tooltip] [data-status="completed"],
+.light [data-calendar-tooltip] [data-status="approved"] {
+  background-color: #4F8C63;
+  border-color: #346847;
+  color: #FFFFFF;
+}
