@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
 import { UserRole } from '../../types';
 import { Sparkles, Lock, Mail, User as UserIcon, Building2, Briefcase, Eye, EyeOff, ArrowRight, AlertCircle, Shield, Check, X } from 'lucide-react';
@@ -288,19 +288,12 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
               <p className="text-xs text-slate-400 mt-1">Fill in your profile details to join WorkSync</p>
             </div>
 
-            <AnimatePresence mode="wait">
-              {errorMsg && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0, y: -6 }}
-                  animate={{ opacity: 1, height: 'auto', y: 0 }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 overflow-hidden"
-                >
-                  <AlertCircle size={16} className="shrink-0 text-rose-400 animate-pulse" />
-                  <span>{errorMsg}</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {errorMsg && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 overflow-hidden">
+                <AlertCircle size={16} className="shrink-0 text-rose-400 animate-pulse" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
 
             <form id="signup-form" onSubmit={handleSignupSubmit} className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -372,50 +365,42 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
               </div>
 
               {/* Conditional Department & Job Title — Only for Team Lead & Team Member */}
-              <AnimatePresence>
-                {isLeadOrMember && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="space-y-3 overflow-hidden"
-                  >
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* Department */}
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-slate-300 block">Department</label>
-                        <div className="relative">
-                          <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                          <select
-                            value={department}
-                            onChange={(e) => setDepartment(e.target.value)}
-                            className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all appearance-none"
-                          >
-                            <option value="Engineering" className="bg-slate-900">Engineering</option>
-                            <option value="IT" className="bg-slate-900">IT</option>
-                            <option value="Human Resources & People Ops" className="bg-slate-900">Human Resources</option>
-                            <option value="Executive Operations" className="bg-slate-900">Executive Ops</option>
-                            <option value="AI Research" className="bg-slate-900">AI Research</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Title */}
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-slate-300 block">Job Title / Designation</label>
-                        <input
-                          type="text"
-                          value={title}
-                          onChange={(e) => setTitle(e.target.value)}
-                          placeholder="Full Stack Developer"
-                          className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all"
-                        />
+              {isLeadOrMember && (
+                <div className="space-y-3 overflow-hidden">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Department */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-slate-300 block">Department</label>
+                      <div className="relative">
+                        <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <select
+                          value={department}
+                          onChange={(e) => setDepartment(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all appearance-none"
+                        >
+                          <option value="Engineering" className="bg-slate-900">Engineering</option>
+                          <option value="IT" className="bg-slate-900">IT</option>
+                          <option value="Human Resources & People Ops" className="bg-slate-900">Human Resources</option>
+                          <option value="Executive Operations" className="bg-slate-900">Executive Ops</option>
+                          <option value="AI Research" className="bg-slate-900">AI Research</option>
+                        </select>
                       </div>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+
+                    {/* Title */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-slate-300 block">Job Title / Designation</label>
+                      <input
+                        type="text"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Full Stack Developer"
+                        className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Password & Confirm Password */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
