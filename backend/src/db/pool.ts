@@ -1,31 +1,50 @@
 import { Pool, QueryResult, QueryResultRow } from 'pg';
+import { isSupabaseServiceConfigured, getSupabaseServiceClient } from './supabase.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Single shared connection pool for the whole backend. Only the Notification
-// Module uses this today (see backend/src/notifications/) — every other
-// backend module (auth, OTP, AI Assistant) still uses its own in-memory or
-// file-backed store, per docs/ProjectAnalysis.md. This file exists so any
-// future module needing real Postgres access has one place to get it,
-// rather than each module opening its own pool.
+function resolveDbUrl(): string {
+  return process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL || '';
+}
+
+function resolveSupabaseProjectUrl(): string {
+  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+}
+
 let pool: Pool | null = null;
 
-export const isDatabaseConfigured = (): boolean => Boolean(process.env.DATABASE_URL);
+export const isDatabaseConfigured = (): boolean => Boolean(resolveDbUrl());
+export const isSupabaseAvailable = (): boolean => isSupabaseServiceConfigured() || isDatabaseConfigured();
 
 export const getPool = (): Pool => {
   if (!pool) {
-    if (!isDatabaseConfigured()) {
+    const dbUrl = resolveDbUrl();
+    if (!dbUrl) {
+      const hasSupabaseProject = Boolean(resolveSupabaseProjectUrl());
       throw new Error(
-        'DATABASE_URL is not configured. Apply database/setup.sql to a PostgreSQL instance ' +
-        'and set DATABASE_URL in your .env file before using Notification Module persistence.'
+        'DATABASE_URL is not configured.\n\n' +
+        (hasSupabaseProject
+          ? 'A Supabase project URL is configured. To connect:\n' +
+            '1. Go to Supabase Dashboard > Project Settings > Database\n' +
+            '2. Copy the Connection Pooling URI (Session mode, port 5432)\n' +
+            '3. Set it as DATABASE_URL in your .env file\n'
+          : 'Set DATABASE_URL to your PostgreSQL connection string in your .env file.\n' +
+            'If using Supabase, also set SUPABASE_URL or VITE_SUPABASE_URL.')
       );
     }
-    pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
   }
   return pool;
 };
 
-// Test-only seam: lets notification.repository.test.ts inject a pg-mem-backed Pool instead of
-// opening a real connection, so repository/service logic can be verified against the actual
-// notify.* schema DDL without a live Postgres instance. Never called from production code.
+export const getSupabaseClient = (): SupabaseClient | null => {
+  if (!isSupabaseServiceConfigured()) return null;
+  try {
+    return getSupabaseServiceClient();
+  } catch {
+    return null;
+  }
+};
+
 export const setPoolForTesting = (customPool: Pool): void => {
   pool = customPool;
 };
@@ -33,18 +52,42 @@ export const resetPoolForTesting = (): void => {
   pool = null;
 };
 
-// Thin query helper — every repository in this backend should go through this
-// (rather than importing `pg` directly) so connection lifecycle/config stays
-// centralized in one place.
+export const bootstrapDatabase = async (): Promise<void> => {
+  const dbUrl = resolveDbUrl();
+  if (!dbUrl) return;
+
+  const bootPool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  try {
+    await bootPool.query(`
+      INSERT INTO org.Organizations (OrganizationId, OrganizationCode, OrganizationName)
+      OVERRIDING SYSTEM VALUE
+      VALUES (1, 'WORKSYNC', 'WorkSync Inc.')
+      ON CONFLICT (OrganizationId) DO NOTHING
+    `);
+
+    await bootPool.query(`
+      INSERT INTO iam.Roles (RoleCode, RoleName, IsSystemRole, IsTemporary, Description)
+      VALUES
+        ('Administrator', 'Administrator', TRUE, FALSE, 'Organization-wide administration'),
+        ('TeamMember', 'Team Member', TRUE, FALSE, 'Standard authenticated user'),
+        ('TeamLead', 'Temporary Team Lead', TRUE, TRUE, 'Project-scoped temporary responsibility'),
+        ('HRRepresentative', 'Temporary HR Representative', TRUE, TRUE, 'Attendance-scoped temporary responsibility')
+      ON CONFLICT (RoleCode) DO NOTHING
+    `);
+
+    console.log('[Database] Bootstrap seeding complete ✓');
+  } catch (err: any) {
+    console.warn(`[Database] Bootstrap seed skipped (tables may not exist yet): ${err.message}`);
+  } finally {
+    await bootPool.end();
+  }
+};
+
 export const query = <T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[]
 ): Promise<QueryResult<T>> => getPool().query<T>(text, params);
 
-// Runs `work` inside a single client checked out from the pool, wrapped in a
-// transaction (BEGIN/COMMIT/ROLLBACK) — used by the notification repository
-// for its "create one Notification + fan out N UserNotifications" write,
-// which must be atomic.
 export const withTransaction = async <T>(
   work: (runQuery: typeof query) => Promise<T>
 ): Promise<T> => {
