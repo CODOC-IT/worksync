@@ -52,9 +52,15 @@ import {
   toTaskFormInput
 } from '../features/tasks/taskMutations';
 import {
+  approveTaskViaApi,
+  changeTaskStatusViaApi,
   createTaskViaApi,
-  loadTasksFromApi
+  deleteTaskViaApi,
+  loadTasksFromApi,
+  rejectTaskViaApi,
+  updateTaskViaApi
 } from '../features/tasks/taskRepository';
+import { fetchProjects as fetchProjectsApi } from '../features/projects/projectRepository';
 import {
   SendNotificationInput,
   sendNotification,
@@ -130,17 +136,14 @@ interface AppState {
     taskId: string,
     newStatus: TaskStatus,
     extraInfo?: {
-      workSummary?: string;
-      completionSummary?: string;
-      blockerReason?: string;
-      reopenReason?: string;
-      // Project Board fields: `note` is the mandatory reason shown in the board's
-      // status-change modal and is recorded on Task.statusHistory. `reviewDecision`
-      // marks the change as an explicit Team Lead/Admin Approve or Reject action.
+      // `note` is the mandatory reason shown in the board's status-change modal, persisted to
+      // work.TaskStatusHistory server-side. `reviewDecision` routes the call to the dedicated
+      // Approve/Reject endpoints instead of the generic status-change one (see task.service.ts
+      // -- Review -> Done must always go through an explicit reviewer decision).
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
     }
-  ) => { success: boolean; message: string };
+  ) => Promise<{ success: boolean; message: string }>;
   proposeControlledEdit: (taskId: string, field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status', newValue: string, reason: string) => void;
   approveApprovalItem: (approvalId: string) => void;
   rejectApprovalItem: (approvalId: string, reason?: string) => void;
@@ -310,7 +313,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Same pattern as hydrateTasks above: on mount, replace the mock INITIAL_PROJECTS with the
+    // real work.Projects rows from the backend (see backend/src/projects/). Falls back to the
+    // existing mock data (console warning only) if there's no reachable backend/session yet --
+    // matches loadTasksFromApi's exact behavior for the same reason (no login yet, backend not
+    // running). This fallback covers the *read* path only; every project mutation below has no
+    // such fallback, per this module's "never fake success" requirement.
+    const hydrateProjects = async () => {
+      try {
+        const remoteProjects = await fetchProjectsApi();
+        if (isActive) setProjects(remoteProjects);
+      } catch (error) {
+        console.warn('Project API request failed; continuing with local project data.', error);
+      }
+    };
+
     void hydrateTasks();
+    void hydrateProjects();
 
     return () => {
       isActive = false;
@@ -1035,136 +1054,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // The Project Board module always supplies `extraInfo.note` (validated as non-empty by
     // its own status-change modal); `reviewDecision` is set only when a Team Lead/Admin is
     // resolving a task that's Pending review approval.
-    const updateTaskStatus = (
+    // Real backend call — the Kanban board's one and only mutation path. No optimistic local
+    // update: `tasks` state only changes once the server confirms the transition (writes
+    // work.TaskStatusHistory + work.Tasks.TaskStatusId in one transaction and publishes the
+    // notification event itself — see task.service.ts). A failed call leaves `tasks` untouched
+    // and returns success: false so the board can show a real, retryable error instead of ever
+    // pretending the move happened.
+    const updateTaskStatus = async (
       taskId: string,
       newStatus: TaskStatus,
       extraInfo?: {
-        workSummary?: string;
-        completionSummary?: string;
-        blockerReason?: string;
-        reopenReason?: string;
         note?: string;
         reviewDecision?: 'Approve' | 'Reject';
       }
-    ): { success: boolean; message: string } => {
+    ): Promise<{ success: boolean; message: string }> => {
       const task = tasks.find((t) => t.id === taskId);
       if (!task) return { success: false, message: 'Task not found.' };
 
-      const note = extraInfo?.note?.trim();
-      const historyEntry: TaskStatusHistoryEntry | null = note
-        ? {
-          id: `tsh-${Date.now()}`,
-          fromStatus: task.status,
-          toStatus: newStatus,
-          note,
-          changedBy: currentUser.id,
-          changedByName: currentUser.name,
-          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
-        }
-        : null;
+      const note = extraInfo?.note?.trim() || '';
 
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== taskId) return t;
-          return {
-            ...t,
-            status: newStatus,
-            workSummary: extraInfo?.workSummary ?? t.workSummary,
-            completionSummary: extraInfo?.completionSummary ?? t.completionSummary,
-            blockerReason: extraInfo?.blockerReason ?? t.blockerReason,
-            reopenReason: extraInfo?.reopenReason ?? t.reopenReason,
-            // Entering Review always opens a pending approval decision; leaving Review by any
-            // path (drag, dropdown, or an Approve/Reject decision) resolves/clears it.
-            reviewApproval: newStatus === 'Review' ? 'Pending' : undefined,
-            statusHistory: historyEntry ? [...(t.statusHistory || []), historyEntry] : t.statusHistory
-          };
-        })
-      );
+      try {
+        const updated =
+          extraInfo?.reviewDecision === 'Approve'
+            ? await approveTaskViaApi(taskId, note)
+            : extraInfo?.reviewDecision === 'Reject'
+              ? await rejectTaskViaApi(taskId, note)
+              : await changeTaskStatusViaApi(taskId, newStatus, note);
 
-      const activityAction =
-        extraInfo?.reviewDecision === 'Approve'
-          ? 'Approved task review'
-          : extraInfo?.reviewDecision === 'Reject'
-            ? 'Rejected task review'
-            : `Moved task to ${newStatus}`;
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
 
-      pushActivity(activityAction, 'Task', taskId, task.title, {
-        field: 'status',
-        oldVal: task.status,
-        newVal: newStatus
-      });
+        const activityAction =
+          extraInfo?.reviewDecision === 'Approve'
+            ? 'Approved task review'
+            : extraInfo?.reviewDecision === 'Reject'
+              ? 'Rejected task review'
+              : `Moved task to ${newStatus}`;
+        pushActivity(activityAction, 'Task', taskId, task.title, {
+          field: 'status',
+          oldVal: task.status,
+          newVal: newStatus
+        });
 
-      const project = projects.find((p) => p.id === task.projectId);
-      const baseRecipients = resolveTaskRecipients({ task, project, excludeUserId: currentUser.id });
+        const successMessage =
+          extraInfo?.reviewDecision === 'Approve'
+            ? `You approved "${task.title}" successfully. It has been moved to Done.`
+            : extraInfo?.reviewDecision === 'Reject'
+              ? `You rejected "${task.title}" successfully. It has been returned to In Progress.`
+              : newStatus === 'Review'
+                ? `You moved "${task.title}" to Review successfully.`
+                : `You moved "${task.title}" to ${newStatus} successfully.`;
+        confirmActionSuccess('Status Updated', successMessage);
 
-      if (extraInfo?.reviewDecision === 'Approve') {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_review_approved',
-          title: 'Task Approved',
-          message: `${currentUser.name} approved "${task.title}" — moved from Review to Done in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'kanban',
-          projectId: task.projectId,
-          taskId
-        });
-        confirmActionSuccess('Task Approved', `You approved "${task.title}" successfully. It has been moved to Done.`);
-      } else if (extraInfo?.reviewDecision === 'Reject') {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_review_rejected',
-          title: 'Task Returned for Revision',
-          message: `${currentUser.name} rejected "${task.title}" — moved from Review back to In Progress in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'kanban',
-          projectId: task.projectId,
-          taskId
-        });
-        confirmActionSuccess('Task Rejected', `You rejected "${task.title}" successfully. It has been returned to In Progress.`);
-      } else if (newStatus === 'Review') {
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(project?.teamLeadId, currentUser.id),
-          type: 'task_review_requested',
-          title: 'Review Requested',
-          message: `${currentUser.name} moved "${task.title}" from ${task.status} to Review in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'kanban',
-          projectId: task.projectId,
-          taskId
-        });
-        confirmActionSuccess('Review Requested', `You moved "${task.title}" to Review successfully.`);
-      } else if (newStatus === 'Done') {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_completed',
-          title: 'Task Completed',
-          message: `${currentUser.name} marked "${task.title}" as Done in ${project?.title || 'the project'} (was ${task.status}).`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'kanban',
-          projectId: task.projectId,
-          taskId
-        });
-        confirmActionSuccess('Task Completed', `You marked "${task.title}" as Done successfully.`);
-      } else {
-        dispatchNotifications({
-          recipientIds: baseRecipients,
-          type: 'task_status_changed',
-          title: 'Task Status Changed',
-          message: `${currentUser.name} moved "${task.title}" from ${task.status} to ${newStatus} in ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'kanban',
-          projectId: task.projectId,
-          taskId
-        });
-        confirmActionSuccess('Status Updated', `You moved "${task.title}" to ${newStatus} successfully.`);
+        return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
+      } catch (error: any) {
+        console.error('Failed to update task status.', error);
+        return { success: false, message: error?.message || 'Failed to update task status. Please try again.' };
       }
-
-      return { success: true, message: `"${task.title}" moved to ${newStatus}.` };
     };
 
     // Controlled Field Edits (Team Member submits -> TL/Admin approves)
