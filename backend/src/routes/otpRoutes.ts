@@ -100,7 +100,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
 
     res.status(200).json({
       success: true,
-      message: `Verification code sent to ${email}. Valid for 10 minutes.`
+      message: `Verification code sent to ${email}. Valid for 1 minute.`
     });
   } catch (error: any) {
     console.error('[OTP Send Error]', error.message);

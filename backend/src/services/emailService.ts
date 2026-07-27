@@ -64,7 +64,7 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
                 </div>
               </div>
               <p style="color:#64748b;font-size:13px;line-height:1.6;margin:0 0 8px;text-align:center;">
-                ⏱ This code expires in <strong style="color:#f59e0b;">10 minutes</strong>
+                ⏱ This code expires in <strong style="color:#f59e0b;">1 minute</strong>
               </p>
               <p style="color:#64748b;font-size:13px;line-height:1.6;margin:0;text-align:center;">
                 🔒 Do not share this code with anyone

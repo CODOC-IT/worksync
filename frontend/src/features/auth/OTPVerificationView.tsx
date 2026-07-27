@@ -275,7 +275,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
 
           {/* Expiry note */}
           <p className="text-xs text-slate-600 text-center mt-4">
-            Code expires in 10 minutes · Single use only
+            Code expires in 1 minute · Single use only
           </p>
         </div>
       </motion.div>
