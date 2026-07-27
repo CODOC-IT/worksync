@@ -104,22 +104,22 @@
     color-scheme: light;
 
     /* Slate palette — inverted for light mode */
-    --shade-slate-50: #14211d;
-    --shade-slate-100: #26352f;
-    --shade-slate-200: #3d4b45;
-    --shade-slate-300: #55645e;
-    --shade-slate-400: #718078;
-    --shade-slate-500: #8d9a93;
-    --shade-slate-600: #b4beb8;
-    --shade-slate-700: #d3dbd6;
-    --shade-slate-800: #e7ece8;
-    --shade-slate-900: #f4f7f4;
-    --shade-slate-950: #fdfefd;
-    --shade-white: #14211d;
+    --shade-slate-50: #17201B;
+    --shade-slate-100: #202A24;
+    --shade-slate-200: #2E3A33;
+    --shade-slate-300: #3F4B44;
+    --shade-slate-400: #5E6B63;
+    --shade-slate-500: #718078;
+    --shade-slate-600: #9DAAA2;
+    --shade-slate-700: #CCD5CF;
+    --shade-slate-800: #E0E6E2;
+    --shade-slate-900: #F1F4F2;
+    --shade-slate-950: #F8FAF9;
+    --shade-white: #17201B;
 
     --bg-canvas: #F1F5F0;
-    --surface-glass: rgba(255, 255, 255, 0.96);
-    --surface-glass-border: #d7e0da;
+    --surface-glass: #F8FAF9;
+    --surface-glass-border: #BCC8C0;
     --neon-cyan: #5F806B;
     --neon-violet: #6D837A;
     --neon-magenta: #a34a67;
@@ -141,15 +141,15 @@
     --tone-secondary-500: #718C80;
     --tone-secondary-600: #5D756A;
     --tone-secondary-950: #31483E;
-    --tone-warning-300: #d6b36e;
-    --tone-warning-400: #bd913f;
-    --tone-warning-500: #a87826;
-    --tone-success-300: #88bba3;
-    --tone-success-400: #609b7f;
-    --tone-success-500: #477e65;
-    --tone-danger-300: #d49aa8;
-    --tone-danger-400: #bd7487;
-    --tone-danger-500: #a85b70;
+    --tone-warning-300: #604000;
+    --tone-warning-400: #7A5000;
+    --tone-warning-500: #B88318;
+    --tone-success-300: #205A34;
+    --tone-success-400: #3E7B52;
+    --tone-success-500: #57936A;
+    --tone-danger-300: #781F1B;
+    --tone-danger-400: #9E2924;
+    --tone-danger-500: #A9322D;
   }
 
   body {
@@ -204,46 +204,52 @@
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border: 1px solid var(--surface-glass-border);
-  box-shadow: 0 1px 2px rgba(20, 33, 29, 0.05), 0 6px 18px rgba(20, 33, 29, 0.035);
+  box-shadow: 0 3px 10px rgba(25, 40, 31, 0.10);
 }
 
 .light .glass-button-neon {
-  background: var(--tone-accent-600);
-  border-color: var(--tone-accent-400);
-  box-shadow: 0 2px 6px rgba(44, 64, 51, 0.16);
+  background: #3F684F;
+  border-color: #31543F;
+  box-shadow: 0 3px 8px rgba(25, 40, 31, 0.16);
   color: #ffffff;
   font-weight: 700;
 }
 
+.light [class*="bg-slate-900"],
+.light [class*="bg-slate-800"] {
+  background-color: #F1F4F2;
+  border-color: #CCD5CF;
+}
+
 .light .glass-button-neon:hover {
-  background: var(--tone-accent-700);
-  border-color: var(--tone-accent-700);
-  box-shadow: 0 3px 8px rgba(44, 64, 51, 0.2);
+  background: #31543F;
+  border-color: #284634;
+  box-shadow: 0 3px 8px rgba(25, 40, 31, 0.2);
   transform: none;
 }
 
 .light .text-gradient-neon {
   background: none;
   -webkit-text-fill-color: currentColor;
-  color: var(--tone-accent-600);
+  color: #202A24;
 }
 
 .light .text-transparent {
-  color: var(--tone-accent-600);
+  color: #202A24;
   -webkit-text-fill-color: currentColor;
 }
 
 .light .bg-gradient-to-r,
 .light .bg-gradient-to-tr {
   background-image: none;
-  background-color: color-mix(in srgb, var(--tone-accent-100) 56%, var(--surface-glass));
+  background-color: #F1F4F2;
 }
 
 .light [class*="shadow-[0_0"],
 .light .shadow-2xl,
 .light .shadow-xl,
 .light .shadow-lg {
-  box-shadow: 0 4px 14px rgba(20, 33, 29, 0.08) !important;
+  box-shadow: 0 3px 10px rgba(25, 40, 31, 0.10) !important;
 }
 
 .light .cursor-glow-container::before {
@@ -253,24 +259,118 @@
 .light input,
 .light select,
 .light textarea {
+  background-color: #FFFFFF;
   box-shadow: none;
-  border-color: #CBD7CE;
+  border-color: #BCC8C0;
+}
+
+.light .text-cyan-300,
+.light .text-cyan-400,
+.light .text-cyan-500,
+.light .text-purple-300,
+.light .text-purple-400,
+.light .text-purple-500 {
+  color: #3F4B44;
 }
 
 .light input:hover,
 .light select:hover,
 .light textarea:hover {
-  border-color: #9DB4A2;
+  border-color: #87998E;
 }
 
 .light :focus-visible {
-  outline: 2px solid rgba(95, 128, 107, 0.42);
+  outline: 2px solid rgba(63, 104, 79, 0.30);
   outline-offset: 2px;
 }
 
 .light .font-mono:not(pre):not(code) {
   font-family: var(--font-sans);
   letter-spacing: normal;
+}
+
+/* Light-mode semantic states remain high contrast across all feature modules. */
+.light .bg-amber-500\/10,
+.light .bg-amber-500\/15,
+.light .bg-amber-500\/20 {
+  background-color: #F4D98A;
+}
+
+.light .text-amber-200,
+.light .text-amber-300,
+.light .text-amber-400,
+.light .text-amber-500 {
+  color: #5A3B00;
+}
+
+.light .border-amber-400\/30,
+.light .border-amber-500\/20,
+.light .border-amber-500\/30,
+.light .border-amber-500\/40 {
+  border-color: #B88318;
+}
+
+.light .bg-emerald-500\/10,
+.light .bg-emerald-500\/15,
+.light .bg-emerald-500\/20 {
+  background-color: #C8E5D1;
+}
+
+.light .text-emerald-200,
+.light .text-emerald-300,
+.light .text-emerald-400,
+.light .text-emerald-500 {
+  color: #205A34;
+}
+
+.light .border-emerald-500\/20,
+.light .border-emerald-500\/30,
+.light .border-emerald-500\/40 {
+  border-color: #57936A;
+}
+
+.light .bg-rose-500\/5,
+.light .bg-rose-500\/10,
+.light .bg-rose-500\/15,
+.light .bg-rose-500\/20 {
+  background-color: #F7C5C1;
+}
+
+.light .text-rose-200,
+.light .text-rose-300,
+.light .text-rose-400,
+.light .text-rose-500,
+.light .text-pink-300,
+.light .text-pink-400,
+.light .text-pink-500 {
+  color: #781F1B;
+}
+
+.light .border-rose-500\/20,
+.light .border-rose-500\/30,
+.light .border-rose-500\/40,
+.light .border-rose-500\/60 {
+  border-color: #C94A43;
+}
+
+.light .bg-rose-500.text-white {
+  background-color: #A9322D;
+  border-color: #82241F;
+  color: #FFFFFF;
+}
+
+.light .bg-rose-500.text-white:hover {
+  background-color: #8D2924;
+}
+
+.light [data-ai-assistant] .glass-button-neon {
+  background: #344C5A;
+  border-color: #293E49;
+}
+
+.light [data-ai-assistant] .glass-button-neon:hover {
+  background: #293E49;
+  border-color: #293E49;
 }
 
 /* Sidebar is deliberately warmer and darker than the light workspace, giving
@@ -354,16 +454,6 @@
   background: rgba(168, 91, 112, 0.16);
   border-color: rgba(210, 138, 134, 0.28);
   color: #f0bbb5;
-}
-
-.light .bg-amber-500\/15,
-.light .bg-amber-500\/20 {
-  background-color: #FFF5DD;
-}
-
-.light .border-amber-500\/30,
-.light .border-amber-500\/40 {
-  border-color: #D8B264;
 }
 
 .text-gradient-neon {
