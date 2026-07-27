@@ -14,6 +14,34 @@
   --color-slate-900: var(--shade-slate-900);
   --color-slate-950: var(--shade-slate-950);
   --color-white: var(--shade-white);
+  --color-cyan-50: var(--tone-accent-50);
+  --color-cyan-100: var(--tone-accent-100);
+  --color-cyan-200: var(--tone-accent-200);
+  --color-cyan-300: var(--tone-accent-300);
+  --color-cyan-400: var(--tone-accent-400);
+  --color-cyan-500: var(--tone-accent-500);
+  --color-cyan-600: var(--tone-accent-600);
+  --color-cyan-700: var(--tone-accent-700);
+  --color-cyan-800: var(--tone-accent-800);
+  --color-cyan-900: var(--tone-accent-900);
+  --color-cyan-950: var(--tone-accent-950);
+  --color-purple-300: var(--tone-secondary-300);
+  --color-purple-400: var(--tone-secondary-400);
+  --color-purple-500: var(--tone-secondary-500);
+  --color-purple-600: var(--tone-secondary-600);
+  --color-purple-950: var(--tone-secondary-950);
+  --color-amber-300: var(--tone-warning-300);
+  --color-amber-400: var(--tone-warning-400);
+  --color-amber-500: var(--tone-warning-500);
+  --color-emerald-300: var(--tone-success-300);
+  --color-emerald-400: var(--tone-success-400);
+  --color-emerald-500: var(--tone-success-500);
+  --color-rose-300: var(--tone-danger-300);
+  --color-rose-400: var(--tone-danger-400);
+  --color-rose-500: var(--tone-danger-500);
+  --color-pink-300: var(--tone-danger-300);
+  --color-pink-400: var(--tone-danger-400);
+  --color-pink-500: var(--tone-danger-500);
 }
 
 @layer base {
@@ -44,31 +72,83 @@
     --neon-magenta: #ff007f;
     --neon-amber: #ffaa00;
     --neon-emerald: #00ff88;
+    --tone-accent-50: #ecfeff;
+    --tone-accent-100: #cffafe;
+    --tone-accent-200: #a5f3fc;
+    --tone-accent-300: #67e8f9;
+    --tone-accent-400: #22d3ee;
+    --tone-accent-500: #06b6d4;
+    --tone-accent-600: #0891b2;
+    --tone-accent-700: #0e7490;
+    --tone-accent-800: #155e75;
+    --tone-accent-900: #164e63;
+    --tone-accent-950: #083344;
+    --tone-secondary-300: #c4b5fd;
+    --tone-secondary-400: #a78bfa;
+    --tone-secondary-500: #8b5cf6;
+    --tone-secondary-600: #7c3aed;
+    --tone-secondary-950: #2e1065;
+    --tone-warning-300: #fcd34d;
+    --tone-warning-400: #fbbf24;
+    --tone-warning-500: #f59e0b;
+    --tone-success-300: #6ee7b7;
+    --tone-success-400: #34d399;
+    --tone-success-500: #10b981;
+    --tone-danger-300: #fda4af;
+    --tone-danger-400: #fb7185;
+    --tone-danger-500: #f43f5e;
   }
 
   .light {
     color-scheme: light;
 
     /* Slate palette — inverted for light mode */
-    --shade-slate-50: #0f172a;
-    --shade-slate-100: #1e293b;
-    --shade-slate-200: #334155;
-    --shade-slate-300: #475569;
-    --shade-slate-400: #64748b;
-    --shade-slate-500: #94a3b8;
-    --shade-slate-600: #cbd5e1;
-    --shade-slate-700: #e2e8f0;
-    --shade-slate-800: #f1f5f9;
-    --shade-slate-900: #f8fafc;
-    --shade-slate-950: #ffffff;
-    --shade-white: #0f172a;
+    --shade-slate-50: #14211d;
+    --shade-slate-100: #26352f;
+    --shade-slate-200: #3d4b45;
+    --shade-slate-300: #55645e;
+    --shade-slate-400: #718078;
+    --shade-slate-500: #8d9a93;
+    --shade-slate-600: #b4beb8;
+    --shade-slate-700: #d3dbd6;
+    --shade-slate-800: #e7ece8;
+    --shade-slate-900: #f4f7f4;
+    --shade-slate-950: #fdfefd;
+    --shade-white: #14211d;
 
-    --bg-canvas: #f1f4f9;
-    --surface-glass: rgba(255, 255, 255, 0.92);
-    --surface-glass-border: rgba(0, 0, 0, 0.12);
-    --neon-cyan: #0088cc;
-    --neon-violet: #6b21a8;
-    --neon-magenta: #c026d3;
+    --bg-canvas: #f3f6f2;
+    --surface-glass: rgba(255, 255, 255, 0.96);
+    --surface-glass-border: #d7e0da;
+    --neon-cyan: #276f82;
+    --neon-violet: #4f7d87;
+    --neon-magenta: #a34a67;
+    --neon-amber: #a76d1a;
+    --neon-emerald: #36735a;
+    --tone-accent-50: #eef8f8;
+    --tone-accent-100: #d8eef0;
+    --tone-accent-200: #b7dfe3;
+    --tone-accent-300: #83c8d0;
+    --tone-accent-400: #4c9eaa;
+    --tone-accent-500: #2f7f8d;
+    --tone-accent-600: #276b79;
+    --tone-accent-700: #245866;
+    --tone-accent-800: #244954;
+    --tone-accent-900: #223e47;
+    --tone-accent-950: #132c33;
+    --tone-secondary-300: #a5c2c8;
+    --tone-secondary-400: #719aa4;
+    --tone-secondary-500: #527d88;
+    --tone-secondary-600: #426873;
+    --tone-secondary-950: #243c43;
+    --tone-warning-300: #d6b36e;
+    --tone-warning-400: #bd913f;
+    --tone-warning-500: #a87826;
+    --tone-success-300: #88bba3;
+    --tone-success-400: #609b7f;
+    --tone-success-500: #477e65;
+    --tone-danger-300: #d49aa8;
+    --tone-danger-400: #bd7487;
+    --tone-danger-500: #a85b70;
   }
 
   body {
@@ -113,6 +193,70 @@
   border-color: color-mix(in srgb, var(--neon-cyan) 85%, transparent);
   box-shadow: 0 0 20px color-mix(in srgb, var(--neon-cyan) 40%, transparent);
   transform: translateY(-1px);
+}
+
+/* Shared light-mode treatment. Existing modules keep their layout and utility
+   classes while inheriting calmer surfaces, borders, and interaction states. */
+.light .glass-panel,
+.light .glass-panel-glow {
+  background: var(--surface-glass);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid var(--surface-glass-border);
+  box-shadow: 0 1px 2px rgba(20, 33, 29, 0.05), 0 6px 18px rgba(20, 33, 29, 0.035);
+}
+
+.light .glass-button-neon {
+  background: var(--tone-accent-600);
+  border-color: var(--tone-accent-600);
+  box-shadow: none;
+  color: #ffffff;
+}
+
+.light .glass-button-neon:hover {
+  background: var(--tone-accent-700);
+  border-color: var(--tone-accent-700);
+  box-shadow: none;
+  transform: none;
+}
+
+.light .text-gradient-neon {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--tone-accent-600);
+}
+
+.light .text-transparent {
+  color: var(--tone-accent-600);
+  -webkit-text-fill-color: currentColor;
+}
+
+.light .bg-gradient-to-r,
+.light .bg-gradient-to-tr {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--tone-accent-100) 56%, var(--surface-glass));
+}
+
+.light [class*="shadow-[0_0"],
+.light .shadow-2xl,
+.light .shadow-xl,
+.light .shadow-lg {
+  box-shadow: 0 4px 14px rgba(20, 33, 29, 0.08) !important;
+}
+
+.light .cursor-glow-container::before {
+  display: none;
+}
+
+.light input,
+.light select,
+.light textarea {
+  box-shadow: none;
+}
+
+.light :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tone-accent-500) 70%, transparent);
+  outline-offset: 2px;
 }
 
 .text-gradient-neon {
@@ -202,6 +346,18 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--neon-cyan) 50%, transparent);
+}
+
+.light ::-webkit-scrollbar-track {
+  background: #edf2ee;
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: #b3c0b8;
+}
+
+.light ::-webkit-scrollbar-thumb:hover {
+  background: #7d9186;
 }
 
 /* Mobile sidebar overlay animation */
