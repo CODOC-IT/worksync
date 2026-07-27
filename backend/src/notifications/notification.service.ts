@@ -1,6 +1,6 @@
 import * as repo from './notification.repository.js';
 import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.js';
-import { toUserPk, fromUserPk } from './idMapping.js';
+import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
 import {
   NotificationDTO,

@@ -1,4 +1,4 @@
-import { fromProjectPk, fromTaskPk, fromUserPk } from './idMapping.js';
+import { fromProjectPk, fromTaskPk, fromUserPk } from '../utils/idMapping.js';
 import { ApiPriority, DbPriority, NotificationCategory, NotificationDTO, NotificationType } from './notification.types.js';
 
 // One row per notification, already joined against NotificationTypes (for TypeCode/

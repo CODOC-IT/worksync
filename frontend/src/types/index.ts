@@ -12,7 +12,10 @@ export interface User {
   lastActive?: string;
 }
 
-export type ProjectStatus = 'Active' | 'Archived' | 'Pending Approval' | 'Completed';
+// 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that
+// have no prior frontend representation — added so the backend project API (see
+// backend/src/projects/) never has to lose information mapping a real DB status to the UI.
+export type ProjectStatus = 'Draft' | 'Active' | 'On Hold' | 'Archived' | 'Pending Approval' | 'Completed';
 
 export interface Milestone {
   id: string;

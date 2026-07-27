@@ -6,6 +6,18 @@ file only covers what's specific to notifications. The module implements
 `nostification_Module_PRD.md` (v1.0) — read that for the full requirements this guide traces
 back to.
 
+> **Update (`feature/backend-project-board-notification`)**: §3's "Not modified" list below
+> (Project Management, Task Creation, the Project Board's own UI) describes PR #70's scope at
+> the time — it is no longer current for Project/Task. That follow-up branch gave Project and
+> Task their own real backend modules (`backend/src/projects/`, `backend/src/tasks/`) which now
+> publish their own events **server-side**, in-process, via this module's
+> `notificationService.publishEvent()` (the same pattern `assistantRoutes.ts` established, listed
+> in the integration-hooks table below) — the frontend `dispatchNotifications` calls §9 describes
+> for Project/Task/Board triggers were removed as part of that migration (they would otherwise
+> double-publish every event). Every other module's integration point (§9's Attendance/Break/
+> Reports/Chat/AI hooks, all still frontend `dispatchNotifications` calls) is unchanged. See
+> `docs/ProjectBoardNotification_Implementation_Notes.md` for the full detail.
+
 ## 1. Purpose
 
 Deliver role-scoped, in-app notifications (plus bottom-right toasts) whenever a tracked event
@@ -103,6 +115,7 @@ Also touched (additively — see §12 for the frontend diff shape, and §10 for 
 | `frontend/App.tsx` | Added the `currentTab === 'notifications'` render case (was an empty stub, unreachable — same situation Kanban/Approvals were in before their branches); mounted `<ToastContainer />` once at the app-shell level |
 | `backend/src/server.ts` | Mounted `notification.routes.ts` at `/api/notifications` |
 | `backend/src/routes/assistantRoutes.ts` | Minimal integration hook: calls `notification.service.publishEvent()` in-process after a saved prompt (see §9) |
+| `backend/src/projects/project.service.ts`, `backend/src/tasks/task.service.ts` | (`feature/backend-project-board-notification`) Same in-process `publishEvent()` pattern as `assistantRoutes.ts`, now the real source of every Project/Task event — supersedes the frontend `dispatchNotifications` calls those triggers used to make |
 | `database/18_notify_seed.sql` (new) | Seed data only — `iam.Users`/`work.Projects`/`work.Tasks` rows to satisfy `notify.*`'s FK constraints, plus every `notify.NotificationTypes` row (existing + new Attendance/Break/Report/Chat/AI codes). No `CREATE TABLE`/`ALTER TABLE` — the schema itself is untouched, per the explicit "do not redesign the schema" constraint |
 | `backend/src/db/pool.ts` (new) | Shared `pg` connection pool + `withTransaction`, with a `setPoolForTesting`/`resetPoolForTesting` seam used only by `notification.repository.test.ts` |
 

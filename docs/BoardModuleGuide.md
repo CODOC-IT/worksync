@@ -4,6 +4,14 @@ Everything a developer needs to extend the Project Board without re-reading the 
 Read `ProjectAnalysis.md` first for general architecture; this file only covers what's
 specific to the board.
 
+> **Update (`feature/backend-project-board-notification`)**: The board is no longer a
+> frontend-only prototype. Sections below written as "no Postgres write path yet"/"frontend
+> memory only" describe the state *before* this branch — see §5 and §9 for the corrected data
+> flow, §12/§13 for what moved out of "current limitations," and
+> `docs/ProjectBoardNotification_Implementation_Notes.md` for the full design writeup. The
+> board's UI/interaction model (columns, drag-and-drop, mandatory-reason modal, approval gate)
+> is unchanged — only what happens when you drop a card changed.
+
 ## 1. Purpose
 
 A role-scoped Kanban view of tasks per project: `Todo → In Progress → Review → Done`, with
@@ -31,7 +39,8 @@ module), sending real notifications (Notification module), authentication, user 
 | `frontend/src/features/kanban/KanbanView.tsx` | The board screen (was an empty stub before this branch) |
 | `frontend/src/features/kanban/boardAccess.ts` | Pure, colocated permission/scoping helpers (new) |
 | `frontend/src/types/index.ts` | Added `TaskStatusHistoryEntry`, `ReviewApprovalStatus`, and two optional fields on `Task` |
-| `frontend/src/store/AppContext.tsx` | Extended the pre-existing (previously unused) `updateTaskStatus` action to append history + drive the approval state machine |
+| `frontend/src/store/AppContext.tsx` | `updateTaskStatus` is now `async` and calls the real `PATCH /api/tasks/:id/status` (or `/approve`/`/reject`) endpoint — no local history/state mutation, `tasks` only updates from the server's response |
+| `backend/src/tasks/task.service.ts` | `changeTaskStatus`/`approveTask`/`rejectTask` — server-side status-machine enforcement, `work.TaskStatusHistory` insert, and notification publish, all in one DB transaction |
 | `frontend/App.tsx` | Added the `currentTab === 'kanban'` and `currentTab === 'approvals'` render cases |
 | `frontend/src/components/layout/Sidebar.tsx` | **Not modified** — the `kanban`/`approvals` nav entries already existed |
 | `frontend/src/features/tasks/taskRules.ts` | **Not modified** — `canEditTask`, `isTaskOverdue`, `getTaskStartDate` are imported/reused as-is |
@@ -59,23 +68,34 @@ wasn't requested.
 
 ```
 AppContext (tasks, projects, users, currentRole, currentUser)
+  -- tasks/projects hydrated from GET /api/tasks / GET /api/projects on mount --
         │
         ▼
 KanbanView.tsx
   ├─ getAccessibleProjects(role, userId, projects)   → project switcher options
   ├─ tasks.filter(projectId === selected)             → per-column task lists
-  ├─ canEditTask(role, userId, project, task)          → can this card be dragged?
-  ├─ canDecideReview(role, userId, project)             → show Approve/Reject?
+  ├─ canEditTask(role, userId, project, task)          → can this card be dragged? (client-side
+  │                                                       UX only -- the backend independently
+  │                                                       re-derives the same rule server-side)
+  ├─ canDecideReview(role, userId, project)             → show Approve/Reject? (same caveat)
   └─ on drop / dropdown change / Approve / Reject:
-        → opens <StatusChangeModal> (mandatory textarea)
+        → opens <StatusChangeModal> (mandatory textarea), disabled/"Saving..." while in flight
         → on submit: useApp().updateTaskStatus(taskId, newStatus, { note, reviewDecision })
-              → AppContext appends a TaskStatusHistoryEntry, updates task.status /
-                task.reviewApproval, calls the existing pushActivity() so the entry shows
-                up in the Activity Log module for free.
+              → PATCH /api/tasks/:id/status (or /approve, /reject)
+              → task.service.ts: assertCanEditTask/isProjectLead (real authorization) →
+                validates the transition → one DB transaction: updates work.Tasks.TaskStatusId
+                + inserts work.TaskStatusHistory → publishes the notification event → responds
+                with the updated task
+              → AppContext replaces that one task in `tasks` with the server's response (never
+                before the response arrives -- no optimistic update) → pushActivity() logs it
+                locally → modal closes only on success; on failure the modal stays open with
+                the real error and the note the user typed, so they can retry.
 ```
 
-No new global state, no new Context, no localStorage — the board is 100% derived from the
-existing `AppContext` tasks/projects arrays, consistent with every other module.
+No new global state, no new Context, no localStorage — the board still only reads from the
+`AppContext` `tasks`/`projects` arrays, same as every other module. What changed is where those
+arrays' *content* comes from (the real API, not just seed data) and where a status change is
+*decided* (the backend, not a local reducer).
 
 ## 6. Board Architecture
 
@@ -131,12 +151,18 @@ persisted:
    The **Update Status** button is disabled/blocked until the textarea is non-empty
    (client-side) — mirrors the mandatory-reason UX from the reference `board.js`.
 4. On submit, `AppContext.updateTaskStatus(taskId, newStatus, { note })` runs, which:
-   - Appends a `TaskStatusHistoryEntry` (`fromStatus`, `toStatus`, `note`, `changedBy`,
-     `changedByName`, `timestamp`) to `task.statusHistory`.
-   - Sets `task.status = newStatus`.
-   - Logs an Activity Log entry via the existing `pushActivity` helper.
-   - Shows a toast-style success `notice` (matches the pattern already used by
-     `TasksView`/`ProjectsView` for consistency, rather than inventing a new toast component).
+   - Calls `PATCH /api/tasks/:id/status` (real API, no local fallback). `task.service.ts`
+     re-validates authorization and the transition itself server-side, then in one DB
+     transaction: updates `work.Tasks.TaskStatusId` and inserts a `work.TaskStatusHistory` row
+     (`FromTaskStatusId`, `ToTaskStatusId`, `ChangedByUserId`, `ProgressNote`, `ChangedAtUtc`),
+     then publishes the corresponding notification event.
+   - On success, replaces that task in `AppContext`'s `tasks` array with the server's response
+     (never before it arrives) and logs an Activity Log entry via `pushActivity`.
+   - On failure, `tasks` is left completely untouched, the modal stays open with the note the
+     user typed and a real error message, and nothing is shown as if it had succeeded.
+   - Shows a toast-style success `notice` only once the server has confirmed the change (matches
+     the pattern already used by `TasksView`/`ProjectsView` for consistency, rather than
+     inventing a new toast component).
 
 ## 10. Drag & Drop Workflow
 
@@ -197,33 +223,40 @@ portal is required for correctness, not just convenience.
 - `Blocked`-status tasks are not surfaced on the board (see §8).
 - No drag-to-reorder within a column (matches the reference implementation; only
   cross-column moves change anything).
-- Approval/status-history state lives only in frontend memory (`AppContext`), like every
-  other module in this prototype — no Postgres write path yet, even though
-  `work.TaskStatusHistory` already models exactly this on the DB side.
-- No real-time multi-user sync (single browser session/state).
+- No real-time multi-user sync — another user's change lands next time this browser's `tasks`
+  array is re-fetched (page load / manual refresh), not via a live socket/subscription. The
+  data is real and shared (Postgres), the *sync* is still pull-based.
 - The board doesn't yet expose bulk actions (e.g. multi-select move).
+- ~~Approval/status-history state lives only in frontend memory~~ — resolved by
+  `feature/backend-project-board-notification`: every status change is persisted to
+  `work.Tasks`/`work.TaskStatusHistory` via the real API (see §5/§9).
 
 ## 13. Future Enhancements / Extension Points
 
 - Auto-approve when a Team Lead/Admin moves their *own* project's task through Review
   themselves (currently always requires the explicit Approve click — see §11).
-- Persist `TaskStatusHistoryEntry`/`reviewApproval` to `work.TaskStatusHistory` once a
-  write-capable backend exists (schema is already there).
 - Column-level WIP limits, swimlanes by assignee, saved board filters.
 - Surface `Blocked` tasks as a collapsible fifth lane or an overlay badge once the Task module
   finalizes its blocker UX.
+- Real-time sync (websocket/SSE push instead of the current re-fetch-on-load model) so a
+  second user's move shows up without a manual refresh.
+- ~~Persist `TaskStatusHistoryEntry`/`reviewApproval` to `work.TaskStatusHistory` once a
+  write-capable backend exists~~ — done, see §5/§9.
 
 ## 14. Expected Integration with the Notification Module
 
-Not implemented here per the brief ("do not implement notification functionality"), but the
-hook point is intentionally the same one every other module already uses:
-`AppContext`'s `pushActivity(...)` call inside `updateTaskStatus` already fires for every
-board status change (including Approve/Reject). A future Notification module can either (a)
-subscribe to new `ActivityLogItem`s with `targetType === 'Task'`, or (b) call
-`AppContext`'s existing `notifications` setter from inside `updateTaskStatus` the same way
-`createProject`/`submitHRRequest` already do — e.g. notify the task's assignees when a status
-changes, and notify the project's Team Lead specifically when `reviewApproval` becomes
-`'Pending'`. No board-specific plumbing is required; the integration point already exists.
+**Implemented** (this was written when the brief said "do not implement notification
+functionality" — that changed once the Notification Module backend was built in PR #70 and this
+branch wired Project/Task events into it). The hook point ended up being server-side, not the
+frontend `pushActivity` path originally anticipated below: `task.service.ts`'s
+`changeTaskStatus`/`approveTask`/`rejectTask` call `notificationService.publishEvent()` directly,
+in the same DB transaction as the status/history update, for `task_status_changed`/
+`task_review_requested`/`task_review_approved`/`task_review_rejected` — including notifying the
+project's Team Lead specifically when a task enters `Review`, exactly as anticipated below. The
+frontend's `dispatchNotifications` is *not* called for any of these anymore (see
+`docs/ProjectBoardNotification_Implementation_Notes.md`) — the paragraph that originally lived
+here describing a frontend-side `pushActivity`/`notifications`-setter hook point is superseded by
+this server-side one.
 
 ## 15. Expected Integration with the Task Module
 

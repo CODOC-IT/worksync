@@ -17,7 +17,9 @@ import {
   CheckCircle2,
   Target,
   Paperclip,
-  StickyNote
+  StickyNote,
+  Check,
+  AlertCircle
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
@@ -82,15 +84,19 @@ export const ProjectsView: React.FC = () => {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [form, setForm] = useState<ProjectFormState>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formNotice, setFormNotice] = useState('');
 
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [fileError, setFileError] = useState('');
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const teamLeads = users.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
   const assignableMembers = users.filter((u) => u.role === 'Team_Member');
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const canCreate = currentRole === 'Team_Lead';
+  const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
   const canManage = (project: Project) =>
     currentRole === 'Admin' || (currentRole === 'Team_Lead' && project.teamLeadId === currentUser.id);
 
@@ -144,6 +150,7 @@ export const ProjectsView: React.FC = () => {
   const closeForm = () => {
     setFormOpen(false);
     setEditingProjectId(null);
+    setFormNotice('');
   };
 
   const toggleMember = (userId: string) => {
@@ -263,7 +270,8 @@ export const ProjectsView: React.FC = () => {
     return errors;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (formSubmitting) return;
     const errors = validate(form);
     setFormErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -281,22 +289,43 @@ export const ProjectsView: React.FC = () => {
       creationReason: form.creationReason.trim() || undefined
     };
 
-    if (formMode === 'create') {
-      // Team Lead creation is fully automatic: always created as Pending Approval
-      createProject(data);
-    } else if (editingProjectId) {
-      updateProject(editingProjectId, { ...data, status: form.status });
-    }
+    setFormSubmitting(true);
+    setFormNotice('');
+    try {
+      // Real backend call -- the form only closes once the server confirms the change. On
+      // failure the modal stays open with the real error so the user can retry (no fake success).
+      const result =
+        formMode === 'create'
+          ? await createProject(data)
+          : editingProjectId
+            ? await updateProject(editingProjectId, { ...data, status: form.status })
+            : { success: false, message: 'No project selected to update.' };
 
-    closeForm();
+      if (!result.success) {
+        setFormNotice(result.message);
+        return;
+      }
+
+      setNotice({ type: 'success', message: result.message });
+      closeForm();
+    } finally {
+      setFormSubmitting(false);
+    }
   };
 
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
 
-  const confirmDelete = () => {
-    if (deleteTargetId) deleteProject(deleteTargetId);
-    setDeleteTargetId(null);
+  const confirmDelete = async () => {
+    if (!deleteTargetId || deleteSubmitting) return;
+    setDeleteSubmitting(true);
+    try {
+      const result = await deleteProject(deleteTargetId);
+      setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.success) setDeleteTargetId(null);
+    } finally {
+      setDeleteSubmitting(false);
+    }
   };
 
   return (
@@ -318,6 +347,25 @@ export const ProjectsView: React.FC = () => {
           </button>
         )}
       </div>
+
+      {notice && (
+        <div
+          role="status"
+          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
+            notice.type === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            {notice.type === 'success' ? <Check size={16} /> : <AlertCircle size={16} />}
+            {notice.message}
+          </span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss message">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Search + Status Filter */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -647,20 +695,35 @@ export const ProjectsView: React.FC = () => {
                 />
               </div>
 
-              {formMode === 'create' && (
+              {formMode === 'create' && currentRole === 'Team_Lead' && (
                 <p className="text-slate-500 flex items-center gap-1.5">
                   <CheckCircle2 size={12} className="text-cyan-400 shrink-0" />
                   This project will be created as Pending Approval until an Admin approves it.
                 </p>
               )}
+
+              {formNotice && (
+                <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-300">
+                  <AlertCircle size={13} className="shrink-0" />
+                  {formNotice}
+                </div>
+              )}
             </div>
 
             <div className="p-4 border-t border-white/10 flex items-center justify-end gap-2 bg-slate-900/40">
-              <button onClick={closeForm} className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5">
+              <button
+                onClick={closeForm}
+                disabled={formSubmitting}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
+              >
                 Cancel
               </button>
-              <button onClick={handleSubmit} className="px-4 py-2 rounded-xl glass-button-neon text-xs font-bold">
-                {formMode === 'create' ? 'Create Project' : 'Save Changes'}
+              <button
+                onClick={handleSubmit}
+                disabled={formSubmitting}
+                className="px-4 py-2 rounded-xl glass-button-neon text-xs font-bold disabled:opacity-60"
+              >
+                {formSubmitting ? 'Saving...' : formMode === 'create' ? 'Create Project' : 'Save Changes'}
               </button>
             </div>
           </div>
@@ -683,7 +746,7 @@ export const ProjectsView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
                     This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                    Deleting it will permanently delete {relatedTasks.length !== 1 ? 'them' : 'it'} too.
+                    The project will be archived (not permanently erased) and its tasks will remain untouched.
                   </p>
                   <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
                     {relatedTasks.map((t) => (
@@ -694,7 +757,7 @@ export const ProjectsView: React.FC = () => {
                   </ul>
                 </div>
               ) : (
-                <p className="text-xs text-slate-400">This action cannot be undone.</p>
+                <p className="text-xs text-slate-400">The project will be archived. This cannot be undone from here.</p>
               )
             ) : (
               <p className="text-xs text-slate-400">
@@ -704,15 +767,23 @@ export const ProjectsView: React.FC = () => {
             )}
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
-              <button onClick={() => setDeleteTargetId(null)} className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5">
+              <button
+                onClick={() => setDeleteTargetId(null)}
+                disabled={deleteSubmitting}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
+              >
                 Cancel
               </button>
-              <button onClick={confirmDelete} className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40">
-                {currentRole === 'Admin'
-                  ? relatedTasks.length > 0
-                    ? `Delete Project & ${relatedTasks.length} Task${relatedTasks.length !== 1 ? 's' : ''}`
-                    : 'Delete Project'
-                  : 'Request Deletion'}
+              <button
+                onClick={confirmDelete}
+                disabled={deleteSubmitting}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 disabled:opacity-60"
+              >
+                {deleteSubmitting
+                  ? 'Working...'
+                  : currentRole === 'Admin'
+                    ? 'Delete Project'
+                    : 'Request Deletion'}
               </button>
             </div>
           </div>
