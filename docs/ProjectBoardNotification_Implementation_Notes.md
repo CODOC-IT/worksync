@@ -92,6 +92,37 @@ imports it first.
 - [x] Full verification pass (tsc, build) — backend has no automated test suite in this repo
 - [ ] Push branch / open or update PR (pending explicit user go-ahead)
 
+## Bugs found via live testing after the frontend-refactor commit
+
+Three real bugs surfaced by manually testing the Team_Lead role end-to-end (not caught by `tsc`/
+build/the existing test suite, since none of them exercise `project.service.ts` directly):
+
+1. **A Team Lead locked out of their own self-created project.** `insertProject` only gives the
+   creator a `'TeamLead'` ProjectMembers row when the lead is a *different* person than the
+   owner — when they're the same (the normal case: a Team Lead making their own project), the
+   creator only gets an `'Owner'` row. `isProjectLead`/`assertCanManage` required an explicit
+   `'TeamLead'` row and had no owner-fallback, so that Team Lead couldn't create tasks, edit, or
+   archive the very project the UI correctly showed them leading. Fixed by adding
+   `project.mapper.ts`'s `resolveTeamLeadUserId(row, members)` (owner-fallback, matching what
+   `rowToProjectDTO` already used for display) and calling it from both authorization checks
+   instead of a raw `'TeamLead'`-only lookup.
+2. **`memberIds` excluded a non-Owner Team Lead.** Only `'Member'`/`'Owner'` rows counted toward
+   `ProjectDTO.memberIds` — an Admin-created project with someone else assigned as the (non-owner)
+   Team Lead meant that Team Lead never appeared in their own project's assignable-member list.
+   Fixed by including `'TeamLead'` in that filter too.
+3. **Missing "Project Deletion Requested" notification to Admins.** The prior commit removed
+   `dispatchNotifications` calls from every Project Module mutation on the assumption that
+   `project.service.ts` now publishes the equivalent event server-side — true for
+   create/update/archive, but **not** for a Team Lead's deletion *request*, which is a purely
+   local `SystemApproval` write (the real archive only happens once an Admin approves it via
+   `approveProjectDeletion`). That branch never calls the backend, so it has no server-side
+   notification to rely on — restored the `dispatchNotifications` call for this one path.
+
+All three verified live: Adolf (seeded Team_Lead) created a project, was activated by Admin,
+then successfully created a task on it (previously 403'd); the project's `memberIds` included
+him; and a deletion request from Adolf produced a real, persisted `Project Deletion Requested`
+notification in Fazal's (Admin) `/api/notifications` list.
+
 ## Project/Task frontend refactor (AppContext.tsx / ProjectsView.tsx / TasksView.tsx)
 
 `createProject`/`approveProject`/`rejectProject`/`updateProject`/`deleteProject`/
