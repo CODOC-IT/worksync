@@ -5,7 +5,7 @@ import authRoutes from './routes/authRoutes.js';
 import assistantRoutes from './routes/assistantRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
-import taskRoutes from './routes/taskRoutes.js';
+import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
 import notificationRoutes from './notifications/notification.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';

@@ -77,13 +77,37 @@ export const listProjectsForUser = async (userId: string, role: string): Promise
   );
 };
 
+const isMemberOfRow = (row: ProjectRow, members: ProjectMemberRow[], userId: string): boolean =>
+  members.some((member) => fromUserPk(member.userid) === userId) || fromUserPk(row.owneruserid) === userId;
+
+// Shared with task.service.ts (a task's project-level access = its parent project's access —
+// there's no separate task-level ACL in the schema) so Task Module authorization stays
+// consistent with Project Module authorization without duplicating the membership query.
+export const isProjectAccessible = async (projectId: string, userId: string, role: string): Promise<boolean> => {
+  if (role === 'Admin') return true;
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) return false;
+  const members = await repo.findMembersForProject(row.projectid);
+  return isMemberOfRow(row, members, userId);
+};
+
+// Whether `userId` leads (or, as Admin, may act on) the given project — used by task.service.ts
+// to gate task status-change review Approve/Reject the same way Project updates are gated.
+export const isProjectLead = async (projectId: string, userId: string, role: string): Promise<boolean> => {
+  if (role === 'Admin') return true;
+  if (role !== 'Team_Lead') return false;
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) return false;
+  const members = await repo.findMembersForProject(row.projectid);
+  return members.some((member) => member.memberrolecode === 'TeamLead' && fromUserPk(member.userid) === userId);
+};
+
 export const getProjectForUser = async (projectId: string, userId: string, role: string): Promise<ProjectDTO> => {
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
 
   const members = await repo.findMembersForProject(row.projectid);
-  const isMember = members.some((member) => fromUserPk(member.userid) === userId) || fromUserPk(row.owneruserid) === userId;
-  if (role !== 'Admin' && !isMember) {
+  if (role !== 'Admin' && !isMemberOfRow(row, members, userId)) {
     throw new ProjectAuthorizationError('You do not have access to this project.');
   }
 
