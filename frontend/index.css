@@ -526,11 +526,6 @@
   border-color: #C5D0C9;
 }
 
-.light [data-kanban] [data-kanban-column="review"] {
-  background: #F8F1F0;
-  border-color: #C56A64 !important;
-}
-
 .light [data-kanban] [data-kanban-column="review"] .text-violet-400,
 .light [data-kanban] [data-kanban-column="review"] .text-purple-400 {
   color: #9C312B;
