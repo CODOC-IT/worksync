@@ -81,7 +81,7 @@ const sidebarContent = (
               </div>
             </div>
             <div>
-              <span className="font-bold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
+              <span data-sidebar-brand className="font-bold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
                 Worksync
               </span>
               <p className="text-[10px] text-slate-400 font-mono tracking-wider">OFFICE CORE</p>
@@ -136,6 +136,8 @@ const sidebarContent = (
             return (
               <button
                 key={item.id}
+                data-sidebar-nav
+                data-active={isActive}
                 onClick={() => {
                   onTabChange(item.id);
                   onMobileClose();
@@ -188,6 +190,7 @@ const sidebarContent = (
       {/* Footer / Logout */}
       <div className="p-3 border-t border-white/10 shrink-0">
         <button
+          data-sidebar-logout
           onClick={() => onTabChange('login')}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 border border-transparent transition-colors"
           title={collapsed ? 'Switch / Logout' : undefined}
@@ -211,6 +214,7 @@ const sidebarContent = (
 
       {/* Mobile Drawer (fixed, slides in from left) - visible only on mobile when open */}
       <aside
+        data-app-sidebar
         className={`
           lg:hidden fixed left-0 top-0 z-50 h-screen flex flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-transform duration-300
           ${collapsed ? 'w-20' : 'w-64'}
@@ -222,6 +226,7 @@ const sidebarContent = (
 
       {/* Desktop Sidebar - always visible on large screens */}
       <aside
+        data-app-sidebar
         className={`
           hidden lg:flex relative z-30 h-screen flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-all duration-300 shrink-0
           ${collapsed ? 'w-20' : 'w-64'}

@@ -290,7 +290,7 @@ export const AIAssistantView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div data-ai-assistant className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
           <Sparkles size={22} />

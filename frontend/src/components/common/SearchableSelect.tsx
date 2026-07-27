@@ -60,7 +60,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} data-searchable-select className="relative">
       <button
         type="button"
         onClick={() => { if (!disabled) setOpen(!open); }}
