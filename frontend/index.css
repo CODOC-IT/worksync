@@ -1208,7 +1208,12 @@
   color: #FFFFFF;
 }
 
-.light [data-calendar-tooltip] [data-calendar-entry-kind="Milestone"],
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Milestone"] {
+  background-color: #A54B72;
+  border-color: #7D3152;
+  color: #FFFFFF;
+}
+
 .light [data-calendar-tooltip] [data-calendar-entry-kind="Meeting"] {
   background-color: #2F6689;
   border-color: #1F4D6B;
@@ -1246,10 +1251,15 @@
 }
 
 .light [data-calendar-tooltip] [data-status="active"],
-.light [data-calendar-tooltip] [data-status="todo"],
 .light [data-calendar-tooltip] [data-status="medium"] {
   background-color: #2F6689;
   border-color: #1F4D6B;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-status="todo"] {
+  background-color: #397A51;
+  border-color: #275B3A;
   color: #FFFFFF;
 }
 
@@ -1301,7 +1311,12 @@
   color: #FFFFFF !important;
 }
 
-.light [data-calendar] [data-calendar-entry-kind="Milestone"],
+.light [data-calendar] [data-calendar-entry-kind="Milestone"] {
+  background-color: #A54B72 !important;
+  border-color: #7D3152 !important;
+  color: #FFFFFF !important;
+}
+
 .light [data-calendar] [data-calendar-entry-kind="Task Due"],
 .light [data-calendar] [data-calendar-entry-kind="Meeting"] {
   background-color: #2F6689 !important;
