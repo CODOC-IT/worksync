@@ -24,5 +24,6 @@ SET TIME ZONE 'UTC';
 \ir 17_seed.sql
 \ir 18_notify_seed.sql
 \ir 19_notify_enhancements.sql
+\ir 20_project_members_backfill.sql
 
 COMMIT;
