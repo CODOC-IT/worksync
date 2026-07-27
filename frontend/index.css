@@ -979,14 +979,20 @@
   background-image: none !important;
 }
 
-:root:not(.light) [data-login-page] .blur-3xl,
-:root:not(.light) [data-login-page] [class*="shadow-[0_0"] {
+:root:not(.light) [data-login-page] .blur-3xl {
   display: none;
 }
 
 :root:not(.light) [data-login-page] .bg-black\/40,
 :root:not(.light) [data-login-page] .bg-slate-950\/80 {
   background-color: #1B201D;
+  border-color: #3D4740;
+}
+
+:root:not(.light) [data-login-page] .bg-slate-900\/70,
+:root:not(.light) [data-login-page] .bg-slate-900\/60,
+:root:not(.light) [data-login-page] .bg-slate-900\/80 {
+  background-color: #222724;
   border-color: #3D4740;
 }
 
