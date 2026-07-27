@@ -259,6 +259,83 @@
   outline-offset: 2px;
 }
 
+/* Sidebar is deliberately warmer and darker than the light workspace, giving
+   navigation a stable visual anchor without gradients, glow, or heavy shadow. */
+.light [data-app-sidebar] {
+  background: #3F3730;
+  border-color: #554B42 !important;
+  box-shadow: none !important;
+}
+
+.light [data-app-sidebar] .border-white\/10,
+.light [data-app-sidebar] .border-white\/5 {
+  border-color: #554B42;
+}
+
+.light [data-app-sidebar] .text-slate-400,
+.light [data-app-sidebar] .text-slate-500 {
+  color: #BFB5A9;
+}
+
+.light [data-app-sidebar] .text-slate-300,
+.light [data-app-sidebar] .text-slate-200,
+.light [data-app-sidebar] .text-white {
+  color: #F5F1EA;
+}
+
+.light [data-app-sidebar] .text-cyan-300,
+.light [data-app-sidebar] .text-cyan-400,
+.light [data-app-sidebar] .text-purple-300,
+.light [data-app-sidebar] .text-purple-400 {
+  color: #F5F1EA;
+}
+
+.light [data-app-sidebar] .bg-slate-950,
+.light [data-app-sidebar] .bg-gradient-to-r,
+.light [data-app-sidebar] .bg-gradient-to-tr,
+.light [data-app-sidebar] .bg-white\/\[0\.02\],
+.light [data-app-sidebar] .bg-white\/5,
+.light [data-app-sidebar] .bg-white\/10,
+.light [data-app-sidebar] .bg-cyan-500\/10 {
+  background-color: #4B423A;
+}
+
+.light [data-app-sidebar] [data-sidebar-nav] {
+  border-color: transparent;
+  color: #BFB5A9;
+  box-shadow: none !important;
+}
+
+.light [data-app-sidebar] [data-sidebar-nav]:hover {
+  background: #4B423A;
+  color: #F5F1EA;
+}
+
+.light [data-app-sidebar] [data-sidebar-nav][data-active="true"] {
+  background: #596354;
+  border-color: #596354;
+  color: #F5F1EA;
+}
+
+.light [data-app-sidebar] [data-sidebar-nav][data-active="true"] > div {
+  background: #F5F1EA;
+  box-shadow: none;
+}
+
+.light [data-app-sidebar] [data-sidebar-nav] svg {
+  color: currentColor;
+}
+
+.light [data-app-sidebar] [data-sidebar-logout] {
+  color: #d28a86;
+}
+
+.light [data-app-sidebar] [data-sidebar-logout]:hover {
+  background: rgba(168, 91, 112, 0.16);
+  border-color: rgba(210, 138, 134, 0.28);
+  color: #f0bbb5;
+}
+
 .text-gradient-neon {
   background: linear-gradient(135deg, #00f2fe 0%, #4facfe 50%, #00ff88 100%);
   -webkit-background-clip: text;
