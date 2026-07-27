@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import assistantRoutes from './routes/assistantRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
+import reportsRoutes from './routes/reportsRoutes.js';
+import taskRoutes from './routes/taskRoutes.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
 
 dotenv.config();
@@ -21,6 +23,8 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/assistant', assistantRoutes);
 app.use('/api/otp', otpRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/tasks', taskRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

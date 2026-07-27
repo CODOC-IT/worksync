@@ -179,7 +179,7 @@ export interface HRRequest {
 
 export interface SystemApproval {
   id: string;
-  type: 'Project_Creation' | 'Task_Creation' | 'Controlled_Edit';
+  type: 'Project_Creation' | 'Project_Deletion' | 'Task_Creation' | 'Controlled_Edit';
   targetId: string;
   targetTitle: string;
   requestedBy: string;

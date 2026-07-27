@@ -75,6 +75,7 @@ export const TasksView: React.FC = () => {
   } = useApp();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [viewingTask, setViewingTask] = useState<Task | null>(null);
@@ -202,8 +203,10 @@ export const TasksView: React.FC = () => {
     setFieldErrors((current) => ({ ...current, assigneeIds: '' }));
   };
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (isSubmitting) return;
+
     const clientErrors = validateTaskInput(
       form,
       selectedProject,
@@ -216,46 +219,53 @@ export const TasksView: React.FC = () => {
       return;
     }
 
-    const existingTask = editingTaskId
-      ? tasks.find((task) => task.id === editingTaskId)
-      : undefined;
-    const isMemberStatusOnly = Boolean(existingTask && currentRole === 'Team_Member');
-    const result = editingTaskId
-      ? updateTask(
-          editingTaskId,
-          isMemberStatusOnly
-            ? { status: form.status }
-            : {
-                title: form.title,
-                description: form.description,
-                priority: form.priority as TaskModulePriority,
-                startDate: form.startDate,
-                dueDate: form.dueDate,
-                assigneeId: form.assigneeIds[0],
-                assigneeIds: form.assigneeIds,
-                status: form.status
-              }
-        )
-      : createTask({
-          projectId: form.projectId,
-          title: form.title,
-          description: form.description,
-          priority: form.priority as TaskModulePriority,
-          startDate: form.startDate,
-          dueDate: form.dueDate,
-          assigneeId: form.assigneeIds[0],
-          assigneeIds: form.assigneeIds,
-          status: form.status
-        });
+    setIsSubmitting(true);
+    try {
+      const existingTask = editingTaskId
+        ? tasks.find((task) => task.id === editingTaskId)
+        : undefined;
+      const isMemberStatusOnly = Boolean(existingTask && currentRole === 'Team_Member');
+      const result = await (
+        editingTaskId
+          ? updateTask(
+              editingTaskId,
+              isMemberStatusOnly
+                ? { status: form.status }
+                : {
+                    title: form.title,
+                    description: form.description,
+                    priority: form.priority as TaskModulePriority,
+                    startDate: form.startDate,
+                    dueDate: form.dueDate,
+                    assigneeId: form.assigneeIds[0],
+                    assigneeIds: form.assigneeIds,
+                    status: form.status
+                  }
+            )
+          : createTask({
+              projectId: form.projectId,
+              title: form.title,
+              description: form.description,
+              priority: form.priority as TaskModulePriority,
+              startDate: form.startDate,
+              dueDate: form.dueDate,
+              assigneeId: form.assigneeIds[0],
+              assigneeIds: form.assigneeIds,
+              status: form.status
+            })
+      );
 
-    if (!result.success) {
-      setFieldErrors(result.fieldErrors || {});
-      setNotice({ type: 'error', message: result.message });
-      return;
+      if (!result.success) {
+        setFieldErrors(result.fieldErrors || {});
+        setNotice({ type: 'error', message: result.message });
+        return;
+      }
+
+      resetForm();
+      setNotice({ type: 'success', message: result.message });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    resetForm();
-    setNotice({ type: 'success', message: result.message });
   };
 
   const handleDelete = (task: Task) => {
@@ -543,9 +553,15 @@ export const TasksView: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold"
+              disabled={isSubmitting}
+              className="glass-button-neon inline-flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {editingTaskId ? 'Save changes' : 'Create task'}
+              {isSubmitting && <LoaderCircle size={14} className="animate-spin" />}
+              {isSubmitting
+                ? 'Saving...'
+                : editingTaskId
+                  ? 'Save changes'
+                  : 'Create task'}
             </button>
           </div>
         </form>
