@@ -83,10 +83,72 @@ imports it first.
 - [x] Read ProjectAnalysis.md, BoardModuleGuide.md, Notification PRD, README.md
 - [x] Confirmed PR #70 merged to main; branched `feature/backend-project-board-notification`
 - [x] Documented schema mapping + architecture decision (this file)
-- [ ] Project CRUD API (`GET/POST/PUT/DELETE /api/projects`, members sub-resource)
-- [ ] Task API migration to Postgres + missing endpoints (status/history/approve/reject)
-- [ ] Kanban board frontend refactor (remove local state dependency)
-- [ ] Project Module frontend refactor (ProjectsView off local state)
-- [ ] Server-side notification publishing wired into Project/Task routes
+- [x] Project CRUD API (`GET/POST/PUT/DELETE /api/projects`, members sub-resource) — live-verified
+- [x] Task API migration to Postgres + missing endpoints (status/history/approve/reject) — live-verified
+- [x] Kanban board frontend refactor (remove local state dependency)
+- [x] Project Module frontend refactor (ProjectsView + AppContext off local state) — live-verified
+- [x] Server-side notification publishing wired into Project/Task routes
 - [ ] Update ProjectAnalysis.md / BoardModuleGuide.md / Notification_Module_Guide.md
-- [ ] Full verification pass (tsc, build, tests)
+- [x] Full verification pass (tsc, build) — backend has no automated test suite in this repo
+- [ ] Push branch / open or update PR (pending explicit user go-ahead)
+
+## Project/Task frontend refactor (AppContext.tsx / ProjectsView.tsx / TasksView.tsx)
+
+`createProject`/`approveProject`/`rejectProject`/`updateProject`/`deleteProject`/
+`approveProjectDeletion` and `updateTask`/`deleteTask` are now async and call the real
+`/api/projects`/`/api/tasks` endpoints via `projectRepository.ts`/`taskRepository.ts` — same
+"no local fallback, no fake success" contract `updateTaskStatus` already established. `tasks`/
+`projects` state only ever changes from the server's response; a failed call returns
+`{ success: false, message }` and leaves state untouched. `ProjectsView.tsx`'s create/edit form and
+delete-confirmation dialog now `await` these calls, show a real inline error on failure (no local
+guessing), and stay open/disabled while the request is in flight (mirrors `KanbanView.tsx`'s
+`StatusChangeModal`/`modalSubmitting` pattern). `ApprovalsInboxView.tsx`'s `handleApprove`/
+`handleReject` do the same.
+
+Removed all the `dispatchNotifications(...)` calls inside these functions — `project.service.ts`/
+`task.service.ts` already publish the equivalent event server-side (`project_created`/`updated`/
+`archived`/`member_added`/`member_removed`, `task_assigned`/`updated`/`deleted`), so leaving the
+frontend calls in place would have doubled every one of those notifications (confirmed this would
+have been a real bug in `createTask`, which still had its old `task_assigned` dispatch even though
+`task.service.ts`'s `createTask` already fires the same event — fixed as part of this pass).
+`updateTask`'s old fine-grained notification differentiation (`task_reassigned`/
+`task_priority_changed`/`task_due_date_changed`/`checklist_completed`) has no backend equivalent
+yet (`task.service.ts`'s `updateTask` only fires a generic `task_updated`) — accepted as a scoped-down
+simplification since the spec's explicit notification list only calls out Assigned/Approved/
+Rejected/Status Changed, not this level of granularity. `Controlled_Edit` approvals stay local-only
+(no backend endpoint for that workflow; out of this branch's scope).
+
+**Reject-as-archive mapping**: `ApiProjectStatus` has no `Rejected` value (see `project.types.ts`) —
+there's no backend concept distinct from `Archived`. `rejectProject`/`rejectApprovalItem` for a
+`Project_Creation` request now call `archiveProjectApi(projectId, reason)`, the same soft-delete
+every other Project mutation uses, with the rejection reason recorded on `ArchiveReason` for the
+audit trail. Locally, `projects` state is annotated with `approvalStatus: 'Rejected'` for immediate
+UI feedback (used by `DashboardView.tsx`'s pending-approvals count and `taskRules.ts`'s
+`canCreateTaskForProject`), but a page refresh will re-fetch from the server and see
+`approvalStatus: 'Approved'` instead (the DTO only derives `Pending Approval` vs `Approved` from
+`StatusCode`, never `Rejected`) — this is a known, harmless cosmetic gap: `status` is still
+`Archived` either way, which is what actually gates task creation and Kanban visibility. A real fix
+would add an additive `Rejected` value to `work.ProjectStatuses` and extend the DTO mapping; not
+done here given schema-change caution and the low practical impact.
+
+**Deletion no longer cascades**: the old mock `deleteProject`/`approveProjectDeletion` removed the
+project *and every task in it* from local state. The real backend never cascades a Project archive
+to `work.Tasks` (soft-delete only touches the one row being archived), so the new versions leave
+`tasks` completely untouched — a deleted/archived project's tasks remain visible/editable via the
+Task module. `ProjectsView.tsx`'s delete-confirmation copy was updated to say this explicitly
+instead of claiming tasks get "permanently deleted."
+
+**`milestones`/`files`/`pinnedMessagesCount`**: still no backend representation (`ProjectDTO` omits
+them, see `project.types.ts`). `createProject`/`hydrateProjects` default them to `[]`/`[]`/`0` on
+every project entering state (the API response has no such keys) so `ProjectsView.tsx`'s form/render
+code never dereferences `undefined`; `updateProject` preserves whatever the project already had
+locally (spreading the API response over the existing object never clobbers keys absent from the
+response). They remain pure frontend decoration, same as `tags`.
+
+**Live verification**: exercised the exact payloads `AppContext.tsx` now sends via `curl` against
+the running local Postgres-backed API — Admin create → Active; Team_Lead create → Pending Approval;
+Admin update; Admin archive (reject-mapping); archived project still returned by
+`GET /api/projects/:id` with `status: "Archived"` (never removed from `work.Projects`); Task
+create/update/archive round-trip; confirmed `findAllTasks`/`findTasksForProject` filter out archived
+tasks (so a deleted task correctly disappears from lists/Kanban) while `findAllProjects` does **not**
+filter archived projects (so `ProjectsView`'s "Archived" status filter keeps working).

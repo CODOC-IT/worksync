@@ -42,8 +42,7 @@ import {
 } from '../mock-data/fixtures';
 import {
   TaskMutationData,
-  TaskMutationResult,
-  getTaskAssigneeIds
+  TaskMutationResult
 } from '../features/tasks/taskRules';
 import {
   prepareTaskCreation,
@@ -60,7 +59,15 @@ import {
   rejectTaskViaApi,
   updateTaskViaApi
 } from '../features/tasks/taskRepository';
-import { fetchProjects as fetchProjectsApi } from '../features/projects/projectRepository';
+import {
+  fetchProjects as fetchProjectsApi,
+  fetchProject as fetchProjectApi,
+  createProjectApi,
+  updateProjectApi,
+  archiveProjectApi,
+  addProjectMemberApi,
+  removeProjectMemberApi
+} from '../features/projects/projectRepository';
 import {
   SendNotificationInput,
   sendNotification,
@@ -124,14 +131,14 @@ interface AppState {
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
   toggleTheme: () => void;
-  createProject: (data: Partial<Project>) => void;
-  approveProject: (projectId: string) => void;
-  rejectProject: (projectId: string, reason?: string) => void;
-  updateProject: (projectId: string, data: Partial<Project>) => void;
-  deleteProject: (projectId: string) => void;
+  createProject: (data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
+  approveProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  rejectProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  updateProject: (projectId: string, data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
+  deleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
-  updateTask: (taskId: string, data: TaskMutationData) => TaskMutationResult;
-  deleteTask: (taskId: string) => TaskMutationResult;
+  updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
+  deleteTask: (taskId: string) => Promise<TaskMutationResult>;
   updateTaskStatus: (
     taskId: string,
     newStatus: TaskStatus,
@@ -145,8 +152,8 @@ interface AppState {
     }
   ) => Promise<{ success: boolean; message: string }>;
   proposeControlledEdit: (taskId: string, field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status', newValue: string, reason: string) => void;
-  approveApprovalItem: (approvalId: string) => void;
-  rejectApprovalItem: (approvalId: string, reason?: string) => void;
+  approveApprovalItem: (approvalId: string) => Promise<{ success: boolean; message: string }>;
+  rejectApprovalItem: (approvalId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   checkIn: () => void;
   checkOut: () => void;
   startBreak: (breakType: BreakType) => void;
@@ -322,7 +329,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const hydrateProjects = async () => {
       try {
         const remoteProjects = await fetchProjectsApi();
-        if (isActive) setProjects(remoteProjects);
+        // The backend's ProjectDTO has no milestones/files/pinnedMessagesCount columns yet (see
+        // project.types.ts) -- default them here so every Project in state always has the arrays
+        // ProjectsView's form/render code expects, regardless of whether it came from the mock
+        // fixtures (which do carry them) or the real API (which doesn't).
+        if (isActive) {
+          setProjects(
+            remoteProjects.map((p) => ({
+              ...p,
+              milestones: p.milestones || [],
+              files: p.files || [],
+              pinnedMessagesCount: p.pinnedMessagesCount ?? 0
+            }))
+          );
+        }
       } catch (error) {
         console.warn('Project API request failed; continuing with local project data.', error);
       }
@@ -515,247 +535,198 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const eligibleProjectMemberIds = (ids: string[]): string[] =>
     ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
 
-  const createProject = (data: Partial<Project>) => {
-    if (currentRole !== 'Team_Lead') return;
-
-    const newProjId = `prj-${Date.now()}`;
-    const code = `PROJ-${Math.floor(100 + Math.random() * 900)}`;
-
-    const newProject: Project = {
-      id: newProjId,
-      code,
-      title: data.title || 'Untitled Project',
-      description: data.description || '',
-      status: 'Pending Approval',
-      approvalStatus: 'Pending Approval',
-      createdBy: currentUser.id,
-      teamLeadId: data.teamLeadId || currentUser.id,
-      memberIds: eligibleProjectMemberIds(data.memberIds || []),
-      startDate: data.startDate || new Date().toISOString().split('T')[0],
-      targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      priority: data.priority || 'Medium',
-      progress: 0,
-      tags: data.tags || ['New Project'],
-      milestones: data.milestones || [],
-      files: data.files || [],
-      pinnedMessagesCount: 0,
-      creationReason: data.creationReason
-    };
-
-    setProjects((prev) => [newProject, ...prev]);
-
-    // Create System Approval for Admin
-    const approval: SystemApproval = {
-      id: `app-${Date.now()}`,
-      type: 'Project_Creation',
-      targetId: newProjId,
-      targetTitle: newProject.title,
-      requestedBy: currentUser.id,
-      requestedRole: currentRole,
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      details: `Team Lead ${currentUser.name} proposed new project "${newProject.title}". Pending Admin approval.`,
-      status: 'Pending'
-    };
-    setSystemApprovals((prev) => [approval, ...prev]);
-
-    dispatchNotifications({
-      recipientIds: resolveAdminRecipients(users, currentUser.id),
-      type: 'approval',
-      title: 'Project Approval Requested',
-      message: `${currentUser.name} requested approval for new project "${newProject.title}".`,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'approvals',
-      projectId: newProjId
-    });
-    confirmActionSuccess('Project Submitted', `"${newProject.title}" was submitted for Admin approval successfully.`);
-
-    // Notify the Team Lead AND every project member that the project now exists.
-    const projectCreatedRecipients = resolveProjectRecipients({ project: newProject, excludeUserId: currentUser.id });
-    if (projectCreatedRecipients.length > 0) {
-      const projectCreatedMessages: Record<string, string> = {};
-      projectCreatedRecipients.forEach((recipientId) => {
-        projectCreatedMessages[recipientId] =
-          recipientId === newProject.teamLeadId
-            ? `${currentUser.name} created the new project "${newProject.title}" and assigned you as Team Lead.`
-            : `${currentUser.name} created the new project "${newProject.title}" and added you as a member.`;
-      });
-
-      dispatchNotifications({
-        recipientIds: projectCreatedRecipients,
-        type: 'project_created',
-        title: 'New Project Created',
-        message: `${currentUser.name} created the new project "${newProject.title}".`,
-        recipientMessages: projectCreatedMessages,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId: newProjId
-      });
+  // --- Project Module (backend/src/projects) -----------------------------------------
+  // Real API, no local fallback: every mutation below either applies the server's authoritative
+  // ProjectDTO to `projects` state, or leaves state untouched and returns success: false with a
+  // real error message. project.service.ts publishes its own notification events server-side
+  // (project_created/updated/archived/member_added/member_removed/approval), so none of these
+  // functions call dispatchNotifications anymore -- doing so would double up every event.
+  // `milestones`/`files`/`pinnedMessagesCount` have no backend representation yet (see
+  // project.types.ts's ProjectDTO comment), so they are preserved/merged locally on top of
+  // whatever the server returns.
+  const createProject = async (data: Partial<Project>): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
+      return { success: false, message: 'You do not have permission to create a project.' };
     }
 
-    pushActivity('Created project', 'Project', newProjId, newProject.title);
+    try {
+      const created = await createProjectApi({
+        title: data.title || 'Untitled Project',
+        description: data.description || '',
+        priority: data.priority || 'Medium',
+        startDate: data.startDate || new Date().toISOString().split('T')[0],
+        targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        teamLeadId: data.teamLeadId,
+        memberIds: eligibleProjectMemberIds(data.memberIds || []),
+        creationReason: data.creationReason
+      });
+
+      setProjects((prev) => [
+        { ...created, milestones: data.milestones || [], files: data.files || [], pinnedMessagesCount: 0 },
+        ...prev
+      ]);
+
+      // Pending Approval projects still need a local SystemApproval record so the Approvals
+      // Inbox can list them -- the backend has no SystemApprovals table of its own (out of this
+      // branch's scope), it only publishes the "approval" notification event to Admins.
+      if (created.status === 'Pending Approval') {
+        const approval: SystemApproval = {
+          id: `app-${Date.now()}`,
+          type: 'Project_Creation',
+          targetId: created.id,
+          targetTitle: created.title,
+          requestedBy: currentUser.id,
+          requestedRole: currentRole,
+          createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+          details: `Team Lead ${currentUser.name} proposed new project "${created.title}". Pending Admin approval.`,
+          status: 'Pending'
+        };
+        setSystemApprovals((prev) => [approval, ...prev]);
+      }
+
+      pushActivity('Created project', 'Project', created.id, created.title);
+
+      const message =
+        created.status === 'Pending Approval'
+          ? `"${created.title}" was submitted for Admin approval successfully.`
+          : `"${created.title}" was created successfully.`;
+      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to create project.', error);
+      return { success: false, message: error?.message || 'Failed to create the project. Please try again.' };
+    }
   };
 
-  const approveProject = (projectId: string) => {
-    if (currentRole !== 'Admin') return;
+  const approveProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can approve project proposals.' };
 
     const project = projects.find((p) => p.id === projectId);
-    const approvalItem = systemApprovals.find(
-      (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
-    );
+    if (!project) return { success: false, message: 'Project not found.' };
 
-    setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, status: 'Active', approvalStatus: 'Approved' } : p))
-    );
-    setSystemApprovals((prev) =>
-      prev.map((sa) => (sa.targetId === projectId ? { ...sa, status: 'Approved' } : sa))
-    );
-
-    if (project && approvalItem) {
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(approvalItem.requestedBy, currentUser.id),
-        type: 'approval',
-        title: 'Project Approved',
-        message: `${currentUser.name} approved your project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId
-      });
-    }
-
-    if (project) confirmActionSuccess('Project Approved', `"${project.title}" was approved successfully.`);
-    pushActivity('Approved project proposal', 'Project', projectId, 'Project Approval');
-  };
-
-  const rejectProject = (projectId: string) => {
-    if (currentRole !== 'Admin') return;
-
-    const project = projects.find((p) => p.id === projectId);
-    const approvalItem = systemApprovals.find(
-      (sa) => sa.targetId === projectId && sa.type === 'Project_Creation'
-    );
-
-    setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, approvalStatus: 'Rejected' } : p))
-    );
-    setSystemApprovals((prev) =>
-      prev.map((sa) => (sa.targetId === projectId ? { ...sa, status: 'Rejected' } : sa))
-    );
-
-    if (project && approvalItem) {
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(approvalItem.requestedBy, currentUser.id),
-        type: 'approval',
-        title: 'Project Rejected',
-        message: `${currentUser.name} rejected your project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId
-      });
-    }
-
-    if (project) confirmActionSuccess('Project Rejected', `"${project.title}" was rejected successfully.`);
-    pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
-  };
-
-  const updateProject = (projectId: string, data: Partial<Project>) => {
-    const project = projects.find((p) => p.id === projectId);
-    if (!project) return;
-
-    const sanitizedData = data.memberIds
-      ? { ...data, memberIds: eligibleProjectMemberIds(data.memberIds) }
-      : data;
-
-    setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...sanitizedData } : p))
-    );
-    pushActivity('Updated project', 'Project', projectId, data.title || project.title);
-
-    const adminRecipients = resolveAdminRecipients(users, currentUser.id);
-    const projectRecipients = resolveProjectRecipients({ project, excludeUserId: currentUser.id });
-    const wasArchived = project.status === 'Archived';
-    const willArchive = data.status === 'Archived';
-
-    if (!wasArchived && willArchive) {
-      dispatchNotifications({
-        recipientIds: [...adminRecipients, ...projectRecipients],
-        type: 'project_archived',
-        title: 'Project Archived',
-        message: `${currentUser.name} archived project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId
-      });
-    } else if (wasArchived && data.status && data.status !== 'Archived') {
-      dispatchNotifications({
-        recipientIds: [...adminRecipients, ...projectRecipients],
-        type: 'project_restored',
-        title: 'Project Restored',
-        message: `${currentUser.name} restored project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId
-      });
-    } else if (data.title || data.description || data.targetDate || data.priority) {
-      dispatchNotifications({
-        recipientIds: projectRecipients,
-        type: 'project_updated',
-        title: 'Project Updated',
-        message: `${currentUser.name} updated project "${data.title || project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'projects',
-        projectId
-      });
-    }
-
-    if (data.memberIds) {
-      const beforeIds = new Set(project.memberIds);
-      const afterIds = new Set(data.memberIds);
-      const added = data.memberIds.filter((id) => !beforeIds.has(id));
-      const removed = project.memberIds.filter((id) => !afterIds.has(id));
-
-      added.forEach((userId) =>
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(userId, currentUser.id),
-          type: 'project_member_added',
-          title: 'Added to Project',
-          message: `${currentUser.name} added you to project "${project.title}".`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'projects',
-          projectId
-        })
+    try {
+      const updated = await updateProjectApi(projectId, { status: 'Active' });
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      setSystemApprovals((prev) =>
+        prev.map((sa) =>
+          sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Approved' } : sa
+        )
       );
-      removed.forEach((userId) =>
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(userId, currentUser.id),
-          type: 'project_member_removed',
-          title: 'Removed from Project',
-          message: `${currentUser.name} removed you from project "${project.title}".`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'projects',
-          projectId
-        })
-      );
-    }
+      pushActivity('Approved project proposal', 'Project', projectId, 'Project Approval');
 
-    confirmActionSuccess('Project Updated', `Your changes to "${data.title || project.title}" were saved successfully.`);
+      const message = `"${project.title}" was approved successfully.`;
+      confirmActionSuccess('Project Approved', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to approve project.', error);
+      return { success: false, message: error?.message || 'Failed to approve the project. Please try again.' };
+    }
   };
 
-  const deleteProject = (projectId: string) => {
+  // There is no dedicated "reject" endpoint on the backend (ApiProjectStatus has no Rejected
+  // value) -- rejecting a pending proposal archives it, the same soft-delete every other Project
+  // mutation uses, with the reason recorded on ArchiveReason for the audit trail.
+  const rejectProject = async (
+    projectId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can reject project proposals.' };
+
     const project = projects.find((p) => p.id === projectId);
-    if (!project) return;
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      await archiveProjectApi(projectId, reason?.trim() || `Project proposal rejected by ${currentUser.name}.`);
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived', approvalStatus: 'Rejected' } : p))
+      );
+      setSystemApprovals((prev) =>
+        prev.map((sa) =>
+          sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Rejected' } : sa
+        )
+      );
+      pushActivity('Rejected project proposal', 'Project', projectId, 'Project Rejection');
+
+      const message = `"${project.title}" was rejected successfully.`;
+      confirmActionSuccess('Project Rejected', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to reject project.', error);
+      return { success: false, message: error?.message || 'Failed to reject the project. Please try again.' };
+    }
+  };
+
+  const updateProject = async (
+    projectId: string,
+    data: Partial<Project>
+  ): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      const updated = await updateProjectApi(projectId, {
+        title: data.title,
+        description: data.description,
+        priority: data.priority,
+        startDate: data.startDate,
+        targetDate: data.targetDate,
+        status: data.status
+      });
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      pushActivity('Updated project', 'Project', projectId, updated.title);
+
+      // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
+      // UpdateProjectPayload) -- it goes through the dedicated member endpoints instead, one
+      // call per added/removed user, diffed against the project's current membership.
+      if (data.memberIds) {
+        const beforeIds = new Set(project.memberIds);
+        const afterIds = eligibleProjectMemberIds(data.memberIds);
+        const added = afterIds.filter((id) => !beforeIds.has(id));
+        const removed = project.memberIds.filter((id) => !afterIds.includes(id));
+        const memberErrors: string[] = [];
+
+        for (const userId of added) {
+          try {
+            await addProjectMemberApi(projectId, userId, 'Member');
+          } catch (error: any) {
+            memberErrors.push(error?.message || `Failed to add member ${userId}.`);
+          }
+        }
+        for (const userId of removed) {
+          try {
+            await removeProjectMemberApi(projectId, userId);
+          } catch (error: any) {
+            memberErrors.push(error?.message || `Failed to remove member ${userId}.`);
+          }
+        }
+
+        if (added.length > 0 || removed.length > 0) {
+          const refreshed = await fetchProjectApi(projectId);
+          setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...refreshed } : p)));
+        }
+
+        if (memberErrors.length > 0) {
+          const message = `Project details saved, but some membership changes failed: ${memberErrors.join(' ')}`;
+          return { success: false, message };
+        }
+      }
+
+      const message = `Your changes to "${updated.title}" were saved successfully.`;
+      confirmActionSuccess('Project Updated', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to update project.', error);
+      return { success: false, message: error?.message || 'Failed to update the project. Please try again.' };
+    }
+  };
+
+  const deleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
 
     // Team Leads cannot delete immediately: their delete action files a Project Deletion
-    // approval request instead, mirroring the Project Creation approval flow. Only Admin
-    // deletes immediately, since Admin is also the sole approver of these requests.
+    // approval request instead (local-only, same as the Project Creation approval flow); the
+    // actual archive only happens once an Admin approves it via approveProjectDeletion below.
     if (currentRole !== 'Admin') {
       const approval: SystemApproval = {
         id: `app-${Date.now()}`,
@@ -769,75 +740,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'Pending'
       };
       setSystemApprovals((prev) => [approval, ...prev]);
-
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Deletion Requested',
-        message: `${currentUser.name} requested deletion of project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId
-      });
-      confirmActionSuccess('Deletion Requested', `Your request to delete "${project.title}" was submitted for Admin approval.`);
       pushActivity('Requested project deletion', 'Project', projectId, project.title);
-      return;
+
+      const message = `Your request to delete "${project.title}" was submitted for Admin approval.`;
+      confirmActionSuccess('Deletion Requested', message);
+      return { success: true, message };
     }
 
-    setProjects((prev) => prev.filter((p) => p.id !== projectId));
-    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
+    try {
+      await archiveProjectApi(projectId, `Deleted by ${currentUser.name}.`);
+      // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an
+      // archived project are intentionally left exactly as they are.
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      pushActivity('Deleted project', 'Project', projectId, project.title);
 
-    dispatchNotifications({
-      recipientIds: [
-        ...resolveAdminRecipients(users, currentUser.id),
-        ...resolveSingleRecipient(project.teamLeadId, currentUser.id)
-      ],
-      type: 'project_deleted',
-      title: 'Project Deleted',
-      message: `${currentUser.name} deleted project "${project.title}".`,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'projects',
-      projectId
-    });
-
-    confirmActionSuccess('Project Deleted', `"${project.title}" was deleted successfully.`);
-    pushActivity('Deleted project', 'Project', projectId, project.title);
+      const message = `"${project.title}" was archived successfully.`;
+      confirmActionSuccess('Project Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to delete project.', error);
+      return { success: false, message: error?.message || 'Failed to delete the project. Please try again.' };
+    }
   };
 
-  // Admin decision on a Project Deletion request. Approving performs the actual deletion;
-  // rejecting is handled entirely by rejectApprovalItem, which never touches project/task state.
-  const approveProjectDeletion = (projectId: string) => {
-    if (currentRole !== 'Admin') return;
+  // Admin decision on a Project Deletion request. Approving performs the actual archive;
+  // rejecting is handled entirely by rejectApprovalItem, which never touches project state.
+  const approveProjectDeletion = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can approve a project deletion.' };
 
     const project = projects.find((p) => p.id === projectId);
-    if (!project) return;
+    if (!project) return { success: false, message: 'Project not found.' };
 
-    setProjects((prev) => prev.filter((p) => p.id !== projectId));
-    setTasks((prev) => prev.filter((t) => t.projectId !== projectId));
-    setSystemApprovals((prev) =>
-      prev.map((sa) =>
-        sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
-      )
-    );
+    try {
+      await archiveProjectApi(projectId, `Deletion approved by ${currentUser.name}.`);
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setSystemApprovals((prev) =>
+        prev.map((sa) =>
+          sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
+        )
+      );
+      pushActivity('Approved project deletion', 'Project', projectId, project.title);
 
-    dispatchNotifications({
-      recipientIds: [
-        ...resolveAdminRecipients(users, currentUser.id),
-        ...resolveSingleRecipient(project.teamLeadId, currentUser.id)
-      ],
-      type: 'project_deleted',
-      title: 'Project Deleted',
-      message: `${currentUser.name} approved deletion of project "${project.title}".`,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'projects',
-      projectId
-    });
-
-    confirmActionSuccess('Deletion Approved', `"${project.title}" was deleted successfully.`);
-    pushActivity('Approved project deletion', 'Project', projectId, project.title);
+      const message = `"${project.title}" was deleted successfully.`;
+      confirmActionSuccess('Deletion Approved', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to approve project deletion.', error);
+      return { success: false, message: error?.message || 'Failed to approve the deletion. Please try again.' };
+    }
   };
 
   // Client-side prototype data boundary. The future API must repeat every
@@ -874,183 +824,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTasks((prev) => [result.task!, ...prev]);
     pushActivity('Created task', 'Task', result.task.id, result.task.title);
 
-    const project = projects.find((p) => p.id === result.task!.projectId);
-    const taskRecipients = resolveTaskRecipients({ task: result.task, project, excludeUserId: currentUser.id });
-    const newTaskAssigneeIds = getTaskAssigneeIds(result.task);
-    const newTaskAssigneeNames = newTaskAssigneeIds
-      .map((id) => users.find((user) => user.id === id)?.name)
-      .filter((name): name is string => Boolean(name))
-      .join(', ') || 'a team member';
-
-    const taskAssignedMessages: Record<string, string> = {};
-    taskRecipients.forEach((recipientId) => {
-      taskAssignedMessages[recipientId] = newTaskAssigneeIds.includes(recipientId)
-        ? `${currentUser.name} assigned you "${result.task!.title}" in ${project?.title || 'the project'}.`
-        : `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task!.title}" in ${project?.title || 'the project'}.`;
-    });
-
-    dispatchNotifications({
-      recipientIds: taskRecipients,
-      type: 'task_assigned',
-      title: 'New Task Assigned',
-      message: `${currentUser.name} assigned ${newTaskAssigneeNames} "${result.task.title}" in ${project?.title || 'the project'}.`,
-      recipientMessages: taskAssignedMessages,
-      actorId: currentUser.id,
-      actorName: currentUser.name,
-      linkRoute: 'tasks',
-      projectId: result.task.projectId,
-      taskId: result.task.id
-    });
-
+    // task.service.ts's createTask already publishes a 'task_assigned' notification event
+    // server-side (see backend/src/tasks/task.service.ts) -- no dispatchNotifications call here
+    // anymore, to avoid every assignee getting the same notification twice.
     confirmActionSuccess('Task Created', `"${result.task.title}" was created successfully.`);
     return result;
   };
 
-    const updateTask = (taskId: string, data: TaskMutationData): TaskMutationResult => {
-      const before = tasks.find((item) => item.id === taskId);
-      const result = prepareTaskUpdate(taskId, data, {
-        currentRole,
-        currentUserId: currentUser.id,
-        projects,
-        tasks,
-        users
-      });
-      if (!result.success || !result.task) return result;
+  // Real API, no local fallback: prepareTaskUpdate/prepareTaskDeletion below still run first for
+  // immediate client-side validation/permission feedback (same as createTask's
+  // prepareTaskCreation), but `tasks` state only ever changes from the server's authoritative
+  // response -- never from prepareTaskUpdate's locally-computed guess. task.service.ts publishes
+  // its own 'task_updated'/'task_deleted' notification events, so neither function below
+  // dispatches one itself.
+  const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
+    const validationResult = prepareTaskUpdate(taskId, data, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    });
+    if (!validationResult.success) return validationResult;
 
-      setTasks((prev) => prev.map((item) => item.id === taskId ? result.task! : item));
-      pushActivity('Updated task', 'Task', taskId, result.task.title);
+    try {
+      const updated = await updateTaskViaApi(taskId, data);
+      setTasks((prev) => prev.map((item) => (item.id === taskId ? updated : item)));
+      pushActivity('Updated task', 'Task', taskId, updated.title);
+      confirmActionSuccess('Task Updated', `Your changes to "${updated.title}" were saved successfully.`);
+      return { success: true, message: 'Task updated successfully.', task: updated };
+    } catch (error: any) {
+      console.error('Failed to update task.', error);
+      return { success: false, message: error?.message || 'Failed to update the task. Please try again.' };
+    }
+  };
 
-      if (before) {
-        const after = result.task;
-        const project = projects.find((p) => p.id === after.projectId);
-        const baseRecipients = resolveTaskRecipients({ task: after, project, excludeUserId: currentUser.id });
+  const deleteTask = async (taskId: string): Promise<TaskMutationResult> => {
+    const validationResult = prepareTaskDeletion(taskId, {
+      currentRole,
+      currentUserId: currentUser.id,
+      projects,
+      tasks,
+      users
+    });
+    if (!validationResult.success || !validationResult.task) return validationResult;
 
-        const beforeAssignees = getTaskAssigneeIds(before);
-        const afterAssignees = getTaskAssigneeIds(after);
-        const assigneesChanged =
-          JSON.stringify([...beforeAssignees].sort()) !== JSON.stringify([...afterAssignees].sort());
-
-        if (assigneesChanged) {
-          const addedAssignees = afterAssignees.filter((id) => !beforeAssignees.includes(id));
-          const newAssigneeNames = afterAssignees
-            .map((id) => users.find((user) => user.id === id)?.name)
-            .filter((name): name is string => Boolean(name))
-            .join(', ') || 'Unassigned';
-          const reassignRecipients = [
-            ...addedAssignees.filter((id) => id !== currentUser.id),
-            ...resolveSingleRecipient(project?.teamLeadId, currentUser.id)
-          ];
-          const genericReassignMessage = `${currentUser.name} reassigned "${after.title}" (${project?.title || 'the project'}) to ${newAssigneeNames}.`;
-          const reassignMessages: Record<string, string> = {};
-          addedAssignees.forEach((recipientId) => {
-            reassignMessages[recipientId] = `${currentUser.name} assigned you "${after.title}" in ${project?.title || 'the project'}.`;
-          });
-
-          dispatchNotifications({
-            recipientIds: reassignRecipients,
-            type: 'task_reassigned',
-            title: 'Task Reassigned',
-            message: genericReassignMessage,
-            recipientMessages: reassignMessages,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: after.projectId,
-            taskId
-          });
-        } else if (before.priority !== after.priority) {
-          dispatchNotifications({
-            recipientIds: baseRecipients,
-            type: 'task_priority_changed',
-            title: 'Task Priority Changed',
-            message: `${currentUser.name} changed "${after.title}" priority from ${before.priority} to ${after.priority} in ${project?.title || 'the project'}.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: after.projectId,
-            taskId
-          });
-        } else if (before.dueDate !== after.dueDate) {
-          dispatchNotifications({
-            recipientIds: baseRecipients,
-            type: 'task_due_date_changed',
-            title: 'Due Date Changed',
-            message: `${currentUser.name} changed the due date for "${after.title}" from ${before.dueDate} to ${after.dueDate} in ${project?.title || 'the project'}.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: after.projectId,
-            taskId
-          });
-        } else {
-          dispatchNotifications({
-            recipientIds: baseRecipients,
-            type: 'task_updated',
-            title: 'Task Updated',
-            message: `${currentUser.name} updated "${after.title}" in ${project?.title || 'the project'}.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: after.projectId,
-            taskId
-          });
-        }
-
-        const beforeAllComplete = Boolean(before.subtasks?.length) && before.subtasks.every((s) => s.completed);
-        const afterAllComplete = Boolean(after.subtasks?.length) && after.subtasks.every((s) => s.completed);
-        if (!beforeAllComplete && afterAllComplete) {
-          dispatchNotifications({
-            recipientIds: baseRecipients,
-            type: 'checklist_completed',
-            title: 'Checklist Completed',
-            message: `${currentUser.name} completed the checklist on "${after.title}" in ${project?.title || 'the project'}.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: after.projectId,
-            taskId
-          });
-        }
-
-        confirmActionSuccess('Task Updated', `Your changes to "${after.title}" were saved successfully.`);
-      }
-
-      return result;
-    };
-
-    const deleteTask = (taskId: string): TaskMutationResult => {
-      const task = tasks.find((item) => item.id === taskId);
-      const result = prepareTaskDeletion(taskId, {
-        currentRole,
-        currentUserId: currentUser.id,
-        projects,
-        tasks,
-        users
-      });
-      if (!result.success || !result.task) return result;
+    const task = validationResult.task;
+    try {
+      await deleteTaskViaApi(taskId);
       setTasks((prev) => prev.filter((item) => item.id !== taskId));
-      pushActivity('Deleted task', 'Task', taskId, result.task.title);
+      pushActivity('Deleted task', 'Task', taskId, task.title);
+      confirmActionSuccess('Task Deleted', `"${task.title}" was deleted successfully.`);
+      return { success: true, message: `"${task.title}" was deleted successfully.`, task };
+    } catch (error: any) {
+      console.error('Failed to delete task.', error);
+      return { success: false, message: error?.message || 'Failed to delete the task. Please try again.' };
+    }
+  };
 
-      if (task) {
-        const project = projects.find((p) => p.id === task.projectId);
-        dispatchNotifications({
-          recipientIds: resolveTaskRecipients({ task, project, excludeUserId: currentUser.id }),
-          type: 'task_deleted',
-          title: 'Task Deleted',
-          message: `${currentUser.name} deleted "${task.title}" from ${project?.title || 'the project'}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'tasks',
-          projectId: task.projectId,
-          taskId
-        });
-      }
-
-      if (task) confirmActionSuccess('Task Deleted', `"${task.title}" was deleted successfully.`);
-      return result;
-    };
-
-    // Update Task Status (Kanban & Details) with mandatory reason/summary handlers.
+  // Update Task Status (Kanban & Details) with mandatory reason/summary handlers.
     // The Project Board module always supplies `extraInfo.note` (validated as non-empty by
     // its own status-change modal); `reviewDecision` is set only when a Team Lead/Admin is
     // resolving a task that's Pending review approval.
@@ -1177,14 +1009,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity(`Proposed controlled edit on ${field}`, 'Task', taskId, task.title);
     };
 
-    const approveApprovalItem = (approvalId: string) => {
+    // Project_Creation/Project_Deletion decisions delegate to the real, API-backed
+    // approveProject/approveProjectDeletion above -- those already update `projects`,
+    // `systemApprovals`, and the success toast; this just adds the Approvals-Inbox-specific
+    // activity log entry once the underlying call actually succeeds.
+    const approveApprovalItem = async (approvalId: string): Promise<{ success: boolean; message: string }> => {
       const item = systemApprovals.find((sa) => sa.id === approvalId);
-      if (!item) return;
+      if (!item) return { success: false, message: 'Approval request not found.' };
+
+      let result: { success: boolean; message: string } = {
+        success: true,
+        message: `Approved "${item.targetTitle}".`
+      };
 
       if (item.type === 'Project_Creation') {
-        approveProject(item.targetId);
+        result = await approveProject(item.targetId);
       } else if (item.type === 'Project_Deletion') {
-        approveProjectDeletion(item.targetId);
+        result = await approveProjectDeletion(item.targetId);
       } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
         const { field, newValue } = item.proposedDiff;
         setTasks((prev) =>
@@ -1215,39 +1056,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           taskId: item.targetId,
           projectId: relatedProject?.id
         });
-        confirmActionSuccess('Request Approved', `You approved the ${field} change on "${item.targetTitle}" successfully.`);
+        result = { success: true, message: `You approved the ${field} change on "${item.targetTitle}" successfully.` };
+        confirmActionSuccess('Request Approved', result.message);
       }
-      pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
+
+      if (result.success) {
+        pushActivity('Approved request', 'Approval', approvalId, item.targetTitle);
+      }
+      return result;
     };
 
-    const rejectApprovalItem = (approvalId: string) => {
+    // Project_Creation is the one type backed by a real API call: rejectProject() above both
+    // archives the pending project on the backend and marks this same SystemApproval Rejected,
+    // so there is nothing left to do here for that branch. Project_Deletion/Controlled_Edit
+    // rejections stay purely local (rejecting a deletion request must never touch the project).
+    const rejectApprovalItem = async (
+      approvalId: string,
+      reason?: string
+    ): Promise<{ success: boolean; message: string }> => {
       const item = systemApprovals.find((sa) => sa.id === approvalId);
+      if (!item) return { success: false, message: 'Approval request not found.' };
 
-      // Only Admin may reject a Project Deletion request; the project remains unchanged either way
-      // since this function never touches `projects`/`tasks` state.
-      if (item?.type === 'Project_Deletion' && currentRole !== 'Admin') return;
+      if (item.type === 'Project_Deletion' && currentRole !== 'Admin') {
+        return { success: false, message: 'Only Admins can reject a project deletion request.' };
+      }
+
+      if (item.type === 'Project_Creation') {
+        return rejectProject(item.targetId, reason);
+      }
 
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
 
-      if (item) {
-        const targetsProject = item.type === 'Project_Creation' || item.type === 'Project_Deletion';
-        const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
-        const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-          type: 'approval',
-          title: 'Request Rejected',
-          message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: targetsProject ? 'projects' : 'tasks',
-          taskId: targetsProject ? undefined : item.targetId,
-          projectId: targetsProject ? item.targetId : undefined
-        });
-        confirmActionSuccess('Request Rejected', `You rejected the request for "${item.targetTitle}" successfully.`);
-      }
+      const targetsProject = item.type === 'Project_Deletion';
+      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+        type: 'approval',
+        title: 'Request Rejected',
+        message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: targetsProject ? 'projects' : 'tasks',
+        taskId: targetsProject ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : undefined
+      });
+      const message = `You rejected the request for "${item.targetTitle}" successfully.`;
+      confirmActionSuccess('Request Rejected', message);
+      return { success: true, message };
     };
 
     // Attendance & Breaks

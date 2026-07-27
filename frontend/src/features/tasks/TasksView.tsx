@@ -268,11 +268,11 @@ export const TasksView: React.FC = () => {
     }
   };
 
-  const handleDelete = (task: Task) => {
+  const handleDelete = async (task: Task) => {
     if (!window.confirm(`Delete "${task.title}"? This action cannot be undone.`)) return;
-    const result = deleteTask(task.id);
+    const result = await deleteTask(task.id);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    if (viewingTask?.id === task.id) setViewingTask(null);
+    if (result.success && viewingTask?.id === task.id) setViewingTask(null);
   };
 
   const clearFilters = () => {
@@ -316,15 +316,6 @@ export const TasksView: React.FC = () => {
           </button>
         )}
       </header>
-
-      <div className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-xs text-amber-200">
-        <AlertCircle className="mt-0.5 shrink-0" size={15} />
-        <p>
-          This repository currently has no backend or authentication routes. Task changes in this
-          screen use session mock data; PostgreSQL persistence and server authorization must be
-          connected before production use.
-        </p>
-      </div>
 
       {notice && (
         <div
