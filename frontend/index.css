@@ -1,4 +1,5 @@
 
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -47,7 +48,7 @@
 @layer base {
   :root {
     color-scheme: dark;
-    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Google Sans', 'Google Sans Text', 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
     /* Slate palette — dark mode */
@@ -116,30 +117,30 @@
     --shade-slate-950: #fdfefd;
     --shade-white: #14211d;
 
-    --bg-canvas: #f3f6f2;
+    --bg-canvas: #F1F5F0;
     --surface-glass: rgba(255, 255, 255, 0.96);
     --surface-glass-border: #d7e0da;
-    --neon-cyan: #276f82;
-    --neon-violet: #4f7d87;
+    --neon-cyan: #5F806B;
+    --neon-violet: #6D837A;
     --neon-magenta: #a34a67;
     --neon-amber: #a76d1a;
     --neon-emerald: #36735a;
-    --tone-accent-50: #eef8f8;
-    --tone-accent-100: #d8eef0;
-    --tone-accent-200: #b7dfe3;
-    --tone-accent-300: #83c8d0;
-    --tone-accent-400: #4c9eaa;
-    --tone-accent-500: #2f7f8d;
-    --tone-accent-600: #276b79;
-    --tone-accent-700: #245866;
-    --tone-accent-800: #244954;
-    --tone-accent-900: #223e47;
-    --tone-accent-950: #132c33;
-    --tone-secondary-300: #a5c2c8;
-    --tone-secondary-400: #719aa4;
-    --tone-secondary-500: #527d88;
-    --tone-secondary-600: #426873;
-    --tone-secondary-950: #243c43;
+    --tone-accent-50: #F0F5F1;
+    --tone-accent-100: #DCE9DF;
+    --tone-accent-200: #C3D7C8;
+    --tone-accent-300: #A6C2AC;
+    --tone-accent-400: #86A78F;
+    --tone-accent-500: #6D9076;
+    --tone-accent-600: #5F806B;
+    --tone-accent-700: #4E6D5A;
+    --tone-accent-800: #405B4B;
+    --tone-accent-900: #34483C;
+    --tone-accent-950: #233128;
+    --tone-secondary-300: #B6C7C0;
+    --tone-secondary-400: #8FA89C;
+    --tone-secondary-500: #718C80;
+    --tone-secondary-600: #5D756A;
+    --tone-secondary-950: #31483E;
     --tone-warning-300: #d6b36e;
     --tone-warning-400: #bd913f;
     --tone-warning-500: #a87826;
@@ -208,15 +209,16 @@
 
 .light .glass-button-neon {
   background: var(--tone-accent-600);
-  border-color: var(--tone-accent-600);
-  box-shadow: none;
+  border-color: var(--tone-accent-400);
+  box-shadow: 0 2px 6px rgba(44, 64, 51, 0.16);
   color: #ffffff;
+  font-weight: 700;
 }
 
 .light .glass-button-neon:hover {
   background: var(--tone-accent-700);
   border-color: var(--tone-accent-700);
-  box-shadow: none;
+  box-shadow: 0 3px 8px rgba(44, 64, 51, 0.2);
   transform: none;
 }
 
@@ -252,11 +254,23 @@
 .light select,
 .light textarea {
   box-shadow: none;
+  border-color: #CBD7CE;
+}
+
+.light input:hover,
+.light select:hover,
+.light textarea:hover {
+  border-color: #9DB4A2;
 }
 
 .light :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--tone-accent-500) 70%, transparent);
+  outline: 2px solid rgba(95, 128, 107, 0.42);
   outline-offset: 2px;
+}
+
+.light .font-mono:not(pre):not(code) {
+  font-family: var(--font-sans);
+  letter-spacing: normal;
 }
 
 /* Sidebar is deliberately warmer and darker than the light workspace, giving
@@ -326,6 +340,12 @@
   color: currentColor;
 }
 
+.light [data-app-sidebar] [data-sidebar-brand] {
+  background: none;
+  color: #F5F1EA;
+  -webkit-text-fill-color: currentColor;
+}
+
 .light [data-app-sidebar] [data-sidebar-logout] {
   color: #d28a86;
 }
@@ -334,6 +354,16 @@
   background: rgba(168, 91, 112, 0.16);
   border-color: rgba(210, 138, 134, 0.28);
   color: #f0bbb5;
+}
+
+.light .bg-amber-500\/15,
+.light .bg-amber-500\/20 {
+  background-color: #FFF5DD;
+}
+
+.light .border-amber-500\/30,
+.light .border-amber-500\/40 {
+  border-color: #D8B264;
 }
 
 .text-gradient-neon {
