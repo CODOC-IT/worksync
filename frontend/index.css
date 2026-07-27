@@ -1,4 +1,5 @@
 
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -19,7 +20,7 @@
 @layer base {
   :root {
     color-scheme: dark;
-    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
     /* Slate palette — dark mode */
@@ -264,6 +265,12 @@
 
 :root:not(.light) [data-app-sidebar] [data-sidebar-nav] svg {
   color: currentColor;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-brand] {
+  background: none;
+  color: #F5F7F5;
+  -webkit-text-fill-color: currentColor;
 }
 
 :root:not(.light) [data-app-sidebar] [data-sidebar-logout] {
