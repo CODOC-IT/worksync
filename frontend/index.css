@@ -1286,3 +1286,37 @@
   border-color: #275B3A;
   color: #FFFFFF;
 }
+
+/* Actual date-cell event pills: these are the calendar items visible before
+   opening a detail popover, so they intentionally use solid semantic colors. */
+.light [data-calendar] [data-calendar-entry-kind] {
+  border-width: 1px !important;
+  box-shadow: none !important;
+  font-weight: 700;
+}
+
+.light [data-calendar] [data-calendar-entry-kind="Deadline"] {
+  background-color: #A9322D !important;
+  border-color: #82241F !important;
+  color: #FFFFFF !important;
+}
+
+.light [data-calendar] [data-calendar-entry-kind="Milestone"],
+.light [data-calendar] [data-calendar-entry-kind="Task Due"],
+.light [data-calendar] [data-calendar-entry-kind="Meeting"] {
+  background-color: #2F6689 !important;
+  border-color: #1F4D6B !important;
+  color: #FFFFFF !important;
+}
+
+.light [data-calendar] [data-calendar-entry-kind="Review"] {
+  background-color: #D19A2D !important;
+  border-color: #9B6D14 !important;
+  color: #241A00 !important;
+}
+
+.light [data-calendar] [data-calendar-entry-kind="Leave"] {
+  background-color: #596873 !important;
+  border-color: #3F4D56 !important;
+  color: #FFFFFF !important;
+}

@@ -300,6 +300,7 @@ const MonthGrid: React.FC<{
                         onSelectEntry(entry);
                       }}
                       title={entry.title}
+                      data-calendar-entry-kind={entry.kind}
                       className={`w-full text-left truncate px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium border ${tone.badgeClass}`}
                     >
                       {entry.title}
@@ -366,9 +367,10 @@ const WeekGrid: React.FC<{
                       users={users}
                     >
                       <button
-                        type="button"
-                        onClick={() => onSelectEntry(entry)}
-                        className={`w-full text-left px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass}`}
+                      type="button"
+                      onClick={() => onSelectEntry(entry)}
+                      data-calendar-entry-kind={entry.kind}
+                      className={`w-full text-left px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass}`}
                       >
                         {entry.time && <span className="font-mono opacity-80 mr-1">{entry.time}</span>}
                         {entry.title}
@@ -488,7 +490,7 @@ const DayEntriesModal: React.FC<{
                   className="w-full flex items-center justify-between gap-2 p-3 text-left"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-bold ${tone.badgeClass}`}>
+                    <span data-calendar-entry-kind={entry.kind} className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-bold ${tone.badgeClass}`}>
                       {entry.kind}
                     </span>
                     <span className="text-xs font-semibold text-slate-200 truncate">{entry.title}</span>
