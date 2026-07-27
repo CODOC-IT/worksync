@@ -23,27 +23,27 @@
     --font-mono: 'JetBrains Mono', monospace;
 
     /* Slate palette — dark mode */
-    --shade-slate-50: #f8fafc;
-    --shade-slate-100: #f1f5f9;
-    --shade-slate-200: #e2e8f0;
-    --shade-slate-300: #cbd5e1;
-    --shade-slate-400: #94a3b8;
-    --shade-slate-500: #64748b;
-    --shade-slate-600: #475569;
-    --shade-slate-700: #334155;
-    --shade-slate-800: #1e293b;
-    --shade-slate-900: #0f172a;
-    --shade-slate-950: #020617;
-    --shade-white: #ffffff;
+    --shade-slate-50: #F5F7F5;
+    --shade-slate-100: #EDF1EE;
+    --shade-slate-200: #E7ECE8;
+    --shade-slate-300: #CCD4CE;
+    --shade-slate-400: #A8B2AA;
+    --shade-slate-500: #8F9B92;
+    --shade-slate-600: #68736B;
+    --shade-slate-700: #49534C;
+    --shade-slate-800: #343C36;
+    --shade-slate-900: #222724;
+    --shade-slate-950: #171A18;
+    --shade-white: #F5F7F5;
 
-    --bg-canvas: #090a0f;
-    --surface-glass: rgba(15, 18, 28, 0.85);
-    --surface-glass-border: rgba(255, 255, 255, 0.1);
-    --neon-cyan: #00f2fe;
-    --neon-violet: #8a2be2;
-    --neon-magenta: #ff007f;
-    --neon-amber: #ffaa00;
-    --neon-emerald: #00ff88;
+    --bg-canvas: #171A18;
+    --surface-glass: #222724;
+    --surface-glass-border: #3D4740;
+    --neon-cyan: #8FAE96;
+    --neon-violet: #8FAE96;
+    --neon-magenta: #A85B70;
+    --neon-amber: #F0C66D;
+    --neon-emerald: #9DD8AD;
   }
 
   .light {
@@ -113,6 +113,251 @@
   border-color: color-mix(in srgb, var(--neon-cyan) 85%, transparent);
   box-shadow: 0 0 20px color-mix(in srgb, var(--neon-cyan) 40%, transparent);
   transform: translateY(-1px);
+}
+
+/* Dark-mode presentation layer: shared utilities are kept in place so no
+   component layout changes are needed, but glass, gradients, and glow are removed. */
+:root:not(.light) .glass-panel,
+:root:not(.light) .glass-panel-glow {
+  background: #222724;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid #3D4740 !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+
+:root:not(.light) .glass-button-neon {
+  background: #66836E;
+  border-color: #8EAA94;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+  color: #FFFFFF;
+  font-weight: 700;
+}
+
+:root:not(.light) .glass-button-neon:hover {
+  background: #78977F;
+  border-color: #A3C0A8;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.30);
+  transform: none;
+}
+
+:root:not(.light) .text-gradient-neon {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: #A3C0A8;
+}
+
+:root:not(.light) .bg-gradient-to-r,
+:root:not(.light) .bg-gradient-to-tr {
+  background-image: none;
+  background-color: #292F2B;
+}
+
+:root:not(.light) [class*="shadow-[0_0"],
+:root:not(.light) .shadow-2xl,
+:root:not(.light) .shadow-xl,
+:root:not(.light) .shadow-lg {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22) !important;
+}
+
+:root:not(.light) .cursor-glow-container::before {
+  display: none;
+}
+
+:root:not(.light) .font-mono:not(pre):not(code) {
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+}
+
+:root:not(.light) input,
+:root:not(.light) select,
+:root:not(.light) textarea {
+  background-color: #1B201D;
+  border-color: #3D4740;
+  box-shadow: none;
+}
+
+:root:not(.light) input:hover,
+:root:not(.light) select:hover,
+:root:not(.light) textarea:hover {
+  border-color: #536157;
+}
+
+:root:not(.light) :focus-visible {
+  outline: 2px solid rgba(143, 174, 150, 0.30);
+  outline-offset: 2px;
+}
+
+:root:not(.light) .density-table th {
+  background: #292F2B;
+  color: #CCD4CE;
+  border-bottom-color: #3D4740;
+}
+
+:root:not(.light) .density-table td {
+  border-bottom-color: #343C36;
+}
+
+:root:not(.light) .density-table tr:hover td {
+  background-color: #303731;
+}
+
+/* Warm, distinct dark navigation surface. Scoped so Project Chats' internal
+   discussion list is not affected. */
+:root:not(.light) [data-app-sidebar] {
+  background: #211D1A;
+  border-color: #3A342F !important;
+  box-shadow: none !important;
+}
+
+:root:not(.light) [data-app-sidebar] .border-white\/10,
+:root:not(.light) [data-app-sidebar] .border-white\/5 {
+  border-color: #3A342F;
+}
+
+:root:not(.light) [data-app-sidebar] .text-slate-400,
+:root:not(.light) [data-app-sidebar] .text-slate-500 {
+  color: #AAA198;
+}
+
+:root:not(.light) [data-app-sidebar] .text-slate-300,
+:root:not(.light) [data-app-sidebar] .text-slate-200,
+:root:not(.light) [data-app-sidebar] .text-white,
+:root:not(.light) [data-app-sidebar] .text-cyan-300,
+:root:not(.light) [data-app-sidebar] .text-cyan-400,
+:root:not(.light) [data-app-sidebar] .text-purple-300,
+:root:not(.light) [data-app-sidebar] .text-purple-400 {
+  color: #E8E1D9;
+}
+
+:root:not(.light) [data-app-sidebar] .bg-slate-950,
+:root:not(.light) [data-app-sidebar] .bg-gradient-to-r,
+:root:not(.light) [data-app-sidebar] .bg-gradient-to-tr,
+:root:not(.light) [data-app-sidebar] .bg-white\/\[0\.02\],
+:root:not(.light) [data-app-sidebar] .bg-white\/5,
+:root:not(.light) [data-app-sidebar] .bg-white\/10,
+:root:not(.light) [data-app-sidebar] .bg-cyan-500\/10 {
+  background-color: #302B27;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-nav] {
+  border-color: transparent;
+  color: #AAA198;
+  box-shadow: none !important;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-nav]:hover {
+  background: #302B27;
+  color: #E8E1D9;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-nav][data-active="true"] {
+  background: #3C493F;
+  border-color: #3C493F;
+  color: #F5F7F5;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-nav][data-active="true"] > div {
+  background: #F5F7F5;
+  box-shadow: none;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-nav] svg {
+  color: currentColor;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-logout] {
+  color: #D28A86;
+}
+
+:root:not(.light) [data-app-sidebar] [data-sidebar-logout]:hover {
+  background: rgba(168, 91, 112, 0.16);
+  border-color: rgba(210, 138, 134, 0.28);
+  color: #F0BBB5;
+}
+
+/* Existing semantic utility usage is toned down in dark mode without changing
+   component markup or the light palette. */
+:root:not(.light) .text-cyan-300,
+:root:not(.light) .text-cyan-400,
+:root:not(.light) .text-cyan-500,
+:root:not(.light) .text-purple-300,
+:root:not(.light) .text-purple-400,
+:root:not(.light) .text-purple-500 {
+  color: #A3C0A8;
+}
+
+:root:not(.light) .text-amber-300,
+:root:not(.light) .text-amber-400,
+:root:not(.light) .text-amber-500 {
+  color: #F0C66D;
+}
+
+:root:not(.light) .text-emerald-300,
+:root:not(.light) .text-emerald-400,
+:root:not(.light) .text-emerald-500 {
+  color: #9DD8AD;
+}
+
+:root:not(.light) .text-rose-300,
+:root:not(.light) .text-rose-400,
+:root:not(.light) .text-rose-500,
+:root:not(.light) .text-pink-300,
+:root:not(.light) .text-pink-400,
+:root:not(.light) .text-pink-500 {
+  color: #FF9A94;
+}
+
+:root:not(.light) .border-cyan-500\/30,
+:root:not(.light) .border-cyan-500\/40,
+:root:not(.light) .border-purple-500\/30,
+:root:not(.light) .border-purple-500\/40 {
+  border-color: #536157;
+}
+
+:root:not(.light) .bg-cyan-500\/10,
+:root:not(.light) .bg-cyan-500\/15,
+:root:not(.light) .bg-cyan-500\/20,
+:root:not(.light) .bg-purple-500\/20 {
+  background-color: #35433A;
+}
+
+:root:not(.light) .bg-amber-500\/15,
+:root:not(.light) .bg-amber-500\/20 {
+  background-color: #4A3A1E;
+}
+
+:root:not(.light) .border-amber-500\/30,
+:root:not(.light) .border-amber-500\/40 {
+  border-color: #80652E;
+}
+
+:root:not(.light) [data-login-page] {
+  background: #171A18 !important;
+  background-image: none !important;
+}
+
+:root:not(.light) [data-login-page] .blur-3xl,
+:root:not(.light) [data-login-page] [class*="shadow-[0_0"] {
+  display: none;
+}
+
+:root:not(.light) [data-login-page] .bg-black\/40,
+:root:not(.light) [data-login-page] .bg-slate-950\/80 {
+  background-color: #1B201D;
+  border-color: #3D4740;
+}
+
+:root:not(.light) [data-login-page] .border-white\/10,
+:root:not(.light) [data-login-page] .border-white\/5 {
+  border-color: #3D4740;
+}
+
+:root:not(.light) [data-login-page] .text-cyan-300,
+:root:not(.light) [data-login-page] .text-cyan-400,
+:root:not(.light) [data-login-page] .text-purple-300,
+:root:not(.light) [data-login-page] .text-purple-400 {
+  color: #A3C0A8;
 }
 
 .text-gradient-neon {
