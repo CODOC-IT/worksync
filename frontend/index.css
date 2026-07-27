@@ -360,6 +360,38 @@
   color: #A3C0A8;
 }
 
+/* AI Assistant keeps its existing form structure but inherits the same dark
+   input, tab, panel, and action hierarchy as the rest of the workspace. */
+:root:not(.light) [data-ai-assistant] .bg-purple-500\/20,
+:root:not(.light) [data-ai-assistant] .bg-cyan-500\/20 {
+  background-color: #35433A;
+}
+
+:root:not(.light) [data-ai-assistant] .border-purple-500\/20,
+:root:not(.light) [data-ai-assistant] .border-purple-500\/30,
+:root:not(.light) [data-ai-assistant] .border-purple-500\/40,
+:root:not(.light) [data-ai-assistant] .border-cyan-500\/20,
+:root:not(.light) [data-ai-assistant] .border-cyan-500\/30,
+:root:not(.light) [data-ai-assistant] .border-cyan-500\/40 {
+  border-color: #536157;
+}
+
+:root:not(.light) [data-ai-assistant] .border-b-2 {
+  border-bottom-color: #A3C0A8;
+}
+
+:root:not(.light) [data-ai-assistant] .bg-slate-800\/50,
+:root:not(.light) [data-ai-assistant] .bg-white\/\[0\.03\] {
+  background-color: #292F2B;
+  border-color: #3D4740;
+}
+
+:root:not(.light) [data-ai-assistant] textarea:focus,
+:root:not(.light) [data-ai-assistant] input:focus {
+  border-color: #8FAE96 !important;
+  box-shadow: 0 0 0 2px rgba(143, 174, 150, 0.18);
+}
+
 .text-gradient-neon {
   background: linear-gradient(135deg, #00f2fe 0%, #4facfe 50%, #00ff88 100%);
   -webkit-background-clip: text;
