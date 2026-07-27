@@ -804,8 +804,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Client-side prototype data boundary. The future API must repeat every
-  // authorization and validation check inside a PostgreSQL transaction.
   const createTask = async (
     data: TaskMutationData
   ): Promise<TaskMutationResult> => {
@@ -850,7 +848,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // prepareTaskCreation), but `tasks` state only ever changes from the server's authoritative
   // response -- never from prepareTaskUpdate's locally-computed guess. task.service.ts publishes
   // its own 'task_updated'/'task_deleted' notification events, so neither function below
-  // dispatches one itself.
+  // dispatches one itself (main's per-field notification differentiation -- reassigned/priority/
+  // due-date/checklist -- had no backend equivalent to call through to, so it's not carried
+  // forward here; see docs/ProjectBoardNotification_Implementation_Notes.md).
   const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
     const validationResult = prepareTaskUpdate(taskId, data, {
       currentRole,

@@ -2,17 +2,14 @@ import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowDownAZ,
-  CalendarDays,
   Check,
   ChevronDown,
   ClipboardList,
-  Eye,
   Filter,
   LoaderCircle,
-  Pencil,
+  MoreHorizontal,
   Plus,
   Search,
-  Trash2,
   UserRound,
   UsersRound,
   X
@@ -27,10 +24,12 @@ import {
   getProjectEndDate,
   getProjectMemberIds,
   getProjectName,
+  getLatestDate,
   getTaskAssigneeIds,
   getTaskPriorityValue,
   getTaskStartDate,
   getTaskStatusLabel,
+  getTodayIsoDate,
   isTaskOverdue,
   TASK_PRIORITIES,
   TASK_STATUSES,
@@ -39,7 +38,7 @@ import {
   validateTaskInput
 } from './taskRules';
 
-const today = new Date().toISOString().split('T')[0];
+const today = getTodayIsoDate();
 
 const inputClass =
   'w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50';
@@ -79,8 +78,13 @@ export const TasksView: React.FC = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [viewingTask, setViewingTask] = useState<Task | null>(null);
+  const [taskPendingDeletion, setTaskPendingDeletion] = useState<Task | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [openMenuTaskId, setOpenMenuTaskId] = useState<string | null>(null);
   const [form, setForm] = useState<TaskFormInput>(emptyForm);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
@@ -95,9 +99,20 @@ export const TasksView: React.FC = () => {
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
+  useEffect(() => {
+    const closeTaskMenu = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('[data-task-actions]')) setOpenMenuTaskId(null);
+    };
+
+    document.addEventListener('pointerdown', closeTaskMenu);
+    return () => document.removeEventListener('pointerdown', closeTaskMenu);
+  }, []);
+
   const availableProjects = useMemo(
     () => projects.filter((project) =>
       canCreateTaskForProject(currentRole, currentUser.id, project)
+      && getProjectEndDate(project) >= today
     ),
     [currentRole, currentUser.id, projects]
   );
@@ -141,19 +156,22 @@ export const TasksView: React.FC = () => {
     setForm(emptyForm());
     setEditingTaskId(null);
     setFieldErrors({});
+    setFormError(null);
     setIsFormOpen(false);
   };
 
   const openCreateForm = () => {
     const initialProject = availableProjects[0];
+    const startDate = getLatestDate(today, initialProject?.startDate) || today;
     setEditingTaskId(null);
     setForm({
       ...emptyForm(),
       projectId: initialProject?.id || '',
-      startDate: initialProject?.startDate || '',
+      startDate,
       dueDate: initialProject ? getProjectEndDate(initialProject) : ''
     });
     setFieldErrors({});
+    setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
   };
@@ -171,16 +189,18 @@ export const TasksView: React.FC = () => {
       status: task.status
     });
     setFieldErrors({});
+    setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
   };
 
   const handleProjectChange = (projectId: string) => {
     const project = projects.find((item) => item.id === projectId);
+    const startDate = getLatestDate(today, project?.startDate) || '';
     setForm((current) => ({
       ...current,
       projectId,
-      startDate: project?.startDate || '',
+      startDate,
       dueDate: project ? getProjectEndDate(project) : '',
       assigneeIds: []
     }));
@@ -211,11 +231,12 @@ export const TasksView: React.FC = () => {
       form,
       selectedProject,
       users,
-      editingTaskId === null
+      editingTaskId === null,
+      editingTaskId === null ? today : undefined
     );
     if (Object.keys(clientErrors).length > 0) {
       setFieldErrors(clientErrors);
-      setNotice({ type: 'error', message: 'Review the highlighted fields.' });
+      setFormError(null);
       return;
     }
 
@@ -257,7 +278,14 @@ export const TasksView: React.FC = () => {
 
       if (!result.success) {
         setFieldErrors(result.fieldErrors || {});
-        setNotice({ type: 'error', message: result.message });
+        const message = result.message.toLowerCase();
+        setFormError(
+          message.includes('invalid token') || message.includes('not authenticated')
+            ? 'Your sign-in session has expired. Please sign in again, then submit the task.'
+            : result.fieldErrors && Object.keys(result.fieldErrors).length > 0
+              ? null
+              : result.message
+        );
         return;
       }
 
@@ -268,11 +296,21 @@ export const TasksView: React.FC = () => {
     }
   };
 
-  const handleDelete = async (task: Task) => {
-    if (!window.confirm(`Delete "${task.title}"? This action cannot be undone.`)) return;
+  const handleDelete = async () => {
+    if (!taskPendingDeletion || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    const task = taskPendingDeletion;
     const result = await deleteTask(task.id);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    if (result.success && viewingTask?.id === task.id) setViewingTask(null);
+    if (!result.success) {
+      setDeleteError(result.message);
+    } else {
+      setNotice({ type: 'success', message: result.message });
+      if (viewingTask?.id === task.id) setViewingTask(null);
+      setTaskPendingDeletion(null);
+      setOpenMenuTaskId(null);
+    }
+    setIsDeleting(false);
   };
 
   const clearFilters = () => {
@@ -286,25 +324,22 @@ export const TasksView: React.FC = () => {
   };
 
   const memberStatusOnly = editingTaskId !== null && currentRole === 'Team_Member';
+  const isCreatePage = isFormOpen && editingTaskId === null;
   const hasActiveFilters = Boolean(
     search || projectFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
   );
 
   return (
     <section className="mx-auto max-w-[1500px] space-y-5">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      {!isCreatePage && <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
-            <ClipboardList size={15} />
-            Task operations
-          </div>
-          <h1 className="text-2xl font-bold text-white">Task Creation & List</h1>
+          <h1 className="text-2xl font-bold text-white">Tasks</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
-            Create project-scoped work, assign current members, and keep deadlines visible.
+            Track project work, ownership, and due dates in one focused workspace.
           </p>
         </div>
 
-        {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (
+        {currentRole === 'Team_Lead' && (
           <button
             type="button"
             onClick={openCreateForm}
@@ -315,9 +350,9 @@ export const TasksView: React.FC = () => {
             Create task
           </button>
         )}
-      </header>
+      </header>}
 
-      {notice && (
+      {!isCreatePage && notice && (
         <div
           role="status"
           className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
@@ -336,35 +371,26 @@ export const TasksView: React.FC = () => {
         </div>
       )}
 
-      {(currentRole === 'Team_Member' || currentRole === 'HR') && (
-        <div className="glass-panel border-cyan-500/20 px-4 py-3 text-sm text-slate-300">
-          {currentRole === 'HR'
-            ? 'HR permission does not grant task-management access. You can view and filter tasks.'
-            : 'Team Members can view tasks and update the status of tasks assigned to them. Protected field changes remain read-only until the approval workflow is connected.'}
-        </div>
-      )}
-
       {isFormOpen && (
-        <form onSubmit={handleSubmit} className="glass-panel-glow overflow-hidden">
+        <div
+          className={editingTaskId ? 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm' : ''}
+          onMouseDown={(event) => {
+            if (editingTaskId && event.target === event.currentTarget) resetForm();
+          }}
+        >
+        <form onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
-              <h2 className="font-bold text-white">
-                {editingTaskId ? 'Edit task' : 'Create a new task'}
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Tasks</p>
+              <h1 className="mt-1 text-2xl font-bold text-white">
+                {editingTaskId ? 'Edit task' : 'Create task'}
+              </h1>
+              <p className="mt-1 text-sm text-slate-400">
                 {memberStatusOnly
-                  ? 'Only status is editable for your assigned task.'
-                  : 'All fields marked with * are required.'}
+                  ? 'Update progress for your assigned work.'
+                  : 'Add the work details, schedule, and assignees, then return to your task list.'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={resetForm}
-              className="rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
-              aria-label="Close form"
-            >
-              <X size={18} />
-            </button>
           </div>
 
           <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
@@ -435,11 +461,15 @@ export const TasksView: React.FC = () => {
               />
             </Field>
 
-            <Field label="Start date *" error={fieldErrors.startDate}>
+            <Field
+              label="Start date *"
+              error={fieldErrors.startDate}
+              hint={`Choose ${getLatestDate(today, selectedProject?.startDate) || 'today'} or a later date.`}
+            >
               <input
                 type="date"
                 value={form.startDate}
-                min={selectedProject?.startDate}
+                min={getLatestDate(today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, startDate: event.target.value }));
@@ -450,11 +480,15 @@ export const TasksView: React.FC = () => {
               />
             </Field>
 
-            <Field label="Due date *" error={fieldErrors.dueDate}>
+            <Field
+              label="Due date *"
+              error={fieldErrors.dueDate}
+              hint={`Choose the start date or later${selectedProject ? `, up to ${getProjectEndDate(selectedProject)}` : ''}.`}
+            >
               <input
                 type="date"
                 value={form.dueDate}
-                min={form.startDate || selectedProject?.startDate}
+                min={getLatestDate(form.startDate, today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, dueDate: event.target.value }));
@@ -534,13 +568,19 @@ export const TasksView: React.FC = () => {
             )}
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-white/10 bg-black/10 px-5 py-4">
+          <div className="border-t border-white/10 bg-black/10 px-5 py-4">
+            {formError && (
+              <p role="alert" className="mb-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {formError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={resetForm}
               className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5"
             >
-              Cancel
+              {editingTaskId ? 'Cancel' : 'View Tasks'}
             </button>
             <button
               type="submit"
@@ -554,11 +594,13 @@ export const TasksView: React.FC = () => {
                   ? 'Save changes'
                   : 'Create task'}
             </button>
+            </div>
           </div>
         </form>
+        </div>
       )}
 
-      <div className="glass-panel overflow-hidden">
+      {!isCreatePage && <div className="glass-panel overflow-hidden">
         <div className="border-b border-white/10 p-4">
           <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -667,105 +709,119 @@ export const TasksView: React.FC = () => {
             description="Try changing or clearing the current filters."
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="density-table min-w-[1050px]">
-              <thead>
-                <tr>
-                  <th className="text-left">Task</th>
-                  <th className="text-left">Project</th>
-                  <th className="text-left">Status</th>
-                  <th className="text-left">Priority</th>
-                  <th className="text-left">Timeline</th>
-                  <th className="text-left">Assignees</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTasks.map((task) => {
-                  const project = projects.find((item) => item.id === task.projectId);
-                  if (!project) return null;
-                  const assignees = getTaskAssigneeIds(task)
-                    .map((id) => users.find((user) => user.id === id))
-                    .filter(Boolean);
-                  const overdue = isTaskOverdue(task, today);
-                  const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
-                  const mayDelete = canDeleteTask(
-                    currentRole,
-                    currentUser.id,
-                    project,
-                    false
-                  );
+          <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {filteredTasks.map((task) => {
+              const project = projects.find((item) => item.id === task.projectId);
+              if (!project) return null;
+              const assignees = getTaskAssigneeIds(task)
+                .map((id) => users.find((user) => user.id === id))
+                .filter(Boolean);
+              const overdue = isTaskOverdue(task, today);
+              const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
+              const mayDelete = canDeleteTask(currentRole, currentUser.id, project);
 
-                  return (
-                    <tr key={task.id}>
-                      <td>
-                        <div className="max-w-[320px]">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate font-semibold text-slate-100">{task.title}</span>
-                            {overdue && (
-                              <span className="shrink-0 rounded-full border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-300">
-                                Overdue
-                              </span>
+              return (
+                <article
+                  key={task.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setViewingTask(task)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') setViewingTask(task);
+                  }}
+                  className="group relative flex min-h-[250px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-4 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-300">
+                        {getProjectName(project)}
+                      </p>
+                      <p className="mt-1 font-mono text-[10px] text-slate-500">{task.taskNumber}</p>
+                    </div>
+                    {(mayEdit || mayDelete) && (
+                      <div
+                        data-task-actions
+                        className="absolute right-3 top-3 z-10"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenMenuTaskId((current) => current === task.id ? null : task.id)
+                          }
+                          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                          aria-label="Task actions"
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+                        {openMenuTaskId === task.id && (
+                          <div className="absolute right-0 top-8 z-20 w-32 overflow-hidden rounded-lg border border-white/10 bg-slate-950 py-1 shadow-xl">
+                            {mayEdit && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  openEditForm(task);
+                                  setOpenMenuTaskId(null);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/10"
+                              >
+                                Edit
+                              </button>
+                            )}
+                            {mayDelete && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTaskPendingDeletion(task);
+                                  setDeleteError(null);
+                                  setOpenMenuTaskId(null);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs text-rose-300 transition hover:bg-rose-500/10"
+                              >
+                                Delete
+                              </button>
                             )}
                           </div>
-                          <span className="font-mono text-[10px] text-slate-500">{task.taskNumber}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <span className="block max-w-[180px] truncate text-slate-300">
-                          {getProjectName(project)}
-                        </span>
-                      </td>
-                      <td><TaskBadge value={task.status} kind="status" /></td>
-                      <td><TaskBadge value={task.priority} kind="priority" /></td>
-                      <td>
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                          <CalendarDays size={13} className="text-slate-500" />
-                          <span>{formatDate(getTaskStartDate(task))}</span>
-                          <span className="text-slate-600">→</span>
-                          <span className={overdue ? 'font-semibold text-rose-300' : ''}>
-                            {formatDate(task.dueDate)}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="flex max-w-[220px] items-center gap-1.5">
-                          <UsersRound size={13} className="shrink-0 text-slate-500" />
-                          <span className="truncate text-[11px] text-slate-300">
-                            {assignees.map((user) => user?.name).join(', ') || 'Unassigned'}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="flex justify-end gap-1">
-                          <ActionButton label="View task" onClick={() => setViewingTask(task)}>
-                            <Eye size={14} />
-                          </ActionButton>
-                          {mayEdit && (
-                            <ActionButton label="Edit task" onClick={() => openEditForm(task)}>
-                              <Pencil size={14} />
-                            </ActionButton>
-                          )}
-                          {mayDelete && (
-                            <ActionButton
-                              label="Delete task"
-                              danger
-                              onClick={() => handleDelete(task)}
-                            >
-                              <Trash2 size={14} />
-                            </ActionButton>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <h3 title={task.title} className="mt-4 truncate pr-10 text-lg font-bold leading-6 text-white">
+                    {task.title}
+                  </h3>
+                  <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
+                    {task.description}
+                  </p>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <TaskBadge value={task.status} kind="status" />
+                    <TaskBadge value={task.priority} kind="priority" />
+                    {overdue && (
+                      <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-300">
+                        Overdue
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-auto border-t border-white/10 pt-4">
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <Detail label="Starts" value={formatDate(getTaskStartDate(task))} compact />
+                      <Detail label="Due" value={formatDate(task.dueDate)} compact />
+                    </div>
+                    <div className="mt-4 flex min-w-0 items-center gap-2">
+                      <UsersRound size={14} className="shrink-0 text-slate-500" />
+                      <span className="truncate text-xs font-semibold text-slate-300">
+                        {assignees.map((user) => user?.name).join(', ') || 'Unassigned'}
+                      </span>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
-      </div>
-
+      </div>}
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
@@ -781,6 +837,15 @@ export const TasksView: React.FC = () => {
           onClose={() => setViewingTask(null)}
         />
       )}
+      {taskPendingDeletion && (
+        <DeleteTaskModal
+          task={taskPendingDeletion}
+          isDeleting={isDeleting}
+          error={deleteError}
+          onCancel={() => !isDeleting && setTaskPendingDeletion(null)}
+          onConfirm={() => void handleDelete()}
+        />
+      )}
     </section>
   );
 };
@@ -788,13 +853,15 @@ export const TasksView: React.FC = () => {
 const Field: React.FC<{
   label: string;
   error?: string;
+  hint?: string;
   className?: string;
   children: React.ReactNode;
-}> = ({ label, error, className = '', children }) => (
+}> = ({ label, error, hint, className = '', children }) => (
   <label className={`block space-y-1.5 ${className}`}>
     <span className="text-xs font-semibold text-slate-300">{label}</span>
     {children}
     {error && <span className="block text-[11px] text-rose-400">{error}</span>}
+    {!error && hint && <span className="block text-[11px] leading-4 text-slate-500">{hint}</span>}
   </label>
 );
 
@@ -851,27 +918,6 @@ const TaskBadge: React.FC<{
   );
 };
 
-const ActionButton: React.FC<{
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-  children: React.ReactNode;
-}> = ({ label, onClick, danger = false, children }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    title={label}
-    aria-label={label}
-    className={`rounded-lg border p-1.5 transition ${
-      danger
-        ? 'border-rose-500/20 text-rose-400 hover:bg-rose-500/10'
-        : 'border-white/10 text-slate-400 hover:border-cyan-500/30 hover:bg-cyan-500/10 hover:text-cyan-300'
-    }`}
-  >
-    {children}
-  </button>
-);
-
 const StateMessage: React.FC<{
   icon: React.ReactNode;
   title: string;
@@ -881,6 +927,42 @@ const StateMessage: React.FC<{
     {icon}
     <h3 className="mt-3 font-semibold text-slate-200">{title}</h3>
     <p className="mt-1 text-xs text-slate-500">{description}</p>
+  </div>
+);
+
+const DeleteTaskModal: React.FC<{
+  task: Task;
+  isDeleting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ task, isDeleting, error, onCancel, onConfirm }) => (
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="delete-task-title"
+    className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+    onKeyDown={(event) => {
+      if (event.key === 'Escape' && !isDeleting) onCancel();
+    }}
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !isDeleting) onCancel();
+    }}
+  >
+    <div className="glass-panel-glow w-full max-w-md p-5">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-rose-300">Permanent action</p>
+      <h2 id="delete-task-title" className="mt-2 text-lg font-bold text-white">Delete this task?</h2>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        <span className="font-semibold text-slate-200">{task.title}</span> will be permanently removed. This cannot be undone.
+      </p>
+      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" autoFocus onClick={onCancel} disabled={isDeleting} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 disabled:opacity-50">Cancel</button>
+        <button type="button" onClick={onConfirm} disabled={isDeleting} className="inline-flex items-center gap-2 rounded-lg bg-rose-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-rose-400 disabled:opacity-50">
+          {isDeleting && <LoaderCircle size={14} className="animate-spin" />}{isDeleting ? 'Deleting…' : 'Delete task'}
+        </button>
+      </div>
+    </div>
   </div>
 );
 
@@ -940,8 +1022,12 @@ const TaskDetailsModal: React.FC<{
   </div>
 );
 
-const Detail: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+const Detail: React.FC<{ label: string; value: string; compact?: boolean }> = ({
+  label,
+  value,
+  compact = false
+}) => (
+  <div className={`rounded-xl border border-white/10 bg-slate-950/40 ${compact ? 'p-2' : 'p-3'}`}>
     <span className="block text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
     <span className="mt-1 block text-xs font-semibold text-slate-200">{value}</span>
   </div>

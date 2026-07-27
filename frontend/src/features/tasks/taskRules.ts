@@ -96,19 +96,33 @@ export const getProjectMemberIds = (project: Project): string[] =>
 export const getTaskStatusLabel = (status: TaskStatus): string =>
   status === 'Todo' ? 'To Do' : status;
 
+export const getTodayIsoDate = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const getLatestDate = (...dates: Array<string | undefined>): string | undefined =>
+  dates
+    .filter((date): date is string => Boolean(date))
+    .reduce<string | undefined>(
+      (latest, date) => !latest || date > latest ? date : latest,
+      undefined
+    );
+
 export const isActiveProject = (project: Project): boolean =>
   project.status === 'Active' && project.approvalStatus === 'Approved';
 
-// The Vite prototype has no UserRole validity/scope records. teamLeadId is only
-// a display-data proxy; the future server must verify iam.UserRoles and
-// iam.TeamLeadProjectScopes for every request.
 export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
 ): boolean =>
   isActiveProject(project)
-  && (role === 'Admin' || (role === 'Team_Lead' && project.teamLeadId === userId));
+  && role === 'Team_Lead'
+  && project.teamLeadId === userId;
 
 export const canEditTask = (
   role: UserRole,
@@ -116,7 +130,6 @@ export const canEditTask = (
   project: Project,
   task: Task
 ): boolean => {
-  if (role === 'Admin') return true;
   if (role === 'Team_Lead') {
     return isActiveProject(project) && project.teamLeadId === userId;
   }
@@ -127,9 +140,8 @@ export const canDeleteTask = (
   role: UserRole,
   userId: string,
   project: Project,
-  teamLeadCanDeleteTasks = false
+  teamLeadCanDeleteTasks = true
 ): boolean => {
-  if (role === 'Admin') return true;
   return role === 'Team_Lead'
     && teamLeadCanDeleteTasks
     && isActiveProject(project)
@@ -140,7 +152,8 @@ export const validateTaskInput = (
   input: TaskFormInput,
   project: Project | undefined,
   users: User[],
-  requireActiveProject = true
+  requireActiveProject = true,
+  minimumStartDate?: string
 ): Record<string, string> => {
   const errors: Record<string, string> = {};
 
@@ -158,6 +171,10 @@ export const validateTaskInput = (
 
   if (input.startDate && input.dueDate && input.dueDate < input.startDate) {
     errors.dueDate = 'Due date cannot be before the start date.';
+  }
+
+  if (minimumStartDate && input.startDate && input.startDate < minimumStartDate) {
+    errors.startDate = `Start date cannot be before ${minimumStartDate}.`;
   }
 
   if (project && input.startDate && input.startDate < project.startDate) {

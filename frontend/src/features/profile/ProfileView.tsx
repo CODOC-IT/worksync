@@ -5,13 +5,14 @@ import { GlassCard } from '../../components/common/GlassCard';
 import {
   Mail, Briefcase, Shield, Camera, Save, AlertCircle,
   CheckCircle2, Calendar, Flag, Users, Trophy, Loader2,
-  FolderKanban, CheckSquare, User, UserCircle,
-  ListTodo, Inbox, Star
+  FolderKanban, CheckSquare, Inbox, Star
 } from 'lucide-react';
 
-const getAuthHeaders = () => {
+const getAuthHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('worksync_auth_token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
 };
 
 const safeParseJSON = async (res: Response): Promise<Record<string, any>> => {
@@ -42,10 +43,10 @@ interface DeadlineItem {
   taskId?: string;
 }
 
-type ProfileTab = 'overview' | 'tasks' | 'projects' | 'led' | 'deadlines' | 'account';
+type ProfileTab ='tasks' | 'projects' | 'led' | 'deadlines' | 'account';
 
 const TABS: { id: ProfileTab; label: string; icon: React.ElementType }[] = [
-  { id: 'overview', label: 'Overview', icon: UserCircle },
+ 
   { id: 'tasks', label: 'My Tasks', icon: CheckSquare },
   { id: 'projects', label: 'My Projects', icon: FolderKanban },
   { id: 'led', label: 'Projects Led', icon: Trophy },
@@ -53,16 +54,10 @@ const TABS: { id: ProfileTab; label: string; icon: React.ElementType }[] = [
   { id: 'account', label: 'Account', icon: Shield },
 ];
 
-const FRIENDLY_ERRORS: Record<string, string> = {
-  'Couldn\'t update your display name. Please try again.': 'Couldn\'t update your display name. Please try again.',
-  'Display name updated successfully.': 'Display name updated successfully.',
-  'Profile picture updated successfully.': 'Profile picture updated successfully.',
-};
-
 export const ProfileView: React.FC = () => {
   const { currentUser, tasks, projects, updateCurrentUser } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [activeTab, setActiveTab] = useState<ProfileTab>('overview');
+  const [activeTab, setActiveTab] = useState<ProfileTab>('tasks');
 
   const [nameInput, setNameInput] = useState(currentUser.name);
   const [nameLoading, setNameLoading] = useState(false);
@@ -141,7 +136,7 @@ export const ProfileView: React.FC = () => {
     try {
       const res = await fetch('/api/auth/profile/display-name', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name: sanitized }),
       });
       const data = await safeParseJSON(res);
@@ -185,7 +180,7 @@ export const ProfileView: React.FC = () => {
 
       const res = await fetch('/api/auth/profile/avatar', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ avatar: base64 }),
       });
       const data = await safeParseJSON(res);
@@ -206,7 +201,6 @@ export const ProfileView: React.FC = () => {
   /* ───────── Avatar Component ───────── */
   const AvatarImage = ({ size = 'lg' }: { size?: 'lg' | 'md' }) => {
     const dimensions = size === 'lg' ? 'w-28 h-28' : 'w-20 h-20';
-    const iconSize = size === 'lg' ? 40 : 28;
     const initials = getInitials(currentUser.name);
     const containerClass = `${dimensions} rounded-full overflow-hidden ring-2 ring-cyan-400/60 shadow-[0_0_24px_rgba(0,242,254,0.2)] shrink-0`;
 
@@ -275,35 +269,6 @@ export const ProfileView: React.FC = () => {
           </button>
         );
       })}
-    </div>
-  );
-
-  /* ───────── Overview Tab ───────── */
-  const renderOverview = () => (
-    <div className="flex flex-col items-center gap-5 py-6 sm:flex-row sm:items-center sm:gap-8">
-      <AvatarImage size="lg" />
-      <div className="min-w-0 text-center sm:text-left">
-        <div className="flex items-center justify-center sm:justify-start gap-2.5 mb-2 flex-wrap">
-          <h1 className="text-xl font-extrabold text-white">{currentUser.name}</h1>
-          <StatusBadge status={currentUser.role.replace('_', ' ')} size="sm" />
-        </div>
-        <div className="flex flex-col items-center sm:items-start gap-1.5 text-xs text-slate-400 font-mono">
-          <span className="flex items-center gap-1.5">
-            <Mail size={13} className="text-cyan-400 shrink-0" />
-            {currentUser.email}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Briefcase size={13} className="text-purple-400 shrink-0" />
-            {currentUser.department}
-          </span>
-          {currentUser.title && (
-            <span className="flex items-center gap-1.5">
-              <Shield size={13} className="text-amber-400 shrink-0" />
-              {currentUser.title}
-            </span>
-          )}
-        </div>
-      </div>
     </div>
   );
 
@@ -546,7 +511,6 @@ export const ProfileView: React.FC = () => {
   /* ───────── Render ───────── */
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'overview': return renderOverview();
       case 'tasks': return renderMyTasks();
       case 'projects': return renderMyProjects();
       case 'led': return renderProjectsLed();
