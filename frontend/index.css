@@ -1142,3 +1142,49 @@
 .sidebar-overlay {
   animation: sidebarFadeIn 0.2s ease-out;
 }
+
+/* Task-display badges keep their semantic color and contrast in light mode
+   instead of inheriting the intentionally muted page surface treatments. */
+.light [data-task-badge] {
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.light [data-task-badge-value="Todo"],
+.light [data-task-badge-value="Medium"] {
+  background-color: #466E55;
+  border-color: #31543F;
+  color: #FFFFFF;
+}
+
+.light [data-task-badge-value="In Progress"],
+.light [data-task-badge-value="High"] {
+  background-color: #D3A33D;
+  border-color: #9C6E16;
+  color: #2D2100;
+}
+
+.light [data-task-badge-value="Review"] {
+  background-color: #9C4D48;
+  border-color: #73332F;
+  color: #FFFFFF;
+}
+
+.light [data-task-badge-value="Done"] {
+  background-color: #4F8C63;
+  border-color: #346847;
+  color: #FFFFFF;
+}
+
+.light [data-task-badge-value="Blocked"],
+.light [data-task-badge-value="Urgent"] {
+  background-color: #A9322D;
+  border-color: #82241F;
+  color: #FFFFFF;
+}
+
+.light [data-task-badge-value="Low"] {
+  background-color: #5F6B63;
+  border-color: #465149;
+  color: #FFFFFF;
+}
