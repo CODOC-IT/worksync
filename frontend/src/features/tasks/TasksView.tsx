@@ -78,6 +78,9 @@ export const TasksView: React.FC = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [viewingTask, setViewingTask] = useState<Task | null>(null);
+  const [taskPendingDeletion, setTaskPendingDeletion] = useState<Task | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [openMenuTaskId, setOpenMenuTaskId] = useState<string | null>(null);
   const [form, setForm] = useState<TaskFormInput>(emptyForm);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -293,12 +296,21 @@ export const TasksView: React.FC = () => {
     }
   };
 
-  const handleDelete = async (task: Task) => {
-    if (!window.confirm(`Delete "${task.title}"? This action cannot be undone.`)) return;
+  const handleDelete = async () => {
+    if (!taskPendingDeletion || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    const task = taskPendingDeletion;
     const result = await deleteTask(task.id);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    if (viewingTask?.id === task.id) setViewingTask(null);
-    setOpenMenuTaskId(null);
+    if (!result.success) {
+      setDeleteError(result.message);
+    } else {
+      setNotice({ type: 'success', message: result.message });
+      if (viewingTask?.id === task.id) setViewingTask(null);
+      setTaskPendingDeletion(null);
+      setOpenMenuTaskId(null);
+    }
+    setIsDeleting(false);
   };
 
   const clearFilters = () => {
@@ -759,7 +771,11 @@ export const TasksView: React.FC = () => {
                             {mayDelete && (
                               <button
                                 type="button"
-                                onClick={() => void handleDelete(task)}
+                                onClick={() => {
+                                  setTaskPendingDeletion(task);
+                                  setDeleteError(null);
+                                  setOpenMenuTaskId(null);
+                                }}
                                 className="block w-full px-3 py-2 text-left text-xs text-rose-300 transition hover:bg-rose-500/10"
                               >
                                 Delete
@@ -771,7 +787,7 @@ export const TasksView: React.FC = () => {
                     )}
                   </div>
 
-                  <h3 className="mt-4 line-clamp-2 text-lg font-bold leading-6 text-white">
+                  <h3 title={task.title} className="mt-4 truncate pr-10 text-lg font-bold leading-6 text-white">
                     {task.title}
                   </h3>
                   <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
@@ -819,6 +835,15 @@ export const TasksView: React.FC = () => {
             .map((id) => users.find((user) => user.id === id)?.name)
             .filter((name): name is string => Boolean(name))}
           onClose={() => setViewingTask(null)}
+        />
+      )}
+      {taskPendingDeletion && (
+        <DeleteTaskModal
+          task={taskPendingDeletion}
+          isDeleting={isDeleting}
+          error={deleteError}
+          onCancel={() => !isDeleting && setTaskPendingDeletion(null)}
+          onConfirm={() => void handleDelete()}
         />
       )}
     </section>
@@ -902,6 +927,42 @@ const StateMessage: React.FC<{
     {icon}
     <h3 className="mt-3 font-semibold text-slate-200">{title}</h3>
     <p className="mt-1 text-xs text-slate-500">{description}</p>
+  </div>
+);
+
+const DeleteTaskModal: React.FC<{
+  task: Task;
+  isDeleting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ task, isDeleting, error, onCancel, onConfirm }) => (
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="delete-task-title"
+    className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+    onKeyDown={(event) => {
+      if (event.key === 'Escape' && !isDeleting) onCancel();
+    }}
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !isDeleting) onCancel();
+    }}
+  >
+    <div className="glass-panel-glow w-full max-w-md p-5">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-rose-300">Permanent action</p>
+      <h2 id="delete-task-title" className="mt-2 text-lg font-bold text-white">Delete this task?</h2>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        <span className="font-semibold text-slate-200">{task.title}</span> will be permanently removed. This cannot be undone.
+      </p>
+      {error && <p role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" autoFocus onClick={onCancel} disabled={isDeleting} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 disabled:opacity-50">Cancel</button>
+        <button type="button" onClick={onConfirm} disabled={isDeleting} className="inline-flex items-center gap-2 rounded-lg bg-rose-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-rose-400 disabled:opacity-50">
+          {isDeleting && <LoaderCircle size={14} className="animate-spin" />}{isDeleting ? 'Deleting…' : 'Delete task'}
+        </button>
+      </div>
+    </div>
   </div>
 );
 
