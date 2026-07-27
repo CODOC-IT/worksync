@@ -727,6 +727,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Team Leads cannot delete immediately: their delete action files a Project Deletion
     // approval request instead (local-only, same as the Project Creation approval flow); the
     // actual archive only happens once an Admin approves it via approveProjectDeletion below.
+    // This entire branch never calls the backend (there's no API for "request a deletion"), so
+    // unlike every other Project mutation, the Admin notification here has no server-side
+    // equivalent to rely on -- it must be dispatched from here, or Admins never learn a
+    // deletion request exists at all.
     if (currentRole !== 'Admin') {
       const approval: SystemApproval = {
         id: `app-${Date.now()}`,
@@ -740,6 +744,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'Pending'
       };
       setSystemApprovals((prev) => [approval, ...prev]);
+      dispatchNotifications({
+        recipientIds: resolveAdminRecipients(users, currentUser.id),
+        type: 'approval',
+        title: 'Project Deletion Requested',
+        message: `${currentUser.name} requested deletion of project "${project.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId
+      });
       pushActivity('Requested project deletion', 'Project', projectId, project.title);
 
       const message = `Your request to delete "${project.title}" was submitted for Admin approval.`;

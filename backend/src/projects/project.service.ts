@@ -1,5 +1,5 @@
 ﻿import * as repo from './project.repository.js';
-import { rowToProjectDTO } from './project.mapper.js';
+import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -46,10 +46,7 @@ const assertCanManage = async (projectRow: ProjectRow, userId: string, role: str
     throw new ProjectAuthorizationError('Only Admins and Team Leads can manage projects.');
   }
   const members = await repo.findMembersForProject(projectRow.projectid);
-  const isLead = members.some(
-    (member) => member.memberrolecode === 'TeamLead' && fromUserPk(member.userid) === userId
-  );
-  if (!isLead) {
+  if (resolveTeamLeadUserId(projectRow, members) !== userId) {
     throw new ProjectAuthorizationError('You can only manage projects you lead.');
   }
 };
@@ -99,7 +96,7 @@ export const isProjectLead = async (projectId: string, userId: string, role: str
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
-  return members.some((member) => member.memberrolecode === 'TeamLead' && fromUserPk(member.userid) === userId);
+  return resolveTeamLeadUserId(row, members) === userId;
 };
 
 export const getProjectForUser = async (projectId: string, userId: string, role: string): Promise<ProjectDTO> => {
