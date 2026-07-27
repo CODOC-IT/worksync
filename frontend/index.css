@@ -1188,3 +1188,52 @@
   border-color: #465149;
   color: #FFFFFF;
 }
+
+/* Calendar entry popovers are rendered in a portal, so their light-mode
+   semantics are scoped directly instead of relying on the calendar page. */
+.light [data-calendar-tooltip] .glass-panel {
+  background: #F8FAF9;
+  border-color: #87998E !important;
+  box-shadow: 0 5px 14px rgba(25, 40, 31, 0.16);
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind] {
+  border-width: 1px;
+  box-shadow: none !important;
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Deadline"] {
+  background-color: #A9322D;
+  border-color: #82241F;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Milestone"],
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Meeting"] {
+  background-color: #466E55;
+  border-color: #31543F;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Task Due"] {
+  background-color: #8D6F50;
+  border-color: #685038;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Review"] {
+  background-color: #D3A33D;
+  border-color: #9C6E16;
+  color: #2D2100;
+}
+
+.light [data-calendar-tooltip] [data-calendar-entry-kind="Leave"] {
+  background-color: #5F6B63;
+  border-color: #465149;
+  color: #FFFFFF;
+}
+
+.light [data-calendar-tooltip] [data-status] {
+  font-weight: 600;
+  box-shadow: none !important;
+}
