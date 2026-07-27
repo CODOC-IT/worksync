@@ -222,7 +222,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         initial={{ opacity: 0, y: 24, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.45, ease: 'easeOut' }}
-        className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 max-h-[90vh] sm:max-h-none sm:h-auto lg:min-h-[600px]"
+        className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 max-h-[90vh] lg:max-h-[85vh]"
       >
         {/* LEFT COLUMN: Visual Showcase Panel (40% width) */}
         <div className="lg:col-span-5 relative p-6 md:p-8 flex flex-col justify-between overflow-hidden border-b lg:border-b-0 lg:border-r border-white/10 bg-gradient-to-br from-purple-950/60 via-slate-950/80 to-slate-950/90 min-h-0">
