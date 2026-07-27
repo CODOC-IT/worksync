@@ -6,11 +6,22 @@ import { GlobalSearchModal } from "../frontend/src/components/common/GlobalSearc
 import { ShortcutsModal } from "../frontend/src/components/common/ShortcutsModal";
 
 // Features
+import { LoginView } from '../frontend/src/features/auth/LoginView';
+import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
+import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
+import { TasksView } from '../frontend/src/features/tasks/TasksView';
+import { AttendanceView } from '../frontend/src/features/attendance/AttendanceView';
+import { AIAssistantView } from '../frontend/src/features/ai-assistant/AIAssistantView';
+import { KanbanView } from '../frontend/src/features/kanban/KanbanView';
+import { ApprovalsInboxView } from '../frontend/src/features/approvals/ApprovalsInboxView';
+import { NotificationsView } from '../frontend/src/features/notifications/NotificationsView';
+import { CalendarView } from "../frontend/src/features/calendar/CalendarView";
+import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
+import { ReportsView } from '../frontend/src/features/reports/ReportsView';
 import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
 import { SettingsView } from '../frontend/src/features/settings/SettingsView';
-import { LoginView } from '../frontend/src/features/auth/LoginView';
 
 import { Shield, Sparkles, Download, Database, Key } from 'lucide-react';
 
@@ -48,7 +59,6 @@ const AppContent: React.FC = () => {
     return (
       <LoginView
         onLoginSuccess={() => setCurrentTab("dashboard")}
-        onSwitchToSignup={() => setCurrentTab("signup")}
       />
     );
   }
@@ -112,8 +122,17 @@ const AppContent: React.FC = () => {
         {/* Main Scrollable View Area */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-          {currentTab === 'members' && <TeamMembersView />}
+          {currentTab === 'projects' && <ProjectsView />}
+          {currentTab === 'tasks' && <TasksView />}
+          {currentTab === 'attendance' && <AttendanceView />}
           {currentTab === 'profile' && <ProfileView />}
+          {currentTab === 'ai-assistant' && <AIAssistantView />}
+          {currentTab === 'kanban' && <KanbanView />}
+          {currentTab === 'approvals' && <ApprovalsInboxView />}
+          {currentTab === 'notifications' && <NotificationsView />}
+          {currentTab === 'reports' && <ReportsView />}
+          {currentTab === 'calendar' && <CalendarView />}
+          {(currentTab === 'members' || currentTab === 'team-members') && <TeamMembersView />}
           {currentTab === 'settings' && <SettingsView />}
         </main>
       </div>
