@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowDownAZ,
   Check,
+  CheckSquare,
   ChevronDown,
   ClipboardList,
   Filter,
@@ -333,7 +334,10 @@ export const TasksView: React.FC = () => {
     <section className="mx-auto max-w-[1500px] space-y-5">
       {!isCreatePage && <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Tasks</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
+            <CheckSquare size={23} className="text-cyan-400" />
+            Tasks
+          </h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
             Track project work, ownership, and due dates in one focused workspace.
           </p>
@@ -605,7 +609,7 @@ export const TasksView: React.FC = () => {
           <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="flex items-center gap-2 font-bold text-white">
-                <ClipboardList size={17} className="text-cyan-400" />
+                <CheckSquare size={17} className="text-cyan-400" />
                 Task list
                 <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
                   {filteredTasks.length}
@@ -732,7 +736,7 @@ export const TasksView: React.FC = () => {
                   className="group relative flex min-h-[250px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-4 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 pr-12">
                       <p className="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-300">
                         {getProjectName(project)}
                       </p>
@@ -749,7 +753,7 @@ export const TasksView: React.FC = () => {
                           onClick={() =>
                             setOpenMenuTaskId((current) => current === task.id ? null : task.id)
                           }
-                          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                        className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/10 hover:text-white"
                           aria-label="Task actions"
                         >
                           <MoreHorizontal size={18} />
@@ -787,7 +791,7 @@ export const TasksView: React.FC = () => {
                     )}
                   </div>
 
-                  <h3 title={task.title} className="mt-4 truncate pr-10 text-lg font-bold leading-6 text-white">
+                  <h3 title={task.title} className="mt-4 truncate pr-12 text-lg font-bold leading-6 text-white">
                     {task.title}
                   </h3>
                   <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
@@ -912,7 +916,12 @@ const TaskBadge: React.FC<{
     : getTaskPriorityValue(value as TaskPriority);
 
   return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${classes}`}>
+    <span
+      data-task-badge
+      data-task-badge-kind={kind}
+      data-task-badge-value={value}
+      className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${classes}`}
+    >
       {label}
     </span>
   );
