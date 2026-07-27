@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/pool.js';
-import { toProjectPkOrNull, toTaskPkOrNull, toUserPk, toUserPkOrNull } from './idMapping.js';
+import { toProjectPkOrNull, toTaskPkOrNull, toUserPk, toUserPkOrNull } from '../utils/idMapping.js';
 import { NotificationRow } from './notification.mapper.js';
 import { ApiPriority, DbPriority, NotificationEvent } from './notification.types.js';
 

@@ -60,6 +60,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
 
   return (
     <span
+      data-status={normalized}
       className={`inline-flex items-center font-medium rounded-full border backdrop-blur-sm whitespace-nowrap ${sizeClasses[size]} ${colorClasses} ${className}`}
     >
       <Icon size={iconSizes[size]} className="shrink-0" />

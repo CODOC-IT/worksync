@@ -1,8 +1,18 @@
 # WorkSync — Project Analysis
 
-Snapshot of the codebase as of the `feature/task-board-kanban` branch (July 2026). This
-document exists so future feature work does not need to re-explore the whole repository —
-skim this first, then read the module-specific guide you need (e.g. `BoardModuleGuide.md`).
+Snapshot of the codebase as of the `feature/backend-project-board-notification` branch (July
+2026). This document exists so future feature work does not need to re-explore the whole
+repository — skim this first, then read the module-specific guide you need (e.g.
+`BoardModuleGuide.md`, `docs/ProjectBoardNotification_Implementation_Notes.md` for the
+Project/Board/Notification backend specifically).
+
+> **Update (this branch)**: Project, Task, and Notification are no longer client-side
+> prototypes. `backend/src/projects/`, `backend/src/tasks/`, and `backend/src/notifications/`
+> are real Express + TypeScript modules backed by the Postgres schema described in §5, mounted
+> at `/api/projects`, `/api/tasks`, `/api/notifications`. Sections below that used to describe
+> "no backend"/"client-side prototype only" for those three modules have been updated; every
+> other module (Attendance, Break Management, Reports, AI Assistant, Chat, Calendar, Dashboard,
+> User Management) is genuinely unchanged and still frontend-only, as before.
 
 ## 1. Folder Structure
 
@@ -37,9 +47,13 @@ worksync/
 │       ├── store/AppContext.tsx   # Single global state container (React Context + useState)
 │       ├── types/index.ts         # All shared TypeScript interfaces/types
 │       └── utils/supabase.ts      # Optional Supabase client (feature-detected, may be null)
-├── backend/                       # Express + TypeScript auth API ONLY
+├── backend/                       # Express + TypeScript API: auth + Project/Task/Notification
 │   └── src/
 │       ├── server.ts, routes/authRoutes.ts, middleware/authMiddleware.ts, store/userStore.ts
+│       ├── projects/              # Project Module: project.{routes,controller,service,repository,types,validation}.ts
+│       ├── tasks/                 # Task Module: task.{routes,controller,service,repository,types,validation}.ts
+│       ├── notifications/         # Notification Module (production-complete, see Notification_Module_Guide.md)
+│       ├── utils/idMapping.ts     # Shared usr-<id>/prj-<id>/tsk-<id> ↔ integer PK conversions
 │       └── (board.js / board.css — untracked, NOT part of this app; see BoardModuleGuide.md §"Why board.js/css were not reused")
 ├── database/                      # PostgreSQL 16+ schema, 70 tables / 11 schemas, split by concern
 │   ├── 00_schemas.sql … 17_seed.sql, setup.sql, README.md
@@ -59,20 +73,34 @@ worksync/
   function on the context value (`createProject`, `updateTask`, `updateTaskStatus`, …). There
   is no Redux/Zustand — every feature view calls `useApp()` and reads/writes through these
   functions.
-- **Persistence**: This is a **client-side prototype**. Nothing is written to `localStorage`
-  by default (state resets on refresh) except attendance/theme are in-memory only. There is an
-  optional, best-effort Supabase read path: `frontend/src/features/tasks/taskRepository.ts`
-  calls `loadTasksFromSupabase(projects)` once on mount and — if a Supabase client is
-  configured (`frontend/src/utils/supabase.ts`) — replaces the mock `tasks` array with rows
-  from `work.tasks` (see §5). If Supabase isn't configured, it silently falls back to mock
-  data. There is currently **no write path** to Supabase/Postgres from the frontend — all
-  mutations (`createTask`, `updateTaskStatus`, etc.) only update React state in memory.
-- **Backend**: `backend/` is a minimal Express + TypeScript service that implements
-  authentication only (`authRoutes.ts`, `authMiddleware.ts`, `userStore.ts`). It has no
-  relationship to the Kanban/Task/Project UI — those are pure frontend-state features today.
-- **Auth/session**: Not wired into the SPA's `AppContext` yet. `LoginView`/`SignupView` exist
-  as UI screens; `currentRole`/`currentUser` in `AppContext` are switched via a manual role
-  selector for prototyping, not a real session.
+- **Persistence — Project/Task/Notification are real, everything else is still a client-side
+  prototype.** `frontend/src/features/projects/projectRepository.ts` and
+  `frontend/src/features/tasks/taskRepository.ts` are thin `fetch` wrappers over
+  `/api/projects`/`/api/tasks` (Bearer token from `localStorage`). `AppContext.tsx` hydrates
+  `projects`/`tasks` from these on mount (`hydrateProjects`/`hydrateTasks` effects) and every
+  mutation (`createProject`, `updateTask`, `updateTaskStatus`, …) is `async`, calls the real
+  API, and **only updates React state from the server's response** — a failed call returns
+  `{ success: false, message }` and leaves state untouched (no optimistic update, no local
+  fallback; see `docs/ProjectBoardNotification_Implementation_Notes.md`). The Notification
+  Module (`frontend/src/features/notifications/notificationApiClient.ts`) follows a related but
+  *different* contract: real API first, silent local fallback only if the call fails (it is not
+  the source of truth for anything else, so a soft-fail is acceptable there in a way it isn't
+  for Project/Task mutations). Every other module (Attendance, Break Management, Reports, AI
+  Assistant, Chat, Calendar, Dashboard widgets, User Management) is still exactly what this
+  document used to describe as the whole app: in-memory `useState`, resets on refresh, no
+  network write path.
+- **Backend**: `backend/` is an Express + TypeScript service. `authRoutes.ts`/`authMiddleware.ts`/
+  `userStore.ts` handle authentication (JWT). `projects/` and `tasks/` (mounted at
+  `/api/projects`/`/api/tasks`) and `notifications/` (mounted at `/api/notifications`) are real,
+  Postgres-backed modules — see §5 and `docs/BoardModuleGuide.md`/`docs/Notification_Module_Guide.md`.
+  Every other frontend module still has no backend counterpart.
+- **Auth/session**: JWT-based (`backend/src/routes/authRoutes.ts`,
+  `backend/src/middleware/authMiddleware.ts`). `LoginView`/`SignupView` call the real
+  `/api/auth` endpoints; `AppContext`'s `currentRole`/`currentUser` still include a manual
+  role-selector for demoing different roles without logging out, but every Project/Task API
+  call carries the real JWT and the backend independently re-derives/enforces the caller's
+  role server-side (see `assertCanManage`/`assertCanEditTask` in `project.service.ts`/
+  `task.service.ts`) rather than trusting whatever role the frontend claims.
 
 ## 3. Module Responsibilities (frontend/src/features)
 
@@ -80,29 +108,45 @@ worksync/
 |---|---|---|
 | `auth` | Login/Signup screens | Not wired to a real session yet |
 | `dashboard` | Landing overview widgets | Reads from `AppContext`, read-only |
-| `projects` | Project CRUD, approval-to-activate flow | `ProjectsView.tsx`; role gates via inline `canManage`/`canCreate` |
-| `tasks` | Task CRUD, task list/filter table | `TasksView.tsx` + `taskRules.ts` (pure permission/validation helpers) + `taskMutations.ts` (mutation builders) + `taskRepository.ts` (Supabase read) |
-| `kanban` | **Project Board module** | Was an empty stub before this branch; see `BoardModuleGuide.md` |
+| `projects` | Project CRUD, approval-to-activate flow | `ProjectsView.tsx`; role gates via inline `canManage`/`canCreate`. Real backend (`/api/projects`) via `projectRepository.ts` — see `docs/ProjectBoardNotification_Implementation_Notes.md` |
+| `tasks` | Task CRUD, task list/filter table | `TasksView.tsx` + `taskRules.ts` (pure permission/validation helpers, still used for client-side pre-validation) + `taskMutations.ts` (mutation builders, still used for pre-validation) + `taskRepository.ts` (real `/api/tasks` read/write, not just a Supabase read anymore) |
+| `kanban` | **Project Board module** | Fully backend-integrated — every status change is `Frontend → PATCH /api/tasks/:id/status → DB update + TaskStatusHistory insert + notification publish → response → UI`; see `BoardModuleGuide.md` |
 | `approvals` | Central inbox for `SystemApproval` items (project creation, controlled edits) | Independent of the board's task-status approval workflow |
 | `attendance`, `calendar`, `chat`, `reports`, `activity`, `notifications`, `profile`, `ai-assistant`, `weekly-summary` | One view each, all read/write through `AppContext` | Out of scope for this branch — not touched |
 
 ## 4. Data Flow
 
 1. `frontend/main.tsx` renders `<App />`, wrapped in `<AppProvider>` (from `AppContext.tsx`).
-2. `AppProvider` seeds all entity state from `fixtures.ts`, then (async, non-blocking) tries
-   `loadTasksFromSupabase` to replace `tasks` with live data if a Supabase project is configured.
+2. `AppProvider` seeds all entity state from `fixtures.ts`, then (async, non-blocking)
+   `hydrateProjects`/`hydrateTasks`/the notification-fetch effect each try their real API —
+   `GET /api/projects`, `GET /api/tasks`, `GET /api/notifications` — and replace the
+   corresponding mock array with the live rows on success (console-warn + keep mock data on
+   failure, e.g. no backend reachable). Every other entity array stays mock-only, seeded once.
 3. Every feature view calls `const { ... } = useApp()` to read entity arrays and call mutation
-   functions. Mutations are plain `setX((prev) => ...)` state updates — no network calls, no
-   optimistic-vs-server reconciliation.
-4. Cross-cutting side effects (activity log, notifications) are pushed manually inside each
-   mutation via the `pushActivity(...)` closure defined in `AppContext.tsx` — there is no
-   event bus. A module that wants an activity-log entry must call `pushActivity` itself from
-   inside a new `AppContext` action (see `applyBoardStatusChange` added for the board module).
-5. Role-based visibility is **not centralized** — each feature view computes its own
-   role-scoping inline (e.g. `ProjectsView`'s `canManage`, `taskRules.ts`'s `canEditTask`).
-   There is no single `usePermissions()` hook. When adding a module, follow this same pattern:
-   write small pure functions colocated with the feature (or reuse an existing one from
-   `taskRules.ts` if the semantics genuinely match).
+   functions. For Projects/Tasks/Notifications, mutations are `async`: they call the real API
+   first and only call `setX((prev) => ...)` from the server's response — never optimistically,
+   never as a fallback on failure (Notifications is the one exception: it falls back to a local
+   write on API failure, since it's not the system of record for anything downstream). Every
+   other module's mutations are still plain synchronous `setX((prev) => ...)` state updates, no
+   network call at all.
+4. Cross-cutting side effects: **notifications now come from two places**. Server-owned events
+   (everything a Project/Task API route triggers — created/updated/archived/status-changed/
+   member-added/removed) are published by `project.service.ts`/`task.service.ts` directly,
+   in-process, via `notificationService.publishEvent()` — the frontend does not call
+   `dispatchNotifications` for any of these anymore (removing that call was part of this
+   branch's work; leaving it in would double-publish). Every other module's notifications still
+   go through `AppContext.tsx`'s `dispatchNotifications` closure exactly as before (which itself
+   calls the real `/api/notifications` publish endpoint, with a local fallback on failure).
+   Activity-log entries (`pushActivity(...)`) are unrelated to notifications and still pushed
+   manually inside each mutation, unchanged.
+5. Role-based visibility is **not centralized on the frontend** — each feature view computes
+   its own role-scoping inline (e.g. `ProjectsView`'s `canManage`, `taskRules.ts`'s
+   `canEditTask`), same as before. The difference for Projects/Tasks: the frontend check is now
+   just a UX convenience (hide a button, show fewer options) — `project.service.ts`/
+   `task.service.ts` independently re-check authorization server-side
+   (`assertCanManage`/`assertCanEditTask`/`isProjectLead`) and are the actual authority; a
+   frontend bug that shows a button it shouldn't still can't produce an unauthorized write.
+   There is still no single `usePermissions()` hook on either side.
 
 ## 5. Storage Architecture / Database Schema Summary
 
@@ -118,12 +162,18 @@ worksync/
   the board module. `ProjectMembers.MemberRoleCode` (`Owner`/`TeamLead`/`Member`/`Reviewer`/
   `Observer`) is the DB-side equivalent of `Project.teamLeadId` / `Project.memberIds` used by
   the frontend mock layer today.
-- **Frontend ↔ DB id mapping**: `taskRepository.ts` maps Postgres integer ids to frontend
-  string ids via a `prj-<id>` / `tsk-<id>` / `usr-<id>` prefix convention
-  (`frontendId()` helper). Any future write-path work should follow the same convention.
+- **Frontend ↔ DB id mapping**: `backend/src/utils/idMapping.ts` (`toUserPk`/`fromUserPk`/
+  `toProjectPk`/`fromProjectPk`/`toTaskPk`/`fromTaskPk`, plus `*OrNull` variants) converts
+  between Postgres integer PKs and the frontend's `usr-<id>` / `prj-<id>` / `tsk-<id>` string
+  ids, server-side, in every Project/Task/Notification route. This is now the single shared
+  home for that convention (relocated here from `backend/src/notifications/idMapping.ts` when
+  the Project/Task modules needed the same conversions).
 - **No frontend localStorage persistence today** — despite the README claiming
   "LocalStorage Persistence," only the Team Members module (per README) actually does this;
-  most other modules including Tasks/Projects/Kanban are in-memory only for now.
+  most modules are in-memory only. Projects/Tasks/Notifications are the exception in the other
+  direction: they persist to real Postgres via the backend, not to `localStorage` — a page
+  refresh re-fetches them from `/api/projects`/`/api/tasks`/`/api/notifications` rather than
+  losing them, which is the actual production-persistence path, not a `localStorage` cache.
 
 ## 6. UI Structure / Design System
 
@@ -193,13 +243,25 @@ worksync/
 
 ## 9. Future Reference
 
-- There is no real backend for Projects/Tasks/Kanban yet — only auth. Any "approval" or
-  "status change" logic implemented in the frontend today is a **client-side prototype**;
-  before production use it must be re-implemented server-side (see the comment above
-  `createTask` in `AppContext.tsx` for the established pattern of calling this out).
-  Postgres already has `work.TaskStatusHistory` and `RequiresReview` columns ready for this.
+- **Projects/Tasks/Notifications now have a real backend** (`backend/src/projects/`,
+  `backend/src/tasks/`, `backend/src/notifications/`), Postgres-backed, JWT-authorized,
+  status-history-audited. Approval/status-change logic for these three modules is
+  server-authoritative, not a client-side prototype anymore — see
+  `docs/ProjectBoardNotification_Implementation_Notes.md` for the full design decisions and
+  `docs/BoardModuleGuide.md`/`docs/Notification_Module_Guide.md` for the module-specific guides.
+  Every *other* module (Attendance, Break Management, Reports, AI Assistant, Chat, Calendar,
+  Dashboard, User Management) is still exactly the client-side prototype this section used to
+  describe for everything — that has not changed, and per this branch's explicit scope, wiring
+  those up is future work, not something to infer is already done.
 - `Sidebar.tsx` already anticipates modules beyond what's implemented (e.g. `kanban` nav item
   existed before the board view did) — always check `Sidebar.tsx` and `App.tsx`'s tab router
   together before assuming a module is fully wired.
 - Do not introduce a second stylesheet or component library; extend `index.css` tokens and
   reuse `GlassCard`/`StatusBadge` instead.
+- Known gaps left by this branch, worth knowing before extending Projects further: `Project`'s
+  `milestones`/`files`/`pinnedMessagesCount` fields have no backend representation yet (pure
+  frontend decoration, defaulted to empty/zero on every project that comes from the API — see
+  `project.types.ts`'s `ProjectDTO` comment); rejecting a pending project proposal reuses the
+  `Archived` status (there is no `Rejected` value in `work.ProjectStatuses` — see the
+  Implementation Notes' "Reject-as-archive mapping" section for the reasoning and the small
+  cosmetic gap it leaves after a page refresh).

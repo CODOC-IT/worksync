@@ -91,15 +91,15 @@ export const ApprovalsInboxView: React.FC = () => {
 
   const pendingCount = visibleApprovals.filter((approval) => approval.status === 'Pending').length;
 
-  const handleApprove = (approval: SystemApproval) => {
-    approveApprovalItem(approval.id);
-    setNotice({ type: 'success', message: `Approved "${approval.targetTitle}".` });
+  const handleApprove = async (approval: SystemApproval) => {
+    const result = await approveApprovalItem(approval.id);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
   };
 
-  const handleReject = (approval: SystemApproval) => {
+  const handleReject = async (approval: SystemApproval) => {
     if (!window.confirm(`Reject "${approval.targetTitle}"? This cannot be undone.`)) return;
-    rejectApprovalItem(approval.id);
-    setNotice({ type: 'success', message: `Rejected "${approval.targetTitle}".` });
+    const result = await rejectApprovalItem(approval.id);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
   };
 
   if (!isPrivilegedRole) {

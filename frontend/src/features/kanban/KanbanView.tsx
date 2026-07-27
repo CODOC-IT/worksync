@@ -73,6 +73,7 @@ export const KanbanView: React.FC = () => {
   const [search, setSearch] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | ''>('');
   const [pendingChange, setPendingChange] = useState<PendingChange | null>(null);
+  const [modalSubmitting, setModalSubmitting] = useState(false);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -130,15 +131,20 @@ export const KanbanView: React.FC = () => {
     });
   };
 
-  const handleModalSubmit = (note: string) => {
+  const handleModalSubmit = async (note: string) => {
     if (!pendingChange) return;
     const { task, toStatus, kind } = pendingChange;
-    const result = updateTaskStatus(task.id, toStatus, {
+    setModalSubmitting(true);
+    const result = await updateTaskStatus(task.id, toStatus, {
       note,
       reviewDecision: kind === 'approve' ? 'Approve' : kind === 'reject' ? 'Reject' : undefined
     });
+    setModalSubmitting(false);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    setPendingChange(null);
+    // Only close on success — a failed request (network error, server rejection) keeps the
+    // modal open with the user's note intact so they can retry without retyping it. Never
+    // treat a rejected/failed call as if the move happened.
+    if (result.success) setPendingChange(null);
   };
 
   const handleDrop = (status: TaskStatus) => {
@@ -157,7 +163,7 @@ export const KanbanView: React.FC = () => {
       : 'View your project context and move your own tasks through the workflow.';
 
   return (
-    <section className="mx-auto max-w-[1600px] space-y-5">
+    <section data-kanban className="mx-auto max-w-[1600px] space-y-5">
       <header>
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
           <ListTodo size={15} />
@@ -308,6 +314,7 @@ export const KanbanView: React.FC = () => {
       {pendingChange && (
         <StatusChangeModal
           pending={pendingChange}
+          submitting={modalSubmitting}
           onCancel={() => setPendingChange(null)}
           onSubmit={handleModalSubmit}
         />
@@ -326,6 +333,7 @@ const BoardColumn: React.FC<{
   renderCard: (task: Task) => React.ReactNode;
 }> = ({ status, tasks, isDragOver, onDragEnter, onDragLeave, onDrop, renderCard }) => (
   <div
+    data-kanban-column={status.toLowerCase().replace(' ', '-')}
     onDragOver={(event) => {
       event.preventDefault();
       onDragEnter();
@@ -558,9 +566,10 @@ const AssigneesDisplay: React.FC<{ names: string[] }> = ({ names }) => {
 
 const StatusChangeModal: React.FC<{
   pending: PendingChange;
+  submitting: boolean;
   onCancel: () => void;
   onSubmit: (note: string) => void;
-}> = ({ pending, onCancel, onSubmit }) => {
+}> = ({ pending, submitting, onCancel, onSubmit }) => {
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
@@ -641,16 +650,18 @@ const StatusChangeModal: React.FC<{
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5"
+            disabled={submitting}
+            className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={handleSubmit}
-            className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold"
+            disabled={submitting}
+            className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitLabels[pending.kind]}
+            {submitting ? 'Saving...' : submitLabels[pending.kind]}
           </button>
         </div>
       </div>
