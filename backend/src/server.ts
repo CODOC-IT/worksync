@@ -57,7 +57,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // mode) means there's nothing in notify.* to scan yet, so the interval would just no-op anyway.
 // Also skipped on Vercel, same as app.listen below — a serverless function has no persistent
 // process for setInterval to run in, so this would never actually fire there.
-const NOTIFICATION_DIGEST_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const NOTIFICATION_DIGEST_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 if (process.env.NODE_ENV !== 'test' && process.env.VERCEL !== '1' && isDatabaseConfigured()) {
   setInterval(() => {
     processEmailCandidates(['High']).catch((error) => {
