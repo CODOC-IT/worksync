@@ -363,7 +363,53 @@ router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest,
       user: updatedUser
     });
   } catch (error: any) {
-    return void res.status(500).json({ success: false, message: error.message || 'Failed to update profile picture.' });
+      return void res.status(500).json({ success: false, message: error.message || 'Failed to update profile picture.' });
+  }
+});
+
+// PUT /api/auth/profile/password
+router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      res.status(400).json({ success: false, message: 'All password fields are required.' });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      res.status(400).json({ success: false, message: 'New password and confirmation do not match.' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+      return;
+    }
+
+    const user = userStore.findById(req.user.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      res.status(403).json({ success: false, message: 'Current password is incorrect.' });
+      return;
+    }
+
+    const newHash = bcrypt.hashSync(newPassword, 10);
+    await userStore.updatePassword(user.email, newHash);
+
+    res.status(200).json({ success: true, message: 'Password changed successfully.' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to change password.' });
   }
 });
 
