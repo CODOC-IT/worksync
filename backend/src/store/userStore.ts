@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
 import { isDatabaseConfigured, query } from '../db/pool.js';
-import { fromUserPk } from '../utils/idMapping.js';
+import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
 
@@ -103,14 +103,20 @@ class UserStore {
         // Sync file store users into DB so foreign keys (FK_Projects_OwnerOrganization etc.)
         // resolve. File store users with id="usr-N" are backfilled if they don't exist yet.
         if (this.dbAvailable) {
+          const PG_INT_MAX = 2147483647;
           for (const [email, user] of this.fallbackUsers) {
+            const uid = parseInt(user.id.replace('usr-', ''), 10);
+            if (isNaN(uid) || uid > PG_INT_MAX) {
+              console.warn(`[UserStore] Skipping backfill for ${email}: ID ${user.id} exceeds PostgreSQL INT range.`);
+              continue;
+            }
             try {
               await query(
                 `INSERT INTO iam.users (userid, organizationid, email, givenname, familyname, displayname, designation, accountstatus)
                  VALUES ($1, 1, $2, $3, $4, $5, $6, 'Active')
                  ON CONFLICT (userid) DO NOTHING`,
                 [
-                  parseInt(user.id.replace('usr-', ''), 10),
+                  uid,
                   user.email.toLowerCase(),
                   user.name.split(' ')[0] || user.name,
                   user.name.split(' ').slice(1).join(' ') || user.name,
@@ -233,9 +239,22 @@ class UserStore {
         [email.toLowerCase()]
       );
       if (result.rows[0]) {
-        const user = rowToUserRecord(result.rows[0]);
-        this.fallbackUsers.set(user.email.toLowerCase(), user);
-        return user;
+        const dbUser = rowToUserRecord(result.rows[0]);
+        const existing = this.fallbackUsers.get(dbUser.email.toLowerCase());
+
+        // Merge: prefer DB for identity, file store for credentials/roles when DB is incomplete
+        const merged: UserRecord = {
+          ...dbUser,
+          passwordHash: dbUser.passwordHash !== DEFAULT_PASSWORD_HASH
+            ? dbUser.passwordHash
+            : (existing?.passwordHash || DEFAULT_PASSWORD_HASH),
+          role: dbUser.role !== 'Team_Member' || !existing
+            ? dbUser.role
+            : existing.role
+        };
+
+        this.fallbackUsers.set(merged.email.toLowerCase(), merged);
+        return merged;
       }
     } catch (err: any) {
       console.warn(`[UserStore] DB findByEmail failed: ${err.message}`);
@@ -312,7 +331,7 @@ class UserStore {
         if (roleResult.rows[0]) {
           await query(
             `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
-             VALUES ($1, $2, $1)`,
+             VALUES ($1, $2, 1)`,
             [userId, roleResult.rows[0].roleid]
           );
         }
@@ -338,8 +357,14 @@ class UserStore {
       }
     }
 
+    const maxUserId = Array.from(this.fallbackUsers.values())
+      .map(u => parseInt(u.id.replace('usr-', ''), 10))
+      .filter(n => !isNaN(n) && n < 1000000000000)
+      .reduce((max, n) => Math.max(max, n), 0);
+    const nextId = maxUserId + 1;
+
     const newUser: UserRecord = {
-      id: `usr-${Date.now()}`,
+      id: `usr-${nextId}`,
       name: userData.name,
       email: userData.email.toLowerCase(),
       passwordHash,
@@ -369,7 +394,7 @@ class UserStore {
 
     if (this.dbAvailable) {
       try {
-        const uid = parseInt(user.id.replace('usr-', ''), 10);
+        const uid = toUserPk(user.id);
         await query(
           `UPDATE iam.usercredentials SET passwordhash = $1, passwordchangedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
           [Buffer.from(newPasswordHash, 'utf-8'), uid]
@@ -391,7 +416,7 @@ class UserStore {
 
     if (this.dbAvailable) {
       try {
-        const uid = parseInt(userId.replace('usr-', ''), 10);
+        const uid = toUserPk(userId);
         const [givenName, ...familyParts] = name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
         await query(
@@ -416,7 +441,7 @@ class UserStore {
 
     if (this.dbAvailable) {
       try {
-        const uid = parseInt(userId.replace('usr-', ''), 10);
+        const uid = toUserPk(userId);
         await query(
           `UPDATE iam.userprofiles SET updatedatutc = CURRENT_TIMESTAMP WHERE userid = $1`,
           [uid]
