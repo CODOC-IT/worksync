@@ -73,7 +73,7 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
           <!-- Body -->
           <tr>
             <td style="padding:40px 48px;">
-              <p style="color:#e2e8f0;font-size:16px;margin:0 0 8px;">Hi <strong style="color:#00d4ff;">${escapeHtml(name)}</strong>,</p>
+              <p style="color:#e2e8f0;font-size:16px;margin:0 0 8px;">Hi <strong style="color:#00d4ff;">${name}</strong>,</p>
               <p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 32px;">
                 Your one-time verification code for WorkSync registration is:
               </p>
@@ -109,19 +109,10 @@ export const sendOTPEmail = async (toEmail: string, name: string, otp: string): 
 </body>
 </html>`;
 
-  const textContent =
-    `Hi ${name},\n\n` +
-    `Your one-time verification code for WorkSync registration is: ${otp}\n\n` +
-    `This code expires in 1 minute. Do not share it with anyone.\n\n` +
-    `If you didn't request this, please ignore this email.\n\n` +
-    `${SENDER_DISPLAY_NAME}`;
-
   await transporter.sendMail({
-    from: `"${SENDER_DISPLAY_NAME}" <${smtpUser}>`,
-    replyTo: REPLY_TO_ADDRESS,
+    from: `"WorkSync Security" <${smtpUser}>`,
     to: toEmail,
     subject: `${otp} is your WorkSync verification code`,
-    text: textContent,
     html: htmlContent
   });
 
