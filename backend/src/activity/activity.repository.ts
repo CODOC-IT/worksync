@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/pool.js';
 import { toProjectPkOrNull, toTaskPkOrNull, toUserPkOrNull } from '../utils/idMapping.js';
 import { ActivityChange, ActivityFilters, ActivityRecordInput } from './activity.types.js';
+import { EffectiveRoles } from './activity.rbac.js';
 
 export interface ActivityRow {
   auditeventid: string;
@@ -68,28 +69,68 @@ export const insertActivity = async (input: ActivityRecordInput): Promise<string
     return eventId;
   });
 
-const visibilitySql = (role: string, userParam: number): string => {
-  if (role === 'Admin') return 'TRUE';
-  if (role === 'HR') {
-    return `(a.actoruserid = $${userParam} OR a.modulecode = 'Attendance')`;
+const visibilitySql = (
+  viewerPk: number,
+  effectiveRoles: EffectiveRoles,
+  paramIndex: number
+): { clause: string; extraParams: unknown[] } => {
+  const params: unknown[] = [viewerPk];
+  const pi = paramIndex;
+
+  if (effectiveRoles.permanentRole === 'Admin') {
+    return { clause: 'TRUE', extraParams: [] };
   }
-  if (role === 'Team_Lead') {
-    return `(a.actoruserid = $${userParam} OR EXISTS (
-      SELECT 1 FROM work.projects vp
-      LEFT JOIN work.projectmembers vpm ON vpm.projectid = vp.projectid AND vpm.leftatutc IS NULL
-      WHERE vp.projectid = a.projectid AND
-        (vp.owneruserid = $${userParam} OR (vpm.userid = $${userParam} AND vpm.memberrolecode = 'TeamLead'))
-    ))`;
+
+  const parts: string[] = [];
+
+  parts.push(`a.actoruserid = $${pi}`);
+  parts.push(`a.projectid IN (
+    SELECT vpm.projectid FROM work.projectmembers vpm
+    WHERE vpm.userid = $${pi} AND vpm.leftatutc IS NULL
+  )`);
+  parts.push(`a.projectid IN (
+    SELECT vt.projectid FROM work.taskassignees vta
+    JOIN work.tasks vt ON vt.taskid = vta.taskid
+    WHERE vta.userid = $${pi} AND vta.unassignedatutc IS NULL
+  )`);
+
+  if (effectiveRoles.permanentRole === 'Team_Lead') {
+    parts.push(`a.projectid IN (
+      SELECT pmlead.projectid FROM work.projectmembers pmlead
+      WHERE pmlead.userid = $${pi} AND pmlead.leftatutc IS NULL AND pmlead.memberrolecode = 'TeamLead'
+    )`);
   }
-  return `((a.actoruserid = $${userParam} OR EXISTS (
-    SELECT 1 FROM work.projectmembers vpm
-    WHERE vpm.projectid = a.projectid AND vpm.userid = $${userParam} AND vpm.leftatutc IS NULL
-  )) AND (a.modulecode NOT IN ('Permissions', 'Authentication') OR a.actoruserid = $${userParam}))`;
+
+  if (effectiveRoles.isActiveTeamLead && effectiveRoles.leadProjectPks.length > 0) {
+    const leadIdx = params.length + 1;
+    params.push(effectiveRoles.leadProjectPks);
+    parts.push(`a.projectid = ANY($${leadIdx}::int[])`);
+  }
+
+  if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
+    parts.push(`a.modulecode IN ('Attendance', 'HR')`);
+  }
+
+  if (effectiveRoles.permanentRole === 'Team_Member' && !effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
+    parts.push(`a.modulecode NOT IN ('Permissions', 'Authentication')`);
+  }
+
+  const clause = parts.length === 0 ? 'FALSE' : parts.join(' OR ');
+  return { clause, extraParams: params.slice(1) };
 };
 
-const buildWhere = (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
-  const values: unknown[] = [toUserPkOrNull(viewerId)];
-  const clauses = [visibilitySql(viewerRole, 1)];
+const buildWhere = (
+  filters: ActivityFilters,
+  viewerId: string,
+  effectiveRoles: EffectiveRoles
+) => {
+  const viewerPk = toUserPkOrNull(viewerId);
+  const values: unknown[] = [viewerPk];
+  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk!, effectiveRoles, 1);
+  values.push(...extraParams);
+
+  const clauses: string[] = [visibilityClause];
+
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace('?', `$${values.length}`)); };
   if (filters.from) add('a.occurredatutc >= ?::timestamptz', filters.from);
   if (filters.to) add('a.occurredatutc <= ?::timestamptz', filters.to);
@@ -132,8 +173,12 @@ const SELECT_COLUMNS = `a.auditeventid, a.actoruserid, a.actioncode, a.entitytyp
   a.affecteduseridtext, a.affectedusernamesnapshot, a.entitynamesnapshot,
   a.projectnamesnapshot, a.tasknamesnapshot, a.linkroute, a.metadatajson`;
 
-export const findActivities = async (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
-  const built = buildWhere(filters, viewerId, viewerRole);
+export const findActivities = async (
+  filters: ActivityFilters,
+  effectiveRoles: EffectiveRoles,
+  viewerId: string
+) => {
+  const built = buildWhere(filters, viewerId, effectiveRoles);
   const countResult = await query<{ total: string }>(`SELECT count(*)::text total FROM audit.auditevents a WHERE ${built.where}`, built.values);
   const values = [...built.values, filters.pageSize, (filters.page - 1) * filters.pageSize];
   const direction = filters.sort === 'oldest' ? 'ASC' : 'DESC';
@@ -154,9 +199,9 @@ export const findActivityById = async (id: string): Promise<ActivityRow | null> 
 export const findVisibleActivityById = async (
   id: string,
   viewerId: string,
-  viewerRole: string
+  effectiveRoles: EffectiveRoles
 ): Promise<ActivityRow | null> => {
-  const built = buildWhere({ page: 1, pageSize: 1 }, viewerId, viewerRole);
+  const built = buildWhere({ page: 1, pageSize: 1 }, viewerId, effectiveRoles);
   const values = [...built.values, id];
   const result = await query<ActivityRow>(
     `SELECT ${SELECT_COLUMNS} FROM audit.auditevents a

@@ -34,3 +34,16 @@ export const exportActivities = async (req: AuthenticatedRequest, res: Response)
   }
 };
 
+export const exportPdf = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const pdf = await service.exportPdf(parseActivityFilters(req.query), req.user!.id, req.user!.role);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="worksync-activity-${new Date().toISOString().slice(0, 10)}.pdf"`);
+    res.setHeader('Content-Length', pdf.length);
+    res.send(pdf);
+  } catch (error) {
+    const message = (error as Error).message;
+    res.status(message.includes('administrators') ? 403 : 500).json({ success: false, message });
+  }
+};
+
