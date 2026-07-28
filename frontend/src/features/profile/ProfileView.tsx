@@ -204,7 +204,7 @@ export const ProfileView: React.FC = () => {
     const initials = getInitials(currentUser.name);
     const containerClass = `${dimensions} rounded-full overflow-hidden ring-2 ring-cyan-400/60 shadow-[0_0_24px_rgba(0,242,254,0.2)] shrink-0`;
 
-    const hasAvatar = currentUser.avatar && !currentUser.avatar.includes('unsplash');
+    const hasAvatar = Boolean(currentUser.avatar);
     if (hasAvatar) {
       return (
         <div className={containerClass}>
