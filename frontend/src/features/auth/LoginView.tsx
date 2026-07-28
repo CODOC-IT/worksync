@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { useApp } from '../../store/AppContext';
-import { UserRole } from '../../types';
 import { ForgotPasswordView } from './ForgotPasswordView';
-import { Sparkles, Lock, Mail, Shield, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle, ArrowLeft, Globe } from 'lucide-react';
+import { Sparkles, Lock, Mail, Shield, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface LoginViewProps {
   onLoginSuccess: () => void;
@@ -11,15 +10,14 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchToSignup }) => {
-  const { loginUser, users } = useApp();
+  const { loginUser } = useApp();
 
   const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [email, setEmail] = useState<string>('fazal.k@codoc.com');
-  const [password, setPassword] = useState<string>('password123');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [selectedDemoRole, setSelectedDemoRole] = useState<UserRole>('Admin');
   const [emailCheck, setEmailCheck] = useState<{ checking: boolean; exists: boolean | null; msg: string | null }>({ checking: false, exists: null, msg: null });
   const emailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -60,18 +58,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
       if (emailTimer.current) clearTimeout(emailTimer.current);
     };
   }, [email]);
-
-  // One-click quick demo preset handler
-  const handleQuickDemoSelect = (role: UserRole) => {
-    setSelectedDemoRole(role);
-    const matchedUser = users.find((u) => u.role === role);
-    if (matchedUser) {
-      setEmail(matchedUser.email);
-      setPassword('password123');
-    }
-  };
-
-  const activeDemoUser = users.find((u) => u.role === selectedDemoRole) || users[0];
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -208,27 +194,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 Role-based access control, task orchestration, attendance tracking, and AI-powered workflow analytics in one sleek workspace.
               </p>
             </div>
-
-            {/* Bottom Demo User Showcase Card */}
-            {activeDemoUser && (
-            <div className="p-3.5 rounded-xl bg-slate-950/80 backdrop-blur-md border border-white/10 space-y-2">
-              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                <span>Selected Demo Profile</span>
-                <span className="text-cyan-400 font-bold">{activeDemoUser.role.replace('_', ' ')}</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <img
-                  src={activeDemoUser.avatar}
-                  alt={activeDemoUser.name}
-                  className="w-10 h-10 rounded-xl object-cover border border-cyan-500/40 shadow-[0_0_10px_rgba(0,242,254,0.3)]"
-                />
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-xs font-bold text-white truncate">{activeDemoUser.name}</h4>
-                  <p className="text-[10px] text-slate-400 truncate">{activeDemoUser.title}</p>
-                </div>
-              </div>
-            </div>
-            )}
           </div>
 
           {/* RIGHT COLUMN: Interactive Login Form Area */}
@@ -255,38 +220,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
             <div className="space-y-5 my-auto">
               <div>
                 <h2 className="text-2xl md:text-3xl font-extrabold text-white">Hi, Welcome Back</h2>
-                <p className="text-xs text-slate-400 mt-1">Sign in with your enterprise credentials or select a role preset</p>
-              </div>
-
-              {/* Quick Demo Role Selector Chips */}
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">
-                  Quick Demo Preset:
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { role: 'Admin', label: 'Fazal', badge: 'Admin', color: 'border-cyan-500/40 text-cyan-300' },
-                    { role: 'Team_Lead', label: 'Adolf', badge: 'Lead', color: 'border-purple-500/40 text-purple-300' },
-                    { role: 'HR', label: 'Maryam', badge: 'HR', color: 'border-pink-500/40 text-pink-300' },
-                    { role: 'Team_Member', label: 'Salman', badge: 'Engineer', color: 'border-emerald-500/40 text-emerald-300' }
-                  ].map((item) => (
-                    <motion.button
-                      key={item.role}
-                      type="button"
-                      whileHover={{ scale: 1.03, y: -1 }}
-                      whileTap={{ scale: 0.97 }}
-                      onClick={() => handleQuickDemoSelect(item.role as UserRole)}
-                      className={`p-2 rounded-xl text-xs font-semibold border transition-all flex flex-col items-center justify-center gap-1 ${
-                        selectedDemoRole === item.role
-                          ? `${item.color} bg-white/10 shadow-[0_0_12px_rgba(0,242,254,0.15)]`
-                          : 'border-white/10 text-slate-400 hover:text-slate-200 hover:bg-white/5'
-                      }`}
-                    >
-                      <span className="font-bold truncate text-[11px]">{item.label}</span>
-                      <span className="text-[9px] font-mono opacity-80">{item.badge}</span>
-                    </motion.button>
-                  ))}
-                </div>
+                <p className="text-xs text-slate-400 mt-1">Sign in with your enterprise credentials</p>
               </div>
 
               {/* Error Alert */}
