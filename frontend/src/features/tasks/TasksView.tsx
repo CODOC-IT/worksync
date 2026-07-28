@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { Task, TaskPriority, TaskStatus } from '../../types';
+import { Task, TaskPriority, TaskStatus, User } from '../../types';
 import {
   canCreateTaskForProject,
   canDeleteTask,
@@ -36,8 +36,10 @@ import {
   TASK_STATUSES,
   TaskFormInput,
   TaskModulePriority,
+  SubtaskFormInput,
   validateTaskInput
 } from './taskRules';
+import { loadTaskDetailFromApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -94,6 +96,10 @@ export const TasksView: React.FC = () => {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [dueDateDirection, setDueDateDirection] = useState<'asc' | 'desc'>('asc');
+  const [subtaskStep, setSubtaskStep] = useState<'ask' | 'count' | 'details' | null>(null);
+  const [subtaskCount, setSubtaskCount] = useState(1);
+  const [subtaskDrafts, setSubtaskDrafts] = useState<SubtaskFormInput[]>([]);
+  const [subtaskErrors, setSubtaskErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
@@ -159,6 +165,9 @@ export const TasksView: React.FC = () => {
     setFieldErrors({});
     setFormError(null);
     setIsFormOpen(false);
+    setSubtaskStep(null);
+    setSubtaskDrafts([]);
+    setSubtaskErrors({});
   };
 
   const openCreateForm = () => {
@@ -240,6 +249,22 @@ export const TasksView: React.FC = () => {
       setFormError(null);
       return;
     }
+    if (!editingTaskId && subtaskStep === null) {
+      setSubtaskStep('ask');
+      return;
+    }
+    if (!editingTaskId && subtaskStep === 'details') {
+      const nextErrors: Record<string, string> = {};
+      subtaskDrafts.forEach((draft, index) => {
+        const errors = validateTaskInput({ ...draft, projectId: form.projectId }, selectedProject, users, true, form.startDate);
+        Object.entries(errors).forEach(([field, message]) => { nextErrors[`${index}.${field}`] = message; });
+        if (draft.dueDate > form.dueDate) nextErrors[`${index}.dueDate`] = 'Due date cannot be after the parent task due date.';
+      });
+      if (Object.keys(nextErrors).length > 0) {
+        setSubtaskErrors(nextErrors);
+        return;
+      }
+    }
 
     setIsSubmitting(true);
     try {
@@ -273,7 +298,8 @@ export const TasksView: React.FC = () => {
               dueDate: form.dueDate,
               assigneeId: form.assigneeIds[0],
               assigneeIds: form.assigneeIds,
-              status: form.status
+              status: form.status,
+              subtasks: subtaskDrafts
             })
       );
 
@@ -295,6 +321,17 @@ export const TasksView: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const startSubtasks = () => {
+    const draft = (): SubtaskFormInput => ({ title: '', description: '', priority: form.priority, startDate: form.startDate, dueDate: form.dueDate, assigneeIds: [], status: 'Todo' });
+    setSubtaskDrafts(Array.from({ length: subtaskCount }, draft));
+    setSubtaskErrors({});
+    setSubtaskStep('details');
+  };
+
+  const updateSubtask = (index: number, patch: Partial<SubtaskFormInput>) => {
+    setSubtaskDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? { ...draft, ...patch } : draft));
   };
 
   const handleDelete = async () => {
@@ -382,7 +419,7 @@ export const TasksView: React.FC = () => {
             if (editingTaskId && event.target === event.currentTarget) resetForm();
           }}
         >
-        <form onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
+        <form id="task-form" onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Tasks</p>
@@ -713,7 +750,8 @@ export const TasksView: React.FC = () => {
             description="Try changing or clearing the current filters."
           />
         ) : (
-          <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <div className="max-h-[calc(100vh-290px)] min-h-[420px] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/25 p-4">
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
             {filteredTasks.map((task) => {
               const project = projects.find((item) => item.id === task.projectId);
               if (!project) return null;
@@ -729,23 +767,22 @@ export const TasksView: React.FC = () => {
                   key={task.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setViewingTask(task)}
+                  onClick={() => void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task))}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') setViewingTask(task);
+                    if (event.key === 'Enter' || event.key === ' ') void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
                   }}
-                  className="group relative flex min-h-[250px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-4 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
+                  className="group relative flex min-h-[340px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-5 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 pr-12">
                       <p className="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-300">
                         {getProjectName(project)}
                       </p>
-                      <p className="mt-1 font-mono text-[10px] text-slate-500">{task.taskNumber}</p>
                     </div>
                     {(mayEdit || mayDelete) && (
                       <div
                         data-task-actions
-                        className="absolute right-3 top-3 z-10"
+                        className="absolute right-4 top-4 z-10"
                         onClick={(event) => event.stopPropagation()}
                       >
                         <button
@@ -791,27 +828,29 @@ export const TasksView: React.FC = () => {
                     )}
                   </div>
 
-                  <h3 title={task.title} className="mt-4 truncate pr-12 text-lg font-bold leading-6 text-white">
+                  <h3 title={task.title} className="mt-4 break-words pr-10 text-xl font-bold leading-7 text-white">
                     {task.title}
                   </h3>
-                  <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <TaskBadge value={task.priority} kind="priority" />
+                    {(task.subtaskCount || 0) > 0 && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-semibold text-slate-300">{task.subtaskCount} Subtask{task.subtaskCount === 1 ? '' : 's'}</span>}
+                  </div>
+                  <p className="mt-3 line-clamp-2 min-h-[40px] text-sm leading-5 text-slate-400">
                     {task.description}
                   </p>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-4">
                     <TaskBadge value={task.status} kind="status" />
-                    <TaskBadge value={task.priority} kind="priority" />
-                    {overdue && (
-                      <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-300">
-                        Overdue
-                      </span>
-                    )}
                   </div>
 
                   <div className="mt-auto border-t border-white/10 pt-4">
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <Detail label="Starts" value={formatDate(getTaskStartDate(task))} compact />
-                      <Detail label="Due" value={formatDate(task.dueDate)} compact />
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-semibold text-slate-300">Due {formatDate(task.dueDate)}</span>
+                      {overdue && (
+                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-300">
+                          Overdue
+                        </span>
+                      )}
                     </div>
                     <div className="mt-4 flex min-w-0 items-center gap-2">
                       <UsersRound size={14} className="shrink-0 text-slate-500" />
@@ -823,9 +862,21 @@ export const TasksView: React.FC = () => {
                 </article>
               );
             })}
+            </div>
           </div>
         )}
       </div>}
+      {subtaskStep === 'ask' && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-panel-glow w-full max-w-md p-5"><h2 className="text-xl font-bold text-white">Add subtasks?</h2><p className="mt-2 text-sm text-slate-400">Break this task into smaller, separately assigned pieces of work.</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSubtaskStep('details')} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">No, create task</button><button type="button" onClick={() => setSubtaskStep('count')} className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold">Yes, add subtasks</button></div></div>
+        </div>
+      )}
+      {subtaskStep === 'count' && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"><div className="glass-panel-glow w-full max-w-md p-5"><h2 className="text-xl font-bold text-white">How many subtasks?</h2><label className="mt-4 block text-sm font-semibold text-slate-300">Number of subtasks<input aria-label="Number of subtasks" type="number" min="1" max="10" value={subtaskCount} onChange={(event) => setSubtaskCount(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} className={`${inputClass} mt-2`} /></label><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSubtaskStep('ask')} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Back</button><button type="button" onClick={startSubtasks} className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold">Continue</button></div></div></div>
+      )}
+      {subtaskStep === 'details' && subtaskDrafts.length > 0 && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-[60] overflow-y-auto bg-black/70 p-4"><div className="glass-panel-glow mx-auto my-6 w-full max-w-4xl p-5"><h2 className="text-xl font-bold text-white">Subtask details</h2><p className="mt-1 text-sm text-slate-400">Each subtask is saved under this parent task.</p><div className="mt-5 space-y-5">{subtaskDrafts.map((draft, index) => <section key={index} className="rounded-xl border border-white/10 p-4"><h3 className="font-bold text-white">Subtask {index + 1} of {subtaskDrafts.length}</h3><div className="mt-4 grid gap-4 md:grid-cols-2"><Field label="Title *" error={subtaskErrors[`${index}.title`]}><input value={draft.title} onChange={(event) => updateSubtask(index, { title: event.target.value })} className={inputClass} /></Field><Field label="Priority *" error={subtaskErrors[`${index}.priority`]}><select value={draft.priority} onChange={(event) => updateSubtask(index, { priority: event.target.value as TaskModulePriority })} className={inputClass}>{TASK_PRIORITIES.map((priority) => <option key={priority}>{priority}</option>)}</select></Field><Field label="Start date *" error={subtaskErrors[`${index}.startDate`]}><input type="date" value={draft.startDate} onChange={(event) => updateSubtask(index, { startDate: event.target.value })} className={inputClass} /></Field><Field label="Due date *" error={subtaskErrors[`${index}.dueDate`]}><input type="date" value={draft.dueDate} onChange={(event) => updateSubtask(index, { dueDate: event.target.value })} className={inputClass} /></Field><Field label="Description *" error={subtaskErrors[`${index}.description`]} className="md:col-span-2"><textarea rows={3} value={draft.description} onChange={(event) => updateSubtask(index, { description: event.target.value })} className={inputClass} /></Field><Field label={`Assignees * (${draft.assigneeIds.length} selected)`} error={subtaskErrors[`${index}.assigneeIds`]} className="md:col-span-2"><div className="flex flex-wrap gap-2">{availableAssignees.map((user) => <button key={user.id} type="button" onClick={() => updateSubtask(index, { assigneeIds: draft.assigneeIds.includes(user.id) ? draft.assigneeIds.filter((id) => id !== user.id) : [...draft.assigneeIds, user.id] })} className={`rounded-lg border px-3 py-2 text-xs ${draft.assigneeIds.includes(user.id) ? 'border-cyan-400 bg-cyan-500/15 text-white' : 'border-white/10 text-slate-300'}`}>{user.name}</button>)}</div></Field></div></section>)}</div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSubtaskStep('count')} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Back</button><button form="task-form" type="submit" className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold">Save task and subtasks</button></div></div></div>
+      )}
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
@@ -838,6 +889,7 @@ export const TasksView: React.FC = () => {
           assigneeNames={getTaskAssigneeIds(viewingTask)
             .map((id) => users.find((user) => user.id === id)?.name)
             .filter((name): name is string => Boolean(name))}
+          users={users}
           onClose={() => setViewingTask(null)}
         />
       )}
@@ -979,8 +1031,9 @@ const TaskDetailsModal: React.FC<{
   task: Task;
   projectName: string;
   assigneeNames: string[];
+  users: User[];
   onClose: () => void;
-}> = ({ task, projectName, assigneeNames, onClose }) => (
+}> = ({ task, projectName, assigneeNames, users, onClose }) => (
   <div
     className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
     onMouseDown={(event) => {
@@ -1026,6 +1079,7 @@ const TaskDetailsModal: React.FC<{
           <Detail label="Due date" value={formatDate(task.dueDate)} />
           <Detail label="Assignees" value={assigneeNames.join(', ') || 'Unassigned'} />
         </div>
+        <section><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Subtasks</h3>{task.subtasks.length === 0 ? <p className="text-sm text-slate-400">No subtasks attached.</p> : <div className="space-y-3">{task.subtasks.map((subtask) => <div key={subtask.id} className="rounded-xl border border-white/10 bg-slate-950/35 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="break-words font-bold text-white">{subtask.title}</p><div className="flex gap-2">{subtask.status && <TaskBadge value={subtask.status} kind="status" />}{subtask.priority && <TaskBadge value={subtask.priority} kind="priority" />}</div></div><p className="mt-2 break-words whitespace-pre-wrap text-sm text-slate-300">{subtask.description}</p><p className="mt-3 text-xs text-slate-500">{formatDate(subtask.startDate || '')} – {formatDate(subtask.dueDate || '')} {subtask.dueDate && subtask.status !== 'Done' && subtask.dueDate < today ? '· Overdue' : ''}</p><p className="mt-1 text-xs text-slate-400">{(subtask.assigneeIds || []).map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(', ') || 'Unassigned'}</p></div>)}</div>}</section>
       </div>
     </div>
   </div>

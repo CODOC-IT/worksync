@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -112,6 +112,309 @@ export const ReportsView: React.FC = () => {
   });
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // ── API data fetch ──────────────────────────────────────────────────
+  const [reportData, setReportData] = useState<any>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchReports = async () => {
+      setReportLoading(true);
+      setReportError(null);
+
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        setReportError('Sign in required to load report data.');
+        setReportData(null);
+        setReportLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `/api/reports/data?from=${encodeURIComponent(dateRange.from)}&to=${encodeURIComponent(dateRange.to)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const json = await res.json();
+        if (json.success) {
+          setReportData(json.data);
+        } else {
+          setReportError(json.message || 'Failed to load report data.');
+          setReportData(null);
+        }
+      } catch {
+        setReportError('Report API unavailable — showing local fallback.');
+        setReportData(null);
+      }
+      setReportLoading(false);
+    };
+    fetchReports();
+  }, [dateRange.from, dateRange.to, currentRole]);
+
+  const apiAvailable = reportData !== null;
+
+  // ── Local fallback: date-filtered data ────────────────────────────────
+  const filteredData = useMemo(() => {
+    const { from, to } = dateRange;
+    const validProjects = projects.filter(
+      (p) => isInDateRange(p.startDate, from, to) || isInDateRange(p.targetDate, from, to) || p.status === 'Active'
+    );
+    const validTasks = tasks.filter(
+      (t) => isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done'
+    );
+    const validAttendance = attendanceRecords.filter(
+      (a) => isInDateRange(a.date, from, to)
+    );
+    const validHrRequests = hrRequests.filter(
+      (r) => isInDateRange(r.submittedAt || r.date, from, to)
+    );
+    return { validProjects, validTasks, validAttendance, validHrRequests };
+  }, [projects, tasks, attendanceRecords, hrRequests, dateRange]);
+
+  const roleFilteredLocal = useMemo(() => {
+    const { validProjects, validTasks, validAttendance, validHrRequests } = filteredData;
+    const userId = currentUser.id;
+
+    if (currentRole === 'Admin') {
+      return { projects: validProjects, tasks: validTasks, attendance: validAttendance, hrRequests: validHrRequests };
+    }
+    if (currentRole === 'HR') {
+      return {
+        projects: validProjects.filter((p) => p.memberIds.includes(userId) || p.teamLeadId === userId),
+        tasks: validTasks.filter((t) => t.assigneeId === userId),
+        attendance: validAttendance,
+        hrRequests: validHrRequests
+      };
+    }
+    if (currentRole === 'Team_Lead') {
+      const leadProjectIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+      return {
+        projects: validProjects.filter((p) => p.teamLeadId === userId),
+        tasks: validTasks.filter((t) => leadProjectIds.includes(t.projectId)),
+        attendance: validAttendance.filter((a) => leadProjectIds.some((_pid) => {
+          const proj = validProjects.find((p) => p.id === _pid);
+          return proj?.memberIds.includes(a.userId) || proj?.teamLeadId === a.userId;
+        })),
+        hrRequests: []
+      };
+    }
+    return {
+      projects: validProjects.filter((p) => p.memberIds.includes(userId)),
+      tasks: validTasks.filter((t) => t.assigneeId === userId),
+      attendance: validAttendance.filter((a) => a.userId === userId),
+      hrRequests: validHrRequests.filter((r) => r.userId === userId)
+    };
+  }, [filteredData, currentRole, currentUser.id]);
+
+  // ── Choose API or local fallback ──────────────────────────────────────
+  const roleFiltered = useMemo(() => {
+    if (apiAvailable) {
+      // Build a roleFiltered-shaped object from API data
+      return {
+        projects: reportData.projects || [],
+        tasks: tasks, // individual tasks not in API; keep local for fallback sections
+        attendance: reportData.attendance?.records || [],
+        hrRequests: roleFilteredLocal.hrRequests, // pending HR objects only local
+      };
+    }
+    return roleFilteredLocal;
+  }, [apiAvailable, reportData, roleFilteredLocal, tasks]);
+
+  // ── Derived metrics from API when available, else from local ──────────
+  const kpiStats = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.overview;
+    }
+    const { projects: rp, tasks: rt } = roleFilteredLocal;
+    const totalProjects = rp.length;
+    const activeTasks = rt.filter((t) => t.status !== 'Done').length;
+    const completedTasks = rt.filter((t) => t.status === 'Done').length;
+    const overdueTasks = rt.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
+    const completionRate = rt.length > 0 ? Math.round((completedTasks / rt.length) * 100) : 0;
+    const activeMembers = new Set(rp.flatMap((p) => p.memberIds).concat(rp.map((p) => p.teamLeadId))).size;
+    return { totalProjects, activeTasks, completedTasks, overdueTasks, completionRate, activeMembers };
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const projectHealthData = useMemo(() => {
+    if (apiAvailable) {
+      return (reportData.projects || []).map((p: any) => ({
+        name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
+        progress: p.progress,
+        completion: p.completion,
+      }));
+    }
+    const { projects: rp, tasks: rt } = roleFilteredLocal;
+    return rp.map((p) => {
+      const pTasks = rt.filter((t) => t.projectId === p.id);
+      const done = pTasks.filter((t) => t.status === 'Done').length;
+      const pct = pTasks.length > 0 ? Math.round((done / pTasks.length) * 100) : 0;
+      return { name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title, progress: p.progress, completion: pct };
+    });
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const taskStatusDist = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.tasks.statusDistribution;
+    }
+    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
+    roleFilteredLocal.tasks.forEach((t) => { counts[t.status] = (counts[t.status] || 0) + 1; });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const taskPriorityDist = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.tasks.priorityDistribution;
+    }
+    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
+    roleFilteredLocal.tasks.forEach((t) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const taskCompletionTrend = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.tasks.completionTrend;
+    }
+    const { from, to } = dateRange;
+    const days: Record<string, { completed: number; created: number }> = {};
+    const start = new Date(from + 'T00:00:00');
+    const end = new Date(to + 'T00:00:00');
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().split('T')[0];
+      days[key] = { completed: 0, created: 0 };
+    }
+    roleFilteredLocal.tasks.forEach((t) => {
+      const cKey = t.createdAt?.slice(0, 10);
+      if (cKey && days[cKey]) days[cKey].created++;
+      if (t.status === 'Done' && t.dueDate && days[t.dueDate]) days[t.dueDate].completed++;
+    });
+    return Object.entries(days).map(([date, vals]) => ({
+      date: date.slice(5),
+      Completed: vals.completed,
+      Created: vals.created
+    }));
+  }, [apiAvailable, reportData, dateRange, roleFilteredLocal]);
+
+  const workloadData = useMemo(() => {
+    if (apiAvailable) {
+      return (reportData.workload || []).map((w: any) => ({
+        ...w,
+        name: w.name || w.userId,
+      }));
+    }
+    const { tasks: rt, projects: rp } = roleFilteredLocal;
+    const memberMap: Record<string, { name: string; active: number; completed: number; review: number; overdue: number }> = {};
+    rt.forEach((t) => {
+      const uid = t.assigneeId;
+      if (!memberMap[uid]) {
+        const u = users.find((u) => u.id === uid);
+        memberMap[uid] = { name: u?.name || uid, active: 0, completed: 0, review: 0, overdue: 0 };
+      }
+      if (t.status === 'Done') memberMap[uid].completed++;
+      else if (t.status === 'Review') memberMap[uid].review++;
+      else {
+        memberMap[uid].active++;
+        if (t.dueDate < todayStr()) memberMap[uid].overdue++;
+      }
+    });
+    return Object.values(memberMap).sort((a, b) => b.active - a.active);
+  }, [apiAvailable, reportData, roleFilteredLocal, users]);
+
+  const deadlineData = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.deadlines;
+    }
+    const { tasks: rt } = roleFilteredLocal;
+    const today = todayStr();
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+    const dueToday = rt.filter((t) => t.status !== 'Done' && t.dueDate === today);
+    const dueTomorrow = rt.filter((t) => t.status !== 'Done' && t.dueDate === tomorrow);
+    const upcoming = rt.filter((t) => t.status !== 'Done' && t.dueDate > tomorrow && t.dueDate <= weekFromNow);
+    const overdue = rt.filter((t) => t.status !== 'Done' && t.dueDate < today);
+    return { dueToday, dueTomorrow, upcoming, overdue };
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const attendanceStats = useMemo(() => {
+    if (apiAvailable && reportData.attendance) {
+      const a = reportData.attendance;
+      return {
+        present: a.present, late: a.late, absent: a.absent,
+        onLeave: a.onLeave, halfDay: a.halfDay,
+        avgHours: a.avgHours,
+        total: a.total,
+        pendingCorrections: a.pendingCorrections,
+        pendingLeaves: a.pendingLeaves,
+      };
+    }
+    const { attendance: att } = roleFilteredLocal;
+    const present = att.filter((a) => a.status === 'Present').length;
+    const late = att.filter((a) => a.status === 'Late').length;
+    const absent = att.filter((a) => a.status === 'Absent').length;
+    const onLeave = att.filter((a) => a.status === 'On Leave').length;
+    const halfDay = att.filter((a) => a.status === 'Half Day').length;
+    const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
+    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
+    const pendingCorrections = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
+    const pendingLeaves = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
+    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections, pendingLeaves };
+  }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  const hrOverviewStats = useMemo(() => {
+    if (apiAvailable && reportData.hrOverviewStats) {
+      return reportData.hrOverviewStats;
+    }
+    const today = todayStr();
+    const todayAtt = filteredData.validAttendance.filter((a) => a.date === today);
+    const presentToday = todayAtt.filter((a) => a.status === 'Present').length;
+    const absentToday = todayAtt.filter((a) => a.status === 'Absent').length;
+    const onLeaveToday = todayAtt.filter((a) => a.status === 'On Leave').length;
+    const lateToday = todayAtt.filter((a) => a.status === 'Late').length;
+    const avgHours = todayAtt.length > 0
+      ? (todayAtt.reduce((s, a) => s + (a.totalHours || 0), 0) / todayAtt.length).toFixed(1)
+      : '0';
+    const pendingLeaveReqs = filteredData.validHrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
+    const pendingCorrections = filteredData.validHrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
+    return { presentToday, absentToday, onLeaveToday, lateToday, avgHours, pendingLeaveReqs, pendingCorrections };
+  }, [apiAvailable, reportData, filteredData]);
+
+  const teamStats = useMemo(() => {
+    if (apiAvailable) {
+      return reportData.teams || [];
+    }
+    const { projects: rp, tasks: rt } = roleFilteredLocal;
+    const deptMap: Record<string, { members: Set<string>; projects: number; tasks: number; completed: number }> = {};
+    rp.forEach((p) => {
+      p.memberIds.forEach((mid) => {
+        const u = users.find((u) => u.id === mid);
+        const dept = u?.department || 'Unknown';
+        if (!deptMap[dept]) deptMap[dept] = { members: new Set(), projects: 0, tasks: 0, completed: 0 };
+        deptMap[dept].members.add(mid);
+        deptMap[dept].projects++;
+      });
+    });
+    rt.forEach((t) => {
+      const p = rp.find((p) => p.id === t.projectId);
+      if (p) {
+        const u = users.find((u) => u.id === t.assigneeId);
+        const dept = u?.department || 'Unknown';
+        if (deptMap[dept]) {
+          deptMap[dept].tasks++;
+          if (t.status === 'Done') deptMap[dept].completed++;
+        }
+      }
+    });
+    return Object.entries(deptMap).map(([dept, data]) => ({
+      department: dept,
+      members: data.members.size,
+      projects: data.projects,
+      tasks: data.tasks,
+      completed: data.completed,
+      rate: data.tasks > 0 ? Math.round((data.completed / data.tasks) * 100) : 0
+    }));
+  }, [apiAvailable, reportData, roleFilteredLocal, users]);
+
+  // ── Rest of the component: unchanged UI code ─────────────────────────
+
   const chartColors = useMemo(() => {
     if (theme === 'light') {
       return {
@@ -154,73 +457,6 @@ export const ReportsView: React.FC = () => {
     chartColors.magenta,
   ], [chartColors]);
 
-  const filteredData = useMemo(() => {
-    const { from, to } = dateRange;
-
-    const validProjects = projects.filter(
-      (p) => isInDateRange(p.startDate, from, to) || isInDateRange(p.targetDate, from, to) || p.status === 'Active'
-    );
-
-    const validTasks = tasks.filter(
-      (t) => isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done'
-    );
-
-    const validAttendance = attendanceRecords.filter(
-      (a) => isInDateRange(a.date, from, to)
-    );
-
-    const validHrRequests = hrRequests.filter(
-      (r) => isInDateRange(r.submittedAt || r.date, from, to)
-    );
-
-    return { validProjects, validTasks, validAttendance, validHrRequests };
-  }, [projects, tasks, attendanceRecords, hrRequests, dateRange]);
-
-  const roleFiltered = useMemo(() => {
-    const { validProjects, validTasks, validAttendance, validHrRequests } = filteredData;
-    const userId = currentUser.id;
-
-    if (currentRole === 'Admin') {
-      return {
-        projects: validProjects,
-        tasks: validTasks,
-        attendance: validAttendance,
-        hrRequests: validHrRequests
-      };
-    }
-
-    if (currentRole === 'HR') {
-      return {
-        projects: validProjects.filter((p) => p.memberIds.includes(userId) || p.teamLeadId === userId),
-        tasks: validTasks.filter((t) => t.assigneeId === userId),
-        attendance: validAttendance,
-        hrRequests: validHrRequests
-      };
-    }
-
-    if (currentRole === 'Team_Lead') {
-      const leadProjectIds = validProjects
-        .filter((p) => p.teamLeadId === userId)
-        .map((p) => p.id);
-      return {
-        projects: validProjects.filter((p) => p.teamLeadId === userId),
-        tasks: validTasks.filter((t) => leadProjectIds.includes(t.projectId)),
-        attendance: validAttendance.filter((a) => leadProjectIds.some((_pid) => {
-          const proj = validProjects.find((p) => p.id === _pid);
-          return proj?.memberIds.includes(a.userId) || proj?.teamLeadId === a.userId;
-        })),
-        hrRequests: []
-      };
-    }
-
-    return {
-      projects: validProjects.filter((p) => p.memberIds.includes(userId)),
-      tasks: validTasks.filter((t) => t.assigneeId === userId),
-      attendance: validAttendance.filter((a) => a.userId === userId),
-      hrRequests: validHrRequests.filter((r) => r.userId === userId)
-    };
-  }, [filteredData, currentRole, currentUser.id]);
-
   const visibleTabs = useMemo<ReportTab[]>(() => {
     switch (currentRole) {
       case 'Admin':
@@ -255,156 +491,6 @@ export const ReportsView: React.FC = () => {
 
   const hasError = validationError !== null;
 
-  const kpiStats = useMemo(() => {
-    const { projects: rp, tasks: rt } = roleFiltered;
-    const totalProjects = rp.length;
-    const activeTasks = rt.filter((t) => t.status !== 'Done').length;
-    const completedTasks = rt.filter((t) => t.status === 'Done').length;
-    const overdueTasks = rt.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
-    const completionRate = rt.length > 0 ? Math.round((completedTasks / rt.length) * 100) : 0;
-    const activeMembers = new Set(rp.flatMap((p) => p.memberIds).concat(rp.map((p) => p.teamLeadId))).size;
-    return { totalProjects, activeTasks, completedTasks, overdueTasks, completionRate, activeMembers };
-  }, [roleFiltered]);
-
-  const projectHealthData = useMemo(() => {
-    const { projects: rp, tasks: rt } = roleFiltered;
-    return rp.map((p) => {
-      const pTasks = rt.filter((t) => t.projectId === p.id);
-      const done = pTasks.filter((t) => t.status === 'Done').length;
-      const pct = pTasks.length > 0 ? Math.round((done / pTasks.length) * 100) : 0;
-      return { name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title, progress: p.progress, completion: pct };
-    });
-  }, [roleFiltered]);
-
-  const taskStatusDist = useMemo(() => {
-    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
-    roleFiltered.tasks.forEach((t) => { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [roleFiltered]);
-
-  const taskPriorityDist = useMemo(() => {
-    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
-    roleFiltered.tasks.forEach((t) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [roleFiltered]);
-
-  const taskCompletionTrend = useMemo(() => {
-    const { from, to } = dateRange;
-    const days: Record<string, { completed: number; created: number }> = {};
-    const start = new Date(from + 'T00:00:00');
-    const end = new Date(to + 'T00:00:00');
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().split('T')[0];
-      days[key] = { completed: 0, created: 0 };
-    }
-    roleFiltered.tasks.forEach((t) => {
-      const cKey = t.createdAt?.slice(0, 10);
-      if (cKey && days[cKey]) days[cKey].created++;
-      if (t.status === 'Done' && t.dueDate && days[t.dueDate]) days[t.dueDate].completed++;
-    });
-    return Object.entries(days).map(([date, vals]) => ({
-      date: date.slice(5),
-      Completed: vals.completed,
-      Created: vals.created
-    }));
-  }, [roleFiltered, dateRange]);
-
-  const workloadData = useMemo(() => {
-    const { tasks: rt, projects: rp } = roleFiltered;
-    const memberMap: Record<string, { name: string; active: number; completed: number; review: number; overdue: number }> = {};
-    rt.forEach((t) => {
-      const uid = t.assigneeId;
-      if (!memberMap[uid]) {
-        const u = users.find((u) => u.id === uid);
-        memberMap[uid] = { name: u?.name || uid, active: 0, completed: 0, review: 0, overdue: 0 };
-      }
-      if (t.status === 'Done') memberMap[uid].completed++;
-      else if (t.status === 'Review') memberMap[uid].review++;
-      else {
-        memberMap[uid].active++;
-        if (t.dueDate < todayStr()) memberMap[uid].overdue++;
-      }
-    });
-    return Object.values(memberMap).sort((a, b) => b.active - a.active);
-  }, [roleFiltered, users]);
-
-  const deadlineData = useMemo(() => {
-    const { tasks: rt } = roleFiltered;
-    const today = todayStr();
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-    const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
-
-    const dueToday = rt.filter((t) => t.status !== 'Done' && t.dueDate === today);
-    const dueTomorrow = rt.filter((t) => t.status !== 'Done' && t.dueDate === tomorrow);
-    const upcoming = rt.filter((t) => t.status !== 'Done' && t.dueDate > tomorrow && t.dueDate <= weekFromNow);
-    const overdue = rt.filter((t) => t.status !== 'Done' && t.dueDate < today);
-    return { dueToday, dueTomorrow, upcoming, overdue };
-  }, [roleFiltered]);
-
-  const attendanceStats = useMemo(() => {
-    const { attendance: att } = roleFiltered;
-    const present = att.filter((a) => a.status === 'Present').length;
-    const late = att.filter((a) => a.status === 'Late').length;
-    const absent = att.filter((a) => a.status === 'Absent').length;
-    const onLeave = att.filter((a) => a.status === 'On Leave').length;
-    const halfDay = att.filter((a) => a.status === 'Half Day').length;
-    const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
-    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    const pendingCorrections = roleFiltered.hrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    const pendingLeaves = roleFiltered.hrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections, pendingLeaves };
-  }, [roleFiltered]);
-
-  const hrOverviewStats = useMemo(() => {
-    const today = todayStr();
-    const todayAtt = filteredData.validAttendance.filter((a) => a.date === today);
-    const presentToday = todayAtt.filter((a) => a.status === 'Present').length;
-    const absentToday = todayAtt.filter((a) => a.status === 'Absent').length;
-    const onLeaveToday = todayAtt.filter((a) => a.status === 'On Leave').length;
-    const lateToday = todayAtt.filter((a) => a.status === 'Late').length;
-    const avgHours = todayAtt.length > 0
-      ? (todayAtt.reduce((s, a) => s + (a.totalHours || 0), 0) / todayAtt.length).toFixed(1)
-      : '0';
-    const pendingLeaveReqs = filteredData.validHrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    const pendingCorrections = filteredData.validHrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-
-    return { presentToday, absentToday, onLeaveToday, lateToday, avgHours, pendingLeaveReqs, pendingCorrections };
-  }, [filteredData]);
-
-  const teamStats = useMemo(() => {
-    const { projects: rp, tasks: rt } = roleFiltered;
-    const deptMap: Record<string, { members: Set<string>; projects: number; tasks: number; completed: number }> = {};
-    rp.forEach((p) => {
-      p.memberIds.forEach((mid) => {
-        const u = users.find((u) => u.id === mid);
-        const dept = u?.department || 'Unknown';
-        if (!deptMap[dept]) deptMap[dept] = { members: new Set(), projects: 0, tasks: 0, completed: 0 };
-        deptMap[dept].members.add(mid);
-        deptMap[dept].projects++;
-      });
-    });
-    rt.forEach((t) => {
-      const p = rp.find((p) => p.id === t.projectId);
-      if (p) {
-        const u = users.find((u) => u.id === t.assigneeId);
-        const dept = u?.department || 'Unknown';
-        if (deptMap[dept]) {
-          deptMap[dept].tasks++;
-          if (t.status === 'Done') deptMap[dept].completed++;
-        }
-      }
-    });
-    return Object.entries(deptMap).map(([dept, data]) => ({
-      department: dept,
-      members: data.members.size,
-      projects: data.projects,
-      tasks: data.tasks,
-      completed: data.completed,
-      rate: data.tasks > 0 ? Math.round((data.completed / data.tasks) * 100) : 0
-    }));
-  }, [roleFiltered, users]);
-
   const handleCsvExport = () => {
     const tab = activeTab;
     let headers: string[] = [];
@@ -412,26 +498,26 @@ export const ReportsView: React.FC = () => {
 
     if (tab === 'projects') {
       headers = ['Project', 'Code', 'Status', 'Progress %', 'Start Date', 'Target Date', 'Members', 'Team Lead'];
-      rows = roleFiltered.projects.map((p) => [
+      rows = roleFiltered.projects.map((p: any) => [
         p.title, p.code, p.status, String(p.progress), p.startDate, p.targetDate,
-        String(p.memberIds.length), users.find((u) => u.id === p.teamLeadId)?.name || p.teamLeadId
+        String(p.memberIds?.length || 0), users.find((u) => u.id === p.teamLeadId)?.name || p.teamLeadId
       ]);
     } else if (tab === 'workload') {
       headers = ['Member', 'Active Tasks', 'Completed', 'In Review', 'Overdue'];
-      rows = workloadData.map((w) => [w.name, String(w.active), String(w.completed), String(w.review), String(w.overdue)]);
+      rows = workloadData.map((w: any) => [w.name, String(w.active), String(w.completed), String(w.review), String(w.overdue)]);
     } else if (tab === 'deadlines') {
       headers = ['Task', 'Status', 'Priority', 'Due Date', 'Assignee'];
-      rows = [...deadlineData.overdue, ...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].map((t) => [
+      rows = [...deadlineData.overdue, ...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].map((t: any) => [
         t.title, t.status, t.priority, t.dueDate, users.find((u) => u.id === t.assigneeId)?.name || t.assigneeId
       ]);
     } else if (tab === 'attendance') {
       headers = ['User', 'Date', 'Status', 'Check In', 'Check Out', 'Total Hours'];
-      rows = roleFiltered.attendance.map((a) => [
-        users.find((u) => u.id === a.userId)?.name || a.userId, a.date, a.status, a.checkIn, a.checkOut || '—', String(a.totalHours)
+      rows = roleFiltered.attendance.map((a: any) => [
+        users.find((u) => u.id === a.userId)?.name || a.userId, a.date, a.status, a.checkIn, a.checkOut || '\u2014', String(a.totalHours)
       ]);
     } else if (tab === 'teams') {
       headers = ['Department', 'Members', 'Projects', 'Tasks', 'Completed', 'Completion Rate'];
-      rows = teamStats.map((t) => [t.department, String(t.members), String(t.projects), String(t.tasks), String(t.completed), `${t.rate}%`]);
+      rows = teamStats.map((t: any) => [t.department, String(t.members), String(t.projects), String(t.tasks), String(t.completed), `${t.rate}%`]);
     } else {
       headers = ['Metric', 'Value'];
       rows = [
@@ -473,62 +559,57 @@ export const ReportsView: React.FC = () => {
       </div>`;
 
     const th = (text: string) => `<th style="background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;border-bottom:2px solid #e2e8f0;color:#334155;font-size:10px;">${text}</th>`;
-
     const td = (text: string | number, cls?: string) =>
       `<td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:${cls || '#475569'};font-size:10px;">${text}</td>`;
-
     const section = (title: string) =>
       `<h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;color:#1e293b;border-left:3px solid #3b82f6;padding-left:8px;">${title}</h3>`;
 
     let bodyHtml = '';
 
-    const { projects: rp, tasks: rt, attendance: ratt, hrRequests: rhr } = roleFiltered;
-    const today = todayStr();
-
     if (tab === 'projects') {
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
-      bodyHtml += kpi('Total Projects', rp.length);
-      const avgProg = rp.length > 0 ? `${Math.round(rp.reduce((s, p) => s + p.progress, 0) / rp.length)}%` : '0%';
+      bodyHtml += kpi('Total Projects', roleFiltered.projects.length);
+      const projArr = roleFiltered.projects as any[];
+      const avgProg = projArr.length > 0 ? `${Math.round(projArr.reduce((s: number, p: any) => s + (p.progress || 0), 0) / projArr.length)}%` : '0%';
       bodyHtml += kpi('Avg Progress', avgProg);
-      bodyHtml += kpi('Active', rp.filter((p) => p.status === 'Active').length);
-      bodyHtml += kpi('Completed', rp.filter((p) => p.status === 'Completed').length);
+      bodyHtml += kpi('Active', projArr.filter((p: any) => p.status === 'Active').length);
+      bodyHtml += kpi('Completed', projArr.filter((p: any) => p.status === 'Completed').length);
       bodyHtml += `</div>`;
       bodyHtml += section('Project Details');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Project')}${th('Code')}${th('Status')}${th('Progress')}${th('Tasks')}${th('Health')}</tr></thead><tbody>`;
-      rp.forEach((p) => {
-        const pTasks = rt.filter((t) => t.projectId === p.id);
-        const health = p.progress >= 70 ? 'On Track' : p.progress >= 40 ? 'At Risk' : 'Needs Attention';
-        bodyHtml += `<tr>${td(p.title, '#0f172a')}${td(p.code)}${td(p.status)}${td(`${p.progress}%`)}${td(pTasks.length)}${td(health)}</tr>`;
+      projArr.forEach((p: any) => {
+        const health = (p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : 'Needs Attention';
+        bodyHtml += `<tr>${td(p.title, '#0f172a')}${td(p.code)}${td(p.status)}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'teams') {
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
       bodyHtml += kpi('Departments', teamStats.length);
-      bodyHtml += kpi('Total Tasks', teamStats.reduce((s, t) => s + t.tasks, 0));
-      bodyHtml += kpi('Completed', teamStats.reduce((s, t) => s + t.completed, 0));
-      const avgRate = teamStats.length > 0 ? `${Math.round(teamStats.reduce((s, t) => s + t.rate, 0) / teamStats.length)}%` : '0%';
+      bodyHtml += kpi('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0));
+      bodyHtml += kpi('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0));
+      const avgRate = teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%';
       bodyHtml += kpi('Avg Rate', avgRate);
       bodyHtml += `</div>`;
       bodyHtml += section('Department Performance');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Department')}${th('Members')}${th('Projects')}${th('Tasks')}${th('Completed')}${th('Rate')}</tr></thead><tbody>`;
-      teamStats.forEach((t) => {
+      teamStats.forEach((t: any) => {
         bodyHtml += `<tr>${td(t.department, '#0f172a')}${td(t.members)}${td(t.projects)}${td(t.tasks)}${td(t.completed)}${td(`${t.rate}%`)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'workload') {
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
-      bodyHtml += kpi('Active Tasks', workloadData.reduce((s, w) => s + w.active, 0));
-      bodyHtml += kpi('Completed', workloadData.reduce((s, w) => s + w.completed, 0));
-      bodyHtml += kpi('In Review', workloadData.reduce((s, w) => s + w.review, 0));
-      bodyHtml += kpi('Overdue', workloadData.reduce((s, w) => s + w.overdue, 0));
+      bodyHtml += kpi('Active Tasks', workloadData.reduce((s: number, w: any) => s + (w.active || 0), 0));
+      bodyHtml += kpi('Completed', workloadData.reduce((s: number, w: any) => s + (w.completed || 0), 0));
+      bodyHtml += kpi('In Review', workloadData.reduce((s: number, w: any) => s + (w.review || 0), 0));
+      bodyHtml += kpi('Overdue', workloadData.reduce((s: number, w: any) => s + (w.overdue || 0), 0));
       bodyHtml += kpi('Members', workloadData.length);
       bodyHtml += `</div>`;
       bodyHtml += section('Member Workload');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Member')}${th('Active')}${th('Completed')}${th('Review')}${th('Overdue')}</tr></thead><tbody>`;
-      workloadData.forEach((w) => {
+      workloadData.forEach((w: any) => {
         bodyHtml += `<tr>${td(w.name, '#0f172a')}${td(w.active)}${td(w.completed)}${td(w.review)}${td(w.overdue)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
@@ -543,7 +624,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section(`Overdue Tasks (${deadlineData.overdue.length})`);
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
-        deadlineData.overdue.forEach((t) => {
+        deadlineData.overdue.forEach((t: any) => {
           bodyHtml += `<tr>${td(t.title, '#991b1b')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
@@ -552,7 +633,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section(`Due Today (${deadlineData.dueToday.length})`);
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
-        deadlineData.dueToday.forEach((t) => {
+        deadlineData.dueToday.forEach((t: any) => {
           bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
@@ -561,7 +642,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section(`Due Tomorrow (${deadlineData.dueTomorrow.length})`);
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
-        deadlineData.dueTomorrow.forEach((t) => {
+        deadlineData.dueTomorrow.forEach((t: any) => {
           bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
@@ -570,7 +651,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section(`Upcoming (${deadlineData.upcoming.length})`);
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
-        deadlineData.upcoming.forEach((t) => {
+        deadlineData.upcoming.forEach((t: any) => {
           bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
@@ -592,9 +673,9 @@ export const ReportsView: React.FC = () => {
       bodyHtml += section('Attendance Records');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
-      ratt.forEach((a) => {
+      (roleFiltered.attendance || []).forEach((a: any) => {
         const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
-        bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date)}${td(a.status)}${td(a.checkIn)}${td(a.checkOut || '\u2014')}${td(a.totalHours)}</tr>`;
+        bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date)}${td(a.status)}${td(a.checkIn)}${td(a.checkOut || '\u2014')}${td(a.totalHours || 0)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else {
@@ -610,14 +691,14 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section('Task Status Distribution');
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Status')}${th('Count')}</tr></thead><tbody>`;
-        taskStatusDist.forEach((s) => {
+        taskStatusDist.forEach((s: any) => {
           bodyHtml += `<tr>${td(s.name)}${td(s.value)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
         bodyHtml += section('Priority Distribution');
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Priority')}${th('Count')}</tr></thead><tbody>`;
-        taskPriorityDist.forEach((p) => {
+        taskPriorityDist.forEach((p: any) => {
           bodyHtml += `<tr>${td(p.name)}${td(p.value)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
@@ -780,13 +861,13 @@ ${bodyHtml}
               <div className="glass-panel p-4 rounded-lg">
                 {renderSectionHeader(<Target size={16} className="text-emerald-400" />, 'Task Status Distribution')}
                 <div className="mt-3 flex items-center justify-center" style={{ height: 260 }}>
-                  {roleFiltered.tasks.length === 0 ? (
+                  {taskStatusDist.length === 0 || taskStatusDist.every((d: any) => d.value === 0) ? (
                     <p className="text-xs text-slate-500">No task data available for this period</p>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie data={taskStatusDist} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={3}>
-                          {taskStatusDist.map((_entry, idx) => (
+                          {taskStatusDist.map((_entry: any, idx: number) => (
                             <Cell key={idx} fill={pieColors[idx % pieColors.length]} stroke={chartPieStroke} strokeWidth={2} />
                           ))}
                         </Pie>
@@ -803,13 +884,13 @@ ${bodyHtml}
               <div className="glass-panel p-4 rounded-lg">
                 {renderSectionHeader(<AlertTriangle size={16} className="text-amber-400" />, 'Task Priority Distribution')}
                 <div className="mt-3 flex items-center justify-center" style={{ height: 260 }}>
-                  {roleFiltered.tasks.length === 0 ? (
+                  {taskPriorityDist.length === 0 || taskPriorityDist.every((d: any) => d.value === 0) ? (
                     <p className="text-xs text-slate-500">No task data available for this period</p>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie data={taskPriorityDist} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={3}>
-                          {taskPriorityDist.map((_entry, idx) => (
+                          {taskPriorityDist.map((_entry: any, idx: number) => (
                             <Cell key={idx} fill={[chartColors.amber, chartColors.cyan, chartColors.violet, chartColors.rose][idx % 4]} stroke={chartPieStroke} strokeWidth={2} />
                           ))}
                         </Pie>
@@ -830,7 +911,7 @@ ${bodyHtml}
                 {deadlineData.dueToday.length === 0 && deadlineData.dueTomorrow.length === 0 && deadlineData.upcoming.length === 0 ? (
                   <p className="text-xs text-slate-500 text-center py-4">No upcoming deadlines in this range</p>
                 ) : (
-                  [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].slice(0, 8).map((t) => (
+                  [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].slice(0, 8).map((t: any) => (
                     <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
                       <div className="flex items-center gap-2 min-w-0">
                         <StatusBadge status={t.priority} size="sm" />
@@ -876,7 +957,7 @@ ${bodyHtml}
                 <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
                   <span className="text-slate-400 block mb-1">Overall Progress</span>
                   <span className="text-white font-bold">
-                    {kpiStats.completionRate}% tasks completed ({kpiStats.completedTasks}/{roleFiltered.tasks.length})
+                    {kpiStats.completionRate}% tasks completed ({kpiStats.completedTasks}/{kpiStats.completedTasks + kpiStats.activeTasks})
                   </span>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
@@ -894,7 +975,7 @@ ${bodyHtml}
                 <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
                   <span className="text-slate-400 block mb-1">Task Distribution</span>
                   <span className="text-white font-bold">
-                    {roleFiltered.tasks.length} total | {roleFiltered.tasks.filter((t) => t.status === 'In Progress').length} in progress
+                    {kpiStats.completedTasks + kpiStats.activeTasks} total | {taskStatusDist.find((d: any) => d.name === 'In Progress')?.value || 0} in progress
                   </span>
                 </div>
               </div>
@@ -929,7 +1010,7 @@ ${bodyHtml}
                     <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {Object.keys({ a: 0, b: 1, c: 2, d: 3 }).map((_, i) => (
+                      {[0, 1, 2, 3].map((i) => (
                         <Cell key={i} fill={[chartColors.emerald, chartColors.rose, chartColors.cyan, chartColors.amber][i]} />
                       ))}
                     </Bar>
@@ -969,9 +1050,9 @@ ${bodyHtml}
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {renderKPICard('Total Projects', roleFiltered.projects.length, <FolderKanban size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Avg Progress', roleFiltered.projects.length > 0 ? `${Math.round(roleFiltered.projects.reduce((s, p) => s + p.progress, 0) / roleFiltered.projects.length)}%` : '0%', <TrendingUp size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Active', roleFiltered.projects.filter((p) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Completed', roleFiltered.projects.filter((p) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}
+        {renderKPICard('Avg Progress', roleFiltered.projects.length > 0 ? `${Math.round(roleFiltered.projects.reduce((s: number, p: any) => s + (p.progress || 0), 0) / roleFiltered.projects.length)}%` : '0%', <TrendingUp size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}
       </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1011,13 +1092,13 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {roleFiltered.projects.length === 0 ? (
+            {(roleFiltered.projects || []).length === 0 ? (
               <tr><td colSpan={7} className="text-center text-slate-500 py-6">No projects in range</td></tr>
             ) : (
-              roleFiltered.projects.map((p) => {
-                const pTasks = roleFiltered.tasks.filter((t) => t.projectId === p.id);
-                const overdue = pTasks.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
-                const healthLabel = p.progress >= 70 ? 'On Track' : p.progress >= 40 ? 'At Risk' : 'Needs Attention';
+              (roleFiltered.projects as any[]).map((p: any) => {
+                const pTasksCount = p.taskCount || 0;
+                const overdueCount = p.overdueCount || 0;
+                const healthLabel = p.healthLabel || ((p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : 'Needs Attention');
                 return (
                   <tr key={p.id}>
                     <td className="text-white font-medium">{p.title}</td>
@@ -1026,13 +1107,13 @@ ${bodyHtml}
                     <td>
                       <div className="flex items-center gap-2">
                         <div className="w-16 h-1.5 rounded-full bg-slate-700">
-                          <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-500" style={{ width: `${p.progress}%` }} />
+                          <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-500" style={{ width: `${p.progress || 0}%` }} />
                         </div>
-                        <span className="text-[10px] font-mono text-slate-300">{p.progress}%</span>
+                        <span className="text-[10px] font-mono text-slate-300">{p.progress || 0}%</span>
                       </div>
                     </td>
-                    <td className="font-mono text-xs">{pTasks.length}</td>
-                    <td className={`font-mono text-xs ${overdue > 0 ? 'text-rose-400' : 'text-slate-400'}`}>{overdue}</td>
+                    <td className="font-mono text-xs">{pTasksCount}</td>
+                    <td className={`font-mono text-xs ${overdueCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>{overdueCount}</td>
                     <td>
                       <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                         healthLabel === 'On Track' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
@@ -1054,9 +1135,9 @@ ${bodyHtml}
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {renderKPICard('Departments', teamStats.length, <Users size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Total Tasks', teamStats.reduce((s, t) => s + t.tasks, 0), <CheckSquare size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Completed', teamStats.reduce((s, t) => s + t.completed, 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s, t) => s + t.rate, 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
+        {renderKPICard('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0), <CheckSquare size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
       </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1098,7 +1179,7 @@ ${bodyHtml}
             {teamStats.length === 0 ? (
               <tr><td colSpan={6} className="text-center text-slate-500 py-6">No data available</td></tr>
             ) : (
-              teamStats.map((t) => (
+              teamStats.map((t: any) => (
                 <tr key={t.department}>
                   <td className="text-white font-medium">{t.department}</td>
                   <td className="font-mono text-xs">{t.members}</td>
@@ -1125,10 +1206,10 @@ ${bodyHtml}
   const renderWorkloadTab = () => (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {renderKPICard('Active Tasks', workloadData.reduce((s, w) => s + w.active, 0), <Activity size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Completed', workloadData.reduce((s, w) => s + w.completed, 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('In Review', workloadData.reduce((s, w) => s + w.review, 0), <Target size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Overdue', workloadData.reduce((s, w) => s + w.overdue, 0), <AlertTriangle size={14} className="text-amber-400" />, 'amber')}
+        {renderKPICard('Active Tasks', workloadData.reduce((s: number, w: any) => s + (w.active || 0), 0), <Activity size={14} className="text-cyan-400" />, 'cyan')}
+        {renderKPICard('Completed', workloadData.reduce((s: number, w: any) => s + (w.completed || 0), 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('In Review', workloadData.reduce((s: number, w: any) => s + (w.review || 0), 0), <Target size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Overdue', workloadData.reduce((s: number, w: any) => s + (w.overdue || 0), 0), <AlertTriangle size={14} className="text-amber-400" />, 'amber')}
         {renderKPICard('Members', workloadData.length, <Users size={14} className="text-cyan-400" />, 'magenta')}
       </div>
 
@@ -1173,12 +1254,12 @@ ${bodyHtml}
             {workloadData.length === 0 ? (
               <tr><td colSpan={6} className="text-center text-slate-500 py-6">No data available</td></tr>
             ) : (
-              workloadData.map((w) => {
-                const total = w.active + w.completed + w.review;
+              workloadData.map((w: any) => {
+                const total = (w.active || 0) + (w.completed || 0) + (w.review || 0);
                 const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
                 return (
-                  <tr key={w.name}>
-                    <td className="text-white font-medium">{w.name}</td>
+                  <tr key={w.name || w.userId}>
+                    <td className="text-white font-medium">{w.name || w.userId}</td>
                     <td className="font-mono text-xs">{w.active}</td>
                     <td className="font-mono text-xs text-emerald-400">{w.completed}</td>
                     <td className="font-mono text-xs text-amber-400">{w.review}</td>
@@ -1217,7 +1298,7 @@ ${bodyHtml}
             <div className="glass-panel p-4 rounded-lg">
               {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Due Today', `${deadlineData.dueToday.length} tasks`)}
               <div className="mt-3 space-y-2">
-                {deadlineData.dueToday.map((t) => (
+                {deadlineData.dueToday.map((t: any) => (
                   <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-cyan-500/20 text-xs">
                     <div className="flex items-center gap-2 min-w-0">
                       <StatusBadge status={t.priority} size="sm" />
@@ -1236,7 +1317,7 @@ ${bodyHtml}
             <div className="glass-panel p-4 rounded-lg">
               {renderSectionHeader(<Calendar size={16} className="text-violet-400" />, 'Due Tomorrow', `${deadlineData.dueTomorrow.length} tasks`)}
               <div className="mt-3 space-y-2">
-                {deadlineData.dueTomorrow.map((t) => (
+                {deadlineData.dueTomorrow.map((t: any) => (
                   <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-purple-500/20 text-xs">
                     <div className="flex items-center gap-2 min-w-0">
                       <StatusBadge status={t.priority} size="sm" />
@@ -1255,7 +1336,7 @@ ${bodyHtml}
             <div className="glass-panel p-4 rounded-lg">
               {renderSectionHeader(<Target size={16} className="text-emerald-400" />, 'Upcoming Deadlines', `${deadlineData.upcoming.length} tasks`)}
               <div className="mt-3 space-y-2">
-                {deadlineData.upcoming.map((t) => (
+                {deadlineData.upcoming.map((t: any) => (
                   <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-emerald-500/20 text-xs">
                     <div className="flex items-center gap-2 min-w-0">
                       <StatusBadge status={t.priority} size="sm" />
@@ -1274,7 +1355,7 @@ ${bodyHtml}
             <div className="glass-panel p-4 rounded-lg border border-rose-500/20">
               {renderSectionHeader(<AlertTriangle size={16} className="text-rose-400" />, 'Overdue Tasks', `${deadlineData.overdue.length} overdue`)}
               <div className="mt-3 space-y-2">
-                {deadlineData.overdue.map((t) => (
+                {deadlineData.overdue.map((t: any) => (
                   <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-rose-500/20 text-xs">
                     <div className="flex items-center gap-2 min-w-0">
                       <StatusBadge status={t.priority} size="sm" />
@@ -1317,7 +1398,7 @@ ${bodyHtml}
         <div className="glass-panel p-4 rounded-lg">
           {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
           <div className="mt-3" style={{ height: 260 }}>
-            {roleFiltered.attendance.length === 0 ? (
+            {(roleFiltered.attendance || []).length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -1358,18 +1439,18 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {roleFiltered.attendance.length === 0 ? (
+            {(roleFiltered.attendance || []).length === 0 ? (
               <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
             ) : (
-              roleFiltered.attendance.map((a) => (
-                <tr key={a.id}>
+              (roleFiltered.attendance as any[]).map((a: any) => (
+                <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
                   <td><StatusBadge status={a.status} size="sm" /></td>
-                  <td className="font-mono text-xs">{a.checkIn}</td>
-                  <td className="font-mono text-xs text-slate-400">{a.checkOut || '—'}</td>
-                  <td className="font-mono text-xs">{a.totalHours}h</td>
-                  <td className="font-mono text-xs text-slate-400">{a.breaks?.length || 0}</td>
+                  <td className="font-mono text-xs">{a.checkIn || '\u2014'}</td>
+                  <td className="font-mono text-xs text-slate-400">{a.checkOut || '\u2014'}</td>
+                  <td className="font-mono text-xs">{a.totalHours || 0}h</td>
+                  <td className="font-mono text-xs text-slate-400">{a.breaksCount || 0}</td>
                 </tr>
               ))
             )}
@@ -1382,7 +1463,7 @@ ${bodyHtml}
           <div className="glass-panel p-4 rounded-lg">
             {renderSectionHeader(<ListTodo size={16} className="text-amber-400" />, 'Pending HR Requests', `${roleFiltered.hrRequests.length} pending`)}
             <div className="mt-3 space-y-2">
-              {roleFiltered.hrRequests.map((r) => (
+              {roleFiltered.hrRequests.map((r: any) => (
                 <div key={r.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
                   <div className="flex items-center gap-2">
                     <StatusBadge status={r.type.replace('_', ' ')} size="sm" />
@@ -1400,26 +1481,24 @@ ${bodyHtml}
 
   const renderExportTab = () => (
     <div className="space-y-5">
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="p-6 text-center space-y-4">
-          <FileSpreadsheet size={40} className="mx-auto text-cyan-400" />
-          <div>
-            <h3 className="text-sm font-bold text-white">CSV Export</h3>
-            <p className="text-xs text-slate-400 mt-1">Export the current report as a CSV spreadsheet</p>
-          </div>
-          <div className="text-[10px] text-slate-500 font-mono">
-            {tabLabels[activeTab]} Report | {dateRange.from} – {dateRange.to}
-          </div>
-          <button
-            onClick={handleCsvExport}
-            disabled={hasError}
-            className="w-full py-2.5 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2 shadow"
-          >
-            <Download size={14} />
-            <span>Download CSV</span>
-          </button>
+      <div className="p-6 text-center space-y-4 bg-slate-900/30 border border-white/10 rounded-xl">
+        <FileSpreadsheet size={40} className="mx-auto text-cyan-400" />
+        <div>
+          <h3 className="text-sm font-bold text-white">CSV Export</h3>
+          <p className="text-xs text-slate-400 mt-1">Export the current report as a CSV spreadsheet</p>
         </div>
-      </GlassCard>
+        <div className="text-[10px] text-slate-500 font-mono">
+          {tabLabels[activeTab]} Report | {dateRange.from} \u2013 {dateRange.to}
+        </div>
+        <button
+          onClick={handleCsvExport}
+          disabled={hasError}
+          className="w-full py-2.5 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2 shadow"
+        >
+          <Download size={14} />
+          <span>Download CSV</span>
+        </button>
+      </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
         <div className="glass-panel p-4 rounded-lg">
@@ -1431,7 +1510,7 @@ ${bodyHtml}
             </div>
             <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
               <span className="text-slate-400 block mb-1">Date Range</span>
-              <span className="text-white font-bold font-mono text-[10px]">{dateRange.from} – {dateRange.to}</span>
+              <span className="text-white font-bold font-mono text-[10px]">{dateRange.from} \u2013 {dateRange.to}</span>
             </div>
             <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
               <span className="text-slate-400 block mb-1">Role</span>
@@ -1444,7 +1523,7 @@ ${bodyHtml}
                  activeTab === 'workload' ? workloadData.length :
                  activeTab === 'deadlines' ? deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length + deadlineData.overdue.length :
                  activeTab === 'attendance' ? roleFiltered.attendance.length :
-                 activeTab === 'teams' ? teamStats.length : roleFiltered.tasks.length}
+                 activeTab === 'teams' ? teamStats.length : (kpiStats.completedTasks + kpiStats.activeTasks)}
               </span>
             </div>
           </div>
@@ -1486,6 +1565,14 @@ ${bodyHtml}
               <FileText size={11} />
               Export PDF
             </button>
+          </div>
+        )}
+        {reportLoading && (
+          <div className="text-xs text-slate-400 text-center py-2">Loading report data...</div>
+        )}
+        {reportError && !reportLoading && !apiAvailable && (
+          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 text-center">
+            {reportError}
           </div>
         )}
         {tabContent}

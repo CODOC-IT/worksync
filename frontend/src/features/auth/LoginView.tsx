@@ -108,8 +108,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
       if (data.user && data.user.role) {
         loginUser(data.user);
       } else {
-        const matchedUser = users.find((u) => u.role === selectedDemoRole) || users[0];
-        loginUser(matchedUser);
+        setErrorMsg('User data not received from server.');
+        setLoading(false);
+        return;
       }
 
       onLoginSuccess();
@@ -209,6 +210,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
             </div>
 
             {/* Bottom Demo User Showcase Card */}
+            {activeDemoUser && (
             <div className="p-3.5 rounded-xl bg-slate-950/80 backdrop-blur-md border border-white/10 space-y-2">
               <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
                 <span>Selected Demo Profile</span>
@@ -219,9 +221,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                   src={activeDemoUser.avatar}
                   alt={activeDemoUser.name}
                   className="w-10 h-10 rounded-xl object-cover border border-cyan-500/40 shadow-[0_0_10px_rgba(0,242,254,0.3)]"
-                  onError={(e) => {
-                    (e.target as HTMLElement).setAttribute('src', 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80');
-                  }}
                 />
                 <div className="min-w-0 flex-1">
                   <h4 className="text-xs font-bold text-white truncate">{activeDemoUser.name}</h4>
@@ -229,6 +228,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 </div>
               </div>
             </div>
+            )}
           </div>
 
           {/* RIGHT COLUMN: Interactive Login Form Area */}

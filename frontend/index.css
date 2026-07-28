@@ -1,5 +1,14 @@
 
+/* Remote @import must precede locally-bundled ones: Vite inlines the
+   @fontsource files into plain rules, which would otherwise push this
+   @import past the "must be first" point in the compiled stylesheet. */
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+/* Geist — self-hosted via @fontsource (bundled locally, no external font request). */
+@import '@fontsource/geist-sans/400.css';
+@import '@fontsource/geist-sans/500.css';
+@import '@fontsource/geist-sans/600.css';
+@import '@fontsource/geist-sans/700.css';
+@import '@fontsource/geist-sans/800.css';
 @import "tailwindcss";
 
 @theme {
@@ -43,12 +52,18 @@
   --color-pink-300: var(--tone-danger-300);
   --color-pink-400: var(--tone-danger-400);
   --color-pink-500: var(--tone-danger-500);
+
+  /* Registered here (Tailwind's theme namespace) so `font-heading` is also
+     available as a utility class, not just the automatic h1-h6 styling below. */
+  --font-heading: 'Geist Sans', 'Geist', 'Google Sans', 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
 }
 
 @layer base {
   :root {
     color-scheme: dark;
-    --font-sans: 'Google Sans', 'Google Sans Text', 'Manrope', 'Inter', system-ui, -apple-system, sans-serif;
+    /* Geist leads the stack; Manrope/Inter/system-ui remain as readable fallbacks
+       if Geist is ever unavailable (e.g. mid-load), so body copy never breaks. */
+    --font-sans: 'Geist Sans', 'Geist', 'Google Sans', 'Google Sans Text', 'Manrope', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
 
     /* Slate palette — dark mode */
@@ -185,6 +200,10 @@
     font-size: 13px;
     line-height: 1.4;
     letter-spacing: -0.01em;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
   }
 }
 

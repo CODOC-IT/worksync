@@ -82,6 +82,7 @@ export const AIAssistantView: React.FC = () => {
   const [additionalContext, setAdditionalContext] = useState('');
   const [generating, setGenerating] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  const [justCopied, setJustCopied] = useState(false);
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [editablePrompt, setEditablePrompt] = useState('');
   const [generateError, setGenerateError] = useState('');
@@ -97,6 +98,9 @@ export const AIAssistantView: React.FC = () => {
   const [versions, setVersions] = useState<PromptVersion[]>([]);
   const [showVersions, setShowVersions] = useState(false);
   const [libraryError, setLibraryError] = useState('');
+  const [editedLibraryContent, setEditedLibraryContent] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState<PromptVersion | null>(null);
 
   const projectOptions = useMemo(
     () =>
@@ -236,6 +240,7 @@ export const AIAssistantView: React.FC = () => {
       setShowVersions(false);
       const data = await apiFetch(`/prompts/${id}`);
       setSelectedPrompt(data);
+      setEditedLibraryContent(data.versions[data.versions.length - 1]?.content || '');
       const vers = await apiFetch(`/prompts/${id}/versions`);
       setVersions(vers || []);
     } catch (err: any) {
@@ -259,12 +264,33 @@ export const AIAssistantView: React.FC = () => {
       const data = await apiFetch(`/prompts/${promptId}`);
       const vers = await apiFetch(`/prompts/${promptId}/versions`);
       setSelectedPrompt(data);
+      setEditedLibraryContent(data.versions[data.versions.length - 1]?.content || '');
       setVersions(vers || []);
       loadLibrary(librarySearch, libraryCategoryFilter);
     } catch (err: any) {
       setLibraryError(err.message);
     }
   }, [librarySearch, libraryCategoryFilter, loadLibrary]);
+
+  const handleSaveLibraryEdit = useCallback(async () => {
+    if (!selectedPrompt || !editedLibraryContent.trim()) return;
+    setSavingEdit(true);
+    try {
+      const data = await apiFetch(`/prompts/${selectedPrompt.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content: editedLibraryContent }),
+      });
+      setSelectedPrompt(data);
+      setEditedLibraryContent(data.versions[data.versions.length - 1]?.content || '');
+      const vers = await apiFetch(`/prompts/${selectedPrompt.id}/versions`);
+      setVersions(vers || []);
+      loadLibrary(librarySearch, libraryCategoryFilter);
+    } catch (err: any) {
+      setLibraryError(err.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [selectedPrompt, editedLibraryContent, librarySearch, libraryCategoryFilter, loadLibrary]);
 
   const handleArchive = useCallback(async (id: string) => {
     try {
@@ -287,6 +313,8 @@ export const AIAssistantView: React.FC = () => {
       document.execCommand('copy');
       document.body.removeChild(textarea);
     }
+    setJustCopied(true);
+    setTimeout(() => setJustCopied(false), 2000);
   };
 
   return (
@@ -435,9 +463,13 @@ export const AIAssistantView: React.FC = () => {
                       </button>
                       <button
                         onClick={() => handleCopy(editablePrompt)}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40 transition-all flex items-center gap-1.5"
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                          justCopied
+                            ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                            : 'bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40'
+                        }`}
                       >
-                        <Copy size={12} /> Copy
+                        {justCopied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
                       </button>
                       <button
                         onClick={() => { setSaveTitle(''); setShowSaveModal(true); }}
@@ -478,7 +510,7 @@ export const AIAssistantView: React.FC = () => {
                 <textarea
                   value={editablePrompt}
                   onChange={(e) => setEditablePrompt(e.target.value)}
-                  className="flex-1 w-full p-4 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-200 font-mono leading-relaxed resize-none focus:border-purple-500/50 focus:outline-none min-h-[300px]"
+                  className="flex-1 w-full p-4 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-200 font-mono leading-relaxed resize-none focus:border-purple-500/50 focus:outline-none min-h-[200px]"
                 />
               )}
             </div>
@@ -609,9 +641,13 @@ export const AIAssistantView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleCopy(selectedPrompt.versions[selectedPrompt.versions.length - 1]?.content || '')}
-                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40 transition-all flex items-center gap-1.5"
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        justCopied
+                          ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                          : 'bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40'
+                      }`}
                     >
-                      <Copy size={12} /> Copy
+                      {justCopied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
                     </button>
                     <button
                       onClick={() => handleLoadVersions(selectedPrompt.id)}
@@ -630,21 +666,32 @@ export const AIAssistantView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="mb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      Latest Version ({selectedPrompt.versions.length})
-                    </span>
-                    {selectedPrompt.versions[selectedPrompt.versions.length - 1]?.isAiGenerated && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">AI</span>
-                    )}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        Latest Version ({selectedPrompt.versions.length})
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {selectedPrompt.versions[selectedPrompt.versions.length - 1]?.isAiGenerated && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">AI</span>
+                        )}
+                        {editedLibraryContent !== (selectedPrompt.versions[selectedPrompt.versions.length - 1]?.content || '') && (
+                          <button
+                            onClick={handleSaveLibraryEdit}
+                            disabled={savingEdit}
+                            className="px-2.5 py-1 rounded-lg text-[10px] font-semibold glass-button-neon flex items-center gap-1 disabled:opacity-50"
+                          >
+                            {savingEdit ? 'Saving...' : <><Save size={11} /> Save</>}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <textarea
+                      value={editedLibraryContent}
+                      onChange={(e) => setEditedLibraryContent(e.target.value)}
+                      className="w-full p-4 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-200 font-mono leading-relaxed resize-none min-h-[180px] focus:border-purple-500/50 focus:outline-none"
+                    />
                   </div>
-                  <textarea
-                    value={selectedPrompt.versions[selectedPrompt.versions.length - 1]?.content || ''}
-                    readOnly
-                    className="w-full p-4 rounded-xl bg-black/40 border border-white/10 text-sm text-slate-200 font-mono leading-relaxed resize-none min-h-[300px]"
-                  />
-                </div>
 
                 {showVersions && versions.length > 0 && (
                   <div className="mt-4 border-t border-white/10 pt-4">
@@ -656,11 +703,12 @@ export const AIAssistantView: React.FC = () => {
                         <X size={16} />
                       </button>
                     </div>
-                    <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                    <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
                       {[...versions].reverse().map((v) => (
                         <div
                           key={v.versionId}
-                          className="p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-purple-500/30 transition-all"
+                          onClick={() => setPreviewVersion(v)}
+                          className="p-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-purple-500/30 transition-all cursor-pointer"
                         >
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
@@ -709,6 +757,47 @@ export const AIAssistantView: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {previewVersion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={() => setPreviewVersion(null)}>
+          <div className="w-full max-w-3xl glass-panel-glow border border-purple-500/40 p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4 shrink-0">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <History size={16} className="text-purple-400" /> Version {previewVersion.versionNumber}
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-slate-500">{previewVersion.createdByName}</span>
+                {previewVersion.createdAtUtc && (
+                  <span className="text-[10px] text-slate-500">{new Date(previewVersion.createdAtUtc).toLocaleDateString()}</span>
+                )}
+                {previewVersion.isAiGenerated && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">AI</span>
+                )}
+                {selectedPrompt && previewVersion.versionNumber !== selectedPrompt.versions.length && (
+                  <button
+                    onClick={() => {
+                      handleRestoreVersion(selectedPrompt.id, previewVersion.versionId);
+                      setPreviewVersion(null);
+                      setShowVersions(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-all"
+                  >
+                    Restore This Version
+                  </button>
+                )}
+                <button onClick={() => setPreviewVersion(null)} className="p-1 text-slate-400 hover:text-white">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              <pre className="text-sm text-slate-200 font-mono leading-relaxed whitespace-pre-wrap">
+                {previewVersion.content}
+              </pre>
+            </div>
           </div>
         </div>
       )}

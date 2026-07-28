@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../store/AppContext';
 import {
+  Users,
   LayoutDashboard,
   FolderKanban,
   CheckSquare,
@@ -66,6 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
     { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
+    { id: 'members', label: 'Members', icon: Users },
     { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },

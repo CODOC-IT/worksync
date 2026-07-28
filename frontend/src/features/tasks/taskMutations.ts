@@ -88,7 +88,7 @@ export const prepareTaskCreation = (
     assigneeIds: input.assigneeIds,
     creatorId: context.currentUserId,
     estimatedHours: data.estimatedHours || 8,
-    subtasks: data.subtasks || [],
+    subtasks: [],
     dependencies: data.dependencies || [],
     tags: data.tags || ['Task'],
     attachments: [],
@@ -143,7 +143,7 @@ export const prepareTaskUpdate = (
     : data.assigneeId
       ? [data.assigneeId]
       : getTaskAssigneeIds(task);
-  const { priority, ...otherChanges } = data;
+  const { priority, subtasks: _subtasks, ...otherChanges } = data;
   const updatedTask: Task & Partial<{ startDate: string; assigneeIds: string[] }> = {
     ...task,
     ...otherChanges,

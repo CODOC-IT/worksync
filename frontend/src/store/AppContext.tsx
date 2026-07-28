@@ -24,22 +24,7 @@ import {
   ControlledEditRequest,
   TaskStatusHistoryEntry
 } from '../types';
-import {
-  INITIAL_USERS,
-  INITIAL_PROJECTS,
-  INITIAL_TASKS,
-  INITIAL_ATTENDANCE,
-  INITIAL_HR_REQUESTS,
-  INITIAL_SYSTEM_APPROVALS,
-  INITIAL_CHAT_MESSAGES,
-  INITIAL_AI_LOGS,
-  INITIAL_AI_AUDIT,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_ACTIVITY_LOGS,
-  INITIAL_CALENDAR_EVENTS,
-  INITIAL_SAVED_PROMPTS,
-  INITIAL_WEEKLY_DRAFT
-} from '../mock-data/fixtures';
+
 import {
   TaskMutationData,
   TaskMutationResult
@@ -98,12 +83,12 @@ const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
     const savedAttendance = localStorage.getItem(ATTENDANCE_STORAGE_KEY);
-    if (!savedAttendance) return INITIAL_ATTENDANCE;
+    if (!savedAttendance) return [];
     const parsedAttendance = JSON.parse(savedAttendance);
-    return Array.isArray(parsedAttendance) ? parsedAttendance : INITIAL_ATTENDANCE;
+    return Array.isArray(parsedAttendance) ? parsedAttendance : [];
   } catch (error) {
     console.error('Failed to load attendance records from localStorage.', error);
-    return INITIAL_ATTENDANCE;
+    return [];
   }
 };
 
@@ -194,26 +179,33 @@ interface AppState {
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
+  addTeamMember: (data: Omit<User, 'id'>) => void;
+  updateTeamMember: (userId: string, data: Partial<User>) => void;
+  deleteTeamMember: (userId: string, targetReassignUserId?: string) => { success: boolean; message: string };
+  reassignMemberTasks: (sourceUserId: string, targetUserId: string) => { success: boolean; count: number };
+  getMemberAssignedTasksCount: (userId: string) => number;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
   const [currentRole, setCurrentRole] = useState<UserRole>('Admin');
-  const [currentUser, setCurrentUser] = useState<User>(INITIAL_USERS[0]);
+  const [currentUser, setCurrentUser] = useState<User>({
+    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
+  });
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>(INITIAL_HR_REQUESTS);
-  const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>(INITIAL_SYSTEM_APPROVALS);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
-  const [aiLogs, setAiLogs] = useState<AIQueryLog[]>(INITIAL_AI_LOGS);
-  const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>(INITIAL_AI_AUDIT);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
+  const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
     toast: true,
@@ -224,10 +216,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     assignments: true,
     email: false
   });
-  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>(INITIAL_ACTIVITY_LOGS);
-  const [calendarEvents] = useState<CalendarEvent[]>(INITIAL_CALENDAR_EVENTS);
-  const [savedPrompts] = useState<SavedPrompt[]>(INITIAL_SAVED_PROMPTS);
-  const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>(INITIAL_WEEKLY_DRAFT);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
+  const [calendarEvents] = useState<CalendarEvent[]>([]);
+  const [savedPrompts] = useState<SavedPrompt[]>([]);
+  const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>({
+    id: '',
+    projectId: '',
+    weekEnding: '',
+    progressSummary: '',
+    blockersText: '',
+    overdueTasksCount: 0,
+    completedTasksCount: 0,
+    keyHighlights: [],
+    recipientChannel: 'Project Chat',
+    generatedAt: ''
+  });
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
   const [activeBreak, setActiveBreak] = useState<{
@@ -261,7 +264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setRole = (role: UserRole) => {
     setCurrentRole(role);
     const matchedUser = users.find((u) => u.role === role) || users[0];
-    setCurrentUser(matchedUser);
+    if (matchedUser) setCurrentUser(matchedUser);
   };
 
   // Theme Toggle Handler
@@ -354,19 +357,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    // Same pattern as hydrateTasks above: on mount, replace the mock INITIAL_PROJECTS with the
-    // real work.Projects rows from the backend (see backend/src/projects/). Falls back to the
-    // existing mock data (console warning only) if there's no reachable backend/session yet --
-    // matches loadTasksFromApi's exact behavior for the same reason (no login yet, backend not
-    // running). This fallback covers the *read* path only; every project mutation below has no
-    // such fallback, per this module's "never fake success" requirement.
     const hydrateProjects = async () => {
       try {
         const remoteProjects = await fetchProjectsApi();
-        // The backend's ProjectDTO has no milestones/files/pinnedMessagesCount columns yet (see
-        // project.types.ts) -- default them here so every Project in state always has the arrays
-        // ProjectsView's form/render code expects, regardless of whether it came from the mock
-        // fixtures (which do carry them) or the real API (which doesn't).
         if (isActive) {
           setProjects(
             remoteProjects.map((p) => ({
@@ -446,9 +439,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Fetches this session's persisted notifications + preferences from the backend
   // (backend/src/notifications) on mount and whenever the authenticated identity changes.
   // Both calls fail silently (console.warn only) whenever there's no backend/DATABASE_URL
-  // reachable — e.g. running the Vite dev server alone, or no real login has happened yet
-  // (see notificationApiClient.ts's module comment) — leaving the pre-existing in-memory mock
-  // data (INITIAL_NOTIFICATIONS / the default preferences above) exactly as before.
+  // reachable — e.g. running the Vite dev server alone, or no real login has happened yet.
   useEffect(() => {
     let isActive = true;
 
@@ -1705,6 +1696,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
   };
 
+  const getMemberAssignedTasksCount = (userId: string) => {
+    return tasks.filter((t) => t.assigneeId === userId && t.status !== 'Done').length;
+  };
+
+  const reassignMemberTasks = (sourceUserId: string, targetUserId: string) => {
+    const assignedTasks = tasks.filter((t) => t.assigneeId === sourceUserId);
+    if (assignedTasks.length === 0) return { success: true, count: 0 };
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const sourceUser = users.find((u) => u.id === sourceUserId);
+
+    setTasks((prev) =>
+      prev.map((t) => (t.assigneeId === sourceUserId ? { ...t, assigneeId: targetUserId } : t))
+    );
+
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Reassigned ${assignedTasks.length} task(s) from ${sourceUser?.name || sourceUserId} to ${targetUser?.name || targetUserId}`,
+        targetType: 'Task',
+        targetId: sourceUserId,
+        targetTitle: 'Task Bulk Reassignment',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+
+    return { success: true, count: assignedTasks.length };
+  };
+
+  const addTeamMember = (data: Omit<User, 'id'>) => {
+    const newUserId = `usr-${Date.now()}`;
+    const newUser: User = {
+      id: newUserId,
+      name: data.name,
+      email: data.email,
+      role: data.role || 'Team_Member',
+      department: data.department || 'Engineering',
+      avatar: data.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name)}`,
+      title: data.title || 'Team Specialist',
+      status: data.status || 'active',
+      lastActive: 'Just now',
+      githubUsername: data.githubUsername
+    };
+
+    setUsers((prev) => [newUser, ...prev]);
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Added new team member ${newUser.name} (${newUser.role})`,
+        targetType: 'Settings',
+        targetId: newUserId,
+        targetTitle: newUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const updateTeamMember = (userId: string, data: Partial<User>) => {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, ...data } : u))
+    );
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Updated profile details for member ${data.name || userId}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: data.name || 'Member',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const deleteTeamMember = (userId: string, targetReassignUserId?: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return { success: false, message: 'Member not found.' };
+
+    const assignedCount = getMemberAssignedTasksCount(userId);
+    if (assignedCount > 0 && !targetReassignUserId) {
+      return {
+        success: false,
+        message: `Safety Warning: Member ${targetUser.name} currently has ${assignedCount} active assigned tasks. Please select a team member to reassign their tasks before deletion.`
+      };
+    }
+
+    if (assignedCount > 0 && targetReassignUserId) {
+      reassignMemberTasks(userId, targetReassignUserId);
+    }
+
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Deleted team member ${targetUser.name}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: targetUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+    return { success: true, message: `Member ${targetUser.name} successfully deleted.` };
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1767,7 +1877,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dismissToast,
         deactivateUser,
         exportBackup,
-        updateCurrentUser
+        updateCurrentUser,
+        addTeamMember,
+        updateTeamMember,
+        deleteTeamMember,
+        reassignMemberTasks,
+        getMemberAssignedTasksCount
       }}
     >
       {children}
