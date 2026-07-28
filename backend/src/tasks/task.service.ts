@@ -5,6 +5,7 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
 import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
+import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
   API_TO_DB_TASK_STATUS,
   ApiTaskStatus,
@@ -290,11 +291,15 @@ export const changeTaskStatus = async (
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
   const recipients = new Set(dto.assigneeIds);
-  if (input.status === 'Review') {
+  if (input.status === 'Review' && projectRow) {
     // The project's Team Lead specifically needs to know a review decision is waiting on them.
+    // resolveTeamLeadUserId falls back to the project Owner when there's no separate 'TeamLead'
+    // membership row (the common case for a project a Team Lead created for themselves -- see
+    // project.repository.ts's insertProject) -- a raw '.find TeamLead' here would silently drop
+    // this notification for every self-led project, the same bug already fixed for project
+    // authorization in project.service.ts's isProjectLead/assertCanManage.
     const members = await projectRepo.findMembersForProject(row.projectid);
-    const lead = members.find((m) => m.memberrolecode === 'TeamLead');
-    if (lead) recipients.add(fromUserPk(lead.userid));
+    recipients.add(resolveTeamLeadUserId(projectRow, members));
   }
 
   notifyTaskRecipients(updatedRow!, Array.from(recipients), actorId, {
