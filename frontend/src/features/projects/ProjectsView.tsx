@@ -1,17 +1,12 @@
 import React, { useState } from 'react';
 import { useApp } from '../../store/AppContext';
-import { GlassCard } from '../../components/common/GlassCard';
-import { StatusBadge } from '../../components/common/StatusBadge';
+import { ProjectCard } from './ProjectCard';
+import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
 import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
 import {
   FolderKanban,
   Plus,
   Search,
-  Calendar,
-  Users,
-  Flag,
-  Pencil,
-  Trash2,
   X,
   AlertTriangle,
   CheckCircle2,
@@ -60,19 +55,6 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const priorityColor = (priority?: TaskPriority) => {
-  switch (priority) {
-    case 'Urgent':
-      return 'text-rose-400 border-rose-500/30 bg-rose-500/10';
-    case 'High':
-      return 'text-fuchsia-400 border-fuchsia-500/30 bg-fuchsia-500/10';
-    case 'Low':
-      return 'text-slate-400 border-slate-500/30 bg-slate-500/10';
-    default:
-      return 'text-amber-400 border-amber-500/30 bg-amber-500/10';
-  }
-};
-
 export const ProjectsView: React.FC = () => {
   const { projects, tasks, users, currentRole, currentUser, createProject, updateProject, deleteProject } = useApp();
 
@@ -91,6 +73,7 @@ export const ProjectsView: React.FC = () => {
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const teamLeads = users.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
   const assignableMembers = users.filter((u) => u.role === 'Team_Member');
@@ -315,6 +298,7 @@ export const ProjectsView: React.FC = () => {
 
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
+  const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
 
   const confirmDelete = async () => {
     if (!deleteTargetId || deleteSubmitting) return;
@@ -400,69 +384,16 @@ export const ProjectsView: React.FC = () => {
           const manageable = canManage(project);
 
           return (
-            <GlassCard key={project.id} hover3dTilt={false} className="flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <span className="text-[10px] font-mono text-cyan-400">{project.code}</span>
-                  <h3 className="text-sm font-bold text-white leading-tight">{project.title}</h3>
-                </div>
-                <StatusBadge status={project.status} size="sm" />
-              </div>
-
-              <p className="text-xs text-slate-400 line-clamp-2">{project.description}</p>
-
-              <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                {project.priority && (
-                  <span className={`px-2 py-0.5 rounded-full border flex items-center gap-1 ${priorityColor(project.priority)}`}>
-                    <Flag size={10} /> {project.priority}
-                  </span>
-                )}
-                <span className="px-2 py-0.5 rounded-full border border-white/10 text-slate-300 flex items-center gap-1">
-                  <Users size={10} /> {project.memberIds.length} member{project.memberIds.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span className="flex items-center gap-1">
-                  <Calendar size={11} className={isOverdue ? 'text-rose-400' : 'text-slate-500'} />
-                  {project.targetDate}
-                </span>
-                {isOverdue && (
-                  <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 font-bold flex items-center gap-1">
-                    <AlertTriangle size={10} /> Overdue
-                  </span>
-                )}
-              </div>
-
-              <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-cyan-500 to-purple-500"
-                  style={{ width: `${project.progress}%` }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[11px] text-slate-400">
-                <span>Lead: {teamLead?.name || 'Unassigned'}</span>
-                {manageable && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEditForm(project)}
-                      className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-cyan-300"
-                      title="Edit project"
-                    >
-                      <Pencil size={13} />
-                    </button>
-                    <button
-                      onClick={() => setDeleteTargetId(project.id)}
-                      className="p-1.5 rounded-lg hover:bg-rose-500/10 text-slate-300 hover:text-rose-400"
-                      title="Delete project"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </GlassCard>
+            <ProjectCard
+              key={project.id}
+              project={project}
+              teamLead={teamLead}
+              isOverdue={isOverdue}
+              manageable={manageable}
+              onEdit={() => openEditForm(project)}
+              onDelete={() => setDeleteTargetId(project.id)}
+              onClick={() => setSelectedProjectId(project.id)}
+            />
           );
         })}
 
@@ -789,6 +720,12 @@ export const ProjectsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ProjectDetailsDrawer
+        project={selectedProject}
+        users={users}
+        onClose={() => setSelectedProjectId(null)}
+      />
     </div>
   );
 };
