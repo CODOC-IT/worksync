@@ -24,22 +24,7 @@ import {
   ControlledEditRequest,
   TaskStatusHistoryEntry
 } from '../types';
-import {
-  INITIAL_USERS,
-  INITIAL_PROJECTS,
-  INITIAL_TASKS,
-  INITIAL_ATTENDANCE,
-  INITIAL_HR_REQUESTS,
-  INITIAL_SYSTEM_APPROVALS,
-  INITIAL_CHAT_MESSAGES,
-  INITIAL_AI_LOGS,
-  INITIAL_AI_AUDIT,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_ACTIVITY_LOGS,
-  INITIAL_CALENDAR_EVENTS,
-  INITIAL_SAVED_PROMPTS,
-  INITIAL_WEEKLY_DRAFT
-} from '../mock-data/fixtures';
+
 import {
   TaskMutationData,
   TaskMutationResult
@@ -98,12 +83,12 @@ const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
     const savedAttendance = localStorage.getItem(ATTENDANCE_STORAGE_KEY);
-    if (!savedAttendance) return INITIAL_ATTENDANCE;
+    if (!savedAttendance) return [];
     const parsedAttendance = JSON.parse(savedAttendance);
-    return Array.isArray(parsedAttendance) ? parsedAttendance : INITIAL_ATTENDANCE;
+    return Array.isArray(parsedAttendance) ? parsedAttendance : [];
   } catch (error) {
     console.error('Failed to load attendance records from localStorage.', error);
-    return INITIAL_ATTENDANCE;
+    return [];
   }
 };
 
@@ -198,21 +183,23 @@ interface AppState {
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
   const [currentRole, setCurrentRole] = useState<UserRole>('Admin');
-  const [currentUser, setCurrentUser] = useState<User>(INITIAL_USERS[0]);
+  const [currentUser, setCurrentUser] = useState<User>({
+    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
+  });
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>(INITIAL_HR_REQUESTS);
-  const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>(INITIAL_SYSTEM_APPROVALS);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
-  const [aiLogs, setAiLogs] = useState<AIQueryLog[]>(INITIAL_AI_LOGS);
-  const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>(INITIAL_AI_AUDIT);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
+  const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
     toast: true,
@@ -223,10 +210,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     assignments: true,
     email: false
   });
-  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>(INITIAL_ACTIVITY_LOGS);
-  const [calendarEvents] = useState<CalendarEvent[]>(INITIAL_CALENDAR_EVENTS);
-  const [savedPrompts] = useState<SavedPrompt[]>(INITIAL_SAVED_PROMPTS);
-  const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>(INITIAL_WEEKLY_DRAFT);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
+  const [calendarEvents] = useState<CalendarEvent[]>([]);
+  const [savedPrompts] = useState<SavedPrompt[]>([]);
+  const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>({
+    id: '',
+    projectId: '',
+    weekEnding: '',
+    progressSummary: '',
+    blockersText: '',
+    overdueTasksCount: 0,
+    completedTasksCount: 0,
+    keyHighlights: [],
+    recipientChannel: 'Project Chat',
+    generatedAt: ''
+  });
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
   const [activeBreak, setActiveBreak] = useState<{
@@ -260,7 +258,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setRole = (role: UserRole) => {
     setCurrentRole(role);
     const matchedUser = users.find((u) => u.role === role) || users[0];
-    setCurrentUser(matchedUser);
+    if (matchedUser) setCurrentUser(matchedUser);
   };
 
   // Theme Toggle Handler
@@ -347,19 +345,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    // Same pattern as hydrateTasks above: on mount, replace the mock INITIAL_PROJECTS with the
-    // real work.Projects rows from the backend (see backend/src/projects/). Falls back to the
-    // existing mock data (console warning only) if there's no reachable backend/session yet --
-    // matches loadTasksFromApi's exact behavior for the same reason (no login yet, backend not
-    // running). This fallback covers the *read* path only; every project mutation below has no
-    // such fallback, per this module's "never fake success" requirement.
     const hydrateProjects = async () => {
       try {
         const remoteProjects = await fetchProjectsApi();
-        // The backend's ProjectDTO has no milestones/files/pinnedMessagesCount columns yet (see
-        // project.types.ts) -- default them here so every Project in state always has the arrays
-        // ProjectsView's form/render code expects, regardless of whether it came from the mock
-        // fixtures (which do carry them) or the real API (which doesn't).
         if (isActive) {
           setProjects(
             remoteProjects.map((p) => ({
@@ -439,9 +427,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Fetches this session's persisted notifications + preferences from the backend
   // (backend/src/notifications) on mount and whenever the authenticated identity changes.
   // Both calls fail silently (console.warn only) whenever there's no backend/DATABASE_URL
-  // reachable — e.g. running the Vite dev server alone, or no real login has happened yet
-  // (see notificationApiClient.ts's module comment) — leaving the pre-existing in-memory mock
-  // data (INITIAL_NOTIFICATIONS / the default preferences above) exactly as before.
+  // reachable — e.g. running the Vite dev server alone, or no real login has happened yet.
   useEffect(() => {
     let isActive = true;
 

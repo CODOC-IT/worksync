@@ -25,7 +25,7 @@ import { ProjectChatsView } from '../frontend/src/features/project-chats/Project
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
 const AppContent: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>("dashboard");
+  const [currentTab, setCurrentTab] = useState<string>("login");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
