@@ -89,6 +89,9 @@ class UserStore {
         const result = await query<DbUserRow>(
           USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
         );
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
+        this.fallbackUsers.clear();
         if (result.rows.length > 0) {
           this.dbAvailable = true;
           for (const row of result.rows) {
@@ -98,36 +101,6 @@ class UserStore {
           console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
         } else {
           this.dbAvailable = true;
-        }
-
-        // Sync file store users into DB so foreign keys (FK_Projects_OwnerOrganization etc.)
-        // resolve. File store users with id="usr-N" are backfilled if they don't exist yet.
-        if (this.dbAvailable) {
-          const PG_INT_MAX = 2147483647;
-          for (const [email, user] of this.fallbackUsers) {
-            const uid = parseInt(user.id.replace('usr-', ''), 10);
-            if (isNaN(uid) || uid > PG_INT_MAX) {
-              console.warn(`[UserStore] Skipping backfill for ${email}: ID ${user.id} exceeds PostgreSQL INT range.`);
-              continue;
-            }
-            try {
-              await query(
-                `INSERT INTO iam.users (userid, organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-                 VALUES ($1, 1, $2, $3, $4, $5, $6, 'Active')
-                 ON CONFLICT (userid) DO NOTHING`,
-                [
-                  uid,
-                  user.email.toLowerCase(),
-                  user.name.split(' ')[0] || user.name,
-                  user.name.split(' ').slice(1).join(' ') || user.name,
-                  user.name,
-                  user.title
-                ]
-              );
-            } catch {
-              // User may already exist with different id — skip
-            }
-          }
         }
 
         return;
@@ -353,8 +326,15 @@ class UserStore {
         console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
         return newUser;
       } catch (err: any) {
-        console.warn(`[UserStore] DB createUser failed: ${err.message}. Using file store.`);
+        console.error(`[UserStore] DB createUser failed: ${err.message}`);
+        throw err;
       }
+    }
+
+    // Do not create a local-only account when a configured database is down.
+    // Such an account would block the email without existing in the database.
+    if (isDatabaseConfigured()) {
+      throw new Error('The configured database is currently unavailable. Please try again.');
     }
 
     const maxUserId = Array.from(this.fallbackUsers.values())
