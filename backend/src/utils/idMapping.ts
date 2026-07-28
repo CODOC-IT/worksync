@@ -40,10 +40,14 @@ export const toUserPk = (frontendId: string): number => {
 };
 export const toProjectPk = (frontendId: string): number => parsePrefixedId('prj', frontendId);
 export const toTaskPk = (frontendId: string): number => parsePrefixedId('tsk', frontendId);
+export const toThreadPk = (frontendId: string): number => parsePrefixedId('dsc', frontendId);
+export const toCommentPk = (frontendId: string): number => parsePrefixedId('cmt', frontendId);
 
 export const fromUserPk = (id: number): string => `usr-${id}`;
 export const fromProjectPk = (id: number): string => `prj-${id}`;
 export const fromTaskPk = (id: number): string => `tsk-${id}`;
+export const fromThreadPk = (id: number): string => `dsc-${id}`;
+export const fromCommentPk = (id: number): string => `cmt-${id}`;
 
 // Safe variants for optional/nullable ids used when constructing a Notification row.
 export const toUserPkOrNull = (frontendId?: string | null): number | null =>

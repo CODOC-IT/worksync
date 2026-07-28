@@ -10,11 +10,14 @@ import {
   History,
   LogIn,
   LogOut,
+  FileText,
   Pencil,
   Plus,
   Save,
+  Send,
   Trash2,
-  Users
+  Users,
+  X
 } from 'lucide-react';
 
 const parseTimeInMinutes = (time?: string): number | null => {
@@ -64,6 +67,9 @@ interface AttendanceRowProps {
   todayStr: string;
   canEdit?: boolean;
   onEdit?: (record: AttendanceRecord) => void;
+  canRequestChange?: boolean;
+  requestPending?: boolean;
+  onRequestChange?: (record: AttendanceRecord) => void;
 }
 
 const AttendanceRow: React.FC<AttendanceRowProps> = ({
@@ -71,7 +77,10 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   employee,
   todayStr,
   canEdit = false,
-  onEdit
+  onEdit,
+  canRequestChange = false,
+  requestPending = false,
+  onRequestChange
 }) => {
   const totalBreakMinutes = getTotalBreakMinutes(record);
   const checkInMinutes = parseTimeInMinutes(record.checkIn);
@@ -124,6 +133,21 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
             Edit Attendance
           </button>
         )}
+        {canRequestChange && onRequestChange && (
+          <button
+            type="button"
+            onClick={() => onRequestChange(record)}
+            disabled={requestPending}
+            className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+              requestPending
+                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
+                : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
+            }`}
+          >
+            <FileText size={13} />
+            {requestPending ? 'Pending' : 'Request Change'}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -137,6 +161,9 @@ interface AttendanceHistoryProps {
   showEmployee?: boolean;
   readOnly?: boolean;
   onEdit?: (record: AttendanceRecord) => void;
+  canRequestChange?: boolean;
+  isRequestPending?: (record: AttendanceRecord) => boolean;
+  onRequestChange?: (record: AttendanceRecord) => void;
   icon?: 'history' | 'team';
   emptyMessage: string;
 }
@@ -149,6 +176,9 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
   showEmployee = false,
   readOnly = true,
   onEdit,
+  canRequestChange = false,
+  isRequestPending,
+  onRequestChange,
   icon = 'history',
   emptyMessage
 }) => (
@@ -187,6 +217,9 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
             todayStr={todayStr}
             canEdit={!readOnly}
             onEdit={onEdit}
+            canRequestChange={canRequestChange}
+            requestPending={isRequestPending?.(record) || false}
+            onRequestChange={onRequestChange}
           />
         ))
       )}
@@ -368,6 +401,101 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   );
 };
 
+
+interface AttendanceChangeRequestModalProps {
+  record: AttendanceRecord;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (record: AttendanceRecord, reason: string) => void;
+}
+
+const AttendanceChangeRequestModal: React.FC<AttendanceChangeRequestModalProps> = ({
+  record,
+  pending,
+  onClose,
+  onSubmit
+}) => {
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = () => {
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length < 10) {
+      setError('Please provide at least 10 characters explaining why the attendance should be changed.');
+      return;
+    }
+
+    setError('');
+    onSubmit(record, trimmedReason);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-lg glass-panel border-purple-500/30 p-5">
+        <div className="flex items-start justify-between gap-4 pb-3 border-b border-white/10">
+          <div>
+            <h3 className="text-base font-bold text-white">Request Attendance Change</h3>
+            <p className="text-xs text-purple-300 mt-1">
+              Attendance date: {record.date}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5"
+            aria-label="Close attendance change request"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-4 p-3 rounded-xl bg-slate-900/60 border border-white/5 text-xs text-slate-300 space-y-1">
+          <p>Recorded check-in: {record.checkIn || 'Not recorded'}</p>
+          <p>Recorded check-out: {record.checkOut || 'Not recorded'}</p>
+        </div>
+
+        <label className="block mt-4 text-xs text-slate-300">
+          Why should this attendance be changed?
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            rows={5}
+            maxLength={500}
+            placeholder="Describe the attendance issue and the correction you need..."
+            className="mt-2 w-full px-3 py-3 rounded-xl bg-slate-950/70 border border-white/10 text-sm text-white resize-none focus:outline-none focus:border-purple-500/50"
+          />
+        </label>
+
+        <div className="mt-1 flex items-center justify-between text-[11px]">
+          <span className={error ? 'text-rose-300' : 'text-slate-500'}>
+            {error || 'The request will be sent to HR for approval.'}
+          </span>
+          <span className="text-slate-500">{reason.length}/500</span>
+        </div>
+
+        <div className="mt-5 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-bold"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={pending}
+            className="px-4 py-2.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <Send size={14} />
+            {pending ? 'Request Pending' : 'Send Request'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const AttendanceView: React.FC = () => {
   const {
     currentUser,
@@ -375,14 +503,17 @@ export const AttendanceView: React.FC = () => {
     users,
     attendanceRecords,
     activeBreak,
+    hrRequests,
     checkIn,
     checkOut,
     startBreak,
     endBreak,
-    updateAttendanceRecord
+    updateAttendanceRecord,
+    submitHRRequest
   } = useApp();
   const [selectedUserId, setSelectedUserId] = useState('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
+  const [requestRecordId, setRequestRecordId] = useState<string | null>(null);
   const [authorizationError, setAuthorizationError] = useState('');
 
   const todayStr = new Date().toISOString().split('T')[0];
@@ -397,8 +528,19 @@ export const AttendanceView: React.FC = () => {
   const canViewOthers = isHR || isAdmin;
   const isOwnRecord = (record: AttendanceRecord) =>
     record.userId === currentUser.id;
+  const isTeamMember = currentRole === 'Team_Member';
   const canEditRecord = (record: AttendanceRecord) =>
-    isOwnRecord(record) || isAdmin;
+    isAdmin || (isOwnRecord(record) && !isTeamMember);
+  const canRequestChange = (record: AttendanceRecord) =>
+    isTeamMember && isOwnRecord(record);
+  const hasPendingCorrectionRequest = (record: AttendanceRecord) =>
+    hrRequests.some(
+      (request) =>
+        request.userId === currentUser.id &&
+        request.type === 'Correction' &&
+        request.status === 'Pending' &&
+        request.date === record.date
+    );
   const hrTeamAttendance = attendanceRecords.filter((record) => {
     if (record.userId === currentUser.id) return false;
 
@@ -422,6 +564,27 @@ export const AttendanceView: React.FC = () => {
   const editingRecord = attendanceRecords.find(
     (record) => record.id === editingRecordId
   );
+  const requestRecord = attendanceRecords.find(
+    (record) => record.id === requestRecordId
+  );
+
+  const openRequestModal = (record: AttendanceRecord) => {
+    if (!canRequestChange(record) || hasPendingCorrectionRequest(record)) return;
+    setRequestRecordId(record.id);
+  };
+
+  const submitAttendanceChangeRequest = (
+    record: AttendanceRecord,
+    reason: string
+  ) => {
+    submitHRRequest('Correction', reason, {
+      requestedCheckIn: record.checkIn,
+      requestedCheckOut: record.checkOut,
+      attendanceChangeReason: reason
+    });
+    setRequestRecordId(null);
+  };
+
   const openEditor = (record: AttendanceRecord) => {
     if (!canEditRecord(record)) {
       setAuthorizationError(
@@ -613,10 +776,22 @@ export const AttendanceView: React.FC = () => {
         records={myAttendanceRecords}
         users={users}
         todayStr={todayStr}
-        readOnly={false}
-        onEdit={openEditor}
+        readOnly={isTeamMember}
+        onEdit={isTeamMember ? undefined : openEditor}
+        canRequestChange={isTeamMember}
+        isRequestPending={hasPendingCorrectionRequest}
+        onRequestChange={openRequestModal}
         emptyMessage="No personal attendance records found."
       />
+
+      {requestRecord && (
+        <AttendanceChangeRequestModal
+          record={requestRecord}
+          pending={hasPendingCorrectionRequest(requestRecord)}
+          onClose={() => setRequestRecordId(null)}
+          onSubmit={submitAttendanceChangeRequest}
+        />
+      )}
 
       {authorizationError && (
         <p role="alert" className="text-xs text-rose-300">

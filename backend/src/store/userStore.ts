@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
-import { isDatabaseConfigured, query } from '../db/pool.js';
+import { isDatabaseConfigured, query, withTransaction } from '../db/pool.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
@@ -26,6 +26,29 @@ const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
   Pending: 'inactive',
   Locked: 'inactive',
   Deactivated: 'inactive'
+};
+
+// The GrantedByUserId for every self-service registration's initial role grant. Never a real
+// registrant's own id (it's a fixed, permanently-Locked row seeded once by
+// database/23_system_actor_bootstrap.sql, before any real user can occupy it) -- so unlike a
+// hardcoded numeric id, this can never coincide with the very user being granted the role and
+// trip iam.UserRoles' CK_UserRoles_NoSelfGrant check.
+const SYSTEM_ACTOR_EMAIL = 'system@worksync.internal';
+let systemActorUserIdCache: number | null = null;
+
+const getSystemActorUserId = async (): Promise<number> => {
+  if (systemActorUserIdCache !== null) return systemActorUserIdCache;
+  const result = await query<{ userid: number }>(
+    'SELECT userid FROM iam.users WHERE organizationid = 1 AND email = $1',
+    [SYSTEM_ACTOR_EMAIL]
+  );
+  if (!result.rows[0]) {
+    throw new Error(
+      'System actor user not found -- run database/23_system_actor_bootstrap.sql (included in setup.sql) before registering users.'
+    );
+  }
+  systemActorUserIdCache = result.rows[0].userid;
+  return systemActorUserIdCache;
 };
 
 const USER_QUERY = `
@@ -89,6 +112,9 @@ class UserStore {
         const result = await query<DbUserRow>(
           USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
         );
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
+        this.fallbackUsers.clear();
         if (result.rows.length > 0) {
           this.dbAvailable = true;
           for (const row of result.rows) {
@@ -130,10 +156,34 @@ class UserStore {
           }
         }
 
+        await this.alignDatabaseUserSequence();
+
         return;
       } catch (err: any) {
         console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
+    }
+  }
+
+  private async alignDatabaseUserSequence(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return;
+
+    try {
+      // Imports and seed scripts can insert explicit IDs without advancing the
+      // serial sequence. Align it before accepting a registration so the next
+      // INSERT receives an unused primary key.
+      await query(`
+        SELECT setval(
+          'iam.users_userid_seq',
+          COALESCE(MAX(userid), 1),
+          MAX(userid) IS NOT NULL
+        )
+        FROM iam.users
+      `);
+    } catch (err: any) {
+      // Report an environment/schema mismatch without preventing the current
+      // user list from loading.
+      console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
     }
   }
 
@@ -309,32 +359,53 @@ class UserStore {
         const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
 
-        const insertUser = await query<{ userid: number }>(
-          `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-           VALUES ($1, $2, $3, $4, $5, $6, 'Active')
-           RETURNING userid`,
-          [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
-        );
-        const userId = insertUser.rows[0].userid;
-
-        await query(
-          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
-           VALUES ($1, $2, 'bcryptjs')`,
-          [userId, Buffer.from(passwordHash, 'utf-8')]
-        );
-
         const roleCode = ROLE_TO_DB[userData.role];
-        const roleResult = await query<{ roleid: number }>(
-          'SELECT roleid FROM iam.roles WHERE rolecode = $1',
+        const roleResult = await query<{ roleid: number; istemporary: boolean }>(
+          'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
           [roleCode]
         );
-        if (roleResult.rows[0]) {
-          await query(
-            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
-             VALUES ($1, $2, 1)`,
-            [userId, roleResult.rows[0].roleid]
+        const systemActorUserId = roleResult.rows[0] ? await getSystemActorUserId() : null;
+
+        // Users + credentials + role grant are inserted atomically -- previously these were three
+        // separate query() calls, so a failure partway through (e.g. the role insert hitting a
+        // constraint) left an orphaned, credential-only iam.users row behind: the email looked
+        // "taken" on any later registration attempt (a real uq_users_organization_email
+        // violation), yet the account had no role and couldn't actually be used.
+        const userId = await withTransaction(async (runQuery) => {
+          const insertUser = await runQuery<{ userid: number }>(
+            `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+             RETURNING userid`,
+            [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
           );
-        }
+          const newUserId = insertUser.rows[0].userid;
+
+          await runQuery(
+            `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
+             VALUES ($1, $2, 'bcryptjs')`,
+            [newUserId, Buffer.from(passwordHash, 'utf-8')]
+          );
+
+          if (roleResult.rows[0]) {
+            // TeamLead/HRRepresentative are seeded IsTemporary=TRUE (see database/17_seed.sql),
+            // which a DB trigger enforces by requiring EndsAtUtc on every assignment -- but this
+            // app grants those roles permanently at registration, the same as Admin/Team Member,
+            // not as a time-boxed elevation. Rather than reinterpret what "temporary" means here,
+            // satisfy the trigger with a far-future expiry so registration succeeds for every role
+            // exactly as before; a real "temporary project-scoped lead" feature, if ever built,
+            // would set a real EndsAtUtc instead of this default.
+            const endsAtUtc = roleResult.rows[0].istemporary
+              ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+              : null;
+            await runQuery(
+              `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+               VALUES ($1, $2, $3, $4)`,
+              [newUserId, roleResult.rows[0].roleid, systemActorUserId, endsAtUtc]
+            );
+          }
+
+          return newUserId;
+        });
 
         const newUser: UserRecord = {
           id: fromUserPk(userId),
@@ -353,8 +424,15 @@ class UserStore {
         console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
         return newUser;
       } catch (err: any) {
-        console.warn(`[UserStore] DB createUser failed: ${err.message}. Using file store.`);
+        console.error(`[UserStore] DB createUser failed: ${err.message}`);
+        throw err;
       }
+    }
+
+    // Do not create a local-only account when a configured database is down.
+    // Such an account would block the email without existing in the database.
+    if (isDatabaseConfigured()) {
+      throw new Error('The configured database is currently unavailable. Please try again.');
     }
 
     const maxUserId = Array.from(this.fallbackUsers.values())

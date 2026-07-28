@@ -328,12 +328,14 @@ test('preferences: master inApp=false suppresses every type, not just categorize
   assert.equal(items.length, 0);
 });
 
-test('getPreferences: defaults to enabled in-app / disabled email with no prior row', async () => {
+test('getPreferences: defaults to enabled in-app and email with no prior row', async () => {
   const service = await import('./notification.service.js');
   const prefs = await service.getPreferences('usr-3');
   assert.equal(prefs.inApp, true);
   assert.equal(prefs.assignments, true);
-  assert.equal(prefs.email, false);
+  // Opt-out, not opt-in: Critical/High-priority events (task review requests, approvals, etc.)
+  // must reach a real inbox without every user first discovering a settings toggle.
+  assert.equal(prefs.email, true);
 });
 
 test('snoozeNotification: hides a notification until the snoozed time passes', async () => {
@@ -376,7 +378,7 @@ test('findEmailCandidates: reflects the recipient\'s email preference and stops 
   const service = await import('./notification.service.js');
   const repo = await import('./notification.repository.js');
 
-  await service.updatePreferences('usr-2', { email: true }); // usr-3 leaves it at the default (off)
+  await service.updatePreferences('usr-3', { email: false }); // usr-2 leaves it at the default (on)
   await service.publishEvent({
     type: 'security_alert',
     title: 'Security Alert',
@@ -386,8 +388,8 @@ test('findEmailCandidates: reflects the recipient\'s email preference and stops 
 
   const candidates = await repo.findEmailCandidates(['Critical']);
   const byRecipient = new Map(candidates.map((row) => [row.recipientuserid, row]));
-  assert.equal(byRecipient.get(2)?.emailenabled, true, 'usr-2 opted into email');
-  assert.equal(byRecipient.get(3)?.emailenabled, false, 'usr-3 never enabled email — defaults off');
+  assert.equal(byRecipient.get(2)?.emailenabled, true, 'usr-2 gets email by default (opt-out model)');
+  assert.equal(byRecipient.get(3)?.emailenabled, false, 'usr-3 explicitly opted out');
 
   await Promise.all(candidates.map((row) => repo.markEmailProcessed(row.recipientuserid, row.notificationid)));
   const afterProcessing = await repo.findEmailCandidates(['Critical']);

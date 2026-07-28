@@ -21,11 +21,13 @@ import { CalendarView } from "../frontend/src/features/calendar/CalendarView";
 import { ToastContainer } from '../frontend/src/features/notifications/ToastContainer';
 import { ReportsView } from '../frontend/src/features/reports/ReportsView';
 import { ProjectChatsView } from '../frontend/src/features/project-chats/ProjectChatsView';
+import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
+import { ActivityLogView } from '../frontend/src/features/activity/ActivityLogView';
 
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
 const AppContent: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>("dashboard");
+  const [currentTab, setCurrentTab] = useState<string>("login");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
@@ -132,6 +134,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'notifications' && <NotificationsView onNavigate={handleNavigate} />}
           {currentTab === 'reports' && <ReportsView />}
           {currentTab === 'project-chats' && <ProjectChatsView />}
+          {currentTab === 'members' && <TeamMembersView />}
+          {currentTab === 'activity' && <ActivityLogView onNavigate={handleNavigate} />}
           
          
 

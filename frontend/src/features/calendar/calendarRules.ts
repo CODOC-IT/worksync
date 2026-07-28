@@ -6,6 +6,20 @@ export type CalendarEntryKind = CalendarEvent['type'] | 'Task Due';
 
 export type CalendarNavigateTab = 'projects' | 'tasks';
 
+// Which side of the app an entry originates from. 'Deadline'/'Milestone' come from a Project,
+// 'Task Due' comes from a Task; standalone calendarEvents (Meeting/Review/Leave) are neither and
+// are only controllable via the kind filter, not the project/task origin toggle.
+export type CalendarEntryOrigin = 'project' | 'task' | 'other';
+
+export const ALL_CALENDAR_KINDS: CalendarEntryKind[] = [
+  'Deadline',
+  'Milestone',
+  'Task Due',
+  'Meeting',
+  'Review',
+  'Leave'
+];
+
 export interface CalendarEntry {
   id: string;
   date: string; // YYYY-MM-DD
@@ -123,6 +137,27 @@ export const buildCalendarEntries = (
   return entries;
 };
 
+export const entryOrigin = (entry: CalendarEntry): CalendarEntryOrigin => {
+  if (entry.kind === 'Deadline' || entry.kind === 'Milestone') return 'project';
+  if (entry.kind === 'Task Due') return 'task';
+  return 'other';
+};
+
+// View-only filtering layered on top of buildCalendarEntries' output — never changes what data
+// enters the pipeline, only what's shown. originFilter narrows to project- or task-origin entries
+// ('other'-origin standalone events are unaffected by it, only by activeKinds). activeKinds narrows
+// by the entry's own kind regardless of origin.
+export const filterCalendarEntries = (
+  entries: CalendarEntry[],
+  originFilter: 'all' | CalendarEntryOrigin,
+  activeKinds: Set<CalendarEntryKind>
+): CalendarEntry[] =>
+  entries.filter((entry) => {
+    if (!activeKinds.has(entry.kind)) return false;
+    if (originFilter === 'all') return true;
+    return entryOrigin(entry) === originFilter;
+  });
+
 // Groups entries under their YYYY-MM-DD date key, each day's entries sorted by time then title
 // so grid cells and day-detail popovers render in a stable, predictable order.
 export const groupEntriesByDate = (entries: CalendarEntry[]): Map<string, CalendarEntry[]> => {
@@ -188,31 +223,31 @@ export const entryToneClasses = (kind: CalendarEntryKind): CalendarEntryTone => 
   switch (kind) {
     case 'Deadline':
       return {
-        badgeClass: 'bg-rose-500/15 text-rose-400 border-rose-500/30 shadow-[0_0_10px_rgba(244,63,94,0.15)]',
+        badgeClass: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
         dotClass: 'bg-rose-400',
         glow: 'magenta'
       };
     case 'Milestone':
       return {
-        badgeClass: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30 shadow-[0_0_10px_rgba(217,70,239,0.15)]',
+        badgeClass: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30',
         dotClass: 'bg-fuchsia-400',
         glow: 'emerald'
       };
     case 'Task Due':
       return {
-        badgeClass: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30 shadow-[0_0_10px_rgba(0,242,254,0.15)]',
+        badgeClass: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
         dotClass: 'bg-cyan-400',
         glow: 'cyan'
       };
     case 'Meeting':
       return {
-        badgeClass: 'bg-purple-500/15 text-purple-400 border-purple-500/30 shadow-[0_0_10px_rgba(168,85,247,0.15)]',
+        badgeClass: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
         dotClass: 'bg-purple-400',
         glow: 'violet'
       };
     case 'Review':
       return {
-        badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30 shadow-[0_0_10px_rgba(255,170,0,0.15)]',
+        badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
         dotClass: 'bg-amber-400',
         glow: 'amber'
       };
