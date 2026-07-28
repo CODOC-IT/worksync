@@ -89,6 +89,9 @@ class UserStore {
         const result = await query<DbUserRow>(
           USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
         );
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
+        this.fallbackUsers.clear();
         if (result.rows.length > 0) {
           this.dbAvailable = true;
           for (const row of result.rows) {
@@ -377,8 +380,15 @@ class UserStore {
         console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
         return newUser;
       } catch (err: any) {
-        console.warn(`[UserStore] DB createUser failed: ${err.message}. Using file store.`);
+        console.error(`[UserStore] DB createUser failed: ${err.message}`);
+        throw err;
       }
+    }
+
+    // Do not create a local-only account when a configured database is down.
+    // Such an account would block the email without existing in the database.
+    if (isDatabaseConfigured()) {
+      throw new Error('The configured database is currently unavailable. Please try again.');
     }
 
     const maxUserId = Array.from(this.fallbackUsers.values())

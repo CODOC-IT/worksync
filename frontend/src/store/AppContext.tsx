@@ -214,7 +214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mentions: true,
     comments: true,
     assignments: true,
-    email: false
+    email: true
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
@@ -509,7 +509,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const dispatchNotifications = (input: SendNotificationInput) => {
     // Real persistence is the primary path; the pure local sendNotification() below is only a
     // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
-    // the acting demo-role-switcher identity has no matching backend session — see
+    // the acting identity has no matching backend session — see
     // notificationApiClient.ts). Every one of this function's ~20 call sites is unaffected by
     // which path actually wrote the notification: they only ever describe *what happened*.
     publishNotificationEvent(input)

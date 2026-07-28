@@ -1,4 +1,4 @@
-import { isEmailConfigured, sendNotificationEmail } from '../services/emailService.js';
+import { isEmailConfigured, sendNotificationEmail } from './notification.emailSender.js';
 import { findEmailCandidates, markEmailProcessed, EmailCandidateRow } from './notification.repository.js';
 import { DbPriority } from './notification.types.js';
 
