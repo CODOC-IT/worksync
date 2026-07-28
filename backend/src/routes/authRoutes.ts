@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 
 const router = Router();
 
@@ -20,17 +21,28 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
 
     const user = userStore.findByEmail(email);
     if (!user) {
+      recordActivitySafe({ action: 'Login', module: 'Authentication', entityType: 'User', entityId: String(email),
+        entityName: String(email), actorEmail: String(email), description: `Failed login attempt for ${email}.`,
+        result: 'Failed', source: 'Web', important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
 
     if (user.status !== 'active') {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Blocked login attempt for deactivated account ${user.email}.`, result: 'Blocked',
+        source: 'Web', important: true, ipAddress: ip });
       res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
       return;
     }
 
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     if (!isValidPassword) {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Failed login attempt for ${user.email}.`, result: 'Failed', source: 'Web',
+        important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
@@ -42,6 +54,9 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       getJwtSecret(),
       { expiresIn: JWT_EXPIRES_IN as any }
     );
+    recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+      action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+      description: `${user.name} signed in.`, result: 'Successful', source: 'Web', ipAddress: ip });
 
     res.status(200).json({
       success: true,
@@ -133,6 +148,9 @@ router.post('/register', async (req, res: Response): Promise<void> => {
     }
 
     const newUser = userStore.createUser({ name: sanitizedName, email, password, role, department, title });
+    recordActivitySafe({ actorId: newUser.id, actorName: newUser.name, actorEmail: newUser.email, actorRole: newUser.role,
+      action: 'Created', module: 'Profile', entityType: 'User', entityId: newUser.id, entityName: newUser.name,
+      description: `${newUser.name} created an account.`, source: 'Web', important: newUser.role === 'Admin' || newUser.role === 'HR' });
 
     const token = jwt.sign(
       { id: newUser.id, email: newUser.email, role: newUser.role },
@@ -293,7 +311,12 @@ router.get('/check-email', (req, res: Response): void => {
 });
 
 // POST /api/auth/logout
-router.post('/logout', authenticateJWT, (_req, res: Response): void => {
+router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  const user = req.user ? userStore.findById(req.user.id) : undefined;
+  if (req.user) recordActivitySafe({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+    actorRole: req.user.role, action: 'Logout', module: 'Authentication', entityType: 'User',
+    entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed out.`,
+    source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
   res.status(200).json({ success: true, message: 'Logout successful.' });
 });
 
