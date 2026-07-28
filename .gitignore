@@ -8,4 +8,5 @@ coverage/
 !.env.example
 database/*.json
 backend/database/*.json
+backend/storage/
 
