@@ -7,28 +7,6 @@ export const isEmailConfigured = (): boolean => {
   return Boolean(smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here');
 };
 
-// The company inbox for anyone who replies to a notification email. This is intentionally NOT
-// the SMTP "From" address: the actual send still authenticates as SMTP_USER (a Gmail account),
-// and Gmail's SMTP relay rejects or rewrites a "From" that doesn't match the authenticated
-// account/verified alias. Claiming a company domain in "From" without SPF/DKIM/DMARC set up for
-// that domain is exactly what gets legitimate mail flagged as spoofing and sent to spam --
-// Reply-To carries the company identity without that risk. Swap SMTP_USER/SMTP_PASS for real
-// info@codoc.it.com credentials (or a transactional provider with the domain verified) to send
-// "From" that address directly.
-const REPLY_TO_ADDRESS = 'info@codoc.it.com';
-const SENDER_DISPLAY_NAME = 'WorkSync by Codoc';
-
-// Names/titles/messages interpolated into these templates are user-influenced content (display
-// names, task titles, discussion subjects) -- escape it so a stray "<" or "&" can't break the
-// layout or inject markup into an email client that renders it.
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
 export const sendOTPEmail = async (toEmail: string, name: string, otp: string): Promise<void> => {
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
@@ -152,7 +130,7 @@ export const sendNotificationEmail = async (
 
   const isSingleCritical = items.length === 1 && items[0].priority === 'Critical';
   const subject = isSingleCritical
-    ? `Action required: ${items[0].title}`
+    ? `[Urgent] ${items[0].title}`
     : items.length === 1
       ? items[0].title
       : `WorkSync: ${items.length} new notification${items.length === 1 ? '' : 's'}`;
@@ -162,17 +140,12 @@ export const sendNotificationEmail = async (
       (item) => `
         <tr>
           <td style="padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
-            <div style="color:#e2e8f0;font-size:15px;font-weight:600;margin:0 0 4px;">${escapeHtml(item.title)}</div>
-            <div style="color:#94a3b8;font-size:13px;line-height:1.5;margin:0;">${escapeHtml(item.message)}</div>
+            <div style="color:#e2e8f0;font-size:15px;font-weight:600;margin:0 0 4px;">${item.title}</div>
+            <div style="color:#94a3b8;font-size:13px;line-height:1.5;margin:0;">${item.message}</div>
           </td>
         </tr>`
     )
     .join('');
-
-  const textContent =
-    `Hi ${name},\n\n` +
-    items.map((item) => `- ${item.title}: ${item.message}`).join('\n') +
-    `\n\nManage your email preferences from the Notification Center in WorkSync.\n\n${SENDER_DISPLAY_NAME}`;
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -200,7 +173,7 @@ export const sendNotificationEmail = async (
           </tr>
           <tr>
             <td style="padding:32px 48px;">
-              <p style="color:#e2e8f0;font-size:16px;margin:0 0 24px;">Hi <strong style="color:#00d4ff;">${escapeHtml(name)}</strong>,</p>
+              <p style="color:#e2e8f0;font-size:16px;margin:0 0 24px;">Hi <strong style="color:#00d4ff;">${name}</strong>,</p>
               <table width="100%" cellpadding="0" cellspacing="0">${rowsHtml}</table>
             </td>
           </tr>
@@ -220,11 +193,9 @@ export const sendNotificationEmail = async (
 </html>`;
 
   await transporter.sendMail({
-    from: `"${SENDER_DISPLAY_NAME}" <${smtpUser}>`,
-    replyTo: REPLY_TO_ADDRESS,
+    from: `"WorkSync Notifications" <${smtpUser}>`,
     to: toEmail,
     subject,
-    text: textContent,
     html: htmlContent
   });
 
