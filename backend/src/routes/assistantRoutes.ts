@@ -1,4 +1,3 @@
-```typescript
 import { Router, Response } from 'express';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { projectStore } from '../store/projectStore.js';
@@ -1017,4 +1016,3 @@ router.patch(
 );
 
 export default router;
-```

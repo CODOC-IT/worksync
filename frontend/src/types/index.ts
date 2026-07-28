@@ -179,6 +179,7 @@ export interface HRRequest {
   details: {
     requestedCheckIn?: string;
     requestedCheckOut?: string;
+    attendanceChangeReason?: string;
     leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
     leaveDays?: number;
     extraBreakMinutes?: number;

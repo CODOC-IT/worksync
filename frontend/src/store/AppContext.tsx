@@ -79,6 +79,20 @@ import {
 import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
 
 const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
+const HR_REQUESTS_STORAGE_KEY = 'worksync-hr-requests';
+
+const loadHRRequests = (): HRRequest[] => {
+  try {
+    const savedRequests = localStorage.getItem(HR_REQUESTS_STORAGE_KEY);
+    if (!savedRequests) return [];
+
+    const parsedRequests = JSON.parse(savedRequests);
+    return Array.isArray(parsedRequests) ? parsedRequests : [];
+  } catch (error) {
+    console.error('Failed to load HR requests from localStorage.', error);
+    return [];
+  }
+};
 
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
@@ -199,7 +213,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>(loadHRRequests);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
@@ -251,6 +265,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.error('Failed to save attendance records.', error);
     }
   }, [attendanceRecords]);
+
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        HR_REQUESTS_STORAGE_KEY,
+        JSON.stringify(hrRequests)
+      );
+    } catch (error) {
+      console.error('Failed to save HR requests.', error);
+    }
+  }, [hrRequests]);
 
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
