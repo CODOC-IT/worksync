@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Project Module and Task Module now backed by PostgreSQL (real CRUD, role-based authorization, status history) instead of local/mock state.
+- Project Chat now backed by PostgreSQL (real discussions, replies, mentions, and file attachments with real content-addressed storage) instead of a local JSON file and a hardcoded project list.
 - Kanban board fully wired to the backend, with independent per-column scrolling and a searchable project selector.
 - Notification list scrolls independently of the page, and clicking a notification navigates to its related page.
 - Email notifications for Critical/High-priority events (task review requests, approvals, HR/attendance requests, etc.), with a professional sender identity and a 2-minute delivery digest.
