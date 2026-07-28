@@ -103,10 +103,64 @@ class UserStore {
           this.dbAvailable = true;
         }
 
+        // Sync file store users into DB so foreign keys (FK_Projects_OwnerOrganization etc.)
+        // resolve. File store users with id="usr-N" are backfilled if they don't exist yet.
+        if (this.dbAvailable) {
+          const PG_INT_MAX = 2147483647;
+          for (const [email, user] of this.fallbackUsers) {
+            const uid = parseInt(user.id.replace('usr-', ''), 10);
+            if (isNaN(uid) || uid > PG_INT_MAX) {
+              console.warn(`[UserStore] Skipping backfill for ${email}: ID ${user.id} exceeds PostgreSQL INT range.`);
+              continue;
+            }
+            try {
+              await query(
+                `INSERT INTO iam.users (userid, organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+                 VALUES ($1, 1, $2, $3, $4, $5, $6, 'Active')
+                 ON CONFLICT (userid) DO NOTHING`,
+                [
+                  uid,
+                  user.email.toLowerCase(),
+                  user.name.split(' ')[0] || user.name,
+                  user.name.split(' ').slice(1).join(' ') || user.name,
+                  user.name,
+                  user.title
+                ]
+              );
+            } catch {
+              // User may already exist with different id — skip
+            }
+          }
+        }
+
+        await this.alignDatabaseUserSequence();
+
         return;
       } catch (err: any) {
         console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
+    }
+  }
+
+  private async alignDatabaseUserSequence(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return;
+
+    try {
+      // Imports and seed scripts can insert explicit IDs without advancing the
+      // serial sequence. Align it before accepting a registration so the next
+      // INSERT receives an unused primary key.
+      await query(`
+        SELECT setval(
+          'iam.users_userid_seq',
+          COALESCE(MAX(userid), 1),
+          MAX(userid) IS NOT NULL
+        )
+        FROM iam.users
+      `);
+    } catch (err: any) {
+      // Report an environment/schema mismatch without preventing the current
+      // user list from loading.
+      console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
     }
   }
 
