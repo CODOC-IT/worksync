@@ -23,6 +23,7 @@ import { ReportsView } from '../frontend/src/features/reports/ReportsView';
 import { ProjectChatsView } from '../frontend/src/features/project-chats/ProjectChatsView';
 import { ActivityLogView } from '../frontend/src/features/activity/ActivityLogView';
 import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
+import { ActivityLogView } from '../frontend/src/features/activity/ActivityLogView';
 
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
@@ -136,6 +137,7 @@ const AppContent: React.FC = () => {
           {currentTab === 'project-chats' && <ProjectChatsView />}
           {currentTab === 'activity' && <ActivityLogView onNavigate={handleNavigate} />}
           {currentTab === 'members' && <TeamMembersView />}
+          {currentTab === 'activity' && <ActivityLogView onNavigate={handleNavigate} />}
           
          
 

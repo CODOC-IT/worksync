@@ -6,6 +6,7 @@ const router = Router();
 router.use(authenticateJWT);
 router.get('/', controller.list);
 router.get('/export', controller.exportActivities);
+router.get('/export/pdf', controller.exportPdf);
 router.get('/:id', controller.detail);
 export default router;
 

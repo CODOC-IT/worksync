@@ -1,5 +1,6 @@
 export type ActivityResult = 'Successful' | 'Failed' | 'Blocked';
 export type ActivitySource = 'Web' | 'API' | 'System';
+export type ActivitySensitivity = 'Normal' | 'Sensitive' | 'Restricted';
 
 export interface ActivityChange {
   field: string;
@@ -79,6 +80,8 @@ export interface ActivityDTO {
   result: ActivityResult;
   source: ActivitySource;
   important: boolean;
+  sensitivity?: ActivitySensitivity;
+  scope?: string;
   reason?: string;
   linkRoute?: string;
   ipAddress?: string;

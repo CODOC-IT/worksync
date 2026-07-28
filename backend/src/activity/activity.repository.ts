@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/pool.js';
 import { toProjectPkOrNull, toTaskPkOrNull, toUserPkOrNull } from '../utils/idMapping.js';
 import { ActivityChange, ActivityFilters, ActivityRecordInput } from './activity.types.js';
+import { EffectiveRoles } from './activity.rbac.js';
 
 export interface ActivityRow {
   auditeventid: string;
