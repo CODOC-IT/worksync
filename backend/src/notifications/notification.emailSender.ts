@@ -14,15 +14,14 @@ export const isEmailConfigured = (): boolean => {
   return Boolean(smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here');
 };
 
-// The company inbox for anyone who replies to a notification email. This is intentionally NOT
-// the SMTP "From" address: the actual send still authenticates as SMTP_USER (a Gmail account),
-// and Gmail's SMTP relay rejects or rewrites a "From" that doesn't match the authenticated
-// account/verified alias. Claiming a company domain in "From" without SPF/DKIM/DMARC set up for
-// that domain is exactly what gets legitimate mail flagged as spoofing and sent to spam --
-// Reply-To carries the company identity without that risk. Swap SMTP_USER/SMTP_PASS for real
-// info@codoc.it.com credentials (or a transactional provider with the domain verified) to send
-// "From" that address directly.
-const REPLY_TO_ADDRESS = 'info@codoc.it.com';
+// No Reply-To pointing at info@codoc.it.com here on purpose, even though that address carries
+// the company identity more safely than the SMTP "From" (which can't be that domain while still
+// authenticating as SMTP_USER, a personal Gmail account -- see the account's own notes on that).
+// In practice a From on one domain (gmail.com) with Reply-To on a completely different one
+// (codoc.it.com) is itself a spam/phishing signal -- it's exactly the shape of a spoofed email
+// (looks official, replies go elsewhere) -- and live testing confirmed notification email was
+// landing in spam while OTP email (same account, no Reply-To) was not. Once real SMTP
+// credentials for info@codoc.it.com exist, both From and Reply-To can correctly be that address.
 const SENDER_DISPLAY_NAME = 'WorkSync by Codoc';
 
 // Notification titles/messages/names are user-influenced content (task titles, discussion
@@ -138,7 +137,6 @@ export const sendNotificationEmail = async (
 
   await transporter.sendMail({
     from: `"${SENDER_DISPLAY_NAME}" <${smtpUser}>`,
-    replyTo: REPLY_TO_ADDRESS,
     to: toEmail,
     subject,
     text: textContent,
