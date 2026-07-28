@@ -21,3 +21,4 @@ All notable changes to this project will be documented in this file.
 - Team Leads who create their own project are no longer locked out of managing it (tasks, edits, review notifications) due to a missing membership-role fallback.
 - Email notifications were silently disabled for every user by default; now opt-out instead of opt-in.
 - Local Postgres connections no longer fail due to an SSL requirement meant only for the deployed database.
+- Notification emails were landing in spam due to a From/Reply-To domain mismatch; confirmed fixed via live inbox testing.
