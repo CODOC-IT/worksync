@@ -214,7 +214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mentions: true,
     comments: true,
     assignments: true,
-    email: false
+    email: true
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
