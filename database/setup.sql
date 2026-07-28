@@ -27,5 +27,6 @@ SET TIME ZONE 'UTC';
 \ir 20_project_members_backfill.sql
 \ir 21_task_assignees_backfill.sql
 \ir 22_audit_enhancements.sql
+\ir 23_system_actor_bootstrap.sql
 
 COMMIT;
