@@ -320,7 +320,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logoutUser = () => {
     localStorage.removeItem('worksync_auth_token');
-    setCurrentUser(INITIAL_USERS[0]);
+    setCurrentUser({ id: '', name: '', email: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive' });
     setCurrentRole('Admin');
   };
 

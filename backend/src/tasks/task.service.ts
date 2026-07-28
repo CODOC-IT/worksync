@@ -203,7 +203,7 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     description: `${actorName} created task “${dto.title}” in “${projectRow.projectname}”.`,
     linkRoute: 'tasks', changes: [
       { field: 'Status', previousValue: null, newValue: dto.status },
-      { field: 'Priority', previousValue: null, newValue: priorityCode },
+      { field: 'Priority', previousValue: null, newValue: dto.priority },
       { field: 'Assignee', previousValue: null, newValue: dto.assigneeIds.join(', ') }
     ]
   });
