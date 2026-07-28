@@ -51,13 +51,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'kanban', label: 'Kanban Board', icon: KanbanSquare },
     { id: 'attendance', label: 'Attendance & Breaks', icon: Clock, badge: currentRole === 'HR' && pendingHrCount > 0 ? pendingHrCount : undefined },
-    {
-      id: 'approvals',
-      label: 'Approvals Inbox',
-      icon: CheckCircle,
-      badge: (currentRole === 'Admin' || currentRole === 'Team_Lead') && pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined,
-      hidden: currentRole === 'Team_Member' || currentRole === 'HR'
-    },
+   {
+  id: 'approvals',
+  label: 'Approvals Inbox',
+  icon: CheckCircle,
+  badge:
+    currentRole === 'HR' && pendingHrCount > 0
+      ? pendingHrCount
+      : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
+          pendingApprovalsCount > 0
+        ? pendingApprovalsCount
+        : undefined,
+  hidden: currentRole === 'Team_Member'
+},
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
     { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
     { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
