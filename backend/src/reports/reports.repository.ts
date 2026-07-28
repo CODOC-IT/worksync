@@ -315,7 +315,8 @@ export const getCompletionTrend = async (
          AND ts.iscompletedstate AND t.duedate >= $2::date AND t.duedate <= $3::date
        GROUP BY t.duedate
      ) completed ON completed.d = dates.date
-     ORDER BY dates.date`,
+      GROUP BY dates.date
+      ORDER BY dates.date`,
     [projectIds, from, to]
   );
   return result.rows;
@@ -568,8 +569,8 @@ export const getAttendanceRecords = async (
        'usr-' || ar.userid AS "userId",
        ar.workdate::text AS date,
        astatus.statuscode AS status,
-       COALESCE(ar.actualcheckinaturc::text, '') AS "checkIn",
-       ar.actualcheckoutaturc::text AS "checkOut",
+       COALESCE(ar.actualcheckinatutc::text, '') AS "checkIn",
+       ar.actualcheckoutatutc::text AS "checkOut",
        COALESCE(ar.workingminutes, 0) AS "totalHours",
        (SELECT COUNT(*) FROM hr.attendancepunches ap WHERE ap.attendancerecordid = ar.attendancerecordid)::int AS "breaksCount"
      FROM hr.attendancerecords ar
