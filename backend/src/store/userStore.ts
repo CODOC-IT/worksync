@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
-import { isDatabaseConfigured, query } from '../db/pool.js';
+import { isDatabaseConfigured, query, withTransaction } from '../db/pool.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
@@ -359,43 +359,53 @@ class UserStore {
         const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
 
-        const insertUser = await query<{ userid: number }>(
-          `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-           VALUES ($1, $2, $3, $4, $5, $6, 'Active')
-           RETURNING userid`,
-          [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
-        );
-        const userId = insertUser.rows[0].userid;
-
-        await query(
-          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
-           VALUES ($1, $2, 'bcryptjs')`,
-          [userId, Buffer.from(passwordHash, 'utf-8')]
-        );
-
         const roleCode = ROLE_TO_DB[userData.role];
         const roleResult = await query<{ roleid: number; istemporary: boolean }>(
           'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
           [roleCode]
         );
-        if (roleResult.rows[0]) {
-          const systemActorUserId = await getSystemActorUserId();
-          // TeamLead/HRRepresentative are seeded IsTemporary=TRUE (see database/17_seed.sql),
-          // which a DB trigger enforces by requiring EndsAtUtc on every assignment -- but this
-          // app grants those roles permanently at registration, the same as Admin/Team Member,
-          // not as a time-boxed elevation. Rather than reinterpret what "temporary" means here,
-          // satisfy the trigger with a far-future expiry so registration succeeds for every role
-          // exactly as before; a real "temporary project-scoped lead" feature, if ever built,
-          // would set a real EndsAtUtc instead of this default.
-          const endsAtUtc = roleResult.rows[0].istemporary
-            ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
-            : null;
-          await query(
-            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
-             VALUES ($1, $2, $3, $4)`,
-            [userId, roleResult.rows[0].roleid, systemActorUserId, endsAtUtc]
+        const systemActorUserId = roleResult.rows[0] ? await getSystemActorUserId() : null;
+
+        // Users + credentials + role grant are inserted atomically -- previously these were three
+        // separate query() calls, so a failure partway through (e.g. the role insert hitting a
+        // constraint) left an orphaned, credential-only iam.users row behind: the email looked
+        // "taken" on any later registration attempt (a real uq_users_organization_email
+        // violation), yet the account had no role and couldn't actually be used.
+        const userId = await withTransaction(async (runQuery) => {
+          const insertUser = await runQuery<{ userid: number }>(
+            `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+             RETURNING userid`,
+            [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
           );
-        }
+          const newUserId = insertUser.rows[0].userid;
+
+          await runQuery(
+            `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
+             VALUES ($1, $2, 'bcryptjs')`,
+            [newUserId, Buffer.from(passwordHash, 'utf-8')]
+          );
+
+          if (roleResult.rows[0]) {
+            // TeamLead/HRRepresentative are seeded IsTemporary=TRUE (see database/17_seed.sql),
+            // which a DB trigger enforces by requiring EndsAtUtc on every assignment -- but this
+            // app grants those roles permanently at registration, the same as Admin/Team Member,
+            // not as a time-boxed elevation. Rather than reinterpret what "temporary" means here,
+            // satisfy the trigger with a far-future expiry so registration succeeds for every role
+            // exactly as before; a real "temporary project-scoped lead" feature, if ever built,
+            // would set a real EndsAtUtc instead of this default.
+            const endsAtUtc = roleResult.rows[0].istemporary
+              ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+              : null;
+            await runQuery(
+              `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+               VALUES ($1, $2, $3, $4)`,
+              [newUserId, roleResult.rows[0].roleid, systemActorUserId, endsAtUtc]
+            );
+          }
+
+          return newUserId;
+        });
 
         const newUser: UserRecord = {
           id: fromUserPk(userId),

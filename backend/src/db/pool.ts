@@ -85,6 +85,18 @@ export const bootstrapDatabase = async (): Promise<void> => {
       ON CONFLICT (RoleCode) DO NOTHING
     `);
 
+    // Matches database/23_system_actor_bootstrap.sql exactly -- kept here too (not just in
+    // setup.sql's \ir list) because setup.sql only ever runs once, by hand, at initial
+    // provisioning. Any database this app points at later (a fresh Supabase project, a
+    // teammate's local DB, a restored backup) needs this row before the first registration can
+    // succeed, so it's re-applied idempotently on every boot instead of requiring a manual
+    // psql -f step each time DATABASE_URL changes.
+    await bootPool.query(`
+      INSERT INTO iam.Users (OrganizationId, Email, GivenName, FamilyName, DisplayName, Designation, AccountStatus)
+      VALUES (1, 'system@worksync.internal', 'System', 'WorkSync', 'WorkSync System', 'System Actor', 'Locked')
+      ON CONFLICT (OrganizationId, Email) DO NOTHING
+    `);
+
     console.log('[Database] Bootstrap seeding complete ✓');
   } catch (err: any) {
     console.warn(`[Database] Bootstrap seed skipped (tables may not exist yet): ${err.message}`);
