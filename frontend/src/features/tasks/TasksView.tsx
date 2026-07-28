@@ -713,7 +713,8 @@ export const TasksView: React.FC = () => {
             description="Try changing or clearing the current filters."
           />
         ) : (
-          <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <div className="max-h-[calc(100vh-290px)] min-h-[420px] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/25 p-4">
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
             {filteredTasks.map((task) => {
               const project = projects.find((item) => item.id === task.projectId);
               if (!project) return null;
@@ -733,19 +734,18 @@ export const TasksView: React.FC = () => {
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') setViewingTask(task);
                   }}
-                  className="group relative flex min-h-[250px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-4 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
+                  className="group relative flex min-h-[340px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-5 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 pr-12">
                       <p className="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-300">
                         {getProjectName(project)}
                       </p>
-                      <p className="mt-1 font-mono text-[10px] text-slate-500">{task.taskNumber}</p>
                     </div>
                     {(mayEdit || mayDelete) && (
                       <div
                         data-task-actions
-                        className="absolute right-3 top-3 z-10"
+                        className="absolute right-4 top-4 z-10"
                         onClick={(event) => event.stopPropagation()}
                       >
                         <button
@@ -791,27 +791,28 @@ export const TasksView: React.FC = () => {
                     )}
                   </div>
 
-                  <h3 title={task.title} className="mt-4 truncate pr-12 text-lg font-bold leading-6 text-white">
+                  <h3 title={task.title} className="mt-4 break-words pr-10 text-xl font-bold leading-7 text-white">
                     {task.title}
                   </h3>
-                  <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <TaskBadge value={task.priority} kind="priority" />
+                  </div>
+                  <p className="mt-3 line-clamp-2 min-h-[40px] text-sm leading-5 text-slate-400">
                     {task.description}
                   </p>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-4">
                     <TaskBadge value={task.status} kind="status" />
-                    <TaskBadge value={task.priority} kind="priority" />
-                    {overdue && (
-                      <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-300">
-                        Overdue
-                      </span>
-                    )}
                   </div>
 
                   <div className="mt-auto border-t border-white/10 pt-4">
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <Detail label="Starts" value={formatDate(getTaskStartDate(task))} compact />
-                      <Detail label="Due" value={formatDate(task.dueDate)} compact />
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-semibold text-slate-300">Due {formatDate(task.dueDate)}</span>
+                      {overdue && (
+                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-300">
+                          Overdue
+                        </span>
+                      )}
                     </div>
                     <div className="mt-4 flex min-w-0 items-center gap-2">
                       <UsersRound size={14} className="shrink-0 text-slate-500" />
@@ -823,6 +824,7 @@ export const TasksView: React.FC = () => {
                 </article>
               );
             })}
+            </div>
           </div>
         )}
       </div>}
