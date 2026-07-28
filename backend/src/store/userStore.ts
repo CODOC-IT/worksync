@@ -130,10 +130,34 @@ class UserStore {
           }
         }
 
+        await this.alignDatabaseUserSequence();
+
         return;
       } catch (err: any) {
         console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
+    }
+  }
+
+  private async alignDatabaseUserSequence(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return;
+
+    try {
+      // Imports and seed scripts can insert explicit IDs without advancing the
+      // serial sequence. Align it before accepting a registration so the next
+      // INSERT receives an unused primary key.
+      await query(`
+        SELECT setval(
+          'iam.users_userid_seq',
+          COALESCE(MAX(userid), 1),
+          MAX(userid) IS NOT NULL
+        )
+        FROM iam.users
+      `);
+    } catch (err: any) {
+      // Report an environment/schema mismatch without preventing the current
+      // user list from loading.
+      console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
     }
   }
 
