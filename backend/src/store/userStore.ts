@@ -28,6 +28,29 @@ const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
   Deactivated: 'inactive'
 };
 
+// The GrantedByUserId for every self-service registration's initial role grant. Never a real
+// registrant's own id (it's a fixed, permanently-Locked row seeded once by
+// database/23_system_actor_bootstrap.sql, before any real user can occupy it) -- so unlike a
+// hardcoded numeric id, this can never coincide with the very user being granted the role and
+// trip iam.UserRoles' CK_UserRoles_NoSelfGrant check.
+const SYSTEM_ACTOR_EMAIL = 'system@worksync.internal';
+let systemActorUserIdCache: number | null = null;
+
+const getSystemActorUserId = async (): Promise<number> => {
+  if (systemActorUserIdCache !== null) return systemActorUserIdCache;
+  const result = await query<{ userid: number }>(
+    'SELECT userid FROM iam.users WHERE organizationid = 1 AND email = $1',
+    [SYSTEM_ACTOR_EMAIL]
+  );
+  if (!result.rows[0]) {
+    throw new Error(
+      'System actor user not found -- run database/23_system_actor_bootstrap.sql (included in setup.sql) before registering users.'
+    );
+  }
+  systemActorUserIdCache = result.rows[0].userid;
+  return systemActorUserIdCache;
+};
+
 const USER_QUERY = `
   SELECT u.userid, u.email, u.displayname, u.designation,
          u.accountstatus, u.createdatutc,
@@ -351,15 +374,26 @@ class UserStore {
         );
 
         const roleCode = ROLE_TO_DB[userData.role];
-        const roleResult = await query<{ roleid: number }>(
-          'SELECT roleid FROM iam.roles WHERE rolecode = $1',
+        const roleResult = await query<{ roleid: number; istemporary: boolean }>(
+          'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
           [roleCode]
         );
         if (roleResult.rows[0]) {
+          const systemActorUserId = await getSystemActorUserId();
+          // TeamLead/HRRepresentative are seeded IsTemporary=TRUE (see database/17_seed.sql),
+          // which a DB trigger enforces by requiring EndsAtUtc on every assignment -- but this
+          // app grants those roles permanently at registration, the same as Admin/Team Member,
+          // not as a time-boxed elevation. Rather than reinterpret what "temporary" means here,
+          // satisfy the trigger with a far-future expiry so registration succeeds for every role
+          // exactly as before; a real "temporary project-scoped lead" feature, if ever built,
+          // would set a real EndsAtUtc instead of this default.
+          const endsAtUtc = roleResult.rows[0].istemporary
+            ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+            : null;
           await query(
-            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
-             VALUES ($1, $2, 1)`,
-            [userId, roleResult.rows[0].roleid]
+            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+             VALUES ($1, $2, $3, $4)`,
+            [userId, roleResult.rows[0].roleid, systemActorUserId, endsAtUtc]
           );
         }
 
