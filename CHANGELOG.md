@@ -22,3 +22,4 @@ All notable changes to this project will be documented in this file.
 - Email notifications were silently disabled for every user by default; now opt-out instead of opt-in.
 - Local Postgres connections no longer fail due to an SSL requirement meant only for the deployed database.
 - Notification emails were landing in spam due to a From/Reply-To domain mismatch; confirmed fixed via live inbox testing.
+- Registration/OTP verification could crash with a database constraint error, and Team Lead/HR roles could silently fail to persist after signup.
