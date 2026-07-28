@@ -2,174 +2,372 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
+import { isDatabaseConfigured, query } from '../db/pool.js';
+import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
-// Pre-hashed default password for initial seed users: "password123"
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
 
-// On Vercel the filesystem is read-only except for /tmp, so we persist
-// the user database under /tmp when running in a serverless environment.
-const DATA_ROOT = process.env.VERCEL === '1'
-  ? '/tmp/database'
-  : path.resolve(process.cwd(), 'database');
-const DB_FILE_PATH = path.resolve(DATA_ROOT, 'users_db.json');
+const ROLE_TO_DB: Record<UserRole, string> = {
+  Admin: 'Administrator',
+  Team_Lead: 'TeamLead',
+  HR: 'HRRepresentative',
+  Team_Member: 'TeamMember'
+};
 
-const INITIAL_USERS: UserRecord[] = [
-  {
-    id: 'usr-1',
-    name: 'Fazal Khan',
-    email: 'fazal.k@codoc.com',
-    passwordHash: DEFAULT_PASSWORD_HASH,
-    role: 'Admin',
-    department: 'Executive Operations',
-    avatar: '/assets/images/fazal.png',
-    title: 'Managing Director & Operations Oversight',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'usr-2',
-    name: 'Adolf',
-    email: 'adolf.h@codoc.com',
-    passwordHash: DEFAULT_PASSWORD_HASH,
-    role: 'Team_Lead',
-    department: 'IT',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-    title: 'Lead Software Architect',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'usr-3',
-    name: 'Maryam',
-    email: 'maryam@codoc.com',
-    passwordHash: DEFAULT_PASSWORD_HASH,
-    role: 'HR',
-    department: 'Human Resources & People Ops',
-    avatar: '/assets/images/maryam.png',
-    title: 'Head of People Operations',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'usr-4',
-    name: 'Salman Ahmed',
-    email: 'salman.c@codoc.com',
-    passwordHash: DEFAULT_PASSWORD_HASH,
-    role: 'Team_Member',
-    department: 'Engineering',
-    avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-    title: 'Senior Frontend Engineer',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  }
-];
+const DB_TO_ROLE: Record<string, UserRole> = {
+  Administrator: 'Admin',
+  TeamLead: 'Team_Lead',
+  HRRepresentative: 'HR',
+  TeamMember: 'Team_Member'
+};
+
+const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
+  Active: 'active',
+  Pending: 'inactive',
+  Locked: 'inactive',
+  Deactivated: 'inactive'
+};
+
+const USER_QUERY = `
+  SELECT u.userid, u.email, u.displayname, u.designation,
+         u.accountstatus, u.createdatutc,
+         r.rolecode, d.departmentname,
+         uc.passwordhash, uc.passwordalgorithm
+  FROM iam.users u
+  LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
+  LEFT JOIN iam.roles r ON r.roleid = ur.roleid
+  LEFT JOIN org.departments d ON d.departmentid = u.departmentid
+  LEFT JOIN iam.usercredentials uc ON uc.userid = u.userid
+`;
+
+interface DbUserRow {
+  userid: number;
+  email: string;
+  displayname: string;
+  designation: string | null;
+  accountstatus: string;
+  createdatutc: string;
+  rolecode: string | null;
+  departmentname: string | null;
+  passwordhash: Buffer | null;
+  passwordalgorithm: string | null;
+}
+
+function rowToUserRecord(row: DbUserRow): UserRecord {
+  return {
+    id: fromUserPk(row.userid),
+    name: row.displayname,
+    email: row.email,
+    passwordHash: row.passwordhash ? row.passwordhash.toString('utf-8') : DEFAULT_PASSWORD_HASH,
+    role: row.rolecode ? (DB_TO_ROLE[row.rolecode] || 'Team_Member') : 'Team_Member',
+    department: row.departmentname || 'Engineering',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    title: row.designation || 'Team Member',
+    status: STATUS_MAP[row.accountstatus] || 'active',
+    createdAt: row.createdatutc ? new Date(row.createdatutc).toISOString() : new Date().toISOString()
+  };
+}
 
 class UserStore {
-  private users: Map<string, UserRecord> = new Map();
+  private dbAvailable: boolean = false;
+  private fallbackUsers: Map<string, UserRecord> = new Map();
+  private initialized = false;
+  private dbLoadStarted = false;
 
   constructor() {
-    this.initDatabase();
+    this.initFileStore();
   }
 
-  private initDatabase(): void {
-    try {
-      // Ensure database directory exists
-      const dbDir = path.dirname(DB_FILE_PATH);
-      if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
+  private async ensureInit(): Promise<void> {
+    if (this.initialized) return;
+    if (this.dbLoadStarted) return;
+    this.dbLoadStarted = true;
+    this.initialized = true;
+
+    if (isDatabaseConfigured()) {
+      try {
+        const result = await query<DbUserRow>(
+          USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
+        );
+        if (result.rows.length > 0) {
+          this.dbAvailable = true;
+          for (const row of result.rows) {
+            const user = rowToUserRecord(row);
+            this.fallbackUsers.set(user.email.toLowerCase(), user);
+          }
+          console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
+        } else {
+          this.dbAvailable = true;
+        }
+
+        // Sync file store users into DB so foreign keys (FK_Projects_OwnerOrganization etc.)
+        // resolve. File store users with id="usr-N" are backfilled if they don't exist yet.
+        if (this.dbAvailable) {
+          const PG_INT_MAX = 2147483647;
+          for (const [email, user] of this.fallbackUsers) {
+            const uid = parseInt(user.id.replace('usr-', ''), 10);
+            if (isNaN(uid) || uid > PG_INT_MAX) {
+              console.warn(`[UserStore] Skipping backfill for ${email}: ID ${user.id} exceeds PostgreSQL INT range.`);
+              continue;
+            }
+            try {
+              await query(
+                `INSERT INTO iam.users (userid, organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+                 VALUES ($1, 1, $2, $3, $4, $5, $6, 'Active')
+                 ON CONFLICT (userid) DO NOTHING`,
+                [
+                  uid,
+                  user.email.toLowerCase(),
+                  user.name.split(' ')[0] || user.name,
+                  user.name.split(' ').slice(1).join(' ') || user.name,
+                  user.name,
+                  user.title
+                ]
+              );
+            } catch {
+              // User may already exist with different id — skip
+            }
+          }
+        }
+
+        return;
+      } catch (err: any) {
+        console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
+    }
+  }
+
+  private initFileStore(): void {
+    const DATA_ROOT = process.env.VERCEL === '1'
+      ? '/tmp/database'
+      : path.resolve(process.cwd(), 'database');
+    const DB_FILE_PATH = path.resolve(DATA_ROOT, 'users_db.json');
+
+    const INITIAL_USERS: UserRecord[] = [
+      {
+        id: 'usr-1', name: 'Fazal Khan', email: 'fazal.k@codoc.com',
+        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Admin',
+        department: 'Executive Operations', avatar: '/assets/images/fazal.png',
+        title: 'Managing Director & Operations Oversight', status: 'active',
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr-2', name: 'Adolf', email: 'adolf.h@codoc.com',
+        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Team_Lead',
+        department: 'IT', avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
+        title: 'Lead Software Architect', status: 'active',
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr-3', name: 'Maryam', email: 'maryam@codoc.com',
+        passwordHash: DEFAULT_PASSWORD_HASH, role: 'HR',
+        department: 'Human Resources & People Ops', avatar: '/assets/images/maryam.png',
+        title: 'Head of People Operations', status: 'active',
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr-4', name: 'Salman Ahmed', email: 'salman.c@codoc.com',
+        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Team_Member',
+        department: 'Engineering', avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
+        title: 'Senior Frontend Engineer', status: 'active',
+        createdAt: new Date().toISOString()
+      }
+    ];
+
+    try {
+      const dbDir = path.dirname(DB_FILE_PATH);
+      if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
       if (fs.existsSync(DB_FILE_PATH)) {
-        const fileData = fs.readFileSync(DB_FILE_PATH, 'utf-8');
-        const parsedUsers: UserRecord[] = JSON.parse(fileData);
-        
-        parsedUsers.forEach((user) => {
-          this.users.set(user.email.toLowerCase(), user);
-        });
-
-        // Ensure default seed users exist if missing
-        INITIAL_USERS.forEach((user) => {
-          if (!this.users.has(user.email.toLowerCase())) {
-            this.users.set(user.email.toLowerCase(), user);
+        const parsedUsers: UserRecord[] = JSON.parse(fs.readFileSync(DB_FILE_PATH, 'utf-8'));
+        for (const user of parsedUsers) {
+          this.fallbackUsers.set(user.email.toLowerCase(), user);
+        }
+        for (const user of INITIAL_USERS) {
+          if (!this.fallbackUsers.has(user.email.toLowerCase())) {
+            this.fallbackUsers.set(user.email.toLowerCase(), user);
           }
-        });
-
-        this.persistToDisk();
-        console.log(`[Database] Loaded ${this.users.size} user records from ${DB_FILE_PATH} ✓`);
+        }
+        this.persistFile(DB_FILE_PATH);
+        console.log(`[UserStore] Loaded ${this.fallbackUsers.size} users from file ✓`);
       } else {
-        // Seed initial users into database file
-        INITIAL_USERS.forEach((user) => {
-          this.users.set(user.email.toLowerCase(), user);
-        });
-        this.persistToDisk();
-        console.log(`[Database] Initialized new user database at ${DB_FILE_PATH} with seed records ✓`);
+        for (const user of INITIAL_USERS) {
+          this.fallbackUsers.set(user.email.toLowerCase(), user);
+        }
+        this.persistFile(DB_FILE_PATH);
+        console.log(`[UserStore] Initialized file store with seed users ✓`);
       }
     } catch (err: any) {
-      console.error(`[Database Error] Failed to load database file: ${err.message}. Falling back to initial seed.`);
-      INITIAL_USERS.forEach((user) => {
-        this.users.set(user.email.toLowerCase(), user);
-      });
+      console.error(`[UserStore] File store error: ${err.message}. Using in-memory seed.`);
+      for (const user of INITIAL_USERS) {
+        this.fallbackUsers.set(user.email.toLowerCase(), user);
+      }
     }
   }
 
-  private persistToDisk(): void {
+  private persistFile(filePath: string): void {
     try {
-      const userList = Array.from(this.users.values());
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(userList, null, 2), 'utf-8');
+      fs.writeFileSync(filePath, JSON.stringify(Array.from(this.fallbackUsers.values()), null, 2), 'utf-8');
     } catch (err: any) {
-      console.error(`[Database Error] Failed to persist users to disk: ${err.message}`);
+      console.error(`[UserStore] Persist error: ${err.message}`);
     }
+  }
+
+  private getFileStorePath(): string {
+    const DATA_ROOT = process.env.VERCEL === '1'
+      ? '/tmp/database'
+      : path.resolve(process.cwd(), 'database');
+    return path.resolve(DATA_ROOT, 'users_db.json');
+  }
+
+  public async syncUsersToDb(): Promise<void> {
+    if (!isDatabaseConfigured()) return;
+    await this.ensureInit();
   }
 
   public findByEmail(email: string): UserRecord | undefined {
-    return this.users.get(email.toLowerCase());
+    return this.fallbackUsers.get(email.toLowerCase());
+  }
+
+  public async findByEmailAsync(email: string): Promise<UserRecord | undefined> {
+    await this.ensureInit();
+    if (!this.dbAvailable) return this.fallbackUsers.get(email.toLowerCase());
+
+    try {
+      const result = await query<DbUserRow>(
+        USER_QUERY + ' WHERE u.email = $1 AND u.organizationid = 1',
+        [email.toLowerCase()]
+      );
+      if (result.rows[0]) {
+        const dbUser = rowToUserRecord(result.rows[0]);
+        const existing = this.fallbackUsers.get(dbUser.email.toLowerCase());
+
+        // Merge: prefer DB for identity, file store for credentials/roles when DB is incomplete
+        const merged: UserRecord = {
+          ...dbUser,
+          passwordHash: dbUser.passwordHash !== DEFAULT_PASSWORD_HASH
+            ? dbUser.passwordHash
+            : (existing?.passwordHash || DEFAULT_PASSWORD_HASH),
+          role: dbUser.role !== 'Team_Member' || !existing
+            ? dbUser.role
+            : existing.role
+        };
+
+        this.fallbackUsers.set(merged.email.toLowerCase(), merged);
+        return merged;
+      }
+    } catch (err: any) {
+      console.warn(`[UserStore] DB findByEmail failed: ${err.message}`);
+    }
+    return this.fallbackUsers.get(email.toLowerCase());
   }
 
   public findByName(name: string): UserRecord | undefined {
     const normalised = name.trim().toLowerCase();
-    return Array.from(this.users.values()).find(
+    return Array.from(this.fallbackUsers.values()).find(
       (u) => u.name.trim().toLowerCase() === normalised
     );
   }
 
   public findById(id: string): UserRecord | undefined {
-    return Array.from(this.users.values()).find((user) => user.id === id);
+    return Array.from(this.fallbackUsers.values()).find((user) => user.id === id);
   }
 
   public getAllUsers(): UserRecord[] {
-    return Array.from(this.users.values());
+    return Array.from(this.fallbackUsers.values());
   }
 
   public hasRole(role: UserRole): boolean {
-    return Array.from(this.users.values()).some((user) => user.role === role);
+    return Array.from(this.fallbackUsers.values()).some((user) => user.role === role);
   }
 
-  public createUser(userData: {
+  public async createUser(userData: {
     name: string;
     email: string;
     password: string;
     role: UserRole;
     department: string;
     title?: string;
-  }): UserRecord {
+  }): Promise<UserRecord> {
+    await this.ensureInit();
+
     const existing = this.findByEmail(userData.email);
-    if (existing) {
-      throw new Error('User with this email already exists.');
-    }
+    if (existing) throw new Error('User with this email already exists.');
 
     if (userData.role === 'Admin' && this.hasRole('Admin')) {
-      throw new Error('An Administrator account already exists in this organization. Only one Admin is permitted.');
+      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
+    }
+    if (userData.role === 'HR' && this.hasRole('HR')) {
+      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
     }
 
-    if (userData.role === 'HR' && this.hasRole('HR')) {
-      throw new Error('An HR Specialist account already exists in this organization. Only one HR is permitted.');
+    const passwordHash = bcrypt.hashSync(userData.password, 10);
+
+    if (this.dbAvailable) {
+      try {
+        const orgId = 1;
+        const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
+        const familyName = familyParts.join(' ') || givenName;
+
+        const insertUser = await query<{ userid: number }>(
+          `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+           VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+           RETURNING userid`,
+          [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
+        );
+        const userId = insertUser.rows[0].userid;
+
+        await query(
+          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
+           VALUES ($1, $2, 'bcryptjs')`,
+          [userId, Buffer.from(passwordHash, 'utf-8')]
+        );
+
+        const roleCode = ROLE_TO_DB[userData.role];
+        const roleResult = await query<{ roleid: number }>(
+          'SELECT roleid FROM iam.roles WHERE rolecode = $1',
+          [roleCode]
+        );
+        if (roleResult.rows[0]) {
+          await query(
+            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
+             VALUES ($1, $2, 1)`,
+            [userId, roleResult.rows[0].roleid]
+          );
+        }
+
+        const newUser: UserRecord = {
+          id: fromUserPk(userId),
+          name: userData.name,
+          email: userData.email.toLowerCase(),
+          passwordHash,
+          role: userData.role,
+          department: userData.department,
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
+          status: 'active',
+          createdAt: new Date().toISOString()
+        };
+
+        this.fallbackUsers.set(newUser.email, newUser);
+        console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
+        return newUser;
+      } catch (err: any) {
+        console.warn(`[UserStore] DB createUser failed: ${err.message}. Using file store.`);
+      }
     }
+
+    const maxUserId = Array.from(this.fallbackUsers.values())
+      .map(u => parseInt(u.id.replace('usr-', ''), 10))
+      .filter(n => !isNaN(n) && n < 1000000000000)
+      .reduce((max, n) => Math.max(max, n), 0);
+    const nextId = maxUserId + 1;
 
     const newUser: UserRecord = {
-      id: `usr-${Date.now()}`,
+      id: `usr-${nextId}`,
       name: userData.name,
       email: userData.email.toLowerCase(),
-      passwordHash: bcrypt.hashSync(userData.password, 10),
+      passwordHash,
       role: userData.role,
       department: userData.department,
       avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -178,9 +376,9 @@ class UserStore {
       createdAt: new Date().toISOString()
     };
 
-    this.users.set(newUser.email, newUser);
-    this.persistToDisk();
-    console.log(`[Database] Created and persisted new user: ${newUser.name} (${newUser.email}) ✓`);
+    this.fallbackUsers.set(newUser.email, newUser);
+    this.persistFile(this.getFileStorePath());
+    console.log(`[UserStore] Created user in file store: ${newUser.name} ✓`);
     return newUser;
   }
 
@@ -189,29 +387,78 @@ class UserStore {
     return sanitized;
   }
 
-  public updatePassword(email: string, newPasswordHash: string): void {
-    const user = this.users.get(email.toLowerCase());
+  public async updatePassword(email: string, newPasswordHash: string): Promise<void> {
+    await this.ensureInit();
+    const user = this.fallbackUsers.get(email.toLowerCase());
     if (!user) throw new Error('User not found.');
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(user.id);
+        await query(
+          `UPDATE iam.usercredentials SET passwordhash = $1, passwordchangedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
+          [Buffer.from(newPasswordHash, 'utf-8'), uid]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB updatePassword failed: ${err.message}`);
+      }
+    }
+
     user.passwordHash = newPasswordHash;
-    this.persistToDisk();
-    console.log(`[Database] Password updated for ${email} ✓`);
+    this.persistFile(this.getFileStorePath());
+    console.log(`[UserStore] Password updated for ${email} ✓`);
   }
 
-  public updateDisplayName(userId: string, name: string): Omit<UserRecord, 'passwordHash'> {
+  public async updateDisplayName(userId: string, name: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(userId);
+        const [givenName, ...familyParts] = name.trim().split(/\s+/);
+        const familyName = familyParts.join(' ') || givenName;
+        await query(
+          `UPDATE iam.users SET displayname = $1, givenname = $2, familyname = $3, updatedatutc = CURRENT_TIMESTAMP
+           WHERE userid = $4`,
+          [name, givenName, familyName, uid]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB updateDisplayName failed: ${err.message}`);
+      }
+    }
+
     user.name = name;
-    this.persistToDisk();
-    console.log(`[Database] Display name updated for ${userId} → "${name}" ✓`);
+    this.persistFile(this.getFileStorePath());
     return this.sanitizeUser(user);
   }
 
-  public updateAvatar(userId: string, avatarUrl: string): Omit<UserRecord, 'passwordHash'> {
+  public async updateAvatar(userId: string, avatarUrl: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(userId);
+        await query(
+          `UPDATE iam.userprofiles SET updatedatutc = CURRENT_TIMESTAMP WHERE userid = $1`,
+          [uid]
+        );
+        await query(
+          `INSERT INTO iam.userprofiles (userid, updatedatutc)
+           VALUES ($1, CURRENT_TIMESTAMP)
+           ON CONFLICT (userid) DO NOTHING`,
+          [uid]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB updateAvatar failed: ${err.message}`);
+      }
+    }
+
     user.avatar = avatarUrl;
-    this.persistToDisk();
-    console.log(`[Database] Avatar updated for ${userId} ✓`);
+    this.persistFile(this.getFileStorePath());
     return this.sanitizeUser(user);
   }
 }

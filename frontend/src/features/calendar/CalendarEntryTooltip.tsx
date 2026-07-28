@@ -99,12 +99,13 @@ export const CalendarEntryTooltip: React.FC<CalendarEntryTooltipProps> = ({
               zIndex: 9999,
               pointerEvents: 'auto'
             }}
+            data-calendar-tooltip
             className="w-72"
           >
             <div className="glass-panel backdrop-blur-xl bg-slate-900/95 border border-white/15 rounded-xl p-3.5 shadow-2xl shadow-black/50">
               {/* Header */}
               <div className="flex items-center gap-2 mb-2.5">
-                <span className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-bold ${tone.badgeClass}`}>
+                <span data-calendar-entry-kind={entry.kind} className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-bold ${tone.badgeClass}`}>
                   {entry.kind}
                 </span>
                 {entry.time && (

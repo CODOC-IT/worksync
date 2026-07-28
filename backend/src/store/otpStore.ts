@@ -15,7 +15,7 @@ const DATA_ROOT = process.env.VERCEL === '1'
   ? '/tmp/database'
   : path.resolve(process.cwd(), 'database');
 const OTP_DB_PATH = path.resolve(DATA_ROOT, 'otp_store.json');
-const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_EXPIRY_MS = 60 * 1000; // 1 minute
 
 class OTPStore {
   private records: Map<string, OTPRecord> = new Map(); // key = email

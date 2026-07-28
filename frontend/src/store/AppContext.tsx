@@ -91,6 +91,21 @@ import {
   clearNotificationApi,
   snoozeNotificationApi
 } from '../features/notifications/notificationApiClient';
+import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
+
+const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
+
+const loadAttendanceRecords = (): AttendanceRecord[] => {
+  try {
+    const savedAttendance = localStorage.getItem(ATTENDANCE_STORAGE_KEY);
+    if (!savedAttendance) return INITIAL_ATTENDANCE;
+    const parsedAttendance = JSON.parse(savedAttendance);
+    return Array.isArray(parsedAttendance) ? parsedAttendance : INITIAL_ATTENDANCE;
+  } catch (error) {
+    console.error('Failed to load attendance records from localStorage.', error);
+    return INITIAL_ATTENDANCE;
+  }
+};
 
 interface AppState {
   currentRole: UserRole;
@@ -192,7 +207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(INITIAL_ATTENDANCE);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>(INITIAL_HR_REQUESTS);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>(INITIAL_SYSTEM_APPROVALS);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
@@ -222,6 +237,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     startTime: string;
     elapsedSeconds: number;
   } | null>(null);
+
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        ATTENDANCE_STORAGE_KEY,
+        JSON.stringify(attendanceRecords)
+      );
+    } catch (error) {
+      console.error('Failed to save attendance records.', error);
+    }
+  }, [attendanceRecords]);
 
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
@@ -445,6 +472,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isActive = false;
     };
   }, [currentUser.id]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const channel = subscribeToChannel(
+      'worksync-notifications',
+      (payload) => {
+        if (payload?.notification) {
+          const notif = payload.notification as NotificationItem;
+          if (notif.userId === currentUser.id) {
+            setNotifications((prev) => [notif, ...prev]);
+            if (notificationPreferences.toast) {
+              const meta = getNotificationTypeMeta(notif.type);
+              pushToast(meta.tone, notif.title, notif.message);
+            }
+          }
+        }
+      }
+    );
+
+    return () => {
+      if (channel) supabase?.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id, isSupabaseConfigured]);
 
   const applyCreatedNotifications = (created: NotificationItem[]) => {
     if (created.length === 0) return;

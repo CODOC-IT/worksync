@@ -23,7 +23,7 @@ import { getNotificationTypeMeta, isNotificationVisibleForRole, PRIORITY_ORDER }
 let sequence = 0;
 const nextId = (prefix: string) => {
   sequence += 1;
-  return `${prefix}-${Date.now()}-${sequence}`;
+  return `${prefix}-${sequence}`;
 };
 
 export interface CreateNotificationInput {

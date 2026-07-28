@@ -266,7 +266,7 @@ router.put('/password', async (req, res: Response): Promise<void> => {
 
     const bcrypt = await import('bcryptjs');
     const newHash = bcrypt.hashSync(newPassword, 10);
-    userStore.updatePassword(payload.email, newHash);
+    await userStore.updatePassword(payload.email, newHash);
 
     res.status(200).json({ success: true, message: 'Password updated successfully. Please sign in with your new password.' });
   } catch (error: any) {
@@ -321,7 +321,7 @@ router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Respons
 });
 
 // PUT /api/auth/profile/display-name
-router.put('/profile/display-name', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
@@ -343,7 +343,7 @@ router.put('/profile/display-name', authenticateJWT, (req: AuthenticatedRequest,
       return void res.status(400).json({ success: false, message: 'Display name must not exceed 100 characters.' });
     }
 
-    const updatedUser = userStore.updateDisplayName(req.user.id, sanitizedName);
+    const updatedUser = await userStore.updateDisplayName(req.user.id, sanitizedName);
 
     return void res.status(200).json({
       success: true,
@@ -356,7 +356,7 @@ router.put('/profile/display-name', authenticateJWT, (req: AuthenticatedRequest,
 });
 
 // PUT /api/auth/profile/avatar
-router.put('/profile/avatar', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
@@ -378,7 +378,7 @@ router.put('/profile/avatar', authenticateJWT, (req: AuthenticatedRequest, res: 
       return void res.status(400).json({ success: false, message: 'Avatar image must be smaller than 2 MB.' });
     }
 
-    const updatedUser = userStore.updateAvatar(req.user.id, avatar);
+    const updatedUser = await userStore.updateAvatar(req.user.id, avatar);
 
     return void res.status(200).json({
       success: true,

@@ -163,8 +163,8 @@ export const KanbanView: React.FC = () => {
       : 'View your project context and move your own tasks through the workflow.';
 
   return (
-    <section data-kanban className="mx-auto max-w-[1600px] space-y-5">
-      <header>
+    <section data-kanban className="mx-auto flex h-full max-w-[1600px] flex-col gap-5">
+      <header className="shrink-0">
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
           <ListTodo size={15} />
           Project board
@@ -176,7 +176,7 @@ export const KanbanView: React.FC = () => {
       {notice && (
         <div
           role="status"
-          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
+          className={`flex shrink-0 items-center justify-between rounded-xl border px-4 py-3 text-sm ${
             notice.type === 'success'
               ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
               : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
@@ -204,24 +204,12 @@ export const KanbanView: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="glass-panel space-y-3 p-4">
-            <div className="flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
-              {accessibleProjects.map((project) => (
-                <button
-                  key={project.id}
-                  type="button"
-                  onClick={() => setSelectedProjectId(project.id)}
-                  className={`shrink-0 rounded-lg border px-3 py-2 text-left text-xs font-semibold transition ${
-                    project.id === selectedProjectId
-                      ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
-                      : 'border-white/10 text-slate-300 hover:bg-white/5'
-                  }`}
-                >
-                  <span className="block">{project.title}</span>
-                  <span className="block font-mono text-[10px] font-normal text-slate-500">{project.code}</span>
-                </button>
-              ))}
-            </div>
+          <div className="glass-panel shrink-0 space-y-3 p-4">
+            <ProjectSelect
+              projects={accessibleProjects}
+              selectedProjectId={selectedProjectId}
+              onSelect={setSelectedProjectId}
+            />
 
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <label className="relative sm:col-span-2">
@@ -270,11 +258,11 @@ export const KanbanView: React.FC = () => {
           </div>
 
           {!selectedProject ? (
-            <div className="glass-panel flex min-h-52 items-center justify-center text-sm text-slate-400">
+            <div className="glass-panel flex min-h-52 flex-1 items-center justify-center text-sm text-slate-400">
               Loading project board...
             </div>
           ) : (
-            <div className="grid gap-4 lg:grid-cols-4">
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-4">
               {BOARD_COLUMNS.map((status) => {
                 const columnTasks = boardTasks.filter((task) => task.status === status);
                 return (
@@ -323,6 +311,165 @@ export const KanbanView: React.FC = () => {
   );
 };
 
+// Searchable project selector -- replaces the old horizontal button list, which stopped
+// scaling once a workspace had more than a handful of projects. Built from scratch (no
+// combobox library in this repo's dependencies) as a button-triggered popover with an
+// internal search input, matching the pattern used by e.g. GitHub's/Linear's project
+// switchers: simpler to keep fully keyboard-operable than a full WAI-ARIA combobox, while
+// still supporting type-to-filter, arrow-key navigation, Enter to select, and Escape to close.
+const ProjectSelect: React.FC<{
+  projects: Project[];
+  selectedProjectId: string;
+  onSelect: (projectId: string) => void;
+}> = ({ projects, selectedProjectId, onSelect }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [highlightIndex, setHighlightIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+
+  const filteredProjects = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return projects;
+    return projects.filter(
+      (project) =>
+        project.title.toLowerCase().includes(normalized) || project.code.toLowerCase().includes(normalized)
+    );
+  }, [projects, query]);
+
+  useEffect(() => {
+    setHighlightIndex(0);
+  }, [query, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const openDropdown = () => {
+    setOpen(true);
+    setQuery('');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const closeDropdown = (returnFocus?: boolean) => {
+    setOpen(false);
+    setQuery('');
+    if (returnFocus) triggerRef.current?.focus();
+  };
+
+  const selectProject = (projectId: string) => {
+    onSelect(projectId);
+    closeDropdown(true);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlightIndex((index) => Math.min(index + 1, filteredProjects.length - 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const target = filteredProjects[highlightIndex];
+      if (target) selectProject(target.id);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeDropdown(true);
+    }
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <label id="kanban-project-select-label" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        Select Project
+      </label>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => (open ? closeDropdown() : openDropdown())}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-labelledby="kanban-project-select-label"
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2.5 text-left text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10 sm:w-80"
+      >
+        {selectedProject ? (
+          <span className="min-w-0 truncate">
+            <span className="font-semibold text-slate-100">{selectedProject.title}</span>
+            <span className="ml-1.5 font-mono text-[10px] text-slate-500">{selectedProject.code}</span>
+          </span>
+        ) : (
+          <span className="text-slate-500">Select a project…</span>
+        )}
+        <ChevronDown
+          size={14}
+          className={`shrink-0 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-labelledby="kanban-project-select-label"
+          className="glass-panel-glow absolute left-0 top-full z-30 mt-1.5 w-full overflow-hidden sm:w-80"
+        >
+          <label className="relative block border-b border-white/10 p-2">
+            <Search
+              size={13}
+              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search projects by name or code..."
+              aria-label="Search projects"
+              className="w-full rounded-md border-none bg-transparent py-1.5 pl-7 pr-2 text-xs text-slate-100 outline-none placeholder:text-slate-500"
+            />
+          </label>
+          <div className="max-h-64 overflow-y-auto scroll-smooth p-1">
+            {filteredProjects.length === 0 ? (
+              <p className="px-3 py-4 text-center text-xs text-slate-500">No projects match "{query}".</p>
+            ) : (
+              filteredProjects.map((project, index) => (
+                <button
+                  key={project.id}
+                  type="button"
+                  role="option"
+                  aria-selected={project.id === selectedProjectId}
+                  onMouseEnter={() => setHighlightIndex(index)}
+                  onClick={() => selectProject(project.id)}
+                  className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition ${
+                    index === highlightIndex ? 'bg-cyan-500/15 text-cyan-200' : 'text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-semibold">{project.title}</span>
+                    <span className="block font-mono text-[10px] text-slate-500">{project.code}</span>
+                  </span>
+                  {project.id === selectedProjectId && <Check size={13} className="shrink-0 text-cyan-400" />}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const BoardColumn: React.FC<{
   status: TaskStatus;
   tasks: Task[];
@@ -347,11 +494,11 @@ const BoardColumn: React.FC<{
       event.preventDefault();
       onDrop();
     }}
-    className={`glass-panel flex min-h-[420px] flex-col gap-3 p-3 transition ${
+    className={`glass-panel flex h-full min-h-[320px] flex-col gap-3 p-3 transition ${
       isDragOver ? 'border-cyan-400/60 bg-cyan-500/5' : ''
     }`}
   >
-    <div className="flex items-center justify-between px-1">
+    <div className="flex shrink-0 items-center justify-between px-1">
       <span className={`flex items-center gap-2 text-sm font-bold ${COLUMN_META[status as Exclude<TaskStatus, 'Blocked'>].accent}`}>
         {COLUMN_META[status as Exclude<TaskStatus, 'Blocked'>].icon}
         {getTaskStatusLabel(status)}
@@ -360,7 +507,11 @@ const BoardColumn: React.FC<{
         {tasks.length}
       </span>
     </div>
-    <div className="flex flex-1 flex-col gap-3 overflow-y-auto">
+    {/* Each column scrolls independently -- min-h-0 lets this flex child shrink below its
+        content size so overflow-y-auto actually kicks in here instead of the whole page
+        growing (the classic flexbox gotcha: without min-h-0, a flex-1 child never shrinks
+        past its content, so it just pushes the page taller instead of scrolling). */}
+    <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto scroll-smooth pr-1">
       {tasks.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-white/10 py-8 text-center text-xs text-slate-500">
           No tasks in {getTaskStatusLabel(status)}

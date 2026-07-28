@@ -36,6 +36,17 @@ const inputClass =
 
 const PAGE_SIZE = 20;
 
+// `linkRoute` is set server-side (and by a few remaining frontend dispatchNotifications calls)
+// at the time each notification was created, so older notifications can carry a tab id that's
+// since been renamed -- 'chat' was the Project Chat tab's id before it became 'project-chats'.
+// This keeps old notifications navigable instead of silently going nowhere.
+const LEGACY_ROUTE_ALIASES: Record<string, string> = { chat: 'project-chats' };
+
+const resolveNavigationTarget = (linkRoute: string): string | null => {
+  if (!linkRoute || linkRoute === 'notifications') return null;
+  return LEGACY_ROUTE_ALIASES[linkRoute] || linkRoute;
+};
+
 const PREFERENCE_LABELS: { key: keyof NotificationPreferences; label: string; description: string }[] = [
   { key: 'inApp', label: 'In-App Notifications', description: 'Show events in the Notification Center' },
   { key: 'toast', label: 'Toast Pop-ups', description: 'Bottom-right toast when a notification arrives' },
@@ -50,7 +61,7 @@ const PREFERENCE_LABELS: { key: keyof NotificationPreferences; label: string; de
   }
 ];
 
-export const NotificationsView: React.FC = () => {
+export const NotificationsView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const {
     currentUser,
     currentRole,
@@ -110,6 +121,8 @@ export const NotificationsView: React.FC = () => {
 
   const handleOpen = (notification: NotificationItem) => {
     markNotificationRead(notification.id);
+    const target = resolveNavigationTarget(notification.linkRoute);
+    if (target) onNavigate?.(target);
   };
 
   const toggleGroupExpanded = (key: string) => {
@@ -128,8 +141,8 @@ export const NotificationsView: React.FC = () => {
   const hasActiveFilters = Boolean(search || unreadOnly || typeFilter !== 'All' || priorityFilter !== 'All' || dateRange !== 'All');
 
   return (
-    <section className="mx-auto max-w-[1100px] space-y-5">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <section className="mx-auto flex h-full max-w-[1100px] flex-col gap-5">
+      <header className="shrink-0 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
             <Bell size={15} />
@@ -182,10 +195,14 @@ export const NotificationsView: React.FC = () => {
         </div>
       </header>
 
-      {showAnalytics && currentRole === 'Admin' && <NotificationAnalyticsPanel />}
+      {showAnalytics && currentRole === 'Admin' && (
+        <div className="shrink-0">
+          <NotificationAnalyticsPanel />
+        </div>
+      )}
 
       {showPreferences && (
-        <div className="glass-panel-glow space-y-3 p-5">
+        <div className="glass-panel-glow shrink-0 space-y-3 p-5">
           <h2 className="flex items-center gap-2 text-sm font-bold text-white">
             <SlidersHorizontal size={15} className="text-cyan-400" />
             Notification Preferences
@@ -215,7 +232,7 @@ export const NotificationsView: React.FC = () => {
         </div>
       )}
 
-      <div className="glass-panel space-y-3 p-4">
+      <div className="glass-panel shrink-0 space-y-3 p-4">
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
           <label className="relative md:col-span-2">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -312,9 +329,13 @@ export const NotificationsView: React.FC = () => {
         </div>
       </div>
 
-      <div className="glass-panel overflow-hidden">
+      {/* min-h-0 lets this panel shrink below its content height so the notification list
+          inside it can be the one thing that scrolls -- header/analytics/preferences/filters
+          above stay put (shrink-0), and the pagination footer below the list stays put too
+          (it's a sibling of the scrollable list, not inside it). */}
+      <div className="glass-panel flex min-h-0 flex-1 flex-col overflow-hidden">
         {pageItems.length === 0 ? (
-          <div className="flex min-h-52 flex-col items-center justify-center px-6 text-center">
+          <div className="flex min-h-52 flex-1 flex-col items-center justify-center px-6 text-center">
             <Bell className="text-slate-500" size={26} />
             <h3 className="mt-3 font-semibold text-slate-200">No notifications</h3>
             <p className="mt-1 text-xs text-slate-500">
@@ -322,7 +343,7 @@ export const NotificationsView: React.FC = () => {
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-white/5">
+          <div className="min-h-0 flex-1 divide-y divide-white/5 overflow-y-auto scroll-smooth">
             {groups.map((group) => {
               const representative = group.items[0];
               const isGroup = group.items.length > 1;
@@ -386,7 +407,7 @@ export const NotificationsView: React.FC = () => {
         )}
 
         {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-white/10 px-4 py-3">
+          <div className="flex shrink-0 items-center justify-between border-t border-white/10 px-4 py-3">
             <span className="text-[11px] text-slate-500">
               Page {page} of {totalPages} &middot; {filtered.length} notification{filtered.length !== 1 ? 's' : ''}
             </span>

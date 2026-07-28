@@ -11,8 +11,9 @@ import projectChatRoutes from './routes/projectChatRoutes.js';
 import notificationRoutes from './notifications/notification.routes.js';
 import activityRoutes from './activity/activity.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
-import { isDatabaseConfigured } from './db/pool.js';
+import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
+import { userStore } from './store/userStore.js';
 import { auditFailedRequests } from './middleware/auditFailureMiddleware.js';
 
 dotenv.config();
@@ -72,9 +73,13 @@ if (process.env.NODE_ENV !== 'test' && process.env.VERCEL !== '1' && isDatabaseC
 // Skip listen on Vercel (serverless) and in test mode
 // Vercel uses the exported `app` directly via api/index.ts
 if (process.env.NODE_ENV !== 'test' && process.env.VERCEL !== '1') {
-  app.listen(PORT, () => {
-    console.log(`[WorkSync API] Server listening on http://localhost:${PORT}`);
-  });
+  bootstrapDatabase()
+    .then(() => userStore.syncUsersToDb())
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`[WorkSync API] Server listening on http://localhost:${PORT}`);
+      });
+    });
 }
 
 export default app;

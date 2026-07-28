@@ -308,7 +308,7 @@ flowchart TD
 | Feature | 🔴 Admin | 🟣 Team Lead | 🩷 HR | 🔵 Member |
 |---|:---:|:---:|:---:|:---:|
 | Create, Edit, Delete Projects | ✅ | Assigned only | ❌ | ❌ |
-| Create and Assign Tasks | ✅ | Assigned projects | ❌ | ❌ |
+| Create and Assign Tasks | ❌ | Assigned projects | ❌ | ❌ |
 | Approve Protected Changes | ✅ Override | Assigned projects | ❌ | ❌ |
 | View All Reports | ✅ | Assigned scope | Attendance only | Personal only |
 | Manage All Attendance | ✅ | ❌ | Within HR scope | ❌ |
