@@ -147,7 +147,7 @@ router.post('/register', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const newUser = userStore.createUser({ name: sanitizedName, email, password, role, department, title });
+    const newUser = await userStore.createUser({ name: sanitizedName, email, password, role, department, title });
     recordActivitySafe({ actorId: newUser.id, actorName: newUser.name, actorEmail: newUser.email, actorRole: newUser.role,
       action: 'Created', module: 'Profile', entityType: 'User', entityId: newUser.id, entityName: newUser.name,
       description: `${newUser.name} created an account.`, source: 'Web', important: newUser.role === 'Admin' || newUser.role === 'HR' });
