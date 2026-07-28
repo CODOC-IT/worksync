@@ -158,6 +158,12 @@ const SEED_DML = `
     ('TeamLead', 'Temporary Team Lead', TRUE, TRUE),
     ('HRRepresentative', 'Temporary HR Representative', TRUE, TRUE),
     ('TeamMember', 'Team Member', TRUE, FALSE);
+  INSERT INTO iam.userroles (userid, roleid, grantedbyuserid) VALUES
+    (1, (SELECT roleid FROM iam.roles WHERE rolecode = 'Administrator'), 1),
+    (2, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamMember'), 1),
+    (3, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamMember'), 1),
+    (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamMember'), 1),
+    (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamMember'), 1);
   INSERT INTO work.projectstatuses (statuscode) VALUES ('Active');
   INSERT INTO work.priorities (prioritycode) VALUES ('Medium');
   INSERT INTO work.projects (organizationid, projectcode, projectname, owneruserid, projectstatusid, priorityid)
@@ -204,7 +210,8 @@ beforeEach(() => {
   memDb.public.none(`DELETE FROM audit.auditevents`);
   memDb.public.none(`DELETE FROM iam.teamleadprojectscopes`);
   memDb.public.none(`DELETE FROM iam.hrdepartmentscopes`);
-  memDb.public.none(`DELETE FROM iam.userroles WHERE userroleid > 0`);
+  memDb.public.none(`DELETE FROM iam.userroles
+    WHERE roleid IN (SELECT roleid FROM iam.roles WHERE istemporary = TRUE)`);
 });
 
 test('Team Member: can view their own activity', async () => {
@@ -268,7 +275,9 @@ test('Team Member: cannot retrieve restricted record by direct ID', async () => 
 test('Team Lead (temporary grant): can view activity for their led project', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
-  const tlUrId = memDb.public.one(`SELECT userroleid FROM iam.userroles WHERE userid = 4`).userroleid;
+  const tlUrId = memDb.public.one(`SELECT ur.userroleid FROM iam.userroles ur
+    JOIN iam.roles r ON r.roleid = ur.roleid
+    WHERE ur.userid = 4 AND r.rolecode = 'TeamLead'`).userroleid;
   memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${tlUrId}, 2)`);
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
     VALUES (1, 5, 'Updated', 'Task', 'tsk-3', 2, '00000000-0000-0000-0000-000000000040', 'Tasks', 'Project B task update', 'Team_Member')`);
@@ -286,7 +295,9 @@ test('Team Lead (temporary grant): can view activity for their led project', asy
 test('Team Lead: lead scope grants visibility in led project, not elsewhere', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
-  const tlUrId = memDb.public.one(`SELECT userroleid FROM iam.userroles WHERE userid = 4`).userroleid;
+  const tlUrId = memDb.public.one(`SELECT ur.userroleid FROM iam.userroles ur
+    JOIN iam.roles r ON r.roleid = ur.roleid
+    WHERE ur.userid = 4 AND r.rolecode = 'TeamLead'`).userroleid;
   memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${tlUrId}, 2)`);
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
     (1, 5, 'Modified', 'Permission', 'perm-led', 2, '00000000-0000-0000-0000-000000000050', 'Permissions', 'Led project perm change', 'Team_Member')`);

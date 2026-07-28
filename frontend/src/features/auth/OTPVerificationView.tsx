@@ -7,7 +7,6 @@ interface OTPVerificationViewProps {
   name: string;
   registrationData: {
     password: string;
-    role: string;
     department: string;
     title?: string;
   };
@@ -83,7 +82,6 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
           otp: otpCode,
           name,
           password: registrationData.password,
-          role: registrationData.role,
           department: registrationData.department,
           title: registrationData.title
         })

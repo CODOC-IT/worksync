@@ -3,8 +3,12 @@ build/
 dist/
 coverage/
 .DS_Store
+.vscode/
 *.log
 .env*
 !.env.example
-database/*.json
 
+# Local runtime data and credential artifacts
+/database/*.json
+/token.txt
+/test_jwt.txt

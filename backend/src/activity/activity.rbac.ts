@@ -29,13 +29,15 @@ interface DbTemporaryRoleRow {
 }
 
 const ROLE_CODE_MAP: Record<string, string> = {
+  Administrator: 'Admin',
+  TeamMember: 'Team_Member',
   TeamLead: 'Team_Lead',
   HRRepresentative: 'HR',
 };
 
 export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles> => {
   const user = userStore.findById(userId);
-  const permanentRole = user?.role || 'Team_Member';
+  let permanentRole: string = user?.role || 'Team_Member';
 
   if (!isDatabaseConfigured()) {
     return {
@@ -49,6 +51,24 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
 
   try {
     const userPk = toUserPk(userId);
+    const permanentRoleResult = await query<{ rolecode: string }>(
+      `SELECT r.rolecode
+       FROM iam.userroles ur
+       JOIN iam.roles r ON r.roleid = ur.roleid
+       WHERE ur.userid = $1
+         AND ur.revokedatutc IS NULL
+         AND ur.startsatutc <= now()
+         AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+         AND r.istemporary = FALSE
+       ORDER BY ur.startsatutc DESC
+       LIMIT 1`,
+      [userPk]
+    );
+    if (permanentRoleResult.rows[0]) {
+      permanentRole = ROLE_CODE_MAP[permanentRoleResult.rows[0].rolecode]
+        || permanentRoleResult.rows[0].rolecode;
+    }
+
     const result = await query<DbTemporaryRoleRow>(
       `SELECT ur.userroleid, r.rolecode,
                ur.startsatutc, ur.endsatutc,

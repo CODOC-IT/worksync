@@ -4,7 +4,7 @@ import { otpStore } from '../store/otpStore.js';
 import { sendOTPEmail, isEmailConfigured } from '../services/emailService.js';
 import { userStore } from '../store/userStore.js';
 import { getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
-import { UserRole } from '../types.js';
+import { getPasswordPolicyError } from '../utils/passwordPolicy.js';
 
 const router = Router();
 
@@ -15,7 +15,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
     const { email, name } = req.body;
 
     if (!isEmailConfigured()) {
-      res.status(503).json({ success: false, message: 'Email service is not configured. Please set SMTP_USER and SMTP_PASS in your .env file.' });
+      res.status(503).json({ success: false, message: 'Email service is not configured.' });
       return;
     }
 
@@ -40,33 +40,6 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Check if name is already taken by another user
-    const nameExists = userStore.findByName(name.trim());
-    if (nameExists) {
-      res.status(409).json({
-        success: false,
-        message: `The name "${name.trim()}" is already registered. Please choose a different name.`
-      });
-      return;
-    }
-
-    const requestedRole = req.body.role as UserRole | undefined;
-    if (requestedRole === 'Admin' && userStore.hasRole('Admin')) {
-      res.status(409).json({
-        success: false,
-        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-      });
-      return;
-    }
-
-    if (requestedRole === 'HR' && userStore.hasRole('HR')) {
-      res.status(409).json({
-        success: false,
-        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
-      });
-      return;
-    }
-
     // Email format check
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(email.trim())) {
@@ -74,23 +47,21 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Check if email is already registered
-    const existingUser = userStore.findByEmail(email.trim().toLowerCase());
+    // Return the same response for existing and eligible addresses to prevent account enumeration.
+    const existingUser = await userStore.findByEmailAsync(email.trim().toLowerCase());
     if (existingUser) {
-      res.status(409).json({
-        success: false,
-        message: `An account with the email "${email.trim()}" already exists. Please sign in instead.`
+      res.status(200).json({
+        success: true,
+        message: 'If this address is eligible, a verification code has been sent.'
       });
       return;
     }
 
-    // Check 60s resend cooldown
-    const { allowed, secondsLeft } = otpStore.canResend(email);
+    const { allowed } = otpStore.canResend(email);
     if (!allowed) {
-      res.status(429).json({
-        success: false,
-        message: `Please wait ${secondsLeft} seconds before requesting a new OTP.`,
-        secondsLeft
+      res.status(200).json({
+        success: true,
+        message: 'If this address is eligible, a verification code has been sent.'
       });
       return;
     }
@@ -100,20 +71,20 @@ router.post('/send', async (req, res: Response): Promise<void> => {
 
     res.status(200).json({
       success: true,
-      message: `Verification code sent to ${email}. Valid for 1 minute.`
+      message: 'If this address is eligible, a verification code has been sent.'
     });
   } catch (error: any) {
     console.error('[OTP Send Error]', error.message);
-    res.status(400).json({ success: false, message: error.message || 'Failed to send verification email. Please try again.' });
+    res.status(500).json({ success: false, message: 'Failed to send verification email. Please try again.' });
   }
 });
 
 // POST /api/otp/verify
-// Body: { email, otp, name, password, role, department, title, purpose }
+// Body: { email, otp, name, password, department, title, purpose }
 // When purpose='password_reset', returns a resetToken instead of creating user
 router.post('/verify', async (req, res: Response): Promise<void> => {
   try {
-    const { email, otp, name, password, role, department, title, purpose } = req.body;
+    const { email, otp, name, password, department, title, purpose } = req.body;
 
     if (!email || !otp) {
       res.status(400).json({ success: false, message: 'Email and OTP are required.' });
@@ -142,7 +113,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
     }
 
     // If registration data provided, create the user account now
-    if (name && password && role && department) {
+    if (name && password && department) {
       try {
         const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
 
@@ -176,7 +147,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           return;
         }
 
-        if (userStore.findByEmail(email)) {
+        if (await userStore.findByEmailAsync(email)) {
           res.status(409).json({
             success: false,
             message: `An account with the email "${email}" already exists. Please sign in instead.`
@@ -184,24 +155,9 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           return;
         }
 
-        if (role === 'Admin' && userStore.hasRole('Admin')) {
-          res.status(409).json({
-            success: false,
-            message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-          });
-          return;
-        }
-
-        if (role === 'HR' && userStore.hasRole('HR')) {
-          res.status(409).json({
-            success: false,
-            message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
-          });
-          return;
-        }
-
-        if (!password || password.length < 6) {
-          res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+        const passwordPolicyError = getPasswordPolicyError(password);
+        if (passwordPolicyError) {
+          res.status(400).json({ success: false, message: passwordPolicyError });
           return;
         }
 
@@ -209,7 +165,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           name: sanitizedName,
           email,
           password,
-          role: role as UserRole,
+          role: 'Team_Member',
           department,
           title
         });
@@ -226,28 +182,17 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           user: userStore.sanitizeUser(newUser)
         });
         return;
-      } catch (err: any) {
-        res.status(400).json({ success: false, message: err.message });
+      } catch {
+        res.status(400).json({ success: false, message: 'Unable to create account.' });
         return;
       }
     }
 
     // If only verifying email (login use-case)
     res.status(200).json({ success: true, message: 'OTP verified successfully.' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'OTP verification failed.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'OTP verification failed.' });
   }
-});
-
-// GET /api/otp/resend-status?email=...
-router.get('/resend-status', (req, res: Response): void => {
-  const email = req.query.email as string;
-  if (!email) {
-    res.status(400).json({ success: false, message: 'Email query parameter required.' });
-    return;
-  }
-  const { allowed, secondsLeft } = otpStore.canResend(email);
-  res.status(200).json({ success: true, allowed, secondsLeft });
 });
 
 export default router;
