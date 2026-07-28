@@ -3,6 +3,7 @@ import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
@@ -187,6 +188,18 @@ export const createProject = async (
       .catch((error) => console.warn('[project.service] Failed to publish approval-request event.', error));
   }
 
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Projects', entityType: 'Project', entityId: dto.id,
+    entityName: dto.title, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} created project “${dto.title}”.`, reason: input.creationReason,
+    linkRoute: 'projects', important: statusCode !== 'Active',
+    changes: [
+      { field: 'Status', previousValue: null, newValue: dto.status },
+      { field: 'Priority', previousValue: null, newValue: priorityCode }
+    ]
+  });
+
   return dto;
 };
 
@@ -239,6 +252,22 @@ export const updateProject = async (
     projectId: dto.id
   });
 
+  const projectChanges = [
+    input.title !== undefined && input.title.trim() !== row.projectname ? { field: 'Title', previousValue: row.projectname, newValue: dto.title } : null,
+    input.description !== undefined && input.description.trim() !== row.description ? { field: 'Description', previousValue: row.description, newValue: dto.description } : null,
+    input.priority !== undefined && API_TO_DB_PRIORITY[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: row.prioritycode, newValue: input.priority } : null,
+    input.status !== undefined && API_TO_DB_PROJECT_STATUS[input.status] !== row.statuscode ? { field: 'Status', previousValue: row.statuscode, newValue: dto.status } : null,
+    input.startDate !== undefined && input.startDate !== row.startdate ? { field: 'Start date', previousValue: row.startdate, newValue: dto.startDate } : null,
+    input.targetDate !== undefined && input.targetDate !== row.enddate ? { field: 'Due date', previousValue: row.enddate, newValue: dto.targetDate } : null
+  ].filter((change): change is { field: string; previousValue: string; newValue: string } => Boolean(change));
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: input.status && API_TO_DB_PROJECT_STATUS[input.status] !== row.statuscode ? 'Status Changed' : 'Updated',
+    module: 'Projects', entityType: 'Project', entityId: dto.id, entityName: dto.title,
+    projectId: dto.id, projectName: dto.title, description: `${actorName} updated project “${dto.title}”.`,
+    linkRoute: 'projects', changes: projectChanges
+  });
+
   return dto;
 };
 
@@ -264,6 +293,14 @@ export const archiveProject = async (
     message: `${actorName} archived "${row.projectname}": ${reason.trim()}`,
     actorId,
     projectId
+  });
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'Project', entityId: projectId,
+    entityName: row.projectname, projectId, projectName: row.projectname,
+    description: `${actorName} archived project “${row.projectname}”.`, reason: reason.trim(),
+    linkRoute: 'projects', important: true,
+    changes: [{ field: 'Status', previousValue: row.statuscode, newValue: 'Archived' }]
   });
 };
 
@@ -294,6 +331,15 @@ export const addMember = async (
       recipientIds: [memberUserId]
     })
     .catch((error) => console.warn('[project.service] Failed to publish member-added event.', error));
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: memberUserId, affectedUserName: userStore.findById(memberUserId)?.name,
+    action: 'Assigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
+    entityName: userStore.findById(memberUserId)?.name, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} added ${userStore.findById(memberUserId)?.name || memberUserId} to “${dto.title}”.`,
+    linkRoute: 'projects', changes: [{ field: 'Project role', previousValue: null, newValue: roleCode || 'Member' }]
+  });
 
   return dto;
 };
@@ -331,6 +377,15 @@ export const removeMember = async (
       recipientIds: [memberUserId]
     })
     .catch((error) => console.warn('[project.service] Failed to publish member-removed event.', error));
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: memberUserId, affectedUserName: userStore.findById(memberUserId)?.name,
+    action: 'Reassigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
+    entityName: userStore.findById(memberUserId)?.name, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} removed ${userStore.findById(memberUserId)?.name || memberUserId} from “${dto.title}”.`,
+    reason, linkRoute: 'projects', important: true
+  });
 
   return dto;
 };

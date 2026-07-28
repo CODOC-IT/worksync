@@ -9,10 +9,12 @@ import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
 import projectChatRoutes from './routes/projectChatRoutes.js';
 import notificationRoutes from './notifications/notification.routes.js';
+import activityRoutes from './activity/activity.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
 import { userStore } from './store/userStore.js';
+import { auditFailedRequests } from './middleware/auditFailureMiddleware.js';
 
 dotenv.config();
 
@@ -24,6 +26,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(auditFailedRequests);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -34,6 +37,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/project-chats', projectChatRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/activity', activityRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

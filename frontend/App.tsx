@@ -22,6 +22,7 @@ import { ToastContainer } from '../frontend/src/features/notifications/ToastCont
 import { ReportsView } from '../frontend/src/features/reports/ReportsView';
 import { ProjectChatsView } from '../frontend/src/features/project-chats/ProjectChatsView';
 import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
+import { ActivityLogView } from '../frontend/src/features/activity/ActivityLogView';
 
 import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
 
@@ -134,6 +135,7 @@ const AppContent: React.FC = () => {
           {currentTab === 'reports' && <ReportsView />}
           {currentTab === 'project-chats' && <ProjectChatsView />}
           {currentTab === 'members' && <TeamMembersView />}
+          {currentTab === 'activity' && <ActivityLogView onNavigate={handleNavigate} />}
           
          
 
