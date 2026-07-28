@@ -9,7 +9,8 @@ import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
 import discussionRoutes from './collab/discussion.routes.js';
 import notificationRoutes from './notifications/notification.routes.js';
-import activityRoutes from './activity/activity.routes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
+import activityLogRoutes from './activityLog/activityLog.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
@@ -37,7 +38,8 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/project-chats', discussionRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/activity', activityRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/activity-log', activityLogRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
