@@ -242,7 +242,7 @@ export const getPreferences = async (userId: string): Promise<NotificationPrefer
     mentions: byType.get(REPRESENTATIVE_TYPE_CODES.mentions)?.inAppEnabled ?? true,
     comments: byType.get(REPRESENTATIVE_TYPE_CODES.comments)?.inAppEnabled ?? true,
     assignments: byType.get(REPRESENTATIVE_TYPE_CODES.assignments)?.inAppEnabled ?? true,
-    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? false
+    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? true
   };
 };
 

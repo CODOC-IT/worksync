@@ -10,6 +10,16 @@ function resolveSupabaseProjectUrl(): string {
   return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 }
 
+// SSL is required by hosted Postgres (Supabase) but unsupported by a plain local install (e.g.
+// Chocolatey's default Postgres has no SSL configured) -- forcing it on unconditionally makes
+// local dev fail with "The server does not support SSL connections". Deployed environments are
+// the only ones with VERCEL/NODE_ENV=production set, which is exactly the same signal
+// server.ts already uses to distinguish "running on Vercel" from local dev.
+function resolveSslOption(): { rejectUnauthorized: boolean } | undefined {
+  const isDeployed = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+  return isDeployed ? { rejectUnauthorized: false } : undefined;
+}
+
 let pool: Pool | null = null;
 
 export const isDatabaseConfigured = (): boolean => Boolean(resolveDbUrl());
@@ -31,7 +41,7 @@ export const getPool = (): Pool => {
             'If using Supabase, also set SUPABASE_URL or VITE_SUPABASE_URL.')
       );
     }
-    pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+    pool = new Pool({ connectionString: dbUrl, ssl: resolveSslOption() });
   }
   return pool;
 };
@@ -56,7 +66,7 @@ export const bootstrapDatabase = async (): Promise<void> => {
   const dbUrl = resolveDbUrl();
   if (!dbUrl) return;
 
-  const bootPool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const bootPool = new Pool({ connectionString: dbUrl, ssl: resolveSslOption() });
   try {
     await bootPool.query(`
       INSERT INTO org.Organizations (OrganizationId, OrganizationCode, OrganizationName)

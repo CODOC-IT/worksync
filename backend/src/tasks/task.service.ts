@@ -4,7 +4,9 @@ import { fromUserPk, toProjectPkOrNull, toTaskPk, toUserPk } from '../utils/idMa
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
+import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
   API_TO_DB_TASK_STATUS,
   ApiTaskStatus,
@@ -195,6 +197,18 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     taskId: dto.id
   });
 
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Tasks', entityType: 'Task', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: projectRow.projectname, taskId: dto.id, taskName: dto.title,
+    description: `${actorName} created task “${dto.title}” in “${projectRow.projectname}”.`,
+    linkRoute: 'tasks', changes: [
+      { field: 'Status', previousValue: null, newValue: dto.status },
+      { field: 'Priority', previousValue: null, newValue: dto.priority },
+      { field: 'Assignee', previousValue: null, newValue: dto.assigneeIds.join(', ') }
+    ]
+  });
+
   return dto;
 };
 
@@ -223,6 +237,9 @@ export const updateTask = async (
     updates.priorityId = await repo.getPriorityId(DB_TO_API_PRIORITY_CODE[input.priority] || 'Medium');
   }
 
+  const previousAssigneeIds = input.assigneeIds
+    ? (await repo.findAssigneesForTask(row.taskid)).map((a) => fromUserPk(a.userid))
+    : [];
   const assigneePks = input.assigneeIds?.map(toUserPk);
   await repo.updateTask(row.taskid, updates, assigneePks, toUserPk(actorId));
 
@@ -237,6 +254,23 @@ export const updateTask = async (
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
+  });
+
+  const taskChanges = [
+    input.title !== undefined && input.title.trim() !== row.title ? { field: 'Title', previousValue: row.title, newValue: dto.title } : null,
+    input.description !== undefined && input.description.trim() !== row.description ? { field: 'Description', previousValue: row.description, newValue: dto.description } : null,
+    input.priority !== undefined && DB_TO_API_PRIORITY_CODE[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: row.prioritycode, newValue: input.priority } : null,
+    input.startDate !== undefined && input.startDate !== row.startdate ? { field: 'Start date', previousValue: row.startdate, newValue: dto.startDate } : null,
+    input.dueDate !== undefined && input.dueDate !== row.duedate ? { field: 'Due date', previousValue: row.duedate, newValue: dto.dueDate } : null,
+    input.assigneeIds !== undefined ? { field: 'Assignee', previousValue: previousAssigneeIds.join(', '), newValue: dto.assigneeIds.join(', ') } : null
+  ].filter((change): change is { field: string; previousValue: string; newValue: string } => Boolean(change));
+  const project = await projectRepo.findProjectById(row.projectid);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: input.assigneeIds ? 'Assigned/Reassigned' : input.priority ? 'Priority Changed' : 'Updated',
+    module: 'Tasks', entityType: 'Task', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: project?.projectname, taskId: dto.id, taskName: dto.title,
+    description: `${actorName} updated task “${dto.title}”.`, linkRoute: 'tasks', changes: taskChanges
   });
 
   return dto;
@@ -259,6 +293,13 @@ export const deleteTask = async (taskId: string, actorId: string, actorRole: str
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
+  });
+  const project = await projectRepo.findProjectById(row.projectid);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Tasks', entityType: 'Task', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: project?.projectname, taskId: dto.id, taskName: dto.title,
+    description: `${actorName} deleted task “${dto.title}”.`, linkRoute: 'tasks', important: true
   });
 };
 
@@ -312,11 +353,15 @@ export const changeTaskStatus = async (
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
   const recipients = new Set(dto.assigneeIds);
-  if (input.status === 'Review') {
+  if (input.status === 'Review' && projectRow) {
     // The project's Team Lead specifically needs to know a review decision is waiting on them.
+    // resolveTeamLeadUserId falls back to the project Owner when there's no separate 'TeamLead'
+    // membership row (the common case for a project a Team Lead created for themselves -- see
+    // project.repository.ts's insertProject) -- a raw '.find TeamLead' here would silently drop
+    // this notification for every self-led project, the same bug already fixed for project
+    // authorization in project.service.ts's isProjectLead/assertCanManage.
     const members = await projectRepo.findMembersForProject(row.projectid);
-    const lead = members.find((m) => m.memberrolecode === 'TeamLead');
-    if (lead) recipients.add(fromUserPk(lead.userid));
+    recipients.add(resolveTeamLeadUserId(projectRow, members));
   }
 
   notifyTaskRecipients(updatedRow!, Array.from(recipients), actorId, {
@@ -330,6 +375,16 @@ export const changeTaskStatus = async (
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
+  });
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Status Changed', module: 'Kanban', entityType: 'Task', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: projectRow?.projectname, taskId: dto.id, taskName: dto.title,
+    description: `${actorName} changed “${dto.title}” from ${row.statuscode} to ${input.status}${projectRow ? ` in “${projectRow.projectname}”` : ''}.`,
+    reason: input.note.trim(), linkRoute: 'kanban', important: input.status === 'Review' || input.status === 'Blocked',
+    changes: [{ field: 'Status', previousValue: row.statuscode === 'InProgress' ? 'In Progress' : row.statuscode, newValue: input.status }],
+    metadata: { requiresReview: input.status === 'Review', overdue: row.duedate < new Date().toISOString().slice(0, 10) }
   });
 
   return dto;
@@ -379,6 +434,20 @@ const decideReview = async (
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
+  });
+
+  const projectRow = await projectRepo.findProjectById(row.projectid);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: decision === 'Approve' ? 'Approved' : 'Rejected', module: 'Approvals',
+    entityType: 'Approval', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: projectRow?.projectname, taskId: dto.id, taskName: dto.title,
+    description: decision === 'Approve'
+      ? `${actorName} approved “${dto.title}” and moved it to Done.`
+      : `${actorName} rejected “${dto.title}” and returned it to In Progress.`,
+    reason: note.trim(), linkRoute: 'kanban', important: true,
+    changes: [{ field: 'Status', previousValue: 'Review', newValue: decision === 'Approve' ? 'Done' : 'In Progress' }],
+    metadata: { relatedApproval: true }
   });
 
   return dto;

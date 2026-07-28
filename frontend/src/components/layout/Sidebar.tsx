@@ -40,7 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   mobileOpen,
   onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, notifications } = useApp();
+  const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
   const pendingHrCount = hrRequests.filter((r) => r.status === 'Pending').length;
@@ -199,7 +199,7 @@ const sidebarContent = (
       <div className="p-3 border-t border-white/10 shrink-0">
         <button
           data-sidebar-logout
-          onClick={() => onTabChange('login')}
+          onClick={() => { logoutUser(); onTabChange('login'); }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 border border-transparent transition-colors"
           title={collapsed ? 'Switch / Logout' : undefined}
         >

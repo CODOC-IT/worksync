@@ -144,6 +144,7 @@ interface AppState {
   refreshUsers: () => void;
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
+  logoutUser: () => void;
   toggleTheme: () => void;
   createProject: (data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   approveProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
@@ -227,7 +228,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mentions: true,
     comments: true,
     assignments: true,
-    email: false
+    email: true
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
@@ -341,6 +342,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentRole(user.role);
     setTaskReloadVersion((version) => version + 1);
     refreshUsers();
+  };
+
+  const logoutUser = () => {
+    localStorage.removeItem('worksync_auth_token');
+    setCurrentUser({ id: '', name: '', email: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive' });
+    setCurrentRole('Admin');
   };
 
   // Fetch persisted database users on mount
@@ -1862,6 +1869,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshUsers,
         onUserRegistered,
         loginUser,
+        logoutUser,
         toggleTheme,
         createProject,
         approveProject,

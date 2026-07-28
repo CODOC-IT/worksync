@@ -102,7 +102,7 @@ export const CalendarEntryTooltip: React.FC<CalendarEntryTooltipProps> = ({
             data-calendar-tooltip
             className="w-72"
           >
-            <div className="glass-panel backdrop-blur-xl bg-slate-900/95 border border-white/15 rounded-xl p-3.5 shadow-2xl shadow-black/50">
+            <div className="rounded-2xl border border-white/10 bg-slate-900/95 p-3.5">
               {/* Header */}
               <div className="flex items-center gap-2 mb-2.5">
                 <span data-calendar-entry-kind={entry.kind} className={`shrink-0 px-2 py-0.5 rounded-full border text-[10px] font-bold ${tone.badgeClass}`}>

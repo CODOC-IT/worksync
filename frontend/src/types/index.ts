@@ -11,6 +11,8 @@ export interface User {
   status: 'active' | 'inactive' | 'away';
   lastActive?: string;
   githubUsername?: string;
+  passwordHash?: string;
+  createdAt?: string;
 }
 
 // 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that

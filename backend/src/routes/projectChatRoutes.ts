@@ -4,6 +4,7 @@ import { discussionStore, DiscussionType, StoredAttachment } from '../store/disc
 import { projectStore } from '../store/projectStore.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 
 const router = Router();
 const TYPES = new Set<DiscussionType>(['General', 'Progress Update', 'Blocker', 'Review Feedback', 'Clarification', 'Decision']);
@@ -52,6 +53,13 @@ const notify = (recipientIds: string[], event: Omit<Parameters<typeof notificati
   notificationService.publishEvent({ ...event, recipientIds: ids }).catch((error) => {
     console.warn('[projectChatRoutes] Failed to publish notification event.', error);
   });
+};
+
+const auditChat = (req: AuthenticatedRequest, input: Parameters<typeof recordActivitySafe>[0]) => {
+  if (!req.user) return;
+  const actor = userStore.findById(req.user.id);
+  recordActivitySafe({ actorId: req.user.id, actorName: actor?.name, actorEmail: actor?.email,
+    actorRole: req.user.role, source: 'Web', ipAddress: req.ip || req.socket.remoteAddress, ...input });
 };
 
 router.use(authenticateJWT);
@@ -112,6 +120,15 @@ router.post('/', (req: AuthenticatedRequest, res: Response) => {
     taskId: taskId || undefined
   });
 
+  auditChat(req, {
+    action: checkedMentions.length ? 'Mentioned' : 'Created', module: 'Project Chats',
+    entityType: 'Comment', entityId: thread.id, entityName: title, projectId, projectName: project!.title,
+    taskId: taskId || undefined, taskName: task?.title, description: `${actorName} started discussion “${title}” in “${project!.title}”.`,
+    reason: body, linkRoute: 'project-chats', important: type === 'Blocker' || type === 'Decision',
+    metadata: { discussionType: type, hasMentions: checkedMentions.length > 0, hasAttachments: checkedAttachments.length > 0,
+      mentionCount: checkedMentions.length, attachments: checkedAttachments.map((file) => ({ name: file.name, mimeType: file.mimeType, size: file.size })) }
+  });
+
   res.status(201).json({ success: true, data: { ...thread, comments: discussionStore.comments(thread.id) }, notifiedUserIds: checkedMentions.filter((id) => id !== req.user!.id) });
 });
 
@@ -154,6 +171,18 @@ router.post('/:threadId/comments', (req: AuthenticatedRequest, res: Response) =>
     });
   }
 
+  const project = projectStore.getProjectById(thread.projectId);
+  const task = thread.taskId ? projectStore.getTaskById(thread.taskId) : undefined;
+  auditChat(req, {
+    action: checkedMentions.length ? 'Mentioned' : 'Commented', module: 'Project Chats',
+    entityType: 'Comment', entityId: comment.id, entityName: thread.title,
+    projectId: thread.projectId, projectName: project?.title, taskId: thread.taskId,
+    taskName: task?.title, description: `${actorName} commented on “${thread.title}”.`, reason: body,
+    linkRoute: 'project-chats', metadata: { hasMentions: checkedMentions.length > 0,
+      hasAttachments: checkedAttachments.length > 0, parentCommentId: parentCommentId || null,
+      attachments: checkedAttachments.map((file) => ({ name: file.name, mimeType: file.mimeType, size: file.size })) }
+  });
+
   res.status(201).json({ success: true, data: comment, notifiedUserIds });
 });
 
@@ -164,7 +193,14 @@ router.patch('/comments/:commentId', (req: AuthenticatedRequest, res: Response) 
   if (comment.authorId !== req.user.id) return res.status(403).json({ success: false, message: 'You can only edit your own comments.' });
   const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
   if (!body || body.length > MAX_COMMENT_LENGTH) return res.status(400).json({ success: false, fieldErrors: { body: `Enter a message of up to ${MAX_COMMENT_LENGTH} characters.` } });
-  res.json({ success: true, data: discussionStore.editComment(comment.id, body) });
+  const previousBody = comment.body;
+  const updated = discussionStore.editComment(comment.id, body);
+  auditChat(req, { action: 'Updated', module: 'Project Chats', entityType: 'Comment', entityId: comment.id,
+    entityName: thread.title, projectId: thread.projectId, projectName: projectStore.getProjectById(thread.projectId)?.title,
+    taskId: thread.taskId, taskName: thread.taskId ? projectStore.getTaskById(thread.taskId)?.title : undefined,
+    description: `${userStore.findById(req.user.id)?.name || 'Someone'} edited a comment on “${thread.title}”.`,
+    linkRoute: 'project-chats', changes: [{ field: 'Comment', previousValue: previousBody, newValue: body }] });
+  res.json({ success: true, data: updated });
 });
 
 router.delete('/comments/:commentId', (req: AuthenticatedRequest, res: Response) => {
@@ -172,7 +208,13 @@ router.delete('/comments/:commentId', (req: AuthenticatedRequest, res: Response)
   const thread = comment && discussionStore.get(comment.threadId);
   if (!req.user || !comment || !thread || !accessible(thread.projectId, req)) return res.status(404).json({ success: false, message: 'Comment not found.' });
   if (comment.authorId !== req.user.id && req.user.role !== 'Admin') return res.status(403).json({ success: false, message: 'You can only delete your own comments.' });
-  res.json({ success: true, data: discussionStore.softDeleteComment(comment.id) });
+  const deleted = discussionStore.softDeleteComment(comment.id);
+  auditChat(req, { action: 'Deleted', module: 'Project Chats', entityType: 'Comment', entityId: comment.id,
+    entityName: thread.title, projectId: thread.projectId, projectName: projectStore.getProjectById(thread.projectId)?.title,
+    taskId: thread.taskId, taskName: thread.taskId ? projectStore.getTaskById(thread.taskId)?.title : undefined,
+    description: `${userStore.findById(req.user.id)?.name || 'Someone'} deleted a comment on “${thread.title}”.`,
+    reason: comment.body, linkRoute: 'project-chats', important: req.user.role === 'Admin' && comment.authorId !== req.user.id });
+  res.json({ success: true, data: deleted });
 });
 
 router.post('/:threadId/resolution', (req: AuthenticatedRequest, res: Response) => {
@@ -180,7 +222,13 @@ router.post('/:threadId/resolution', (req: AuthenticatedRequest, res: Response) 
   if (!req.user || !thread || !accessible(thread.projectId, req)) return res.status(404).json({ success: false, message: 'Discussion not found.' });
   if (!canModerate(thread.projectId, req)) return res.status(403).json({ success: false, message: 'Only an administrator or active scoped Team Lead can resolve discussions.' });
   if (typeof req.body?.resolved !== 'boolean') return res.status(400).json({ success: false, fieldErrors: { resolved: 'Choose a resolution state.' } });
-  res.json({ success: true, data: discussionStore.setResolved(thread.id, req.body.resolved, req.user.id) });
+  const updated = discussionStore.setResolved(thread.id, req.body.resolved, req.user.id);
+  auditChat(req, { action: 'Status Changed', module: 'Project Chats', entityType: 'Comment', entityId: thread.id,
+    entityName: thread.title, projectId: thread.projectId, projectName: projectStore.getProjectById(thread.projectId)?.title,
+    taskId: thread.taskId, taskName: thread.taskId ? projectStore.getTaskById(thread.taskId)?.title : undefined,
+    description: `${userStore.findById(req.user.id)?.name || 'Someone'} ${req.body.resolved ? 'resolved' : 'reopened'} discussion “${thread.title}”.`,
+    linkRoute: 'project-chats', changes: [{ field: 'Status', previousValue: req.body.resolved ? 'Open' : 'Resolved', newValue: req.body.resolved ? 'Resolved' : 'Open' }] });
+  res.json({ success: true, data: updated });
 });
 
 export default router;
