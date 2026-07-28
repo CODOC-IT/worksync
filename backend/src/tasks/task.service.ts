@@ -109,7 +109,11 @@ export const getTaskForUser = async (taskId: string, userId: string, role: strin
   if (!(await isProjectAccessible(projectFrontendId(row), userId, role))) {
     throw new TaskAuthorizationError('You do not have access to this task.');
   }
-  return buildDTO(row);
+  const children = row.parenttaskid ? [] : await repo.findChildTasks(row.taskid);
+  const assignees = await repo.findAssigneesForTasks([row.taskid, ...children.map((child) => child.taskid)]);
+  const task = rowToTaskDTO({ ...row, subtaskcount: children.length }, assignees);
+  task.subtasks = children.map((child) => rowToTaskDTO(child, assignees));
+  return task;
 };
 
 export const createTask = async (input: CreateTaskInput, actorId: string, actorRole: string): Promise<TaskDTO> => {
@@ -142,23 +146,41 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     throw new TaskValidationError('At least one assignee is required.');
   }
 
-  const priorityCode = DB_TO_API_PRIORITY_CODE[input.priority] || 'Medium';
-  const priorityId = await repo.getPriorityId(priorityCode === 'Critical' ? 'Critical' : priorityCode);
-  const statusId = await repo.getTaskStatusId(
-    input.status ? API_TO_DB_TASK_STATUS[input.status] : 'Todo'
-  );
+  const allInputs = [input, ...(input.subtasks || [])];
+  for (const [index, taskInput] of allInputs.entries()) {
+    const label = index === 0 ? 'Task' : `Subtask ${index}`;
+    if (!taskInput.title?.trim()) throw new TaskValidationError(`${label} title is required.`);
+    if (!taskInput.description?.trim()) throw new TaskValidationError(`${label} description is required.`);
+    if (!taskInput.startDate || !taskInput.dueDate || taskInput.dueDate < taskInput.startDate) {
+      throw new TaskValidationError(`${label} due date cannot be before its start date.`);
+    }
+    if (taskInput.startDate < projectRow.startdate || taskInput.dueDate > projectRow.enddate) {
+      throw new TaskValidationError(`${label} dates must be within the project dates.`);
+    }
+    if (!taskInput.assigneeIds?.length) throw new TaskValidationError(`${label} requires at least one assignee.`);
+  }
 
-  const taskId = await repo.insertTask({
+  const projectMemberIds = new Set((await projectRepo.findMembersForProject(projectRow.projectid)).map((member) => fromUserPk(member.userid)));
+  for (const taskInput of allInputs) {
+    if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
+      throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
+    }
+  }
+
+  const toInsertRow = async (taskInput: CreateTaskInput | NonNullable<CreateTaskInput['subtasks']>[number]) => ({
     projectId: projectRow.projectid,
-    title: input.title.trim(),
-    description: input.description.trim(),
-    statusId,
-    priorityId,
-    startDate: input.startDate,
-    dueDate: input.dueDate,
+    title: taskInput.title.trim(),
+    description: taskInput.description.trim(),
+    statusId: await repo.getTaskStatusId(taskInput.status ? API_TO_DB_TASK_STATUS[taskInput.status] : 'Todo'),
+    priorityId: await repo.getPriorityId(DB_TO_API_PRIORITY_CODE[taskInput.priority] || 'Medium'),
+    startDate: taskInput.startDate,
+    dueDate: taskInput.dueDate,
     createdByUserId: toUserPk(actorId),
-    assigneeUserIds: input.assigneeIds.map(toUserPk)
+    assigneeUserIds: taskInput.assigneeIds.map(toUserPk)
   });
+  const parentInsert = await toInsertRow(input);
+  const childInserts = await Promise.all((input.subtasks || []).map(toInsertRow));
+  const { parentTaskId: taskId } = await repo.insertTaskBundle(parentInsert, childInserts);
 
   const row = await repo.findTaskById(taskId);
   const dto = await buildDTO(row!);

@@ -35,6 +35,8 @@ export interface TaskFormInput {
   status: TaskStatus;
 }
 
+export interface SubtaskFormInput extends Omit<TaskFormInput, 'projectId'> {}
+
 export type TaskModuleTask = Task & Partial<{
   assigneeIds: string[];
   startDate: string;
@@ -47,10 +49,11 @@ export interface TaskMutationResult {
   fieldErrors?: Record<string, string>;
 }
 
-export type TaskMutationData = Partial<Omit<Task, 'priority'>> & {
+export type TaskMutationData = Partial<Omit<Task, 'priority' | 'subtasks'>> & {
   priority?: TaskModulePriority;
   assigneeIds?: string[];
   startDate?: string;
+  subtasks?: SubtaskFormInput[];
 };
 
 type CompatibleProject = Project & Partial<{
