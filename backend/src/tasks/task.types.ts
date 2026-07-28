@@ -29,6 +29,7 @@ export const API_TO_DB_TASK_STATUS: Record<ApiTaskStatus, TaskStatusCode> = {
 export interface TaskRow {
   taskid: number;
   projectid: number;
+  parenttaskid: number | null;
   tasknumber: number;
   title: string;
   description: string;
@@ -44,6 +45,7 @@ export interface TaskRow {
   updatedatutc: Date;
   rowversion: string;
   projectcode: string;
+  subtaskcount?: number;
 }
 
 export interface TaskAssigneeRow {
@@ -68,6 +70,7 @@ export interface TaskDTO {
   id: string;
   taskNumber: string;
   projectId: string;
+  parentTaskId?: string;
   title: string;
   description: string;
   status: ApiTaskStatus;
@@ -78,7 +81,8 @@ export interface TaskDTO {
   startDate: string;
   dueDate: string;
   estimatedHours: number;
-  subtasks: [];
+  subtaskCount: number;
+  subtasks: TaskDTO[];
   dependencies: string[];
   tags: string[];
   attachments: [];
@@ -102,6 +106,17 @@ export interface TaskStatusHistoryDTO {
 
 export interface CreateTaskInput {
   projectId: string;
+  title: string;
+  description: string;
+  priority: ApiTaskPriority;
+  startDate: string;
+  dueDate: string;
+  assigneeIds: string[];
+  status?: ApiTaskStatus;
+  subtasks?: CreateSubtaskInput[];
+}
+
+export interface CreateSubtaskInput {
   title: string;
   description: string;
   priority: ApiTaskPriority;

@@ -51,6 +51,22 @@ export const validateCreateTaskBody = (body: unknown): ValidationResult => {
   if (input.status && !VALID_STATUSES.has(input.status)) {
     fieldErrors.status = 'Select a valid task status.';
   }
+  if (input.subtasks !== undefined) {
+    if (!Array.isArray(input.subtasks) || input.subtasks.length > 10) {
+      fieldErrors.subtasks = 'Add between 1 and 10 subtasks.';
+    } else {
+      input.subtasks.forEach((subtask, index) => {
+        const prefix = `subtasks.${index}`;
+        if (!subtask || typeof subtask !== 'object' || !subtask.title?.trim()) fieldErrors[`${prefix}.title`] = 'Enter a subtask title.';
+        if (!subtask || typeof subtask !== 'object' || !subtask.description?.trim()) fieldErrors[`${prefix}.description`] = 'Enter a subtask description.';
+        if (!subtask || !isValidIsoDate(subtask.startDate)) fieldErrors[`${prefix}.startDate`] = 'Select a valid start date.';
+        if (!subtask || !isValidIsoDate(subtask.dueDate) || (isValidIsoDate(subtask.startDate) && subtask.dueDate < subtask.startDate)) fieldErrors[`${prefix}.dueDate`] = 'Select a valid due date.';
+        if (!subtask || !VALID_PRIORITIES.has(subtask.priority)) fieldErrors[`${prefix}.priority`] = 'Select a valid priority.';
+        if (!subtask || !Array.isArray(subtask.assigneeIds) || subtask.assigneeIds.length === 0 || subtask.assigneeIds.some((id) => typeof id !== 'string' || !FRONTEND_USER_ID_PATTERN.test(id))) fieldErrors[`${prefix}.assigneeIds`] = 'Select at least one assignee.';
+        if (subtask?.status && !VALID_STATUSES.has(subtask.status)) fieldErrors[`${prefix}.status`] = 'Select a valid status.';
+      });
+    }
+  }
 
   if (Object.keys(fieldErrors).length > 0) {
     return { valid: false, message: 'Review the highlighted task fields.', fieldErrors };

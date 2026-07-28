@@ -80,6 +80,12 @@ export interface TaskComment {
 export interface Subtask {
   id: string;
   title: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  startDate?: string;
+  dueDate?: string;
+  assigneeIds?: string[];
   completed: boolean;
 }
 
@@ -114,6 +120,7 @@ export interface Task {
   id: string;
   taskNumber: string;
   projectId: string;
+  parentTaskId?: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -122,6 +129,7 @@ export interface Task {
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
+  subtaskCount?: number;
   subtasks: Subtask[];
   dependencies: string[]; // array of Task IDs
   tags: string[];
