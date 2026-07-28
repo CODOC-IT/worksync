@@ -45,6 +45,7 @@ export const recordActivitySafe = (input: ActivityRecordInput): void => {
 };
 
 export const listActivities = async (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
+  if (!isDatabaseConfigured()) return { items: [], page: filters.page, pageSize: filters.pageSize, total: 0, totalPages: 1 };
   const { rows, total } = await repo.findActivities(filters, viewerId, viewerRole);
   const changes = await repo.findChanges(rows.map((row) => String(row.auditeventid)));
   return {
@@ -55,6 +56,7 @@ export const listActivities = async (filters: ActivityFilters, viewerId: string,
 };
 
 export const getActivity = async (id: string, viewerId: string, viewerRole: string): Promise<ActivityDTO | null> => {
+  if (!isDatabaseConfigured()) return null;
   const row = await repo.findVisibleActivityById(id, viewerId, viewerRole);
   if (!row) return null;
   const changes = await repo.findChanges([String(row.auditeventid)]);
