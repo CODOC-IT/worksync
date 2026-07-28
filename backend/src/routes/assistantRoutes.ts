@@ -3,6 +3,7 @@ import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddlew
 import { projectStore } from '../store/projectStore.js';
 import { promptStore } from '../store/promptStore.js';
 import { userStore } from '../store/userStore.js';
+import { discussionStore } from '../store/discussionStore.js';
 import { generatePrompt } from '../services/aiService.js';
 import * as notificationService from '../notifications/notification.service.js';
 
@@ -101,9 +102,30 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
     }
 
     const allTasks = projectStore.getTasksForProject(projectId, req.user.id, req.user.role);
+    const allDiscussions = discussionStore.list().filter((d) => d.projectId === projectId);
     const projectTasksStr = allTasks
-      .map((t) => `- ${t.taskNumber} [${t.status}] ${t.title}${t.assigneeId ? ' (Assignee: ' + (userStore.findById(t.assigneeId)?.name || 'Unknown') + ')' : ''}${t.dueDate ? ' Due: ' + t.dueDate : ''}`)
-      .join('\n');
+      .map((t) => {
+        const depNames = t.dependencies
+          .map((depId) => projectStore.getTaskById(depId)?.taskNumber)
+          .filter(Boolean)
+          .join(', ');
+
+        const taskDiscussions = allDiscussions.filter((d) => d.taskId === t.id);
+        const discussionsStr = taskDiscussions.length
+          ? '\n  Discussions:\n' + taskDiscussions.map((d) => {
+              const comments = discussionStore.comments(d.id);
+              const latestComment = comments.length ? comments[comments.length - 1] : null;
+              const authorName = latestComment ? userStore.findById(latestComment.authorId)?.name || 'Unknown' : '';
+              return `    - [${d.type}] "${d.title}"${d.resolved ? ' (Resolved)' : ''}${latestComment ? ` — Latest by ${authorName}: "${latestComment.body.slice(0, 150)}${latestComment.body.length > 150 ? '...' : ''}"` : ''}`;
+            }).join('\n')
+          : '';
+
+        return `- ${t.taskNumber} [${t.status}] ${t.title}
+  Description: ${t.description}
+  Priority: ${t.priority} | Assignee: ${userStore.findById(t.assigneeId)?.name || 'Unassigned'} | Due: ${t.dueDate || 'No due date'}
+  Dependencies: ${depNames || 'None'}${discussionsStr}`;
+      })
+      .join('\n\n---\n\n');
 
     const memberNames = project.memberIds
       .map((uid) => userStore.findById(uid)?.name)
