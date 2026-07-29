@@ -167,10 +167,8 @@ export const getProjectStats = async (projectIds: number[], from: string, to: st
               SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END)::int AS overdue_tasks
        FROM work.tasks t
        JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-         AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-              OR NOT ts.iscompletedstate)
-       GROUP BY t.projectid
+        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+        GROUP BY t.projectid
      ) task_stats ON task_stats.projectid = p.projectid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL`,
     [projectIds, from, to]

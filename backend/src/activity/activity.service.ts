@@ -391,13 +391,13 @@ export const exportPdf = async (
 
   const colWidths = [...COLS.slice(0, -1).map((c) => c.w), descW];
 
-  const ROW_H       = 20;
-  const HEADER_H    = 18;
-  const BAND_H      = 54;   // top brand band
-  const COVER_H     = 110;  // full cover section on page 1
+  const ROW_H       = 14;
+  const HEADER_H    = 16;
+  const BAND_H      = 44;
+  const COVER_H     = 90;
   const TABLE_TOP_P1 = COVER_H + 4;
   const TABLE_TOP_PN = BAND_H + 4;
-  const FOOTER_H    = 24;
+  const FOOTER_H    = 20;
 
   let pageNum = 0;
   let y       = 0;
@@ -408,13 +408,13 @@ export const exportPdf = async (
     doc.rect(0, 0, PW, height).fill(PDF.brandDark);
     doc.rect(0, height - 3, PW, 3).fill(PDF.brandAccent);
     // Logo area
-    doc.fillColor(PDF.brandAccent).fontSize(16).font('Helvetica-Bold')
-      .text('WorkSync', MARGIN, 14, { lineBreak: false });
-    doc.fillColor(PDF.pageBg).fontSize(8).font('Helvetica')
-      .text('Activity Log Export', MARGIN + 90, 18, { lineBreak: false });
+    doc.fillColor(PDF.brandAccent).fontSize(13).font('Helvetica-Bold')
+      .text('WorkSync', MARGIN, 10, { lineBreak: false });
+    doc.fillColor(PDF.pageBg).fontSize(7).font('Helvetica')
+      .text('Activity Log Export', MARGIN + 80, 13, { lineBreak: false });
     // Right: page number
-    doc.fillColor(PDF.textMuted).fontSize(8).font('Helvetica')
-      .text(`Page ${pageNum}`, PW - MARGIN - 40, 18, { width: 40, align: 'right', lineBreak: false });
+    doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+      .text(`Page ${pageNum}`, PW - MARGIN - 40, 13, { width: 40, align: 'right', lineBreak: false });
   };
 
   const drawCoverMeta = () => {
@@ -426,14 +426,14 @@ export const exportPdf = async (
 
     const col1 = MARGIN + 14;
     const col2 = MARGIN + CONTENT / 2;
-    const lineH = 14;
-    let metaLine = metaY + 8;
+    const lineH = 12;
+    let metaLine = metaY + 6;
 
     const drawMeta = (label: string, value: string, x: number) => {
-      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+      doc.fillColor(PDF.textMuted).fontSize(6).font('Helvetica')
         .text(label.toUpperCase(), x, metaLine, { lineBreak: false });
-      doc.fillColor(PDF.textPrimary).fontSize(8).font('Helvetica-Bold')
-        .text(value, x, metaLine + 8, { lineBreak: false });
+      doc.fillColor(PDF.textPrimary).fontSize(7).font('Helvetica-Bold')
+        .text(value, x, metaLine + 6, { lineBreak: false });
     };
 
     drawMeta('Exported at',      fmtDate(exportedAt.toISOString()),    col1);
@@ -457,7 +457,7 @@ export const exportPdf = async (
     doc.rect(MARGIN, topY, CONTENT, HEADER_H).fill(PDF.tableHeaderBg);
     let x = MARGIN;
     COLS.slice(0, -1).forEach((col, i) => {
-      doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+      doc.fillColor(PDF.tableHeaderFg).fontSize(6).font('Helvetica-Bold')
         .text(col.header, x + 4, topY + 5, { width: colWidths[i] - 8, lineBreak: false });
       x += colWidths[i];
     });
@@ -533,7 +533,7 @@ export const exportPdf = async (
         drawModuleBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
       } else {
         doc.fillColor(i === 0 ? PDF.textSecondary : PDF.textPrimary)
-          .fontSize(i === 7 ? 7 : 7.5)
+          .fontSize(i === 7 ? 6 : 6.5)
           .font('Helvetica')
           .text(cell, cx, cy, { width: cw, lineBreak: false });
       }
