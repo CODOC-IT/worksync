@@ -1096,6 +1096,28 @@
   box-shadow: var(--pc-shadow);
 }
 
+[data-project-chats] .project-chat-scrollbar {
+  scrollbar-color: var(--pc-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+[data-project-chats] .project-chat-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+[data-project-chats] .project-chat-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--pc-border-strong);
+  border: 2px solid var(--pc-panel);
+  border-radius: 999px;
+}
+
+[data-project-chats] .project-chat-new-messages {
+  background: var(--pc-selected);
+  border: 1px solid var(--pc-border-strong);
+  box-shadow: var(--pc-shadow);
+  color: var(--pc-text);
+}
+
 [data-project-chats] .project-chat-menu,
 [data-project-chats] .project-chat-mention-list,
 [data-project-chats] .project-chat-dialog {

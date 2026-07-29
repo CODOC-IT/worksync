@@ -184,7 +184,7 @@ export const ProjectChatsView: React.FC = () => {
   };
 
   return (
-    <section data-project-chats className="project-chat-shell mx-auto flex h-auto min-h-[820px] max-w-[1550px] flex-col gap-3 overflow-visible rounded-2xl p-3 md:p-4">
+    <section data-project-chats className="project-chat-shell mx-auto flex h-auto min-h-[820px] max-w-[1550px] flex-col gap-3 overflow-visible rounded-2xl p-3 md:p-4 lg:h-full lg:min-h-0 lg:overflow-hidden">
       <header className="flex shrink-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <h1 className="project-chat-heading flex items-center gap-2.5 text-2xl font-bold"><span className="project-chat-icon flex h-9 w-9 items-center justify-center rounded-xl"><MessageSquare size={19} /></span>Project Chats</h1>
@@ -207,13 +207,13 @@ export const ProjectChatsView: React.FC = () => {
       </div>
 
       {error && <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><span>{error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/15">Try again</button></div>}
-      <div className="project-chat-layout grid min-h-[650px] flex-1 grid-cols-1 overflow-hidden rounded-2xl lg:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="project-chat-layout grid min-h-[650px] flex-1 grid-cols-1 overflow-hidden rounded-2xl lg:min-h-0 lg:grid-cols-[360px_minmax(0,1fr)]">
         <aside aria-label="Discussion list" className={`${mobileConversationOpen ? 'hidden lg:flex' : 'flex'} project-chat-sidebar min-h-0 flex-col overflow-hidden lg:border-r`}>
           <div className="project-chat-divider flex shrink-0 items-center justify-between border-b px-4 py-3">
             <span className="project-chat-heading text-sm font-bold">Discussions</span>
             <span className="project-chat-count rounded-full px-2 py-0.5 text-xs">{visibleThreads.length}</span>
           </div>
-          {loading ? <ListState label="Gathering your discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'Nothing matches those filters yet.' : 'No conversations yet. Start one when your team is ready.'} /> : <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => { setSelectedId(thread.id); setMobileConversationOpen(true); }} />)}</div>}
+          {loading ? <ListState label="Gathering your discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'Nothing matches those filters yet.' : 'No conversations yet. Start one when your team is ready.'} /> : <div className="project-chat-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => { setSelectedId(thread.id); setMobileConversationOpen(true); }} />)}</div>}
         </aside>
         <main className={`${mobileConversationOpen ? 'flex' : 'hidden lg:flex'} project-chat-conversation min-h-0 min-w-0 flex-col overflow-hidden`}>
           {loading ? <ListState label="Opening the conversation…" /> : selected ? <DiscussionPanel thread={selected} users={chatUsers} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} onBack={() => setMobileConversationOpen(false)} onReply={(commentId) => { setReplyTo(commentId); replyRef.current?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Choose a discussion to join the conversation." />}
@@ -368,8 +368,10 @@ const DiscussionPanel: React.FC<any> = ({
   onEditTextChange, onEditSubmit, onEditCancel,
 }) => {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  const wasNearBottom = useRef(true);
   useEffect(() => {
     const handler = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpenId(null); };
     document.addEventListener('mousedown', handler);
@@ -377,12 +379,22 @@ const DiscussionPanel: React.FC<any> = ({
   }, []);
   useEffect(() => {
     const history = historyRef.current;
-    if (history) history.scrollTop = history.scrollHeight;
-  }, [thread.id, thread.comments.length]);
+    if (!history) return;
+    if (wasNearBottom.current || thread.comments.at(-1)?.authorId === currentUserId) {
+      history.scrollTop = history.scrollHeight;
+      setHasNewMessages(false);
+    } else {
+      setHasNewMessages(true);
+    }
+  }, [thread.id, thread.comments.length, currentUserId]);
+  useEffect(() => {
+    setHasNewMessages(false);
+    wasNearBottom.current = true;
+  }, [thread.id]);
   const participantCount = new Set(thread.comments.map((comment: DiscussionComment) => comment.authorId)).size;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="project-chat-header project-chat-divider flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-4 md:px-5">
         <div className="min-w-0 flex-1">
           <button type="button" onClick={onBack} className="project-chat-action mb-3 inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold lg:hidden"><ArrowLeft size={14} />Back to Discussions</button>
@@ -396,7 +408,11 @@ const DiscussionPanel: React.FC<any> = ({
           </div>
         </div>
       </div>
-      <div ref={historyRef} className="min-h-0 flex-1 scroll-pb-6 overflow-y-auto overscroll-contain p-3 pb-6 md:p-4 md:pb-6">
+      <div ref={historyRef} onScroll={(event) => {
+        const element = event.currentTarget;
+        wasNearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+        if (wasNearBottom.current) setHasNewMessages(false);
+      }} className="project-chat-scrollbar min-h-0 flex-1 overflow-x-hidden scroll-pb-6 overflow-y-auto overscroll-contain p-3 pb-6 md:p-4 md:pb-6">
         <div className="mx-auto max-w-5xl">
         {thread.comments.map((comment: DiscussionComment, index: number) => {
           const author = users.find((user: ProjectMemberSummary) => user.id === comment.authorId);
@@ -484,6 +500,12 @@ const DiscussionPanel: React.FC<any> = ({
           })}
         </div>
       </div>
+      {hasNewMessages && <button type="button" onClick={() => {
+        const history = historyRef.current;
+        if (history) history.scrollTop = history.scrollHeight;
+        wasNearBottom.current = true;
+        setHasNewMessages(false);
+      }} className="project-chat-new-messages absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5 text-xs font-semibold">New messages ↓</button>}
     </div>
   );
 };
