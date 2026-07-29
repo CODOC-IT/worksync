@@ -121,6 +121,10 @@ export const bootstrapDatabase = async (): Promise<void> => {
       ['task_deleted', 'Task', 'Normal'], ['task_due_today', 'Task', 'High'],
       ['task_due_tomorrow', 'Task', 'Normal'], ['task_overdue', 'Task', 'High'],
       ['checklist_completed', 'Task', 'Low'], ['comment_added', 'Task', 'Normal'],
+      // Subtask lifecycle -- see database/18_notify_seed.sql for why these are distinct codes.
+      ['subtask_assigned', 'Task', 'High'], ['subtask_completed', 'Task', 'Normal'],
+      ['subtask_reopened', 'Task', 'Normal'], ['subtask_due_today', 'Task', 'High'],
+      ['subtask_overdue', 'Task', 'High'], ['task_reopened', 'Task', 'High'],
       ['mention', 'Chat', 'Normal'], ['attachment_uploaded', 'Task', 'Low'],
       // Project
       ['project_created', 'Project', 'Normal'], ['project_updated', 'Project', 'Low'],

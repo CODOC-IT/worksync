@@ -15,6 +15,8 @@ export type NotificationType =
   | 'task_priority_changed' | 'task_due_date_changed' | 'task_review_requested'
   | 'task_review_approved' | 'task_review_rejected' | 'task_completed' | 'task_deleted'
   | 'task_due_today' | 'task_due_tomorrow' | 'task_overdue' | 'checklist_completed'
+  | 'subtask_assigned' | 'subtask_completed' | 'subtask_reopened' | 'subtask_due_today'
+  | 'subtask_overdue' | 'task_reopened'
   | 'comment_added' | 'mention' | 'attachment_uploaded'
   | 'project_created' | 'project_updated' | 'project_archived' | 'project_restored'
   | 'project_deleted' | 'project_member_added' | 'project_member_removed'
