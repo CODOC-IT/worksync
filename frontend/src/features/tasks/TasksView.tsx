@@ -1044,11 +1044,11 @@ export const TasksView: React.FC = () => {
                 </article>
               );
             })}
-            </div>
           </div>
+        </div>
         )}
-      </div>00 bg-cyan-500/15 text-white' : 'border-white/10 text-slate-300'}`}>{user.name}</button>)}</div></Field></div></section>)}</div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSubtaskStep('count')} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Back</button><button form="task-form" type="submit" className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold">Save task and subtasks</button></div></div></div>
-      )}
+      </div>
+      }
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
