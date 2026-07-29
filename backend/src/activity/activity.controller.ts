@@ -36,6 +36,15 @@ export const list = async (req: AuthenticatedRequest, res: Response): Promise<vo
   }
 };
 
+export const scope = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const viewerScope = await service.getViewerScope(req.user!.id);
+    res.json({ success: true, scope: viewerScope });
+  } catch (error) {
+    sendError(res, error, 'Could not determine activity scope.');
+  }
+};
+
 export const detail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const item = await service.getActivity(parseActivityId(req.params.id), req.user!.id, req.user!.role);

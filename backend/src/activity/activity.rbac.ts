@@ -16,6 +16,7 @@ export interface EffectiveRoles {
   activeTemporaryRoles: ActiveTemporaryRole[];
   isActiveTeamLead: boolean;
   isActiveHR: boolean;
+  isHRandTeamLead: boolean;
   leadProjectPks: number[];
 }
 
@@ -45,6 +46,7 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
       activeTemporaryRoles: [],
       isActiveTeamLead: permanentRole === 'Team_Lead',
       isActiveHR: permanentRole === 'HR',
+      isHRandTeamLead: false,
       leadProjectPks: [],
     };
   }
@@ -108,18 +110,20 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
       || activeTemporaryRoles.some((role) => role.roleCode === 'Team_Lead');
     const isActiveHR = permanentRole === 'HR'
       || activeTemporaryRoles.some((role) => role.roleCode === 'HR');
+    const isHRandTeamLead = isActiveHR && isActiveTeamLead;
 
     const leadProjectPks = Array.from(
       new Set(activeTemporaryRoles.flatMap((role) => role.leadProjectPks))
     );
 
-    return { permanentRole, activeTemporaryRoles, isActiveTeamLead, isActiveHR, leadProjectPks };
+    return { permanentRole, activeTemporaryRoles, isActiveTeamLead, isActiveHR, isHRandTeamLead, leadProjectPks };
   } catch (err) {
     return {
       permanentRole,
       activeTemporaryRoles: [],
       isActiveTeamLead: permanentRole === 'Team_Lead',
       isActiveHR: permanentRole === 'HR',
+      isHRandTeamLead: false,
       leadProjectPks: [],
     };
   }

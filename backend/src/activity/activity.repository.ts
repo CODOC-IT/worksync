@@ -77,54 +77,82 @@ const visibilitySql = (
   const params: unknown[] = [viewerPk];
   const pi = paramIndex;
 
+  // ── Admin: unrestricted within the organization ──────────────────────────────
   if (effectiveRoles.permanentRole === 'Admin') {
     return { clause: 'TRUE', extraParams: [] };
   }
 
-  const scopedParts: string[] = [
+  // ── Base scope: events the viewer is the actor for (all roles) ──────────────
+  const ownParts: string[] = [
     `a.actoruserid = $${pi}`,
-    `a.projectid IN (
-      SELECT vpm.projectid FROM work.projectmembers vpm
-      WHERE vpm.userid = $${pi} AND vpm.leftatutc IS NULL
-    )`,
-    `a.projectid IN (
-      SELECT vt.projectid FROM work.taskassignees vta
-      JOIN work.tasks vt ON vt.taskid = vta.taskid
-      WHERE vta.userid = $${pi} AND vta.unassignedatutc IS NULL
-    )`,
   ];
 
+  // ── Team Member / Team Lead base: own events + events from projects they
+  //    are members of (project membership rows only; HR alone does not grant this) ──
+  const projectMemberPart = `a.projectid IN (
+    SELECT vpm.projectid FROM work.projectmembers vpm
+    WHERE vpm.userid = $${pi} AND vpm.leftatutc IS NULL
+  )`;
+
+  const taskAssigneePart = `a.projectid IN (
+    SELECT vt.projectid FROM work.taskassignees vta
+    JOIN work.tasks vt ON vt.taskid = vta.taskid
+    WHERE vta.userid = $${pi} AND vta.unassignedatutc IS NULL
+  )`;
+
+  // Combine base project/task access with module restriction for plain Team Members
+  const buildMemberClause = (): string => {
+    const parts = [...ownParts, projectMemberPart, taskAssigneePart];
+    const scopeClause = `(${parts.join(' OR ')})`;
+    // Restrict to non-sensitive modules for pure Team Members
+    if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
+      return `${scopeClause} AND a.modulecode NOT IN ('Permissions', 'Authentication', 'Settings', 'System')`;
+    }
+    return scopeClause;
+  };
+
+  // ── HR only (no Team Lead active): own + attendance/HR + own project membership ──
+  if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
+    const hrParts = [
+      ...ownParts,
+      projectMemberPart,
+      taskAssigneePart,
+      `a.modulecode IN ('Attendance', 'HR')`,
+    ];
+    return {
+      clause: `(${hrParts.join(' OR ')})`,
+      extraParams: params.slice(1),
+    };
+  }
+
+  // ── Team Lead (permanent or temporary): own + project-member + led-project scope ──
+  // If also HR, combine both scopes.
+  const scopeParts: string[] = [...ownParts, projectMemberPart, taskAssigneePart];
+
+  // Permanent Team Lead: also include formal lead membership rows
   if (effectiveRoles.permanentRole === 'Team_Lead') {
-    scopedParts.push(`a.projectid IN (
+    scopeParts.push(`a.projectid IN (
       SELECT pmlead.projectid FROM work.projectmembers pmlead
       WHERE pmlead.userid = $${pi} AND pmlead.leftatutc IS NULL AND pmlead.memberrolecode = 'TeamLead'
     )`);
   }
 
+  // Temporary Team Lead: include scoped projects from the role assignment
   if (effectiveRoles.isActiveTeamLead && effectiveRoles.leadProjectPks.length > 0) {
     const leadIdx = params.length + 1;
     params.push(effectiveRoles.leadProjectPks);
-    scopedParts.push(`a.projectid = ANY($${leadIdx}::int[])`);
+    scopeParts.push(`a.projectid = ANY($${leadIdx}::int[])`);
   }
 
-  // Combined temporary roles retain both scopes; HR access must not disappear while a
-  // Team Lead grant is also active.
-  if (effectiveRoles.isActiveHR) {
-    scopedParts.push(`a.modulecode IN ('Attendance', 'HR')`);
+  // HR+TeamLead combined: also add attendance/HR scope
+  if (effectiveRoles.isHRandTeamLead) {
+    scopeParts.push(`a.modulecode IN ('Attendance', 'HR')`);
   }
 
-  let clause = `(${scopedParts.join(' OR ')})`;
-  if (
-    effectiveRoles.permanentRole === 'Team_Member'
-    && !effectiveRoles.isActiveTeamLead
-    && !effectiveRoles.isActiveHR
-  ) {
-    // This is an AND restriction on the member's own/project/task scope. Making it another
-    // OR term would expose every non-restricted organization event to every Team Member.
-    clause = `${clause} AND a.modulecode NOT IN ('Permissions', 'Authentication')`;
-  }
-
-  return { clause, extraParams: params.slice(1) };
+  return {
+    clause: `(${scopeParts.join(' OR ')})`,
+    extraParams: params.slice(1),
+  };
 };
 
 const buildWhere = (
