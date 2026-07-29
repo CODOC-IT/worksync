@@ -190,8 +190,9 @@ interface AppState {
   endBreak: () => void;
   updateAttendanceRecord: (
     recordId: string,
-    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-  ) => { success: boolean; message: string };
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>,
+    reason?: string
+  ) => Promise<{ success: boolean; message: string }>;
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details'], requestDate?: string) => Promise<{ success: boolean; message: string }>;
   approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
@@ -451,11 +452,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const token = localStorage.getItem('worksync_auth_token');
         if (!token || !isActive) return;
-        const today = new Date().toISOString().split('T')[0];
+        const futureDate = new Date();
+        futureDate.setDate(futureDate.getDate() + 90);
+        const to = futureDate.toISOString().split('T')[0];
         const fromDate = new Date();
         fromDate.setDate(fromDate.getDate() - 90);
         const from = fromDate.toISOString().split('T')[0];
-        const response = await fetch(`/api/attendance?from=${from}&to=${today}`, {
+        const response = await fetch(`/api/attendance?from=${from}&to=${to}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         const data = await response.json();
@@ -474,8 +477,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? new Date(r.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : undefined,
             totalHours: r.totalHours || 0,
-            status: (r.status || 'Present') as AttendanceRecord['status'],
-            breaks: [],
+            status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
+            breaks: Array.isArray(r.breaks) ? r.breaks : [],
           }));
           setAttendanceRecords(mapped);
         }
@@ -1985,10 +1988,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const updateAttendanceRecord = (
+    const updateAttendanceRecord = async (
       recordId: string,
-      updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-    ) => {
+      updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>,
+      reason?: string
+    ): Promise<{ success: boolean; message: string }> => {
       const record = attendanceRecords.find((item) => item.id === recordId);
       if (!record) {
         return { success: false, message: 'Attendance record not found.' };
@@ -2023,6 +2027,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
         return { success: false, message: 'Every saved break must have valid start and end times.' };
+      }
+
+      if (!isAdmin) {
+        if (!isOwnRecord) {
+          return { success: false, message: 'You can only request changes to your own attendance.' };
+        }
+        const cleanReason = reason?.trim() || '';
+        if (!cleanReason) {
+          return { success: false, message: 'A reason is required for an attendance edit request.' };
+        }
+        return submitHRRequest(
+          'Correction',
+          cleanReason,
+          {
+            currentCheckIn: record.checkIn,
+            currentCheckOut: record.checkOut || '',
+            requestedCheckIn: updates.checkIn,
+            requestedCheckOut: updates.checkOut || '',
+            currentBreaks: record.breaks,
+            requestedBreaks: normalizedBreaks,
+            attendanceChangeReason: cleanReason
+          },
+          record.date
+        );
+      }
+
+      try {
+        const response = await fetch(
+          `/api/attendance/${encodeURIComponent(record.userId)}/${encodeURIComponent(record.date)}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              checkIn: updates.checkIn,
+              checkOut: updates.checkOut || '',
+              breaks: normalizedBreaks
+            })
+          }
+        );
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.message || 'Failed to save attendance changes.');
+        }
+      } catch (error: any) {
+        return { success: false, message: error?.message || 'Failed to save attendance changes.' };
       }
 
       setAttendanceRecords((prev) =>
@@ -2078,10 +2127,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newReq = data.request as HRRequest;
         setHrRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
 
+        const recipients =
+          newReq.approvalStage === 'Admin'
+            ? resolveAdminRecipients(users, currentUser.id)
+            : resolveHRRecipients();
         dispatchNotifications({
-          recipientIds: resolveHRRecipients(),
-          type: type === 'Correction' ? 'attendance_correction_submitted' : 'approval',
-          title: `New ${type.replace('_', ' ')} Request`,
+          recipientIds: recipients,
+          type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
+          title: type === 'Leave' ? 'Leave Submitted' : 'New Attendance Edit Request',
           message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
           actorId: currentUser.id,
           actorName: currentUser.name,
@@ -2117,16 +2170,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
 
+        if (data.forwarded) {
+          dispatchNotifications({
+            recipientIds: resolveAdminRecipients(users, currentUser.id),
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'} request for ${updatedRequest.date}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'approvals'
+          });
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `HR approved your leave request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+          const message = data.message || 'Leave request forwarded to Admin.';
+          confirmActionSuccess('Leave Forwarded', message);
+          return { success: true, message };
+        }
+
+        if (updatedRequest.type === 'Correction') {
+          setAttendanceRecords((prev) => prev.map((record) =>
+            record.userId === updatedRequest.userId && record.date === updatedRequest.date
+              ? {
+                  ...record,
+                  checkIn: updatedRequest.details.requestedCheckIn || record.checkIn,
+                  checkOut: updatedRequest.details.requestedCheckOut || undefined,
+                  breaks: updatedRequest.details.requestedBreaks || []
+                }
+              : record
+          ));
+        } else if (updatedRequest.type === 'Leave') {
+          const status = updatedRequest.details.leaveType === 'Half Day Leave' ? 'Half Day' : 'On Leave';
+          setAttendanceRecords((prev) => {
+            const exists = prev.some((record) =>
+              record.userId === updatedRequest.userId && record.date === updatedRequest.date
+            );
+            if (exists) {
+              return prev.map((record) =>
+                record.userId === updatedRequest.userId && record.date === updatedRequest.date
+                  ? { ...record, status }
+                  : record
+              );
+            }
+            return [{
+              id: `att-${updatedRequest.userId}-${updatedRequest.date}`,
+              userId: updatedRequest.userId,
+              date: updatedRequest.date,
+              checkIn: '',
+              totalHours: 0,
+              status,
+              breaks: []
+            }, ...prev];
+          });
+        }
+
         const notifType =
           updatedRequest.type === 'Correction'
             ? 'attendance_correction_approved'
             : updatedRequest.type === 'Break_Exception'
               ? 'break_approved'
-              : 'approval';
+              : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${updatedRequest.type.replace('_', ' ')} Request Approved`,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Approved'
+            : updatedRequest.type === 'Correction'
+              ? 'Attendance Approved'
+              : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
           message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
@@ -2167,11 +2284,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ? 'attendance_correction_rejected'
             : updatedRequest.type === 'Break_Exception'
               ? 'break_rejected'
-              : 'approval';
+              : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Rejected'
+            : updatedRequest.type === 'Correction'
+              ? 'Attendance Rejected'
+              : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
           message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
           actorId: currentUser.id,
           actorName: currentUser.name,

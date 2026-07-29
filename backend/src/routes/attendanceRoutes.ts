@@ -7,10 +7,19 @@ import * as attendanceRepo from '../attendance/attendance.repository.js';
 
 const router = Router();
 
+const ensureBreakStorage = async (): Promise<void> => {
+  await query(`
+    CREATE TABLE IF NOT EXISTS public.worksync_attendance_breaks (
+      user_id TEXT NOT NULL,
+      work_date DATE NOT NULL,
+      breaks JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, work_date)
+    )
+  `);
+};
+
 function validateDateRange(from: string, to: string): string | null {
-  const today = new Date().toISOString().split('T')[0];
-  if (from > today) return 'From date cannot be in the future.';
-  if (to > today) return 'To date cannot be in the future.';
   if (to < from) return 'To date cannot be earlier than From date.';
   return null;
 }
@@ -37,12 +46,93 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
     }
 
     const userPk = toUserPk(req.user.id);
-    const records = await repo.getAttendanceRecords(from, to, [userPk]);
+    const normalizedRole = String(req.user.role || '').replace(/[\s_-]/g, '').toLowerCase();
+    const canViewAll = ['admin', 'administrator', 'hr', 'hrrepresentative', 'humanresources'].includes(normalizedRole);
+    const records = await repo.getAttendanceRecords(from, to, canViewAll ? undefined : [userPk]);
+    await ensureBreakStorage();
+    const breakRows = await query<{ user_id: string; work_date: string | Date; breaks: unknown[] | string }>(
+      `SELECT user_id, work_date, breaks
+         FROM public.worksync_attendance_breaks
+        WHERE work_date BETWEEN $1::date AND $2::date
+          ${canViewAll ? '' : 'AND user_id = $3'}`,
+      canViewAll ? [from, to] : [from, to, req.user.id]
+    );
+    const breaksByDate = new Map(
+      breakRows.rows.map((row) => [
+        `${row.user_id}:${new Date(row.work_date).toISOString().split('T')[0]}`,
+        typeof row.breaks === 'string' ? JSON.parse(row.breaks) : row.breaks
+      ])
+    );
 
-    res.json({ success: true, data: records });
+    res.json({
+      success: true,
+      data: records.map((record) => ({
+        ...record,
+        breaks: breaksByDate.get(`${record.userId}:${record.date}`) || []
+      }))
+    });
   } catch (err: any) {
     console.error('[Attendance Error]', err);
     res.status(500).json({ success: false, message: 'Failed to load attendance records.' });
+  }
+});
+
+// PUT /api/attendance/:userId/:date — preserves the existing Admin direct-edit capability.
+router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+    const role = String(req.user.role || '').replace(/[\s_-]/g, '').toLowerCase();
+    if (!['admin', 'administrator'].includes(role)) {
+      res.status(403).json({ success: false, message: 'Only Admin can directly edit attendance.' });
+      return;
+    }
+    const { checkIn, checkOut, breaks } = req.body as {
+      checkIn?: string;
+      checkOut?: string;
+      breaks?: unknown[];
+    };
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!checkIn || !timePattern.test(checkIn) || (checkOut && !timePattern.test(checkOut))) {
+      res.status(400).json({ success: false, message: 'Attendance times must use HH:mm format.' });
+      return;
+    }
+    if (checkOut && checkOut <= checkIn) {
+      res.status(400).json({ success: false, message: 'Check-out must be later than check-in.' });
+      return;
+    }
+    const updated = await query(
+      `UPDATE hr.attendancerecords
+          SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
+              actualcheckoutatutc = CASE WHEN NULLIF($4, '') IS NULL THEN NULL
+                ELSE ($2::date + $4::time) AT TIME ZONE 'UTC' END,
+              workingminutes = CASE WHEN NULLIF($4, '') IS NULL THEN 0
+                ELSE GREATEST(0, EXTRACT(EPOCH FROM (
+                  (($2::date + $4::time) AT TIME ZONE 'UTC') -
+                  (($2::date + $3::time) AT TIME ZONE 'UTC')
+                )) / 60)::int END,
+              sourcecode = 'HRCorrection',
+              updatedatutc = CURRENT_TIMESTAMP
+        WHERE userid = $1 AND workdate = $2::date`,
+      [toUserPk(req.params.userId), req.params.date, checkIn, checkOut || '']
+    );
+    if (!updated.rowCount) {
+      res.status(404).json({ success: false, message: 'Attendance record not found.' });
+      return;
+    }
+    await ensureBreakStorage();
+    await query(
+      `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
+       VALUES ($1, $2::date, $3::jsonb, NOW())
+       ON CONFLICT (user_id, work_date) DO UPDATE SET breaks = EXCLUDED.breaks, updated_at = NOW()`,
+      [req.params.userId, req.params.date, JSON.stringify(Array.isArray(breaks) ? breaks : [])]
+    );
+    res.json({ success: true, message: 'Attendance record updated.' });
+  } catch (err: any) {
+    console.error('[Attendance Update Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to update attendance record.' });
   }
 });
 

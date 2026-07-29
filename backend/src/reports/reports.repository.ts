@@ -573,7 +573,7 @@ export const getAttendanceStats = async (
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS present,
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS late,
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS absent,
-       COALESCE(SUM(CASE WHEN astatus.statuscode = 'On Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeave",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeave",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Half Day' THEN 1 ELSE 0 END), 0)::int AS "halfDay",
        COALESCE(SUM(ar.workingminutes), 0)::int AS totalMinutes,
        COUNT(*)::int AS totalRecords
@@ -650,6 +650,7 @@ export const getAttendanceRecords = async (
   );
   return result.rows.map((r) => ({
     ...r,
+    status: r.status === 'Leave' ? 'On Leave' : r.status,
     totalHours: Math.round((r.totalHours / 60) * 10) / 10,
   }));
 };
@@ -715,7 +716,7 @@ export const getTodayAttendance = async (): Promise<TodayAttendanceResult> => {
     `SELECT
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS "presentToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS "absentToday",
-       COALESCE(SUM(CASE WHEN astatus.statuscode = 'On Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS "lateToday",
        COALESCE(SUM(ar.workingminutes), 0)::int AS "totalMinutesToday",
        COUNT(*)::int AS "totalRecordsToday"
