@@ -489,7 +489,10 @@ export const ProjectsView: React.FC = () => {
                 <select
                   value={form.teamLeadId}
                   onChange={(e) => setForm((prev) => ({ ...prev, teamLeadId: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                  // Team Leads can edit their own project but must not reassign its Team Lead;
+                  // only Admins are allowed to change this field once a project exists.
+                  disabled={formMode === 'edit' && currentRole === 'Team_Lead'}
+                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">Select a Team Lead...</option>
                   {teamLeads.map((u) => (
