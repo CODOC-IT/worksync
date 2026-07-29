@@ -184,22 +184,28 @@ router.put('/password', async (req, res: Response): Promise<void> => {
 });
 
 // GET /api/auth/me
-router.get('/me', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user) {
-    res.status(401).json({ success: false, message: 'Not authenticated.' });
-    return;
-  }
+router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
 
-  const user = userStore.findById(req.user.id);
-  if (!user) {
-    res.status(404).json({ success: false, message: 'User profile not found.' });
-    return;
-  }
+    // Serverless instances may receive this request before any login has hydrated the cache.
+    await userStore.syncUsersToDb();
+    const user = userStore.findById(req.user.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User profile not found.' });
+      return;
+    }
 
-  res.status(200).json({
-    success: true,
-    user: userStore.sanitizeUser(user)
-  });
+    res.status(200).json({
+      success: true,
+      user: userStore.sanitizeUser(user)
+    });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to restore authenticated session.' });
+  }
 });
 
 // GET /api/auth/users
