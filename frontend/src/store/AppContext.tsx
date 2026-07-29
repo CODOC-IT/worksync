@@ -1189,6 +1189,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     if (!validationResult.success) return validationResult;
 
+    const existingTask = tasks.find((task) => task.id === taskId);
+    const project = existingTask && projects.find((item) => item.id === existingTask.projectId);
+    const isStandaloneMemberTask = Boolean(
+      existingTask
+      && !existingTask.parentTaskId
+      && Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0
+      && currentRole === 'Team_Member'
+    );
+
+    // Team Members may prepare changes to their own standalone tasks, but the stored task
+    // remains unchanged until the owning Team Lead approves the request. Subtasks keep their
+    // assignee-only direct-edit workflow, and Team Leads continue to save directly.
+    if (isStandaloneMemberTask && existingTask && project?.teamLeadId) {
+      const proposedTaskUpdate = {
+        title: data.title?.trim() || existingTask.title,
+        description: data.description?.trim() || existingTask.description,
+        priority: data.priority || (existingTask.priority === 'Urgent' ? 'Critical' : existingTask.priority),
+        startDate: data.startDate || validationResult.task?.startDate || existingTask.createdAt.slice(0, 10),
+        dueDate: data.dueDate || existingTask.dueDate
+      };
+      const requestId = `edit-${Date.now()}`;
+      const createdAt = new Date().toISOString().replace('T', ' ').substring(0, 16);
+      const pendingEdit: ControlledEditRequest = {
+        id: requestId,
+        taskId,
+        requestedBy: currentUser.id,
+        field: 'description',
+        oldValue: 'Current task details',
+        newValue: 'Proposed task details',
+        reason: 'Task update requested by the assignee.',
+        status: 'Pending',
+        createdAt
+      };
+      const approval: SystemApproval = {
+        id: `app-${requestId}`,
+        type: 'Controlled_Edit',
+        targetId: taskId,
+        targetTitle: existingTask.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        createdAt,
+        details: `${currentUser.name} requested an update to "${existingTask.title}". Pending Team Lead approval.`,
+        status: 'Pending',
+        projectId: existingTask.projectId,
+        proposedDiff: { field: 'Task details', oldValue: 'Current task details', newValue: 'Proposed task details' },
+        proposedTaskUpdate
+      };
+
+      setTasks((prev) => prev.map((task) => task.id === taskId
+        ? { ...task, approvalStatus: 'Pending Approval', pendingEdit }
+        : task));
+      setSystemApprovals((prev) => [approval, ...prev]);
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
+        type: 'approval',
+        title: 'Task Update Requested',
+        message: `${currentUser.name} requested an update to "${existingTask.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId: existingTask.projectId,
+        taskId
+      });
+      pushActivity('Requested task update approval', 'Approval', approval.id, existingTask.title);
+      confirmActionSuccess('Task Update Requested', `Your changes to "${existingTask.title}" were sent to the Team Lead for approval.`);
+      return { success: true, message: 'Task update requested for Team Lead approval.', task: { ...existingTask, approvalStatus: 'Pending Approval', pendingEdit } };
+    }
+
     try {
       const updated = await updateTaskViaApi(taskId, data);
       setTasks((prev) => prev.map((item) => (item.id === taskId ? updated : item)));
@@ -1486,6 +1554,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `You approved "${item.targetTitle}" and created the task successfully.`
         };
         confirmActionSuccess('Task Request Approved', result.message);
+      } else if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        const relatedTask = tasks.find((task) => task.id === item.targetId);
+        const relatedProject = relatedTask && projects.find((project) => project.id === relatedTask.projectId);
+        if (currentRole !== 'Team_Lead' || !relatedProject || relatedProject.teamLeadId !== currentUser.id) {
+          return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
+        }
+        try {
+          const approvedUpdate: TaskMutationData = {
+            ...item.proposedTaskUpdate,
+            priority: item.proposedTaskUpdate.priority === 'Urgent'
+              ? 'Critical'
+              : item.proposedTaskUpdate.priority
+          };
+          const updated = await updateTaskViaApi(item.targetId, approvedUpdate);
+          setTasks((prev) => prev.map((task) => task.id === item.targetId
+            ? { ...updated, approvalStatus: 'Approved', pendingEdit: undefined }
+            : task));
+          setSystemApprovals((prev) => prev.map((approval) => approval.id === approvalId
+            ? { ...approval, status: 'Approved' }
+            : approval));
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+            type: 'approval',
+            title: 'Task Update Approved',
+            message: `${currentUser.name} approved your update to "${item.targetTitle}".`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: relatedProject.id,
+            taskId: item.targetId
+          });
+          result = { success: true, message: `You approved the update to "${item.targetTitle}".` };
+          confirmActionSuccess('Task Update Approved', result.message);
+        } catch (error: any) {
+          return { success: false, message: error?.message || 'Unable to apply the approved task update.' };
+        }
       } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
         const { field, newValue } = item.proposedDiff;
         setTasks((prev) =>
@@ -1559,6 +1663,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
+      if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        setTasks((prev) => prev.map((task) => task.id === item.targetId
+          ? { ...task, approvalStatus: 'Approved', pendingEdit: undefined }
+          : task));
+      }
 
       const targetsProject = item.type === 'Project_Deletion';
       const relatedProjectId = targetsProject
