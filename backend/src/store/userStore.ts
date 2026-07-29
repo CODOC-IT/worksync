@@ -355,7 +355,7 @@ class UserStore {
           passwordHash,
           role: userData.role,
           department: userData.department,
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    avatar: '',
           title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
           status: 'active',
           createdAt: new Date().toISOString()
@@ -391,7 +391,7 @@ class UserStore {
       passwordHash,
       role: userData.role,
       department: userData.department,
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatar: '',
       title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
       status: 'active',
       createdAt: new Date().toISOString()
