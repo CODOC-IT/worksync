@@ -16,9 +16,9 @@ import { userStore } from '../store/userStore.js';
 const without = (ids: (string | null | undefined)[], excludeUserId?: string): string[] =>
   Array.from(new Set(ids.filter((id): id is string => Boolean(id) && id !== excludeUserId)));
 
-export const resolveAdminRecipients = (excludeUserId?: string): string[] =>
+export const resolveAdminRecipients = async (excludeUserId?: string): Promise<string[]> =>
   without(
-    userStore.getAllUsers().filter((user) => user.role === 'Admin').map((user) => user.id),
+    (await userStore.getAllUsers()).filter((user) => user.role === 'Admin').map((user) => user.id),
     excludeUserId
   );
 
