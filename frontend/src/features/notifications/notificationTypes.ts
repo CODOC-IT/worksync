@@ -55,7 +55,13 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   task_due_today: { label: 'Due Today', icon: FileWarning, tone: 'warning', priority: 'High' },
   task_due_tomorrow: { label: 'Due Tomorrow', icon: FileWarning, tone: 'info', priority: 'Medium' },
   task_overdue: { label: 'Overdue', icon: AlertTriangle, tone: 'error', priority: 'High' },
-  checklist_completed: { label: 'Checklist Completed', icon: CheckSquare, tone: 'success', priority: 'Low' },
+  checklist_completed: { label: 'All Subtasks Completed', icon: CheckSquare, tone: 'success', priority: 'Low' },
+  subtask_assigned: { label: 'Subtask Assigned', icon: UserPlus, tone: 'info', priority: 'High' },
+  subtask_completed: { label: 'Subtask Completed', icon: CheckCircle2, tone: 'success', priority: 'Medium' },
+  subtask_reopened: { label: 'Subtask Reopened', icon: RefreshCcw, tone: 'warning', priority: 'Medium' },
+  subtask_due_today: { label: 'Subtask Due Today', icon: FileWarning, tone: 'warning', priority: 'High' },
+  subtask_overdue: { label: 'Subtask Overdue', icon: AlertTriangle, tone: 'error', priority: 'High' },
+  task_reopened: { label: 'Task Reopened', icon: RefreshCcw, tone: 'warning', priority: 'High' },
   comment_added: { label: 'New Comment', icon: MessageSquare, tone: 'info', priority: 'Medium' },
   mention: { label: 'Mentioned You', icon: AtSign, tone: 'info', priority: 'Medium' },
   attachment_uploaded: { label: 'File Attached', icon: Paperclip, tone: 'info', priority: 'Low' },
@@ -123,7 +129,13 @@ const ADMIN_BLOCKED_TYPES = new Set<NotificationType>([
   'task_priority_changed', 'task_due_date_changed', 'task_review_requested',
   'task_review_approved', 'task_review_rejected', 'task_completed', 'task_deleted',
   'task_due_today', 'task_due_tomorrow', 'task_overdue', 'checklist_completed',
-  'comment_added', 'attachment_uploaded', 'task'
+  'comment_added', 'attachment_uploaded', 'task',
+  // Subtask events are the most granular work chatter there is — an Admin only tracks
+  // project-level outcomes, so none of these ever reach them (PRD: "Admin receives only
+  // high-level project notifications"). 'task_reopened' is deliberately NOT blocked: reopening
+  // a completed task reverses a recorded outcome and is an accountability event Admins keep.
+  'subtask_assigned', 'subtask_completed', 'subtask_reopened',
+  'subtask_due_today', 'subtask_overdue'
 ]);
 
 const TEAM_LEAD_BLOCKED_TYPES = new Set<NotificationType>([

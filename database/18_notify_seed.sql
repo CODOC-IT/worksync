@@ -137,6 +137,16 @@ VALUES
     ('task_due_tomorrow',      'Task',       'Normal',   FALSE, TRUE),
     ('task_overdue',           'Task',       'High',     FALSE, TRUE),
     ('checklist_completed',    'Task',       'Low',      FALSE, TRUE),
+    -- Subtask lifecycle (Project Board subtask integration). Subtasks are work.Tasks rows with
+    -- ParentTaskId set, so these are Task-category events like their parents' — they exist as
+    -- distinct TypeCodes purely so recipients/copy can differ ("a subtask of X" vs "X itself")
+    -- and so a user can mute subtask chatter without muting parent-task events.
+    ('subtask_assigned',       'Task',       'High',     FALSE, TRUE),
+    ('subtask_completed',      'Task',       'Normal',   FALSE, TRUE),
+    ('subtask_reopened',       'Task',       'Normal',   FALSE, TRUE),
+    ('subtask_due_today',      'Task',       'High',     FALSE, TRUE),
+    ('subtask_overdue',        'Task',       'High',     FALSE, TRUE),
+    ('task_reopened',          'Task',       'High',     FALSE, TRUE),
     ('comment_added',          'Task',       'Normal',   FALSE, TRUE),
     ('mention',                'Chat',       'Normal',   FALSE, TRUE),
     ('attachment_uploaded',    'Task',       'Low',      FALSE, TRUE),
