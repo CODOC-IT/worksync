@@ -194,6 +194,7 @@ export const ReportsView: React.FC = () => {
   const [deadlineFilterDateRange, setDeadlineFilterDateRange] = useState('all');
   const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -1777,30 +1778,6 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Pending Approvals', roleFiltered.projects.filter((p: any) => p.status === 'Pending Approval').length, <Clock size={14} className="text-amber-400" />, 'amber')}</div>
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Project Progress')}
-          <div className="mt-3 overflow-x-auto">
-            <div style={{ width: Math.max(projectHealthData.length * 80, 400), height: 300 }}>
-              {projectHealthData.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-8">No project data available</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                    <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                    <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px' }} />
-                    <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress %" />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
-
       <GlassCard>
         <div className="p-4 space-y-3">
           {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filters')}
@@ -2291,61 +2268,6 @@ ${bodyHtml}
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Tasks Per Member')}
-              <div className="max-h-[500px] overflow-y-auto">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-60 text-slate-500 text-xs">No data</div>
-                ) : (
-                  <div style={{ height: Math.max(members.length * 35, 300) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                        <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                        <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                        <Legend wrapperStyle={{ fontSize: '10px' }} />
-                        <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
-                        <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
-                        <Bar dataKey="overdue" fill={chartColors.rose} radius={[0, 0, 0, 0]} name="Overdue" stackId="a" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </div>
-            </div>
-          </GlassCard>
-
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<CheckCircle2 size={16} className="text-emerald-400" />, 'Completion By Member')}
-              <div className="max-h-[500px] overflow-y-auto">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-60 text-slate-500 text-xs">No data</div>
-                ) : (
-                  <div style={{ height: Math.max(members.length * 35, 300) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={members.map((m: any) => ({
-                        name: m.name,
-                        shortName: m.shortName,
-                        rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
-                      }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                        <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                        <Tooltip formatter={(value: any) => `${value}%`} />
-                        <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </div>
-            </div>
-          </GlassCard>
-        </div>
-
         <GlassCard>
           <div className="p-4 space-y-3">
             {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filters')}
@@ -2755,21 +2677,29 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Status Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskStatusDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={taskStatusDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
-                      {taskStatusDistData.map((_entry: any, idx: number) => (
-                        <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} stroke={chartPieStroke} strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
-                  </PieChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskStatusDistData.map((d: any) => d.value), 1);
+                  const statusColorMap: Record<string, string> = {
+                    'Todo': 'bg-cyan-500', 'In Progress': 'bg-amber-500', 'Review': 'bg-amber-500',
+                    'Done': 'bg-emerald-500', 'Blocked': 'bg-rose-500',
+                  };
+                  return taskStatusDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${statusColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -2778,21 +2708,28 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<BarChart3 size={16} className="text-violet-400" />, 'Priority Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskPriorityDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={taskPriorityDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
-                      {taskPriorityDistData.map((_entry: any, idx: number) => (
-                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} stroke={chartPieStroke} strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
-                  </PieChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskPriorityDistData.map((d: any) => d.value), 1);
+                  const priorityColorMap: Record<string, string> = {
+                    'Urgent': 'bg-rose-500', 'High': 'bg-orange-500', 'Medium': 'bg-amber-500', 'Low': 'bg-emerald-500',
+                  };
+                  return taskPriorityDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${priorityColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -3439,36 +3376,35 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
-          <div className="mt-3" style={{ height: 260 }}>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={[
-                  { name: 'Present', value: attendanceStats.present },
-                  { name: 'Late', value: attendanceStats.late },
-                  { name: 'Absent', value: attendanceStats.absent },
-                  { name: 'On Leave', value: attendanceStats.onLeave },
-                  { name: 'Half Day', value: attendanceStats.halfDay }
-                ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {[chartColors.emerald, chartColors.amber, chartColors.rose, chartColors.cyan, chartColors.violet].map((color, i) => (
-                      <Cell key={i} fill={color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-slate-400">Filter by status:</span>
+        <div className="flex flex-wrap gap-1.5">
+          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+            const isActive = attendanceStatusFilter === s;
+            if (s === '') {
+              return (
+                <button key={s} onClick={() => setAttendanceStatusFilter('')}
+                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-all ${isActive
+                    ? 'bg-slate-600/60 text-slate-200 border border-white/10'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/60 hover:text-slate-200'}`}>
+                  All
+                </button>
+              );
+            }
+            const colorClass = s === 'Present' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              : s === 'Late' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+              : s === 'Absent' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              : s === 'On Leave' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+              : 'bg-violet-500/20 text-violet-400 border-violet-500/30';
+            return (
+              <button key={s} onClick={() => setAttendanceStatusFilter(s === attendanceStatusFilter ? '' : s)}
+                className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
+                {s}
+              </button>
+            );
+          })}
         </div>
-      </GlassCard>
+      </div>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
         <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
@@ -3493,10 +3429,13 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
-            ) : (
-              (roleFiltered.attendance as any[]).map((a: any) => (
+              {(() => {
+                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                const filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                if (filtered.length === 0) {
+                  return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
+                }
+                return filtered.map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs truncate">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
@@ -3506,8 +3445,8 @@ ${bodyHtml}
                   <td className="font-mono text-xs">{a.totalHours || 0}h</td>
                   <td className="font-mono text-xs text-slate-400">{a.breaksCount || 0}</td>
                 </tr>
-              ))
-            )}
+                ));
+              })()}
           </tbody>
         </table>
       </div>
