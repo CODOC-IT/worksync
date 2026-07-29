@@ -54,14 +54,15 @@ export const ProjectChatsView: React.FC = () => {
     const accepted = Array.from(files).filter((file) => allowed.has(file.type) && file.size <= 10 * 1024 * 1024 && /^[\w. -]+$/.test(file.name));
     if (accepted.length !== files.length) setReplyError('Only safe PDF, text, image, and DOCX files up to 10 MB are allowed.');
     const processed = await Promise.all(accepted.map(async (file) => {
-      let url: string | undefined;
-      if (file.type.startsWith('image/')) {
-        url = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
-      }
+      // Every accepted attachment (not just images) carries its real content as a base64 data
+      // URL — the backend persists these bytes for real (collab.StoredFiles, content-addressed
+      // on disk) and rejects any attachment with no readable content, so a non-image file
+      // without this would simply fail to save.
+      const url = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
       return { id: `file-${Date.now()}-${file.name}`, name: file.name, mimeType: file.type, size: file.size, url };
     }));
     setAttachments((current) => [...current, ...processed]);

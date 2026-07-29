@@ -7,29 +7,36 @@ import { getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { UserRole } from '../types.js';
 
 const router = Router();
+const USER_ROLES: UserRole[] = ['Team_Member', 'Team_Lead', 'HR', 'Admin'];
+
+const isUserRole = (role: unknown): role is UserRole =>
+  typeof role === 'string' && USER_ROLES.includes(role as UserRole);
 
 // POST /api/otp/send
-// Body: { email, name }
+// Body: { email, name, role }
 router.post('/send', async (req, res: Response): Promise<void> => {
   try {
-    const { email, name } = req.body;
+    const { email, name, role } = req.body;
 
     if (!isEmailConfigured()) {
-      res.status(503).json({ success: false, message: 'Email service is not configured. Please set SMTP_USER and SMTP_PASS in your .env file.' });
+      res.status(503).json({ success: false, message: 'Email service is not configured.' });
       return;
     }
 
-    if (!email || !name) {
-      res.status(400).json({ success: false, message: 'Email and name are required.' });
+    if (!email || !name || !isUserRole(role)) {
+      res.status(400).json({ success: false, message: 'Email, name, and a valid role are required.' });
       return;
     }
 
-    if (name.trim().length < 4) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const sanitizedName = name.trim();
+
+    if (sanitizedName.length < 4) {
       res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
       return;
     }
 
-    const nameParts = name.trim().split(/\s+/).filter(Boolean);
+    const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
     if (nameParts.length < 2) {
       res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
       return;
@@ -40,18 +47,17 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Check if name is already taken by another user
-    const nameExists = userStore.findByName(name.trim());
-    if (nameExists) {
+    await userStore.syncUsersToDb();
+
+    if (userStore.findByName(sanitizedName)) {
       res.status(409).json({
         success: false,
-        message: `The name "${name.trim()}" is already registered. Please choose a different name.`
+        message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
       });
       return;
     }
 
-    const requestedRole = req.body.role as UserRole | undefined;
-    if (requestedRole === 'Admin' && userStore.hasRole('Admin')) {
+    if (role === 'Admin' && userStore.hasRole('Admin')) {
       res.status(409).json({
         success: false,
         message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
@@ -59,7 +65,7 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    if (requestedRole === 'HR' && userStore.hasRole('HR')) {
+    if (role === 'HR' && userStore.hasRole('HR')) {
       res.status(409).json({
         success: false,
         message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
@@ -67,25 +73,21 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Email format check
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email.trim())) {
+    if (!emailRegex.test(normalizedEmail)) {
       res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
       return;
     }
 
-    // Check if email is already registered
-    const existingUser = userStore.findByEmail(email.trim().toLowerCase());
-    if (existingUser) {
+    if (await userStore.findByEmailAsync(normalizedEmail)) {
       res.status(409).json({
         success: false,
-        message: `An account with the email "${email.trim()}" already exists. Please sign in instead.`
+        message: `An account with the email "${normalizedEmail}" already exists. Please sign in instead.`
       });
       return;
     }
 
-    // Check 60s resend cooldown
-    const { allowed, secondsLeft } = otpStore.canResend(email);
+    const { allowed, secondsLeft } = otpStore.canResend(normalizedEmail);
     if (!allowed) {
       res.status(429).json({
         success: false,
@@ -95,16 +97,16 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const otp = otpStore.generate(email);
-    await sendOTPEmail(email, name, otp);
+    const otp = otpStore.generate(normalizedEmail);
+    await sendOTPEmail(normalizedEmail, sanitizedName, otp);
 
     res.status(200).json({
       success: true,
-      message: `Verification code sent to ${email}. Valid for 1 minute.`
+      message: `Verification code sent to ${normalizedEmail}. Valid for 1 minute.`
     });
   } catch (error: any) {
     console.error('[OTP Send Error]', error.message);
-    res.status(400).json({ success: false, message: error.message || 'Failed to send verification email. Please try again.' });
+    res.status(500).json({ success: false, message: 'Failed to send verification email. Please try again.' });
   }
 });
 
@@ -141,8 +143,17 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    const registrationRequested = Boolean(name || password || role || department || title);
+    if (registrationRequested && (!name || !password || !department || !isUserRole(role))) {
+      res.status(400).json({
+        success: false,
+        message: 'Name, password, role, and department are required for registration.'
+      });
+      return;
+    }
+
     // If registration data provided, create the user account now
-    if (name && password && role && department) {
+    if (registrationRequested && isUserRole(role)) {
       try {
         const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
 
@@ -176,7 +187,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           return;
         }
 
-        if (userStore.findByEmail(email)) {
+        if (await userStore.findByEmailAsync(email)) {
           res.status(409).json({
             success: false,
             message: `An account with the email "${email}" already exists. Please sign in instead.`
@@ -200,7 +211,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           return;
         }
 
-        if (!password || password.length < 6) {
+        if (typeof password !== 'string' || password.length < 6) {
           res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
           return;
         }
@@ -209,7 +220,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           name: sanitizedName,
           email,
           password,
-          role: role as UserRole,
+          role,
           department,
           title
         });
@@ -226,28 +237,17 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           user: userStore.sanitizeUser(newUser)
         });
         return;
-      } catch (err: any) {
-        res.status(400).json({ success: false, message: err.message });
+      } catch {
+        res.status(400).json({ success: false, message: 'Unable to create account.' });
         return;
       }
     }
 
     // If only verifying email (login use-case)
     res.status(200).json({ success: true, message: 'OTP verified successfully.' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'OTP verification failed.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'OTP verification failed.' });
   }
-});
-
-// GET /api/otp/resend-status?email=...
-router.get('/resend-status', (req, res: Response): void => {
-  const email = req.query.email as string;
-  if (!email) {
-    res.status(400).json({ success: false, message: 'Email query parameter required.' });
-    return;
-  }
-  const { allowed, secondsLeft } = otpStore.canResend(email);
-  res.status(200).json({ success: true, allowed, secondsLeft });
 });
 
 export default router;

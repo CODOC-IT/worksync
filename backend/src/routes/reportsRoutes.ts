@@ -75,7 +75,6 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
                : ps.statuscode === 'OnHold' ? 'On Hold'
                : ps.statuscode,
         progress,
-        completion: progress,
         taskCount: ps.totalTasks,
         overdueCount: ps.overdueTasks,
         startDate: ps.startdate,

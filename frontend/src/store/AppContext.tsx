@@ -140,7 +140,6 @@ interface AppState {
     maxChatPins: number;
   };
   // Actions
-  setRole: (role: UserRole) => void;
   refreshUsers: () => void;
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
@@ -204,10 +203,10 @@ const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>([]);
-  const [currentRole, setCurrentRole] = useState<UserRole>('Admin');
   const [currentUser, setCurrentUser] = useState<User>({
     id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
   });
+  const currentRole: UserRole = currentUser.role;
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -286,13 +285,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     maxChatPins: 10
   });
 
-  // Role Switcher Handler
-  const setRole = (role: UserRole) => {
-    setCurrentRole(role);
-    const matchedUser = users.find((u) => u.role === role) || users[0];
-    if (matchedUser) setCurrentUser(matchedUser);
-  };
-
   // Theme Toggle Handler
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -308,7 +300,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshUsers = () => {
-    fetch('/api/auth/users')
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) return;
+
+    fetch('/api/auth/users', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.users) && data.users.length > 0) {
@@ -316,7 +313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       })
       .catch(() => {
-        // Silently keep default users if offline
+        // Silently keep the authenticated user if the directory is unavailable.
       });
   };
 
@@ -327,9 +324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...prev, newUser];
     });
     setCurrentUser(newUser);
-    setCurrentRole(newUser.role);
     setTaskReloadVersion((version) => version + 1);
-    refreshUsers();
   };
 
   const loginUser = (user: User) => {
@@ -339,21 +334,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...prev, user];
     });
     setCurrentUser(user);
-    setCurrentRole(user.role);
     setTaskReloadVersion((version) => version + 1);
-    refreshUsers();
+    if (user.role === 'Admin') refreshUsers();
   };
 
   const logoutUser = () => {
     localStorage.removeItem('worksync_auth_token');
     setCurrentUser({ id: '', name: '', email: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive' });
-    setCurrentRole('Admin');
+    setUsers([]);
   };
-
-  // Fetch persisted database users on mount
-  useEffect(() => {
-    refreshUsers();
-  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -421,6 +410,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeBreak?.isBreaking]);
 
   // Log Activity Helper
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('worksync_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  };
+
   const pushActivity = (
     action: string,
     targetType: ActivityLogItem['targetType'],
@@ -441,6 +437,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       diff
     };
     setActivityLogs((prev) => [newAct, ...prev]);
+
+    fetch('/api/activity-log', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
+    }).catch(() => {});
   };
 
   // --- Notification Module -----------------------------------------------------------
@@ -535,9 +537,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const dispatchNotifications = (input: SendNotificationInput) => {
     // Real persistence is the primary path; the pure local sendNotification() below is only a
     // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
-    // the acting demo-role-switcher identity has no matching backend session — see
-    // notificationApiClient.ts). Every one of this function's ~20 call sites is unaffected by
-    // which path actually wrote the notification: they only ever describe *what happened*.
+    // or because a login transition left the token and current user briefly out of sync,
+    // or the authenticated session cannot persist the event — see notificationApiClient.ts).
+    // Every call site is unaffected by which path actually wrote the notification.
     publishNotificationEvent(input)
       .then(applyCreatedNotifications)
       .catch((error) => {
@@ -1865,7 +1867,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         weeklySummaryDraft,
         activeBreak,
         settings,
-        setRole,
         refreshUsers,
         onUserRegistered,
         loginUser,

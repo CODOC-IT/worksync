@@ -48,15 +48,23 @@ export interface ActivityFilters {
   result: string;
   source: string;
   search: string;
+  changedField: string;
   myActivityOnly: boolean;
   importantOnly: boolean;
+  hasAttachments: boolean;
+  hasMentions: boolean;
+  deletedOnly: boolean;
+  failedOrBlockedOnly: boolean;
+  hrActivityOnly: boolean;
   sort: 'newest' | 'oldest';
 }
 
-export const EMPTY_ACTIVITY_FILTERS: ActivityFilters = {
+export const DEFAULT_ACTIVITY_FILTERS: ActivityFilters = {
   datePreset: 'Last 30 Days', customFrom: '', customTo: '', userId: '', userRole: '',
   projectId: '', taskId: '', module: '', action: '', entityType: '', status: '',
-  priority: '', result: '', source: '', search: '', myActivityOnly: false,
-  importantOnly: false, sort: 'newest'
+  priority: '', result: '', source: '', search: '', changedField: '',
+  myActivityOnly: false, importantOnly: false, hasAttachments: false,
+  hasMentions: false, deletedOnly: false, failedOrBlockedOnly: false,
+  hrActivityOnly: false, sort: 'newest'
 };
 

@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 
 import authRoutes from './routes/authRoutes.js';
 import assistantRoutes from './routes/assistantRoutes.js';
@@ -10,8 +10,10 @@ import hrRequestRoutes from './routes/hrRequestRoutes.js';
 
 import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
-import projectChatRoutes from './routes/projectChatRoutes.js';
+import discussionRoutes from './collab/discussion.routes.js';
 import notificationRoutes from './notifications/notification.routes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
+import activityLogRoutes from './activityLog/activityLog.routes.js';
 import activityRoutes from './activity/activity.routes.js';
 
 import { processEmailCandidates } from './notifications/notification.email.js';
@@ -19,8 +21,6 @@ import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
 import { userStore } from './store/userStore.js';
 import { auditFailedRequests } from './middleware/auditFailureMiddleware.js';
-
-dotenv.config();
 
 // Fail-fast security checks on boot
 validateAuthConfig();
@@ -40,8 +40,10 @@ app.use('/api/otp', otpRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/projects', projectRoutes);
-app.use('/api/project-chats', projectChatRoutes);
+app.use('/api/project-chats', discussionRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/activity-log', activityLogRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/hr-requests', hrRequestRoutes);
 
