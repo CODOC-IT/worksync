@@ -40,8 +40,10 @@ import {
   changeTaskStatusViaApi,
   createTaskViaApi,
   deleteTaskViaApi,
+  loadTaskDetailFromApi,
   loadTasksFromApi,
   rejectTaskViaApi,
+  reopenTaskViaApi,
   updateTaskViaApi
 } from '../features/tasks/taskRepository';
 import {
@@ -159,6 +161,22 @@ interface AppState {
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
     }
+  ) => Promise<{ success: boolean; message: string }>;
+  // Team-Lead-only reopen of a Done task. `reason` is mandatory and is persisted to
+  // work.TaskStatusHistory exactly like a normal status change's note.
+  reopenTask: (
+    taskId: string,
+    newStatus: TaskStatus,
+    reason: string
+  ) => Promise<{ success: boolean; message: string }>;
+  // Ticks/un-ticks a subtask from the board's task detail. `note` is the mandatory description
+  // the board prompts for. Returns once the server has confirmed and the parent task (whose
+  // status/progress may have cascaded) has been re-read.
+  setSubtaskCompletion: (
+    subtaskId: string,
+    parentTaskId: string,
+    completed: boolean,
+    note: string
   ) => Promise<{ success: boolean; message: string }>;
   proposeControlledEdit: (taskId: string, field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status', newValue: string, reason: string) => void;
   approveApprovalItem: (approvalId: string) => Promise<{ success: boolean; message: string }>;
@@ -1268,6 +1286,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Reopens a completed task. Kept separate from updateTaskStatus because the backend treats
+    // it as a distinct, more strictly authorized operation (Team Lead only, mandatory reason,
+    // its own endpoint and history entry) — see backend/src/tasks/task.service.ts's reopenTask.
+    // Like every other board mutation, `tasks` is only updated from the server's response.
+    const reopenTask = async (
+      taskId: string,
+      newStatus: TaskStatus,
+      reason: string
+    ): Promise<{ success: boolean; message: string }> => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return { success: false, message: 'Task not found.' };
+
+      try {
+        const updated = await reopenTaskViaApi(taskId, newStatus, reason.trim());
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
+
+        pushActivity('Reopened task', 'Task', taskId, task.title, {
+          field: 'status',
+          oldVal: 'Done',
+          newVal: newStatus
+        });
+        confirmActionSuccess('Task Reopened', `"${task.title}" was reopened to ${newStatus}.`);
+
+        return { success: true, message: `"${task.title}" reopened to ${newStatus}.` };
+      } catch (error: any) {
+        console.error('Failed to reopen task.', error);
+        return { success: false, message: error?.message || 'Failed to reopen the task. Please try again.' };
+      }
+    };
+
+    // Ticks / un-ticks a subtask from the Project Board's task detail. A subtask is just a Task
+    // with a parent (Task Module model), so this reuses the *existing* status endpoint rather
+    // than adding a subtask-specific one — the board consumes the Task Module's API, it does not
+    // duplicate its logic. `note` is the mandatory description the board prompts for, persisted
+    // to work.TaskStatusHistory exactly like any other status change's reason.
+    //
+    // The parent is then re-read from the server, never patched locally: completing a subtask
+    // can cascade the parent to In Progress or Review server-side (see task.service.ts's
+    // syncParentFromSubtasks), so only the server knows the resulting status and progress.
+    const setSubtaskCompletion = async (
+      subtaskId: string,
+      parentTaskId: string,
+      completed: boolean,
+      note: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        await changeTaskStatusViaApi(subtaskId, completed ? 'Done' : 'Todo', note);
+
+        const refreshedParent = await loadTaskDetailFromApi(parentTaskId);
+        setTasks((prev) => prev.map((t) => (t.id === parentTaskId ? refreshedParent : t)));
+
+        return {
+          success: true,
+          message: completed ? 'Subtask marked complete.' : 'Subtask reopened.'
+        };
+      } catch (error: any) {
+        console.error('Failed to update subtask.', error);
+        return { success: false, message: error?.message || 'Failed to update the subtask. Please try again.' };
+      }
+    };
+
     // Controlled Field Edits (Team Member submits -> TL/Admin approves)
     const proposeControlledEdit = (
       taskId: string,
@@ -2250,6 +2329,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateTask,
         deleteTask,
         updateTaskStatus,
+        reopenTask,
+        setSubtaskCompletion,
         proposeControlledEdit,
         approveApprovalItem,
         rejectApprovalItem,
