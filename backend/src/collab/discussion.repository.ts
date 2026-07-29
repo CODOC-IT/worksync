@@ -24,7 +24,7 @@ const ORGANIZATION_ID = 1;
 // redundantly.
 const THREAD_COLUMNS = `
   dt.threadid, dt.threadtype, dt.subject, COALESCE(dt.projectid, t.projectid) AS effectiveprojectid,
-  dt.taskid, dt.createdbyuserid, dt.isresolved, dt.resolvedbyuserid, dt.resolvedatutc, dt.createdatutc
+  dt.taskid, dt.createdbyuserid, dt.createdatutc
 `;
 const THREAD_JOINS = `
   FROM collab.discussionthreads dt
@@ -248,11 +248,3 @@ export const softDeleteComment = async (commentId: number): Promise<void> => {
   );
 };
 
-export const setThreadResolved = async (threadId: number, resolved: boolean, userId: number): Promise<void> => {
-  await query(
-    `UPDATE collab.discussionthreads
-     SET isresolved = $1, resolvedbyuserid = $2, resolvedatutc = $3
-     WHERE threadid = $4`,
-    [resolved, resolved ? userId : null, resolved ? new Date() : null, threadId]
-  );
-};

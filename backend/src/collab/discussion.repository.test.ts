@@ -266,22 +266,3 @@ test('softDeleteComment: sets DeletedAtUtc without violating the non-empty text 
   assert.ok(comment!.commenttext.length > 0, 'CommentText must stay non-empty (CK_Comments_Text)');
 });
 
-test('setThreadResolved: toggles resolution state and clears resolver fields on reopen', async () => {
-  const repo = await import('./discussion.repository.js');
-  const { threadId } = await repo.insertThread({
-    projectId: 1, title: 'Resolvable thread', commentKind: 'Blocker', creatorUserId: 1,
-    body: 'Blocking issue.', mentionUserIds: [], attachments: []
-  });
-
-  await repo.setThreadResolved(threadId, true, 2);
-  let row = await repo.findThreadById(threadId);
-  assert.equal(row!.isresolved, true);
-  assert.equal(row!.resolvedbyuserid, 2);
-  assert.ok(row!.resolvedatutc);
-
-  await repo.setThreadResolved(threadId, false, 2);
-  row = await repo.findThreadById(threadId);
-  assert.equal(row!.isresolved, false);
-  assert.equal(row!.resolvedbyuserid, null);
-  assert.equal(row!.resolvedatutc, null);
-});

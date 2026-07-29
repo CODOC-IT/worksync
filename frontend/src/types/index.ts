@@ -203,6 +203,18 @@ export interface SystemApproval {
   createdAt: string;
   details: string;
   status: 'Pending' | 'Approved' | 'Rejected' | 'Clarification_Requested';
+  projectId?: string;
+  proposedTask?: {
+    projectId: string;
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    startDate?: string;
+    dueDate: string;
+    assigneeIds: string[];
+    status: TaskStatus;
+    parentTaskId?: string;
+  };
   proposedDiff?: {
     field: string;
     oldValue: string;

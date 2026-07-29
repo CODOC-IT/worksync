@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -80,6 +80,12 @@ function formatHumanDate(d: string | undefined): string {
   const parts = d.slice(0, 10).split('-');
   const date = new Date(+parts[0], +parts[1] - 1, +parts[2]);
   return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function getShortName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length <= 1) return parts[0] || fullName;
+  return `${parts[0]} ${parts[parts.length - 1][0]}.`;
 }
 
 function getTaskAssigneeIds(t: any): string[] {
@@ -193,40 +199,44 @@ export const ReportsView: React.FC = () => {
   const [reportData, setReportData] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [reportFirstLoadDone, setReportFirstLoadDone] = useState(false);
+
+  const fetchReportData = useCallback(async (_from: string, _to: string) => {
+    setReportLoading(true);
+    setReportError(null);
+
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) {
+      setReportError('Sign in required to load report data.');
+      setReportData(null);
+      setReportLoading(false);
+      setReportFirstLoadDone(true);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `/api/reports/data?from=${encodeURIComponent(_from)}&to=${encodeURIComponent(_to)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const json = await res.json();
+      if (json.success) {
+        setReportData(json.data);
+      } else {
+        setReportError(json.message || 'Failed to load report data.');
+        setReportData(null);
+      }
+    } catch {
+      setReportError('Unable to reach the report server. Please verify your connection and try again.');
+      setReportData(null);
+    }
+    setReportLoading(false);
+    setReportFirstLoadDone(true);
+  }, []);
 
   useEffect(() => {
-    const fetchReports = async () => {
-      setReportLoading(true);
-      setReportError(null);
-
-      const token = localStorage.getItem('worksync_auth_token');
-      if (!token) {
-        setReportError('Sign in required to load report data.');
-        setReportData(null);
-        setReportLoading(false);
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `/api/reports/data?from=${encodeURIComponent(dateRange.from)}&to=${encodeURIComponent(dateRange.to)}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        const json = await res.json();
-        if (json.success) {
-          setReportData(json.data);
-        } else {
-          setReportError(json.message || 'Failed to load report data.');
-          setReportData(null);
-        }
-      } catch {
-        setReportError('Report API unavailable — data may be incomplete.');
-        setReportData(null);
-      }
-      setReportLoading(false);
-    };
-    fetchReports();
-  }, [dateRange.from, dateRange.to, currentRole]);
+    fetchReportData(dateRange.from, dateRange.to);
+  }, [dateRange.from, dateRange.to, currentRole, fetchReportData]);
 
   const apiAvailable = reportData !== null;
 
@@ -394,7 +404,7 @@ export const ReportsView: React.FC = () => {
 
   const taskCompletionTrend = useMemo(() => {
     if (apiAvailable) {
-      return reportData.tasks.completionTrend || [];
+      return (reportData.tasks || {}).completionTrend || [];
     }
     return [];
   }, [apiAvailable, reportData]);
@@ -458,78 +468,45 @@ export const ReportsView: React.FC = () => {
   }, [roleFiltered.tasks, users]);
 
   const workloadData = useMemo(() => {
-    const baseTasks = roleFiltered.tasks as any[];
+    if (!apiAvailable || !reportData?.workload) return [];
+
     const baseProjects = roleFiltered.projects as any[];
 
-    // Build a member-centric workload map from tasks (always derived from roleFiltered tasks)
-    const memberMap: Record<string, {
-      userId: string; name: string; role: string; department: string; title: string;
-      avatar: string; status: string;
-      active: number; completed: number; review: number; overdue: number;
-      projectIds: Set<string>;
-    }> = {};
-
-    baseTasks.forEach((t: any) => {
-      const assigneeIds = getTaskAssigneeIds(t);
-      assigneeIds.forEach((uid: string) => {
-        if (!uid) return;
-        if (!memberMap[uid]) {
-          const u = users.find((u: any) => u.id === uid);
-          memberMap[uid] = {
-            userId: uid,
-            name: u?.name || uid,
-            role: u?.role || '',
-            department: u?.department || '',
-            title: u?.title || '',
-            avatar: u?.avatar || '',
-            status: u?.status || 'active',
-            active: 0, completed: 0, review: 0, overdue: 0,
-            projectIds: new Set(),
-          };
-        }
-        memberMap[uid].projectIds.add(t.projectId);
-        if (t.status === 'Done') memberMap[uid].completed++;
-        else if (t.status === 'Review') memberMap[uid].review++;
-        else {
-          memberMap[uid].active++;
-          if (t.dueDate && t.dueDate < todayStr()) memberMap[uid].overdue++;
-        }
-      });
-    });
-
-    // Add members from projects who might have no tasks assigned
+    const userProjectMap: Record<string, Set<string>> = {};
     baseProjects.forEach((p: any) => {
       const allMemberIds = [p.teamLeadId, ...(p.memberIds || [])].filter(Boolean);
       allMemberIds.forEach((uid: string) => {
-        if (!memberMap[uid]) {
-          const u = users.find((u: any) => u.id === uid);
-          memberMap[uid] = {
-            userId: uid,
-            name: u?.name || uid,
-            role: u?.role || '',
-            department: u?.department || '',
-            title: u?.title || '',
-            avatar: u?.avatar || '',
-            status: u?.status || 'active',
-            active: 0, completed: 0, review: 0, overdue: 0,
-            projectIds: new Set([p.id]),
-          };
-        } else {
-          memberMap[uid].projectIds.add(p.id);
-        }
+        if (!userProjectMap[uid]) userProjectMap[uid] = new Set();
+        userProjectMap[uid].add(p.id);
       });
     });
 
-    return Object.values(memberMap)
-      .map((m) => ({
-        ...m,
-        projectIds: [...m.projectIds] as string[],
-        projectCount: m.projectIds.size,
-        totalTasks: m.active + m.completed + m.review + m.overdue,
-        hasTasks: m.active + m.completed + m.review + m.overdue > 0,
-      }))
-      .sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
-  }, [roleFiltered.tasks, roleFiltered.projects, users]);
+    return (reportData.workload as any[]).map((w: any) => {
+      const u = users.find((u: any) => u.id === w.userId);
+      const name = u?.name || w.name || w.userId;
+      const projectIds = [...(userProjectMap[w.userId] || new Set())] as string[];
+      const totalTasks = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
+      return {
+        userId: w.userId,
+        name,
+        shortName: getShortName(name),
+        role: u?.role || '',
+        department: u?.department || '',
+        title: u?.title || '',
+        avatar: u?.avatar || '',
+        status: u?.status || 'active',
+        active: w.active || 0,
+        completed: w.completed || 0,
+        review: w.review || 0,
+        overdue: w.overdue || 0,
+        projectIds,
+        projectCount: projectIds.length,
+        totalTasks,
+        hasTasks: totalTasks > 0,
+        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : 'Light',
+      };
+    }).sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
+  }, [apiAvailable, reportData, roleFiltered.projects, users]);
 
   const workloadKpiStats = useMemo(() => {
     const members = workloadData as any[];
@@ -600,9 +577,58 @@ export const ReportsView: React.FC = () => {
   const deadlineData = useMemo(() => {
     const today = todayStr();
     const tomorrow = addDays(today, 1);
+
+    if (apiAvailable && reportData?.deadlines) {
+      const apiDeadlines = reportData.deadlines;
+      const tasksMap = new Map((roleFiltered.tasks as any[]).map((t: any) => [t.id, t]));
+
+      const enrichAndFilter = (items: any[]) => {
+        return items.map((d: any) => {
+          const task = tasksMap.get(d.id);
+          return {
+            ...d,
+            projectId: task?.projectId || '',
+            taskNumber: task?.taskNumber || '',
+            assigneeIds: task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : []),
+          };
+        }).filter((t: any) => {
+          if (deadlineSearchQuery && t.title && !t.title.toLowerCase().includes(deadlineSearchQuery.toLowerCase())) return false;
+          if (deadlineFilterProject && t.projectId !== deadlineFilterProject) return false;
+          if (deadlineFilterAssignee && !getTaskAssigneeIds(t).includes(deadlineFilterAssignee)) return false;
+          if (deadlineFilterStatus && t.status !== deadlineFilterStatus) return false;
+          return true;
+        });
+      };
+
+      const enriched = {
+        dueToday: enrichAndFilter(apiDeadlines.dueToday || []),
+        dueTomorrow: enrichAndFilter(apiDeadlines.dueTomorrow || []),
+        upcoming: enrichAndFilter(apiDeadlines.upcoming || []),
+        overdue: enrichAndFilter(apiDeadlines.overdue || []),
+      };
+
+      if (deadlineFilterDateRange !== 'all') {
+        const allItems = [...enriched.dueToday, ...enriched.dueTomorrow, ...enriched.upcoming, ...enriched.overdue];
+        const filtered = allItems.filter((t: any) => {
+          if (deadlineFilterDateRange === 'today') return t.dueDate === today;
+          if (deadlineFilterDateRange === 'tomorrow') return t.dueDate === tomorrow;
+          if (deadlineFilterDateRange === 'next7') return t.dueDate >= today && t.dueDate <= addDays(today, 7);
+          if (deadlineFilterDateRange === 'next30') return t.dueDate >= today && t.dueDate <= addDays(today, 30);
+          return true;
+        });
+        return {
+          dueToday: filtered.filter((t: any) => t.dueDate === today),
+          dueTomorrow: filtered.filter((t: any) => t.dueDate === tomorrow),
+          upcoming: filtered.filter((t: any) => t.dueDate > tomorrow),
+          overdue: filtered.filter((t: any) => t.dueDate < today),
+        };
+      }
+
+      return enriched;
+    }
+
     const tasks = deadlineBaseTasks.filter((t: any) => t.dueDate && t.status !== 'Done');
 
-    // Apply date range filter
     let filtered = tasks;
     if (deadlineFilterDateRange === 'today') {
       filtered = tasks.filter((t: any) => t.dueDate === today);
@@ -615,7 +641,6 @@ export const ReportsView: React.FC = () => {
       const endDate = addDays(today, 30);
       filtered = tasks.filter((t: any) => t.dueDate >= today && t.dueDate <= endDate);
     }
-    // 'all' — no additional date filter
 
     const dueToday = filtered.filter((t: any) => t.dueDate === today)
       .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
@@ -624,9 +649,9 @@ export const ReportsView: React.FC = () => {
     const upcoming = filtered.filter((t: any) => t.dueDate > tomorrow)
       .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
     const overdue = filtered.filter((t: any) => t.dueDate < today)
-      .sort((a: any, b: any) => b.dueDate.localeCompare(a.dueDate)); // most overdue first
+      .sort((a: any, b: any) => b.dueDate.localeCompare(a.dueDate));
     return { dueToday, dueTomorrow, upcoming, overdue };
-  }, [deadlineBaseTasks, deadlineFilterDateRange]);
+  }, [apiAvailable, reportData, roleFiltered.tasks, deadlineBaseTasks, deadlineFilterDateRange, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineKpiTotals = useMemo(() => ({
     dueToday: deadlineData.dueToday.length,
@@ -848,7 +873,7 @@ export const ReportsView: React.FC = () => {
       wlMembers.forEach((w: any) => {
         const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
         const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
-        bodyHtml += `<tr>${td(w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
+        bodyHtml += `<tr>${td(w.shortName || w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'deadlines') {
@@ -1068,7 +1093,7 @@ ${bodyHtml}
 
     let bodyHtml = '';
 
-    bodyHtml += `<div style="margin-bottom:16px;"><span style="font-size:10px;color:#64748b;">${t.taskNumber || t.id.slice(0, 8)}</span>`;
+    bodyHtml += `<div style="margin-bottom:16px;"><span style="font-size:10px;color:#64748b;">${t.taskNumber || (t.id || '').slice(0, 8)}</span>`;
     bodyHtml += `<h2 style="margin:4px 0;font-size:18px;font-weight:700;color:#0f172a;">${t.title || '\u2014'}</h2>`;
     bodyHtml += `<div style="display:flex;gap:6px;margin-top:4px;">`;
     bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#dbeafe;color:#1e40af;">${t.status || '\u2014'}</span>`;
@@ -1132,9 +1157,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;p
 .header .meta{font-size:11px;color:#64748b;margin-top:6px;}
 .footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}
 </style></head><body>
-<div class="header"><h1>Task Detail</h1><div class="meta">${t.taskNumber || t.id.slice(0, 8)} &middot; Generated ${now}</div></div>
+<div class="header"><h1>Task Detail</h1><div class="meta">${t.taskNumber || (t.id || '').slice(0, 8)} &middot; Generated ${now}</div></div>
 ${bodyHtml}
-<div class="footer">Task ${t.taskNumber || t.id.slice(0, 8)} &middot; WorkSync Reports &middot; ${now}</div>
+<div class="footer">Task ${t.taskNumber || (t.id || '').slice(0, 8)} &middot; WorkSync Reports &middot; ${now}</div>
 </body></html>`;
 
     const printFrame = document.createElement('iframe');
@@ -1221,7 +1246,7 @@ ${bodyHtml}
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Task')}${th('Priority')}${th('Completed')}</tr></thead><tbody>`;
       completedTasks.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.priority || '\u2014')}${td(t.createdAt?.slice(0, 10) || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.priority || '\u2014')}${td(t.completedAt?.slice(0, 10) || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1639,7 +1664,7 @@ ${bodyHtml}
                       <BarChart data={workloadData} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                         <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                        <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
                         <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                         <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
                         <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
@@ -2238,7 +2263,7 @@ ${bodyHtml}
                     <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                       <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
                       <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                       <Legend wrapperStyle={{ fontSize: '10px' }} />
                       <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
@@ -2265,7 +2290,7 @@ ${bodyHtml}
                     }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                       <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                      <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
                       <Tooltip formatter={(value: any) => `${value}%`} />
                       <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
                     </BarChart>
@@ -2836,7 +2861,7 @@ ${bodyHtml}
                         onClick={() => setSelectedTaskId(t.id)}
                         className="cursor-pointer border-b border-slate-700/20 hover:bg-slate-700/20 transition-colors group"
                       >
-                        <td className="py-2 pr-2 text-slate-400 font-mono">{t.taskNumber || t.id.slice(0, 8)}</td>
+                        <td className="py-2 pr-2 text-slate-400 font-mono">{t.taskNumber || (t.id || '').slice(0, 8)}</td>
                         <td className="py-2 pr-2 text-slate-200 group-hover:text-cyan-300 transition-colors max-w-[200px] truncate">{t.title}</td>
                         <td className="py-2 pr-2"><StatusBadge status={t.status} size="sm" /></td>
                         <td className="py-2 pr-2"><StatusBadge status={t.priority} size="sm" /></td>
@@ -2914,7 +2939,7 @@ ${bodyHtml}
           <div className="p-5 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-[10px] text-slate-500 font-mono mb-1">{t.taskNumber || t.id.slice(0, 8)}</div>
+                <div className="text-[10px] text-slate-500 font-mono mb-1">{t.taskNumber || (t.id || '').slice(0, 8)}</div>
                 <h2 className="text-lg font-bold text-slate-100">{t.title}</h2>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -3488,24 +3513,40 @@ ${bodyHtml}
 
     return (
       <>
-        <div className="flex justify-end">
-          <button
-            onClick={handlePdfExport}
-            className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
-          >
-            <FileText size={11} />
-            Export PDF
-          </button>
-        </div>
-        {reportLoading && (
-          <div className="text-xs text-slate-400 text-center py-2">Loading report data...</div>
-        )}
-        {reportError && !reportLoading && !apiAvailable && (
-          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 text-center">
-            {reportError}
+        {reportLoading && !reportFirstLoadDone ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <div className="w-8 h-8 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+            <p className="text-xs text-slate-400">Loading report data...</p>
           </div>
+        ) : (
+          <>
+            <div className="flex justify-end">
+              <button
+                onClick={handlePdfExport}
+                className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+              >
+                <FileText size={11} />
+                Export PDF
+              </button>
+            </div>
+            {reportLoading && (
+              <div className="text-xs text-slate-400 text-center py-2">Refreshing report data...</div>
+            )}
+            {reportError && !reportLoading && !apiAvailable && (
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 text-center flex items-center justify-center gap-2">
+                <AlertTriangle size={14} />
+                <span>{reportError}</span>
+                <button
+                  onClick={() => fetchReportData(dateRange.from, dateRange.to)}
+                  className="ml-2 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[10px] font-semibold transition-all"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {tabContent}
+          </>
         )}
-        {tabContent}
       </>
     );
   };

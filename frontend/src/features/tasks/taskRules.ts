@@ -136,32 +136,44 @@ export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  isActiveProject(project)
-  && role === 'Team_Lead'
-  && project.teamLeadId === userId;
+): boolean => {
+  if (!isActiveProject(project)) {
+    return false;
+  }
+
+  if (role === 'Team_Lead') {
+    return project.teamLeadId === userId;
+  }
+
+  if (role === 'Team_Member') {
+    return getProjectMemberIds(project).includes(userId);
+  }
+
+  return false;
+};
 
 export const canEditTask = (
-  _role: UserRole,
+  role: UserRole,
   userId: string,
-  _project: Project,
+  project: Project,
   task: Task
 ): boolean =>
   Boolean(task.parentTaskId)
     ? getTaskAssigneeIds(task).includes(userId)
     : Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) === 0
-      && getTaskAssigneeIds(task).includes(userId);
+      && (getTaskAssigneeIds(task).includes(userId)
+        || (role === 'Team_Lead' && project.teamLeadId === userId));
 
 export const canDeleteTask = (
   role: UserRole,
   userId: string,
   project: Project,
+  task: Task,
   teamLeadCanDeleteTasks = true
 ): boolean => {
-  return role === 'Team_Lead'
-    && teamLeadCanDeleteTasks
-    && isActiveProject(project)
-    && project.teamLeadId === userId;
+  if (!teamLeadCanDeleteTasks || !isActiveProject(project)) return false;
+  return getTaskAssigneeIds(task).includes(userId)
+    || (role === 'Team_Lead' && project.teamLeadId === userId);
 };
 
 export const validateTaskInput = (

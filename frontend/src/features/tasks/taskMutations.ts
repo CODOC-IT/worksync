@@ -179,7 +179,7 @@ export const prepareTaskDeletion = (
 
   if (
     !project
-    || !canDeleteTask(context.currentRole, context.currentUserId, project)
+    || !canDeleteTask(context.currentRole, context.currentUserId, project, task)
   ) {
     return { success: false, message: 'You do not have permission to delete this task.' };
   }

@@ -52,27 +52,38 @@ const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 // assigned) — re-derived server-side since the backend must never trust the client's own
 // permission check.
 const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
-  if (role === 'Admin') return;
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot edit tasks.');
-  const projectId = projectFrontendId(row);
-  if (role === 'Team_Lead') {
-    if (await isProjectLead(projectId, userId, role)) return;
-    throw new TaskAuthorizationError('You can only edit tasks in projects you lead.');
-  }
   const assignees = await repo.findAssigneesForTask(row.taskid);
-  const denialReason = getTaskEditDenialReason({
-    actorId: userId,
-    assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
-    parentTaskId: row.parenttaskid,
-    subtaskCount: Number(row.subtaskcount || 0)
-  });
-  if (denialReason) throw new TaskAuthorizationError(denialReason);
+  const isAssignee = assignees.some((assignee) => fromUserPk(assignee.userid) === userId);
+
+  // Subtask editing remains intentionally assignee-only, regardless of project role.
+  if (row.parenttaskid) {
+    const denialReason = getTaskEditDenialReason({
+      actorId: userId,
+      assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
+      parentTaskId: row.parenttaskid,
+      subtaskCount: Number(row.subtaskcount || 0)
+    });
+    if (denialReason) throw new TaskAuthorizationError(denialReason);
+    return;
+  }
+
+  if (Number(row.subtaskcount || 0) > 0) {
+    throw new TaskAuthorizationError('A task with subtasks is read-only. Edit its assigned subtasks instead.');
+  }
+  if (isAssignee) return;
+
+  const projectId = projectFrontendId(row);
+  if (role === 'Team_Lead' && await isProjectLead(projectId, userId, role)) return;
+  throw new TaskAuthorizationError('You can only edit tasks assigned to you or in projects you lead.');
 };
 
 const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
-  if (role === 'Admin') return;
+  if (role === 'HR') throw new TaskAuthorizationError('HR users cannot delete tasks.');
+  const assignees = await repo.findAssigneesForTask(row.taskid);
+  if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
   if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
-  throw new TaskAuthorizationError('Only the project Team Lead may delete this task.');
+  throw new TaskAuthorizationError('You can only delete tasks assigned to you or in projects you lead.');
 };
 
 // Recipients are always assignees + the project's Team Lead (PRD §6.3/§6.6: a Team Lead must
