@@ -10,6 +10,7 @@ import {
   ApiTaskStatus,
   ChangeStatusInput,
   CreateTaskInput,
+  SubtaskDTO,
   TaskDTO,
   TaskRow,
   TaskStatusHistoryDTO,
@@ -33,13 +34,23 @@ const DB_TO_API_PRIORITY_CODE: Record<string, 'Low' | 'Medium' | 'High' | 'Criti
 
 const buildDTO = async (row: TaskRow): Promise<TaskDTO> => {
   const assignees = await repo.findAssigneesForTask(row.taskid);
-  return rowToTaskDTO(row, assignees);
+  const subtaskRows = await repo.findSubtasksForTask(row.taskid);
+  const subtasks: SubtaskDTO[] = subtaskRows.map(repo.subtaskRowToDTO);
+  return rowToTaskDTO(row, assignees, subtasks);
 };
 
 const buildDTOs = async (rows: TaskRow[]): Promise<TaskDTO[]> => {
   if (rows.length === 0) return [];
-  const assignees = await repo.findAssigneesForTasks(rows.map((row) => row.taskid));
-  return rows.map((row) => rowToTaskDTO(row, assignees));
+  const taskIds = rows.map((row) => row.taskid);
+  const assignees = await repo.findAssigneesForTasks(taskIds);
+  const subtaskRows = await repo.findSubtasksForTasks(taskIds);
+  const subtaskMap = new Map<number, SubtaskDTO[]>();
+  for (const subRow of subtaskRows) {
+    const parentId = subRow.parenttaskid ?? 0;
+    if (!subtaskMap.has(parentId)) subtaskMap.set(parentId, []);
+    subtaskMap.get(parentId)!.push(repo.subtaskRowToDTO(subRow));
+  }
+  return rows.map((row) => rowToTaskDTO(row, assignees, subtaskMap.get(row.taskid) || []));
 };
 
 const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
@@ -148,6 +159,8 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     input.status ? API_TO_DB_TASK_STATUS[input.status] : 'Todo'
   );
 
+  const parentPk = input.parentTaskId ? toTaskPk(input.parentTaskId) : undefined;
+
   const taskId = await repo.insertTask({
     projectId: projectRow.projectid,
     title: input.title.trim(),
@@ -157,8 +170,27 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     startDate: input.startDate,
     dueDate: input.dueDate,
     createdByUserId: toUserPk(actorId),
-    assigneeUserIds: input.assigneeIds.map(toUserPk)
+    assigneeUserIds: input.assigneeIds.map(toUserPk),
+    parentTaskId: parentPk
   });
+
+  // Create subtasks if provided
+  if (input.subtasks && input.subtasks.length > 0) {
+    for (const sub of input.subtasks) {
+      await repo.insertTask({
+        projectId: projectRow.projectid,
+        title: sub.title.trim(),
+        description: sub.description.trim(),
+        statusId: await repo.getTaskStatusId('Todo'),
+        priorityId,
+        startDate: input.startDate,
+        dueDate: input.dueDate,
+        createdByUserId: toUserPk(actorId),
+        assigneeUserIds: input.assigneeIds.map(toUserPk),
+        parentTaskId: taskId
+      });
+    }
+  }
 
   const row = await repo.findTaskById(taskId);
   const dto = await buildDTO(row!);

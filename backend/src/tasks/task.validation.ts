@@ -16,6 +16,8 @@ const FRONTEND_TASK_ID_PATTERN = /^tsk-\d+$/;
 const FRONTEND_PROJECT_ID_PATTERN = /^prj-\d+$/;
 const FRONTEND_USER_ID_PATTERN = /^usr-\d+$/;
 
+const SUBTASK_TITLE_PATTERN = /^.{1,200}$/;
+
 export const validateCreateTaskBody = (body: unknown): ValidationResult => {
   if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
   const input = body as Partial<CreateTaskInput>;
@@ -50,6 +52,17 @@ export const validateCreateTaskBody = (body: unknown): ValidationResult => {
   }
   if (input.status && !VALID_STATUSES.has(input.status)) {
     fieldErrors.status = 'Select a valid task status.';
+  }
+
+  if (input.subtasks && Array.isArray(input.subtasks)) {
+    for (let i = 0; i < input.subtasks.length; i++) {
+      const sub = input.subtasks[i];
+      if (!sub.title || typeof sub.title !== 'string' || !sub.title.trim()) {
+        fieldErrors[`subtasks.${i}.title`] = 'Enter a subtask title.';
+      } else if (sub.title.trim().length > 200) {
+        fieldErrors[`subtasks.${i}.title`] = 'Subtask title cannot exceed 200 characters.';
+      }
+    }
   }
 
   if (Object.keys(fieldErrors).length > 0) {

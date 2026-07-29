@@ -47,10 +47,12 @@ export interface TaskMutationResult {
   fieldErrors?: Record<string, string>;
 }
 
-export type TaskMutationData = Partial<Omit<Task, 'priority'>> & {
+export type TaskMutationData = Partial<Omit<Task, 'priority' | 'subtasks'>> & {
   priority?: TaskModulePriority;
   assigneeIds?: string[];
   startDate?: string;
+  parentTaskId?: string;
+  subtasks?: Array<{ title: string; description?: string }>;
 };
 
 type CompatibleProject = Project & Partial<{
