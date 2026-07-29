@@ -17,6 +17,7 @@ import {
   TaskStatusHistoryDTO,
   UpdateTaskInput
 } from './task.types.js';
+import { getTaskEditDenialReason } from './task.authorization.js';
 
 // Service Layer — business logic, authorization, and notification publishing (matching
 // backend/src/notifications and backend/src/projects). No SQL here (task.repository.ts); no
@@ -52,29 +53,61 @@ const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 // permission check.
 const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'Admin') return;
+  if (role === 'HR') throw new TaskAuthorizationError('HR users cannot edit tasks.');
   const projectId = projectFrontendId(row);
   if (role === 'Team_Lead') {
     if (await isProjectLead(projectId, userId, role)) return;
     throw new TaskAuthorizationError('You can only edit tasks in projects you lead.');
   }
   const assignees = await repo.findAssigneesForTask(row.taskid);
-  const isAssignee = assignees.some((a) => fromUserPk(a.userid) === userId);
-  if (!isAssignee) {
-    throw new TaskAuthorizationError('You can only edit tasks assigned to you.');
-  }
+  const denialReason = getTaskEditDenialReason({
+    actorId: userId,
+    assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
+    parentTaskId: row.parenttaskid,
+    subtaskCount: Number(row.subtaskcount || 0)
+  });
+  if (denialReason) throw new TaskAuthorizationError(denialReason);
 };
 
+const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
+  if (role === 'Admin') return;
+  if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+  throw new TaskAuthorizationError('Only the project Team Lead may delete this task.');
+};
+
+// Recipients are always assignees + the project's Team Lead (PRD §6.3/§6.6: a Team Lead must
+// see the full task lifecycle for their own projects, not only when they're also personally
+// assigned) -- resolveTeamLeadUserId falls back to the project Owner when there's no separate
+// 'TeamLead' membership row, matching the same fallback already used for authorization
+// (project.service.ts's isProjectLead) and for the Review-decision notification this used to be
+// special-cased for. The actor is still always excluded from their own event's recipient list.
 const notifyTaskRecipients = (
   row: TaskRow,
   assigneeIds: string[],
   actorId: string,
   event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds'>
-) => {
-  const recipientIds = Array.from(new Set(assigneeIds)).filter((id) => id !== actorId);
-  if (recipientIds.length === 0) return;
-  notificationService.publishEvent({ ...event, recipientIds }).catch((error) => {
-    console.warn('[task.service] Failed to publish notification event.', error);
-  });
+): void => {
+  void (async () => {
+    const recipientSet = new Set(assigneeIds);
+    try {
+      const projectRow = await projectRepo.findProjectById(row.projectid);
+      if (projectRow) {
+        const members = await projectRepo.findMembersForProject(row.projectid);
+        recipientSet.add(resolveTeamLeadUserId(projectRow, members));
+      }
+    } catch (error) {
+      console.error('[task.service] Failed to resolve project Team Lead for notification recipients.', error);
+    }
+
+    const recipientIds = Array.from(recipientSet).filter((id) => id !== actorId);
+    if (recipientIds.length === 0) return;
+
+    try {
+      await notificationService.publishEvent({ ...event, recipientIds });
+    } catch (error) {
+      console.error('[task.service] Failed to publish notification event.', event.type, error);
+    }
+  })();
 };
 
 export const listTasksForUser = async (
@@ -167,10 +200,17 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
     }
+    const hrAssignee = taskInput.assigneeIds.find((assigneeId) => userStore.findById(assigneeId)?.role === 'HR');
+    if (hrAssignee) {
+      throw new TaskValidationError('HR users cannot be assigned tasks.');
+    }
   }
+
+  const parentPk = input.parentTaskId ? toTaskPk(input.parentTaskId) : undefined;
 
   const toInsertRow = async (taskInput: CreateTaskInput | NonNullable<CreateTaskInput['subtasks']>[number]) => ({
     projectId: projectRow.projectid,
+    parentTaskId: parentPk,
     title: taskInput.title.trim(),
     description: taskInput.description.trim(),
     statusId: await repo.getTaskStatusId(taskInput.status ? API_TO_DB_TASK_STATUS[taskInput.status] : 'Todo'),
@@ -222,6 +262,10 @@ export const updateTask = async (
   if (!row) throw new TaskNotFoundError('Task not found.');
   await assertCanEditTask(row, actorId, actorRole);
 
+  if (input.assigneeIds !== undefined) {
+    throw new TaskAuthorizationError('Task assignments cannot be changed from the assignee edit form.');
+  }
+
   if (input.title !== undefined && !input.title.trim()) throw new TaskValidationError('Task title cannot be empty.');
   if (input.description !== undefined && !input.description.trim()) {
     throw new TaskValidationError('Task description cannot be empty.');
@@ -241,6 +285,10 @@ export const updateTask = async (
     ? (await repo.findAssigneesForTask(row.taskid)).map((a) => fromUserPk(a.userid))
     : [];
   const assigneePks = input.assigneeIds?.map(toUserPk);
+  if (input.assigneeIds) {
+    const hrAssignee = input.assigneeIds.find((id) => userStore.findById(id)?.role === 'HR');
+    if (hrAssignee) throw new TaskValidationError('HR users cannot be assigned tasks.');
+  }
   await repo.updateTask(row.taskid, updates, assigneePks, toUserPk(actorId));
 
   const updatedRow = await repo.findTaskById(row.taskid);
@@ -279,7 +327,7 @@ export const updateTask = async (
 export const deleteTask = async (taskId: string, actorId: string, actorRole: string): Promise<void> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId, actorRole);
+  await assertCanDeleteTask(row, actorId, actorRole);
 
   const dto = await buildDTO(row);
   const archived = await repo.archiveTask(row.taskid);
@@ -352,19 +400,9 @@ export const changeTaskStatus = async (
   const actorName = userStore.findById(actorId)?.name || 'Someone';
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
-  const recipients = new Set(dto.assigneeIds);
-  if (input.status === 'Review' && projectRow) {
-    // The project's Team Lead specifically needs to know a review decision is waiting on them.
-    // resolveTeamLeadUserId falls back to the project Owner when there's no separate 'TeamLead'
-    // membership row (the common case for a project a Team Lead created for themselves -- see
-    // project.repository.ts's insertProject) -- a raw '.find TeamLead' here would silently drop
-    // this notification for every self-led project, the same bug already fixed for project
-    // authorization in project.service.ts's isProjectLead/assertCanManage.
-    const members = await projectRepo.findMembersForProject(row.projectid);
-    recipients.add(resolveTeamLeadUserId(projectRow, members));
-  }
-
-  notifyTaskRecipients(updatedRow!, Array.from(recipients), actorId, {
+  // notifyTaskRecipients now always includes the project's Team Lead alongside the assignees,
+  // so the Review-specific manual add that used to live here is redundant.
+  notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: (input.status === 'Review'
       ? 'task_review_requested'
       : TASK_STATUS_NOTIFICATION_TYPE[input.status]) as Parameters<typeof notificationService.publishEvent>[0]['type'],

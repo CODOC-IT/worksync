@@ -77,7 +77,7 @@ const notify = (
   const ids = Array.from(new Set(recipientIds));
   if (ids.length === 0) return;
   notificationService.publishEvent({ ...event, recipientIds: ids }).catch((error) => {
-    console.warn('[discussion.service] Failed to publish notification event.', error);
+    console.error('[discussion.service] Failed to publish notification event.', event.type, error);
   });
 };
 

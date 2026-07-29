@@ -3,7 +3,9 @@ import {
   NotificationItem,
   NotificationPreferences,
   NotificationPriority,
-  NotificationType
+  NotificationType,
+  UserNotificationAnalyticsRow,
+  UserNotificationCategoryBreakdown
 } from '../../types';
 
 // ---------------------------------------------------------------------------------------
@@ -166,5 +168,41 @@ export const snoozeNotificationApi = async (id: string, untilIso: string): Promi
 // Admin-only delivery analytics (read rates / suppressed counts per notification type).
 export const fetchNotificationAnalytics = async (): Promise<NotificationAnalyticsRow[]> => {
   const { data } = await apiFetch<{ data: NotificationAnalyticsRow[] }>('/analytics');
+  return data;
+};
+
+export interface FetchUserAnalyticsFilters {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'total' | 'readRate' | 'name';
+}
+
+// Admin-only per-user analytics — who received/read what, and their read rate. Search/sort/
+// pagination are all server-side (see notification.repository.ts's getUserAnalyticsList) since
+// this is meant to scale to the whole org roster, not just whatever's already loaded client-side.
+export const fetchUserNotificationAnalytics = async (
+  filters: FetchUserAnalyticsFilters = {}
+): Promise<{ items: UserNotificationAnalyticsRow[]; total: number }> => {
+  const params = new URLSearchParams();
+  if (filters.search) params.set('search', filters.search);
+  if (filters.page) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+  if (filters.sortBy) params.set('sortBy', filters.sortBy);
+  const qs = params.toString();
+
+  const result = await apiFetch<{ data: UserNotificationAnalyticsRow[]; total: number }>(
+    `/analytics/users${qs ? `?${qs}` : ''}`
+  );
+  return { items: result.data, total: result.total };
+};
+
+// Admin-only drill-down: one user's full category/type read breakdown (their "interest").
+export const fetchUserNotificationAnalyticsDetail = async (
+  userId: string
+): Promise<UserNotificationCategoryBreakdown[]> => {
+  const { data } = await apiFetch<{ data: UserNotificationCategoryBreakdown[] }>(
+    `/analytics/users/${encodeURIComponent(userId)}`
+  );
   return data;
 };

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { AttendanceRecord, User, WorkBreak } from '../../types';
+import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import {
   CheckCircle2,
   Clock,
@@ -68,7 +68,7 @@ interface AttendanceRowProps {
   canEdit?: boolean;
   onEdit?: (record: AttendanceRecord) => void;
   canRequestChange?: boolean;
-  requestPending?: boolean;
+  requestStatus?: HRRequest['status'];
   onRequestChange?: (record: AttendanceRecord) => void;
 }
 
@@ -79,7 +79,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   canEdit = false,
   onEdit,
   canRequestChange = false,
-  requestPending = false,
+  requestStatus,
   onRequestChange
 }) => {
   const totalBreakMinutes = getTotalBreakMinutes(record);
@@ -137,15 +137,29 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
           <button
             type="button"
             onClick={() => onRequestChange(record)}
-            disabled={requestPending}
+            disabled={requestStatus === 'Pending' || requestStatus === 'Approved'}
             className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
-              requestPending
-                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
-                : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
+              requestStatus === 'Approved'
+                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed'
+                : requestStatus === 'Pending'
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
+                  : requestStatus === 'Rejected'
+                    ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                    : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
             }`}
           >
-            <FileText size={13} />
-            {requestPending ? 'Pending' : 'Request Change'}
+            {requestStatus === 'Approved' ? (
+              <CheckCircle2 size={13} />
+            ) : (
+              <FileText size={13} />
+            )}
+            {requestStatus === 'Approved'
+              ? 'Approved'
+              : requestStatus === 'Pending'
+                ? 'Pending'
+                : requestStatus === 'Rejected'
+                  ? 'Request Again'
+                  : 'Request Change'}
           </button>
         )}
       </div>
@@ -162,7 +176,7 @@ interface AttendanceHistoryProps {
   readOnly?: boolean;
   onEdit?: (record: AttendanceRecord) => void;
   canRequestChange?: boolean;
-  isRequestPending?: (record: AttendanceRecord) => boolean;
+  getRequestStatus?: (record: AttendanceRecord) => HRRequest['status'] | undefined;
   onRequestChange?: (record: AttendanceRecord) => void;
   icon?: 'history' | 'team';
   emptyMessage: string;
@@ -177,7 +191,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
   readOnly = true,
   onEdit,
   canRequestChange = false,
-  isRequestPending,
+  getRequestStatus,
   onRequestChange,
   icon = 'history',
   emptyMessage
@@ -218,7 +232,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
             canEdit={!readOnly}
             onEdit={onEdit}
             canRequestChange={canRequestChange}
-            requestPending={isRequestPending?.(record) || false}
+            requestStatus={getRequestStatus?.(record)}
             onRequestChange={onRequestChange}
           />
         ))
@@ -533,14 +547,23 @@ export const AttendanceView: React.FC = () => {
     isAdmin || (isOwnRecord(record) && !isTeamMember);
   const canRequestChange = (record: AttendanceRecord) =>
     isTeamMember && isOwnRecord(record);
+  const getCorrectionRequestStatus = (
+    record: AttendanceRecord
+  ): HRRequest['status'] | undefined => {
+    const latestRequest = hrRequests
+      .filter(
+        (request) =>
+          request.userId === currentUser.id &&
+          request.type === 'Correction' &&
+          request.date === record.date
+      )
+      .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+
+    return latestRequest?.status;
+  };
+
   const hasPendingCorrectionRequest = (record: AttendanceRecord) =>
-    hrRequests.some(
-      (request) =>
-        request.userId === currentUser.id &&
-        request.type === 'Correction' &&
-        request.status === 'Pending' &&
-        request.date === record.date
-    );
+    getCorrectionRequestStatus(record) === 'Pending';
   const hrTeamAttendance = attendanceRecords.filter((record) => {
     if (record.userId === currentUser.id) return false;
 
@@ -569,7 +592,12 @@ export const AttendanceView: React.FC = () => {
   );
 
   const openRequestModal = (record: AttendanceRecord) => {
-    if (!canRequestChange(record) || hasPendingCorrectionRequest(record)) return;
+    const requestStatus = getCorrectionRequestStatus(record);
+    if (
+      !canRequestChange(record) ||
+      requestStatus === 'Pending' ||
+      requestStatus === 'Approved'
+    ) return;
     setRequestRecordId(record.id);
   };
 
@@ -577,12 +605,20 @@ export const AttendanceView: React.FC = () => {
     record: AttendanceRecord,
     reason: string
   ) => {
-    submitHRRequest('Correction', reason, {
-      requestedCheckIn: record.checkIn,
-      requestedCheckOut: record.checkOut,
-      attendanceChangeReason: reason
+    void submitHRRequest(
+      'Correction',
+      reason,
+      {
+        requestedCheckIn: record.checkIn,
+        requestedCheckOut: record.checkOut,
+        attendanceChangeReason: reason
+      },
+      record.date
+    ).then((result) => {
+      if (result.success) {
+        setRequestRecordId(null);
+      }
     });
-    setRequestRecordId(null);
   };
 
   const openEditor = (record: AttendanceRecord) => {
@@ -779,7 +815,7 @@ export const AttendanceView: React.FC = () => {
         readOnly={isTeamMember}
         onEdit={isTeamMember ? undefined : openEditor}
         canRequestChange={isTeamMember}
-        isRequestPending={hasPendingCorrectionRequest}
+        getRequestStatus={getCorrectionRequestStatus}
         onRequestChange={openRequestModal}
         emptyMessage="No personal attendance records found."
       />

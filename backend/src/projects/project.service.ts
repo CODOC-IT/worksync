@@ -71,7 +71,7 @@ const notifyRecipients = (
   );
   if (recipientIds.length === 0) return;
   notificationService.publishEvent({ ...event, recipientIds }).catch((error) => {
-    console.warn('[project.service] Failed to publish notification event.', error);
+    console.error('[project.service] Failed to publish notification event.', event.type, error);
   });
 };
 
@@ -182,19 +182,19 @@ export const createProject = async (
       actorId,
       projectId: dto.id
     });
-    notificationService
-      .publishEvent({
+    (async () => {
+      const admins = (await userStore.getAllUsers()).filter(
+        (user) => user.role === 'Admin' && user.id !== actorId
+      );
+      await notificationService.publishEvent({
         type: 'approval',
         title: 'Project Activation Requested',
         message: `${actorName} submitted "${dto.title}" for activation.`,
         actorId,
         projectId: dto.id,
-        recipientIds: userStore
-          .getAllUsers()
-          .filter((user) => user.role === 'Admin' && user.id !== actorId)
-          .map((user) => user.id)
-      })
-      .catch((error) => console.warn('[project.service] Failed to publish approval-request event.', error));
+        recipientIds: admins.map((user) => user.id)
+      });
+    })().catch((error) => console.error('[project.service] Failed to publish approval-request event.', error));
   }
 
   recordActivitySafe({
@@ -339,7 +339,7 @@ export const addMember = async (
       projectId: dto.id,
       recipientIds: [memberUserId]
     })
-    .catch((error) => console.warn('[project.service] Failed to publish member-added event.', error));
+    .catch((error) => console.error('[project.service] Failed to publish member-added event.', error));
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -385,7 +385,7 @@ export const removeMember = async (
       projectId: dto.id,
       recipientIds: [memberUserId]
     })
-    .catch((error) => console.warn('[project.service] Failed to publish member-removed event.', error));
+    .catch((error) => console.error('[project.service] Failed to publish member-removed event.', error));
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,

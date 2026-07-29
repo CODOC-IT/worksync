@@ -102,3 +102,33 @@ export interface NotificationListQuery {
   page?: number;
   pageSize?: number;
 }
+
+// Admin per-user analytics — "which user saw which notification, their interest, and their
+// read percentage" (see notification.repository.ts's getUserAnalyticsList/getTopCategoriesForUsers).
+export interface UserAnalyticsListQuery {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'total' | 'readRate' | 'name';
+}
+
+export interface UserNotificationAnalyticsDTO {
+  userId: string;
+  name: string;
+  email: string;
+  totalReceived: number;
+  totalDelivered: number;
+  totalRead: number;
+  readRate: number; // read / delivered, 0..100, 0 when nothing delivered yet
+  topInterest: NotificationCategory | null; // the category this user reads the most of
+  lastNotifiedAt: string | null;
+  lastReadAt: string | null;
+}
+
+export interface UserNotificationCategoryBreakdownDTO {
+  category: NotificationCategory;
+  type: NotificationType;
+  total: number;
+  read: number;
+  readRate: number;
+}
