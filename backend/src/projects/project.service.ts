@@ -121,6 +121,32 @@ export const getProjectForUser = async (projectId: string, userId: string, role:
   return buildDetailDTO(row, members);
 };
 
+export const getProjectMemberDirectoryForUser = async (
+  projectId: string,
+  userId: string,
+  role: string
+) => {
+  const project = await getProjectForUser(projectId, userId, role);
+  const members = project.memberIds
+    .map((memberId) => userStore.findById(memberId))
+    .filter((member): member is NonNullable<typeof member> => Boolean(member))
+    .map((member) => ({
+      id: member.id,
+      name: member.name,
+      role: member.role,
+      department: member.department,
+      avatar: member.avatar,
+      title: member.title,
+      status: member.status
+    }));
+
+  return {
+    teamLeadId: project.teamLeadId,
+    memberIds: project.memberIds,
+    members
+  };
+};
+
 export const createProject = async (
   input: CreateProjectInput,
   actorId: string,
