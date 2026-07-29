@@ -340,13 +340,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(user);
     setTaskReloadVersion((version) => version + 1);
-    // Every role needs the full roster, not just Admin -- HR-recipient resolution
-    // (resolveHRRecipients), @mention detection, and the Team Members view all read this same
-    // `users` state regardless of who's logged in. Restricting this to Admin left `users` at []
-    // for every other role, so e.g. attendance/break notifications never found an HR recipient.
-    refreshUsers();
-  };
-
+    if (['Admin', 'Team_Lead', 'HR'].includes(user.role)) {
+  refreshUsers();
+}
+}; 
   const logoutUser = () => {
   localStorage.removeItem('worksync_auth_token');
   setHrRequests([]);
