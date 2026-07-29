@@ -436,6 +436,31 @@ export interface NotificationAnalyticsRow {
   readRate: number; // percentage, 0-100
 }
 
+// One row per user — who received/read what, and their "interest" (the category they read the
+// most of), for the Admin-only per-user analytics drill-down (backend's getUserAnalytics).
+export interface UserNotificationAnalyticsRow {
+  userId: string;
+  name: string;
+  email: string;
+  totalReceived: number;
+  totalDelivered: number;
+  totalRead: number;
+  readRate: number; // percentage, 0-100
+  topInterest: string | null;
+  lastNotifiedAt: string | null;
+  lastReadAt: string | null;
+}
+
+// One row per notification type, for a single user — backs the analytics drawer's interest
+// breakdown chart.
+export interface UserNotificationCategoryBreakdown {
+  category: string;
+  type: NotificationType;
+  total: number;
+  read: number;
+  readRate: number;
+}
+
 export type ToastTone = 'success' | 'info' | 'warning' | 'error';
 
 export interface ToastItem {
