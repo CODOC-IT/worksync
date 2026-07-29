@@ -1330,7 +1330,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;p
 .header .meta{font-size:11px;color:#64748b;margin-top:6px;}
 .footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}
 </style></head><body>
-<div class="header"><h1>Member Workload Details</h1><div class="meta">${m.name} &middot; Generated ${now}</div></div>
+<div class="header"><h1>Member Workload Details</h1><div class="meta">${m.name || '\u2014'} &middot; Generated ${now}</div></div>
 ${bodyHtml}
 <div class="footer">${m.name} &middot; WorkSync Reports &middot; ${now}</div>
 </body></html>`;
@@ -1478,9 +1478,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;p
 .header .meta{font-size:10px;color:#64748b;margin-top:6px;}
 .footer{text-align:center;margin-top:24px;padding-top:10px;border-top:1px solid #e2e8f0;font-size:8px;color:#94a3b8;}
 </style></head><body>
-<div class="header"><h1>${project.title}</h1><div class="meta">${project.code} &nbsp;|&nbsp; ${from} \u2014 ${to} &nbsp;|&nbsp; Generated ${now}</div></div>
+<div class="header"><h1>${project.title || '\u2014'}</h1><div class="meta">${project.code || ''} &nbsp;|&nbsp; ${from} \u2014 ${to} &nbsp;|&nbsp; Generated ${now}</div></div>
 ${bodyHtml}
-<div class="footer">Project Detail &middot; ${project.code} &middot; WorkSync Reports &middot; ${now}</div>
+<div class="footer">Project Detail &middot; ${project.code || ''} &middot; WorkSync Reports &middot; ${now}</div>
 </body></html>`;
 
     const printFrame = document.createElement('iframe');
@@ -3545,6 +3545,15 @@ ${bodyHtml}
 
     return (
       <>
+        <div className="flex justify-end">
+          <button
+            onClick={handlePdfExport}
+            className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+          >
+            <FileText size={11} />
+            Export PDF
+          </button>
+        </div>
         {reportLoading && (
           <div className="text-xs text-slate-400 text-center py-2">Loading report data...</div>
         )}
