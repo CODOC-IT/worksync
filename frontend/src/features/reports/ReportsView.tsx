@@ -941,6 +941,39 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
+    } else if (tab === 'tasks') {
+      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+      bodyHtml += kpi('Total', taskKpiStats.total);
+      bodyHtml += kpi('Todo', taskKpiStats.todo);
+      bodyHtml += kpi('In Progress', taskKpiStats.inProgress);
+      bodyHtml += kpi('Review', taskKpiStats.review);
+      bodyHtml += kpi('Done', taskKpiStats.completed);
+      bodyHtml += kpi('Blocked', taskKpiStats.blocked);
+      bodyHtml += kpi('Overdue', taskKpiStats.overdue);
+      bodyHtml += `</div>`;
+      bodyHtml += section('Status Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Status')}${th('Count')}</tr></thead><tbody>`;
+      (taskStatusDistData || []).forEach((s: any) => {
+        bodyHtml += `<tr>${td(s.name || '\u2014')}${td(s.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section('Priority Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Priority')}${th('Count')}</tr></thead><tbody>`;
+      (taskPriorityDistData || []).forEach((p: any) => {
+        bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section(`Task Details (${filteredTasks.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('ID')}${th('Title')}${th('Status')}${th('Priority')}${th('Assignee')}${th('Project')}${th('Due Date')}${th('Completed')}</tr></thead><tbody>`;
+      filteredTasks.forEach((t: any) => {
+        const assigneeNames = getTaskAssigneeIds(t).map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
+        const projName = roleFiltered.projects.find((p: any) => p.id === t.projectId)?.title || '\u2014';
+        bodyHtml += `<tr>${td(t.taskNumber || (t.id || '').slice(0, 8), '#64748b')}${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(assigneeNames)}${td(projName)}${td(t.dueDate ? t.dueDate.slice(0, 10) : '\u2014')}${td(t.completedAt ? t.completedAt.slice(0, 10) : '\u2014')}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
     } else {
       if (currentRole !== 'HR') {
         bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
@@ -2716,14 +2749,15 @@ ${bodyHtml}
                 <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={taskStatusDistData} cx="50%" cy="50%" outerRadius={70} dataKey="value" nameKey="name" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                        {taskStatusDistData.map((entry, idx) => (
-                          <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    </PieChart>
+                  <PieChart>
+                    <Pie data={taskStatusDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                      {taskStatusDistData.map((_entry: any, idx: number) => (
+                        <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} stroke={chartPieStroke} strokeWidth={2} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
+                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
+                  </PieChart>
                 </ResponsiveContainer>
               )}
             </div>
@@ -2738,17 +2772,15 @@ ${bodyHtml}
                 <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={taskPriorityDistData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {taskPriorityDistData.map((entry, idx) => (
-                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} />
+                  <PieChart>
+                    <Pie data={taskPriorityDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                      {taskPriorityDistData.map((_entry: any, idx: number) => (
+                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} stroke={chartPieStroke} strokeWidth={2} />
                       ))}
-                    </Bar>
-                  </BarChart>
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
+                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
+                  </PieChart>
                 </ResponsiveContainer>
               )}
             </div>
