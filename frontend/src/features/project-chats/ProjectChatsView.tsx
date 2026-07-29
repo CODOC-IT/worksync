@@ -192,7 +192,9 @@ export const ProjectChatsView: React.FC = () => {
         </div>
         <div className="flex w-full gap-2 xl:w-auto">
           <label className="relative min-w-0 flex-1 xl:w-72"><Search size={15} className="project-chat-secondary pointer-events-none absolute left-3 top-1/2 -translate-y-1/2" /><input aria-label="Search discussions" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className={`${inputClass} h-10 pl-9`} placeholder="Search discussions" /></label>
-          <button type="button" onClick={() => setComposerOpen(true)} className="project-chat-primary inline-flex h-10 shrink-0 items-center gap-2 rounded-[10px] px-4 text-sm font-bold"><Plus size={16} />Start Discussion</button>
+          {currentRole !== 'HR' && (
+            <button type="button" onClick={() => setComposerOpen(true)} className="project-chat-primary inline-flex h-10 shrink-0 items-center gap-2 rounded-[10px] px-4 text-sm font-bold"><Plus size={16} />Start Discussion</button>
+          )}
         </div>
       </header>
 
@@ -276,7 +278,7 @@ export const ProjectChatsView: React.FC = () => {
           )}
         </main>
       </div>
-      {composerOpen && <NewDiscussionDialog projects={availableProjects} tasks={tasks} users={chatUsers} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
+      {composerOpen && currentRole !== 'HR' && <NewDiscussionDialog projects={availableProjects} tasks={tasks} users={chatUsers} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
       {deleteConfirmId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelDelete(); }}>
           <div className="project-chat-dialog w-full max-w-md overflow-hidden rounded-2xl">
