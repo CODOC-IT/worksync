@@ -298,45 +298,14 @@ const fmtDate = (iso: string) =>
     hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
   }) + ' UTC';
 
-// Strip underscores and title-case
-const fmtRole = (role: string) =>
-  role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
 // Truncate text with ellipsis
 const trunc = (text: string, maxLen: number) =>
   text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
 
-// Draw a rounded badge-like result label
-const drawResultBadge = (
-  doc: PDFKit.PDFDocument,
-  text: string,
-  x: number,
-  y: number,
-  w: number,
-) => {
-  const bg  = text === 'Successful' ? PDF.successBg : text === 'Failed' ? PDF.dangerBg : PDF.warningBg;
-  const fg  = text === 'Successful' ? PDF.success   : text === 'Failed' ? PDF.danger   : PDF.warning;
-  doc.save();
-  doc.roundedRect(x, y + 1, w, 11, 3).fill(bg);
-  doc.fillColor(fg).fontSize(6.5).font('Helvetica-Bold')
-    .text(text, x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
-  doc.restore();
-};
-
-// Draw a pill module label
-const drawModuleBadge = (
-  doc: PDFKit.PDFDocument,
-  text: string,
-  x: number,
-  y: number,
-  w: number,
-) => {
-  doc.save();
-  doc.roundedRect(x, y + 1, w, 11, 3).fill(PDF.moduleBg);
-  doc.fillColor(PDF.moduleFg).fontSize(6.5).font('Helvetica-Bold')
-    .text(trunc(text, 14), x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
-  doc.restore();
-};
+// Keep export cells to one physical line. Unbounded values can make PDFKit paginate while
+// rendering a table cell, which turns a compact report into many nearly empty pages.
+const pdfCellValue = (value: string, maxLength: number): string =>
+  trunc(value.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim(), maxLength);
 
 export const exportPdf = async (
   filters: ActivityFilters,
@@ -373,16 +342,15 @@ export const exportPdf = async (
   const CONTENT  = PW - MARGIN * 2;
 
   // ── Column definitions ──────────────────────────────────────────────────
-  // Order: Timestamp | Actor | Role | Action | Module | Project / Task | Result | Description
+  // Keep the printable report compact and readable instead of squeezing every audit field
+  // into tiny columns that can overflow across pages.
   const COLS = [
-    { header: 'Timestamp',       key: 'ts',     w: 105 },
-    { header: 'Actor',           key: 'actor',  w: 100 },
-    { header: 'Role',            key: 'role',   w: 72  },
-    { header: 'Action',          key: 'action', w: 90  },
-    { header: 'Module',          key: 'module', w: 72  },
-    { header: 'Project / Task',  key: 'proj',   w: 110 },
-    { header: 'Result',          key: 'result', w: 58  },
-    { header: 'Description',     key: 'desc',   w: 0   }, // fills remainder
+    { header: 'Timestamp',      key: 'ts',      w: 112 },
+    { header: 'Member',         key: 'actor',   w: 106 },
+    { header: 'Action',         key: 'action',  w: 112 },
+    { header: 'Project / Task', key: 'context', w: 158 },
+    { header: 'Result',         key: 'result',  w: 72  },
+    { header: 'Details',        key: 'details', w: 0   }, // fills remainder
   ] as const;
 
   // Calculate description column width
@@ -447,8 +415,8 @@ export const exportPdf = async (
       doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
         .text('ACTIVE FILTERS', col1, metaLine, { lineBreak: false });
       doc.fillColor(PDF.textSecondary).fontSize(7).font('Helvetica')
-        .text(filterSummary, col1, metaLine + 9, {
-          width: CONTENT - 18, lineBreak: false,
+        .text(pdfCellValue(filterSummary, 220), col1, metaLine + 9, {
+          width: CONTENT - 18, height: 9, lineBreak: false, ellipsis: true,
         });
     }
   };
@@ -461,9 +429,9 @@ export const exportPdf = async (
         .text(col.header, x + 4, topY + 5, { width: colWidths[i] - 8, lineBreak: false });
       x += colWidths[i];
     });
-    // Description header
+    // Details header
     doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
-      .text('Description', x + 4, topY + 5, { width: descW - 8, lineBreak: false });
+      .text('Details', x + 4, topY + 5, { width: descW - 8, height: 8, lineBreak: false, ellipsis: true });
   };
 
   const drawFooterBar = () => {
@@ -510,13 +478,11 @@ export const exportPdf = async (
     const projectTask = [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—';
     const cellData = [
       fmtDate(item.timestamp),
-      trunc(item.actor.name, 18),
-      fmtRole(item.actor.role),
-      trunc(item.action, 20),
-      item.module,
-      trunc(projectTask, 22),
+      item.actor.name,
+      `${item.action} • ${item.module}`,
+      projectTask,
       item.result,
-      trunc(item.description, 120),
+      item.description,
     ];
 
     let x = MARGIN;
@@ -525,18 +491,15 @@ export const exportPdf = async (
       const cy = y + (ROW_H - 9) / 2;   // vertically centered
       const cw = colWidths[i] - 8;
 
-      if (i === 6) {
-        // Result — badge
-        drawResultBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
-      } else if (i === 4) {
-        // Module — badge
-        drawModuleBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
-      } else {
-        doc.fillColor(i === 0 ? PDF.textSecondary : PDF.textPrimary)
-          .fontSize(i === 7 ? 6 : 6.5)
-          .font('Helvetica')
-          .text(cell, cx, cy, { width: cw, lineBreak: false });
-      }
+      doc.fillColor(i === 0 || i === 4 ? PDF.textSecondary : PDF.textPrimary)
+        .fontSize(i === 5 ? 6 : 6.5)
+        .font('Helvetica')
+        .text(pdfCellValue(cell, i === 5 ? 150 : 42), cx, cy, {
+          width: cw,
+          height: 8,
+          lineBreak: false,
+          ellipsis: true,
+        });
       x += colWidths[i];
     });
 
