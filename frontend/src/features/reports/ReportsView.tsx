@@ -1479,14 +1479,15 @@ ${bodyHtml}
     emerald: 'p-1.5 rounded-lg bg-emerald-500/20',
     amber: 'p-1.5 rounded-lg bg-amber-500/20',
     magenta: 'p-1.5 rounded-lg bg-pink-500/20',
-    rose: 'p-1.5 rounded-lg bg-rose-500/20'
+    rose: 'p-1.5 rounded-lg bg-rose-500/20',
+    slate: 'p-1.5 rounded-lg bg-slate-500/20'
   };
 
   const renderKPICard = (
     label: string,
     value: string | number,
     icon: React.ReactNode,
-    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' = 'cyan',
+    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' | 'slate' = 'cyan',
     insight?: React.ReactNode
   ) => (
     <GlassCard glowColor={glow === 'rose' ? 'magenta' : glow} hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1734,7 +1735,7 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Total Projects', roleFiltered.projects.length, <FolderKanban size={14} className="text-cyan-400" />, 'cyan')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}</div>
-        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Avg Rate', roleFiltered.projects.length > 0 ? `${Math.round(roleFiltered.projects.reduce((s: number, p: any) => s + (p.progress || 0), 0) / roleFiltered.projects.length)}%` : '0%', <TrendingUp size={14} className="text-violet-400" />, 'violet')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Archived Projects', reportData?.overview?.archivedCount ?? 0, <History size={14} className="text-slate-400" />, 'slate')}</div>
       </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1788,8 +1789,7 @@ ${bodyHtml}
               <option value="">All Statuses</option>
               <option value="Active">Active</option>
               <option value="Completed">Completed</option>
-              <option value="On Hold">On Hold</option>
-              <option value="Cancelled">Cancelled</option>
+              <option value="Archived">Archived</option>
             </select>
             {(projectSearchTerm || projectFilterStatus) && (
               <button
@@ -1860,6 +1860,7 @@ ${bodyHtml}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                             healthLabel === 'On Track' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
                             healthLabel === 'At Risk' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                            healthLabel === 'Archived' ? 'text-slate-400 bg-slate-500/10 border-slate-500/20' :
                             'text-rose-400 bg-rose-500/10 border-rose-500/20'
                           }`}>{healthLabel}</span>
                         </td>

@@ -53,6 +53,10 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to);
     const projectIds = visibleProjects.map((p) => p.projectid);
 
+    // ── Archived projects (visible to role) ─────────────────
+    const archivedProjects = await repo.getArchivedProjects(userPk, role, from, to);
+    const archivedCount = archivedProjects.length;
+
     // ── Overview stats ──────────────────────────────────────
     const overview = await repo.getOverviewStats(projectIds, from, to);
     const members = await repo.getProjectMembers(projectIds);
@@ -60,7 +64,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
 
     // ── Project details with progress ───────────────────────
     const projectStats = await repo.getProjectStats(projectIds, from, to);
-    const projectDetails = projectStats.map((ps) => {
+    const activeProjectDetails = projectStats.map((ps) => {
       const progress = ps.totalTasks > 0 ? Math.round((ps.completedTasks / ps.totalTasks) * 100) : 0;
       const projectMembers = members.filter((m) => m.projectid === ps.projectid);
       const teamLeadMember = projectMembers.find((m) => m.memberrolecode === 'TeamLead');
@@ -84,6 +88,24 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
         healthLabel,
       };
     });
+
+    const projectDetails = [
+      ...activeProjectDetails,
+      ...archivedProjects.map((ap) => ({
+        id: `prj-${ap.projectid}`,
+        title: ap.projectname,
+        code: ap.projectcode,
+        status: 'Archived',
+        progress: 0,
+        taskCount: 0,
+        overdueCount: 0,
+        startDate: ap.startdate,
+        targetDate: ap.enddate,
+        teamLeadId: fromUserPk(ap.owneruserid),
+        memberIds: [],
+        healthLabel: 'Archived',
+      })),
+    ];
 
     // ── Task distributions ──────────────────────────────────
     const statusDistribution = await repo.getTaskStatusDistribution(projectIds, from, to);
@@ -218,6 +240,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
           activeTasks: overview.activeTasks,
           completedTasks: overview.completedTasks,
           overdueTasks: overview.overdueTasks,
+          archivedCount,
           completionRate: overview.totalTasks > 0
             ? Math.round((overview.completedTasks / overview.totalTasks) * 100)
             : 0,

@@ -178,6 +178,66 @@ export const getProjectStats = async (projectIds: number[], from: string, to: st
   return result.rows;
 };
 
+export interface ArchivedProjectRow {
+  projectid: number;
+  projectcode: string;
+  projectname: string;
+  startdate: string;
+  enddate: string;
+  owneruserid: number;
+}
+
+export const getArchivedProjects = async (
+  userPk: number,
+  role: string,
+  from: string,
+  to: string
+): Promise<ArchivedProjectRow[]> => {
+  const base = `SELECT p.projectid, p.projectcode, p.projectname,
+                        p.startdate::text, p.enddate::text, p.owneruserid
+                 FROM work.projects p
+                 JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
+                 WHERE p.archivedatutc IS NOT NULL`;
+
+  if (role === 'Admin' || role === 'HR') {
+    const result = await query<ArchivedProjectRow>(
+      `${base}
+       AND (ps.statuscode = 'Active'
+            OR p.startdate >= $1::date AND p.startdate <= $2::date
+            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+      [from, to]
+    );
+    return result.rows;
+  }
+
+  if (role === 'Team_Lead') {
+    const result = await query<ArchivedProjectRow>(
+      `${base}
+       AND (p.owneruserid = $3
+            OR EXISTS (SELECT 1 FROM work.projectmembers pm
+                       WHERE pm.projectid = p.projectid AND pm.userid = $3
+                       AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL))
+       AND (ps.statuscode = 'Active'
+            OR p.startdate >= $1::date AND p.startdate <= $2::date
+            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+      [from, to, userPk]
+    );
+    return result.rows;
+  }
+
+  const result = await query<ArchivedProjectRow>(
+    `${base}
+     AND EXISTS (SELECT 1 FROM work.projectmembers pm
+                 WHERE pm.projectid = p.projectid AND pm.userid = $3
+                 AND pm.leftatutc IS NULL)
+     AND (ps.statuscode = 'Active'
+          OR p.startdate >= $1::date AND p.startdate <= $2::date
+          OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+    [from, to, userPk]
+  );
+  return result.rows;
+};
+
 // ────────────────────────────────────────────────────────────
 // Member IDs per project (for activeMembers count)
 // ────────────────────────────────────────────────────────────
