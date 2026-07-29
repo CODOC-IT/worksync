@@ -3,7 +3,7 @@ import { isDatabaseConfigured } from '../db/pool.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as repo from './activity.repository.js';
-import { getEffectiveRoles, hasAccessToSensitivity, EffectiveRoles } from './activity.rbac.js';
+import { getEffectiveRoles, EffectiveRoles } from './activity.rbac.js';
 import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput, ActivitySensitivity } from './activity.types.js';
 
 const SENSITIVE_FIELD = /(password|secret|token|cookie|credential|authorization|api.?key|session)/i;
@@ -49,19 +49,6 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
   };
 };
 
-const memToDto = (event: StoredEvent): ActivityDTO => ({
-  id: event.id, correlationId: event.correlationId, actor: event.actor,
-  affectedUser: event.affectedUser, action: event.action, module: event.module,
-  entityType: event.entityType, entityId: event.entityId, entityName: event.entityName,
-  description: event.description, project: event.project, task: event.task,
-  timestamp: event.occurredAt.toISOString(),
-  result: event.result as ActivityDTO['result'], source: event.source as ActivityDTO['source'],
-  important: event.important, reason: event.reason, linkRoute: event.linkRoute,
-  ipAddress: event.ipAddress, changes: event.changes, metadata: event.metadata,
-  sensitivity: event.sensitivity, scope: event.scope,
-  isNew: Date.now() - event.occurredAt.getTime() < 5 * 60 * 1000
-});
-
 export const recordActivity = async (input: ActivityRecordInput): Promise<string | null> => {
   const safeChanges = (input.changes || []).filter((change) => !SENSITIVE_FIELD.test(change.field));
   const safeMetadata = Object.fromEntries(Object.entries(input.metadata || {}).filter(([key]) => !SENSITIVE_FIELD.test(key)));
@@ -99,55 +86,6 @@ export const recordActivitySafe = (input: ActivityRecordInput): void => {
   recordActivity(input).catch((error) => console.warn('[activity] Audit write failed.', error));
 };
 
-const memberOfProject = (event: StoredEvent, userId: string): boolean => {
-  return event.actor.id === userId || event.entityId === userId;
-};
-
-const MEMORY_MODULE_SCOPES: Record<string, string[]> = {
-  Team_Member: [],
-  Team_Lead: [],
-  HR: ['Attendance', 'HR'],
-  Admin: [],
-};
-
-const matchesFilters = (
-  event: StoredEvent,
-  filters: ActivityFilters,
-  viewerId: string,
-  effectiveRoles: EffectiveRoles
-): boolean => {
-  if (!hasAccessToSensitivity(effectiveRoles.permanentRole, effectiveRoles.isActiveTeamLead, effectiveRoles.isActiveHR, viewerId, event.sensitivity)) return false;
-
-  const role = effectiveRoles.permanentRole;
-  if (role !== 'Admin') {
-    if (event.actor.id !== viewerId) {
-      if (role === 'HR' && !effectiveRoles.isActiveTeamLead) {
-        if (!MEMORY_MODULE_SCOPES.HR.includes(event.module)) return false;
-      } else if (role === 'Team_Member' && !effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
-        if (event.module === 'Permissions' || event.module === 'Authentication') return false;
-      }
-    }
-  }
-
-  if (filters.module && event.module !== filters.module) return false;
-  if (filters.action && event.action !== filters.action) return false;
-  if (filters.result && event.result !== filters.result) return false;
-  if (filters.source && event.source !== filters.source) return false;
-  if (filters.userId && event.actor.id !== filters.userId) return false;
-  if (filters.projectId && event.project?.id !== filters.projectId) return false;
-  if (filters.taskId && event.task?.id !== filters.taskId) return false;
-  if (filters.search) {
-    const q = filters.search.toLowerCase();
-    if (!event.actor.name.toLowerCase().includes(q) && !event.description.toLowerCase().includes(q) &&
-        !event.entityName.toLowerCase().includes(q) && !event.entityId.toLowerCase().includes(q)) return false;
-  }
-  if (filters.myActivityOnly && event.actor.id !== viewerId) return false;
-  if (filters.importantOnly && !event.important) return false;
-  if (filters.from && event.occurredAt < new Date(filters.from)) return false;
-  if (filters.to && event.occurredAt > new Date(filters.to)) return false;
-  return true;
-};
-
 const getEffectiveRolesForViewer = async (viewerId: string, viewerRole: string): Promise<EffectiveRoles> => {
   const effective = await getEffectiveRoles(viewerId);
   if (effective.permanentRole !== viewerRole) {
@@ -159,11 +97,7 @@ const getEffectiveRolesForViewer = async (viewerId: string, viewerRole: string):
 export const listActivities = async (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
   const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
   if (!isDatabaseConfigured()) {
-    const filtered = memStore.filter((event) => matchesFilters(event, filters, viewerId, effectiveRoles));
-    const sorted = filters.sort === 'oldest' ? filtered : [...filtered].reverse();
-    const start = (filters.page - 1) * filters.pageSize;
-    const items = sorted.slice(start, start + filters.pageSize).map(memToDto);
-    return { items, page: filters.page, pageSize: filters.pageSize, total: filtered.length, totalPages: Math.max(1, Math.ceil(filtered.length / filters.pageSize)) };
+    throw new Error('Activity Log requires a database. Database is not configured.');
   }
   const { rows, total } = await repo.findActivities(filters, effectiveRoles, viewerId);
   const changes = await repo.findChanges(rows.map((row) => String(row.auditeventid)));
@@ -180,15 +114,7 @@ export const listActivities = async (filters: ActivityFilters, viewerId: string,
 export const getActivity = async (id: string, viewerId: string, viewerRole: string): Promise<ActivityDTO | null> => {
   const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
   if (!isDatabaseConfigured()) {
-    const event = memStore.find((e) => e.id === id);
-    if (!event) return null;
-    if (!hasAccessToSensitivity(effectiveRoles.permanentRole, effectiveRoles.isActiveTeamLead, effectiveRoles.isActiveHR, viewerId, event.sensitivity)) return null;
-    if (effectiveRoles.permanentRole !== 'Admin' && event.actor.id !== viewerId) {
-      if (effectiveRoles.permanentRole === 'HR' && !effectiveRoles.isActiveTeamLead) {
-        if (event.module !== 'Attendance' && event.module !== 'HR') return null;
-      }
-    }
-    return memToDto(event);
+    throw new Error('Activity Log requires a database. Database is not configured.');
   }
   const row = await repo.findVisibleActivityById(id, viewerId, effectiveRoles);
   if (!row) return null;

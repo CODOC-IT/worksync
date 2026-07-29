@@ -327,7 +327,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
             ) : error ? (
               <FeedState icon={<AlertCircle />} title="Activity unavailable" message={error} action={() => setRefreshKey((key) => key + 1)} />
             ) : items.length === 0 ? (
-              <FeedState icon={<Filter />} title="No matching activity" message="Try widening the date range or clearing some filters." />
+              <FeedState icon={<Filter />} title="No matching activity" message={activeChips.length === 0 ? 'No activity yet.' : 'Try widening the date range or clearing some filters.'} />
             ) : (
               <div className="divide-y divide-white/5">
                 {items.map((item) => (
