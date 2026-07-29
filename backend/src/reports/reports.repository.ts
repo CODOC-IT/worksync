@@ -116,7 +116,7 @@ export const getOverviewStats = async (
        COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS overdue
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
             OR NOT ts.iscompletedstate)`,
     [projectIds, from, to]
@@ -167,7 +167,7 @@ export const getProjectStats = async (projectIds: number[], from: string, to: st
               SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END)::int AS overdue_tasks
        FROM work.tasks t
        JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
          AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
               OR NOT ts.iscompletedstate)
        GROUP BY t.projectid
@@ -279,7 +279,7 @@ export const getTaskStatusDistribution = async (
     `SELECT ts.statuscode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
             OR NOT ts.iscompletedstate)
      GROUP BY ts.statuscode
@@ -318,7 +318,7 @@ export const getTaskPriorityDistribution = async (
      FROM work.tasks t
      JOIN work.priorities pr ON pr.priorityid = t.priorityid
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
             OR NOT ts.iscompletedstate)
      GROUP BY pr.prioritycode
@@ -365,7 +365,7 @@ export const getCompletionTrend = async (
      LEFT JOIN (
        SELECT t.createdatutc::date AS d, COUNT(*)::int AS cnt
        FROM work.tasks t
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
          AND t.createdatutc::date >= $2::date AND t.createdatutc::date <= $3::date
        GROUP BY t.createdatutc::date
      ) created ON created.d = dates.date
@@ -373,7 +373,7 @@ export const getCompletionTrend = async (
         SELECT t.completedatutc::date AS d, COUNT(*)::int AS cnt
         FROM work.tasks t
         JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
           AND ts.iscompletedstate AND t.completedatutc::date >= $2::date AND t.completedatutc::date <= $3::date
         GROUP BY t.completedatutc::date
       ) completed ON completed.d = dates.date
@@ -407,7 +407,7 @@ export const getWorkload = async (projectIds: number[], from: string, to: string
        COALESCE(SUM(CASE WHEN ts.statuscode = 'Review' THEN 1 ELSE 0 END), 0)::int AS review,
        COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS overdue
      FROM work.taskassignees ta
-     JOIN work.tasks t ON t.taskid = ta.taskid AND t.archivedatutc IS NULL
+     JOIN work.tasks t ON t.taskid = ta.taskid AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE ta.unassignedatutc IS NULL
        AND t.projectid = ANY($1::int[])
@@ -472,8 +472,8 @@ export const getDeadlineBucketTasks = async (
        LIMIT 1
      ) ta ON true
      WHERE t.projectid = ANY($1::int[])
-       AND t.archivedatutc IS NULL
-       AND NOT ts.iscompletedstate
+        AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+        AND NOT ts.iscompletedstate
        AND ${dateFilter}
      ORDER BY t.duedate, t.taskid`,
     [projectIds]
@@ -526,7 +526,7 @@ export const getTeamStats = async (projectIds: number[], from: string, to: strin
      FROM iam.users u
      JOIN work.projectmembers pm ON pm.userid = u.userid AND pm.leftatutc IS NULL
      LEFT JOIN org.departments d ON d.departmentid = u.departmentid
-     LEFT JOIN work.tasks t ON t.projectid = pm.projectid AND t.archivedatutc IS NULL
+      LEFT JOIN work.tasks t ON t.projectid = pm.projectid AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
      LEFT JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE pm.projectid = ANY($1::int[])
        AND (t.taskid IS NULL

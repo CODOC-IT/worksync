@@ -195,6 +195,9 @@ export const ReportsView: React.FC = () => {
   const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
+  const [teamSearchQuery, setTeamSearchQuery] = useState('');
+  const [expandedTeams, setExpandedTeams] = useState<Set<string>>(new Set());
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -270,7 +273,7 @@ export const ReportsView: React.FC = () => {
       (p) => isInDateRange(p.startDate, from, to) || isInDateRange(p.targetDate, from, to) || p.status === 'Active'
     );
     const validTasks = tasks.filter(
-      (t) => isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done'
+      (t) => !t.parentTaskId && (isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done')
     );
     const validAttendance = attendanceRecords.filter(
       (a) => isInDateRange(a.date, from, to)
@@ -368,7 +371,7 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       const o = reportData.overview || {};
       return {
-        totalProjects: o.totalProjects ?? 0,
+        totalProjects: (o.totalProjects ?? 0) + (o.archivedCount ?? 0),
         activeTasks: o.activeTasks ?? 0,
         completedTasks: o.completedTasks ?? 0,
         overdueTasks: o.overdueTasks ?? 0,
@@ -723,6 +726,25 @@ export const ReportsView: React.FC = () => {
     return [];
   }, [apiAvailable, reportData]);
 
+  const teamMemberMap = useMemo(() => {
+    const map: Record<string, { id: string; name: string; role: string }[]> = {};
+    users.forEach((u: any) => {
+      const dept = u.department || 'Unknown';
+      if (!map[dept]) map[dept] = [];
+      map[dept].push({ id: u.id, name: u.name || u.id, role: u.role || u.title || '' });
+    });
+    return map;
+  }, [users]);
+
+  const filteredTeamStats = useMemo(() => {
+    if (!teamSearchQuery) return teamStats;
+    const q = teamSearchQuery.toLowerCase();
+    return teamStats.filter((t: any) =>
+      t.department.toLowerCase().includes(q) ||
+      (teamMemberMap[t.department] || []).some((m) => m.name.toLowerCase().includes(q))
+    );
+  }, [teamStats, teamSearchQuery, teamMemberMap]);
+
   // ── Rest of the component: unchanged UI code ─────────────────────────
 
   const chartColors = useMemo(() => {
@@ -1004,6 +1026,25 @@ export const ReportsView: React.FC = () => {
           bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
+        const projArr = (reportData?.projects || roleFiltered.projects || []) as any[];
+        if (projArr.length > 0) {
+          bodyHtml += section(`Project Breakdown (${projArr.length} total)`);
+          bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;">`;
+          bodyHtml += kpi('Total Projects', kpiStats.totalProjects ?? 0);
+          bodyHtml += kpi('Active', projArr.filter((p: any) => p.status === 'Active').length);
+          bodyHtml += kpi('Completed', projArr.filter((p: any) => p.status === 'Completed').length);
+          bodyHtml += kpi('Archived', reportData?.overview?.archivedCount ?? 0);
+          const avgProg = projArr.length > 0 ? Math.round(projArr.reduce((s: number, p: any) => s + (p.progress || 0), 0) / projArr.length) : 0;
+          bodyHtml += kpi('Avg Progress', `${avgProg}%`);
+          bodyHtml += `</div>`;
+          bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+          bodyHtml += `<thead><tr>${th('Project')}${th('Status')}${th('Progress')}${th('Tasks')}${th('Health')}</tr></thead><tbody>`;
+          projArr.forEach((p: any) => {
+            const health = (p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : p.status === 'Archived' ? 'Archived' : 'Needs Attention';
+            bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
+          });
+          bodyHtml += `</tbody></table>`;
+        }
       } else {
         bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
         bodyHtml += kpi('Present Today', hrOverviewStats.presentToday);
@@ -1564,44 +1605,33 @@ ${bodyHtml}
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Contributors', kpiStats.activeMembers, <Users size={14} className="text-cyan-400" />, 'cyan')}</div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health')}
-                <div className={`mt-3 ${projectHealthData.length > 10 ? 'overflow-y-auto' : ''}`} style={{ height: Math.min(projectHealthData.length * 32 + 40, 400) }}>
-                  <div style={{ height: Math.max(projectHealthData.length * 32 + 40, 260) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                        <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                        <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                        <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                        <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+          <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+            <div className="glass-panel p-4 rounded-lg">
+              {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health', `${projectHealthData.length} projects`)}
+              <div className="mt-3 max-h-[400px] overflow-y-auto space-y-1">
+                {projectHealthData.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-4">No project data available for this period</p>
+                ) : (
+                  projectHealthData.map((p: any, i: number) => {
+                    const proj = (reportData?.projects || [])[i] || p;
+                    return (
+                      <div key={p.name} className="flex items-center gap-3 py-2 px-2 rounded hover:bg-slate-800/30 transition-colors">
+                        <StatusBadge status={proj.status || 'Unknown'} size="sm" />
+                        <span className="text-xs text-slate-200 truncate flex-1 min-w-0">{p.name}</span>
+                        <div className="w-28 shrink-0 h-3 rounded bg-slate-700/50 overflow-hidden">
+                          <div
+                            className={`h-full rounded transition-all ${p.progress >= 70 ? 'bg-emerald-500' : p.progress >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                            style={{ width: `${Math.min(p.progress, 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-400 w-10 text-right shrink-0">{p.progress}%</span>
+                      </div>
+                    );
+                  })
+                )}
               </div>
-            </GlassCard>
-
-            <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<TrendingUp size={16} className="text-violet-400" />, 'Task Activity Trend')}
-                <div className="mt-3" style={{ height: 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={taskCompletionTrend} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis dataKey="date" tick={{ fill: chartTextColor, fontSize: 9 }} tickFormatter={formatDateLabel} />
-                      <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <Tooltip content={({ active, payload, label }) => <CustomTooltip active={active} payload={payload} label={formatDateLabel(label)} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Area type="monotone" dataKey="Created" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.2} />
-                      <Area type="monotone" dataKey="Completed" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.3} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </GlassCard>
-          </div>
+            </div>
+          </GlassCard>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <GlassCard glowColor="emerald" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -2184,73 +2214,108 @@ ${bodyHtml}
         {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Department Performance')}
-          <div className="mt-3" style={{ height: 300 }}>
-            {teamStats.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No department data available</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={teamStats} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="department" tick={{ fill: chartTextColor, fontSize: 9 }} angle={-20} textAnchor="end" height={60} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Legend wrapperStyle={{ fontSize: '10px' }} />
-                  <Bar dataKey="tasks" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Tasks" />
-                  <Bar dataKey="completed" fill={chartColors.emerald} radius={[4, 4, 0, 0]} name="Completed" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+      <GlassCard>
+        <div className="p-4 space-y-3">
+          {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filter Teams')}
+          <div className="flex flex-wrap gap-2">
+            <div className="relative flex-1 min-w-[160px] max-w-[300px]">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+              <input
+                type="text"
+                value={teamSearchQuery}
+                onChange={(e) => setTeamSearchQuery(e.target.value)}
+                placeholder="Search department or member..."
+                className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
+              />
+              {teamSearchQuery && (
+                <button onClick={() => setTeamSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                  <X size={12} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </GlassCard>
 
-      <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
-        <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
-          <colgroup>
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '15%' }} />
-            <col style={{ width: '24%' }} />
-          </colgroup>
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th>Department</th>
-              <th>Members</th>
-              <th>Projects</th>
-              <th>Tasks</th>
-              <th>Completed</th>
-              <th>Completion Rate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {teamStats.length === 0 ? (
-              <tr><td colSpan={6} className="text-center text-slate-500 py-6">No data available</td></tr>
-            ) : (
-              teamStats.map((t: any) => (
-                <tr key={t.department}>
-                  <td className="text-white font-medium truncate">{t.department}</td>
-                  <td className="font-mono text-xs">{t.members}</td>
-                  <td className="font-mono text-xs">{t.projects}</td>
-                  <td className="font-mono text-xs">{t.tasks}</td>
-                  <td className="font-mono text-xs text-emerald-400">{t.completed}</td>
-                  <td>
+      <div className="max-h-[500px] overflow-y-auto space-y-3 pr-1">
+        {filteredTeamStats.length === 0 ? (
+          <div className="text-center py-12 text-slate-500">
+            <Users size={32} className="mx-auto mb-2 opacity-30" />
+            <p className="text-xs">{teamSearchQuery ? 'No teams match the search' : 'No team data available'}</p>
+          </div>
+        ) : (
+          filteredTeamStats.map((t: any) => {
+            const members = teamMemberMap[t.department] || [];
+            const isExpanded = expandedTeams.has(t.department);
+            return (
+              <GlassCard key={t.department} glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-12 h-1.5 rounded-full bg-slate-700">
-                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${t.rate}%` }} />
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-300">{t.rate}%</span>
+                      <button
+                        onClick={() => {
+                          const next = new Set(expandedTeams);
+                          if (isExpanded) next.delete(t.department); else next.add(t.department);
+                          setExpandedTeams(next);
+                        }}
+                        className="text-slate-400 hover:text-slate-200 transition-colors"
+                      >
+                        <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+                      <span className="text-sm font-semibold text-white">{t.department}</span>
+                      <span className="text-[10px] text-slate-500 ml-1">{members.length} members</span>
                     </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
+                      <div className="text-[10px] text-slate-400">Members</div>
+                      <div className="text-sm font-bold text-slate-200">{t.members}</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
+                      <div className="text-[10px] text-slate-400">Projects</div>
+                      <div className="text-sm font-bold text-slate-200">{t.projects}</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
+                      <div className="text-[10px] text-slate-400">Tasks</div>
+                      <div className="text-sm font-bold text-cyan-400">{t.tasks}</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
+                      <div className="text-[10px] text-slate-400">Completed</div>
+                      <div className="text-sm font-bold text-emerald-400">{t.completed}</div>
+                    </div>
+                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
+                      <div className="text-[10px] text-slate-400">Rate</div>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <div className="w-10 h-1.5 rounded-full bg-slate-700">
+                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${t.rate}%` }} />
+                        </div>
+                        <span className="text-xs font-mono text-slate-300">{t.rate}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="mt-2 pt-3 border-t border-white/5">
+                      <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Team Members</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                        {members.map((m) => (
+                          <div key={m.id} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-800/30 text-xs">
+                            <div className="w-5 h-5 rounded-full bg-cyan-500/20 flex items-center justify-center shrink-0">
+                              <span className="text-[9px] font-bold text-cyan-400">{m.name.charAt(0).toUpperCase()}</span>
+                            </div>
+                            <span className="text-slate-300 truncate">{m.name}</span>
+                            {m.role && <span className="text-[10px] text-slate-500 shrink-0">{m.role}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </GlassCard>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -3376,7 +3441,7 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
         <div className="flex flex-wrap gap-1.5">
           {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
@@ -3403,6 +3468,21 @@ ${bodyHtml}
               </button>
             );
           })}
+        </div>
+        <div className="relative flex-1 min-w-[160px] max-w-[280px]">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            value={attendanceSearchQuery}
+            onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+            placeholder="Search user name..."
+            className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
+          />
+          {attendanceSearchQuery && (
+            <button onClick={() => setAttendanceSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+              <X size={12} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -3431,7 +3511,14 @@ ${bodyHtml}
           <tbody>
               {(() => {
                 const raw: any[] = (roleFiltered.attendance || []) as any[];
-                const filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                if (attendanceSearchQuery) {
+                  const q = attendanceSearchQuery.toLowerCase();
+                  filtered = filtered.filter((a: any) => {
+                    const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
+                    return userName.toLowerCase().includes(q);
+                  });
+                }
                 if (filtered.length === 0) {
                   return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
                 }
