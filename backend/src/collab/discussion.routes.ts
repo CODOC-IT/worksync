@@ -30,6 +30,5 @@ router.patch('/comments/:commentId', controller.editComment);
 router.delete('/comments/:commentId', controller.deleteComment);
 
 // POST /api/project-chats/:threadId/resolution — body: { resolved }
-router.post('/:threadId/resolution', controller.setResolution);
 
 export default router;

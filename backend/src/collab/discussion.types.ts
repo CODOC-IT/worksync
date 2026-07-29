@@ -42,9 +42,6 @@ export interface DiscussionThreadRow {
   effectiveprojectid: number;
   taskid: number | null;
   createdbyuserid: number;
-  isresolved: boolean;
-  resolvedbyuserid: number | null;
-  resolvedatutc: Date | null;
   createdatutc: Date;
 }
 
@@ -112,9 +109,6 @@ export interface DiscussionThreadDTO {
   title: string;
   type: DiscussionType;
   creatorId: string;
-  resolved: boolean;
-  resolvedBy?: string;
-  resolvedAt?: string;
   createdAt: string;
   updatedAt: string;
   comments: DiscussionCommentDTO[];
