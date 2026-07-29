@@ -5,7 +5,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import {
   Mail, Briefcase, Shield, Camera, Save, AlertCircle,
   CheckCircle2, Calendar, Flag, Users, Trophy, Loader2,
-  FolderKanban, CheckSquare, Inbox, Star
+  FolderKanban, CheckSquare, Inbox, Star, Clock, Activity
 } from 'lucide-react';
 
 const getAuthHeaders = (): Record<string, string> => {
@@ -55,7 +55,7 @@ const TABS: { id: ProfileTab; label: string; icon: React.ElementType }[] = [
 ];
 
 export const ProfileView: React.FC = () => {
-  const { currentUser, tasks, projects, updateCurrentUser } = useApp();
+  const { currentUser, tasks, projects, attendanceRecords, updateCurrentUser } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<ProfileTab>('tasks');
 
@@ -77,6 +77,17 @@ export const ProfileView: React.FC = () => {
     (p) => p.memberIds.includes(currentUser.id) || p.teamLeadId === currentUser.id
   );
   const projectsLed = projects.filter((p) => p.teamLeadId === currentUser.id);
+
+  // Azeem Phase 2 - Today's attendance
+  const todayStr = new Date().toISOString().split('T')[0];
+  const myTodayAttendance = attendanceRecords.find(
+    (a) => a.userId === currentUser.id && a.date === todayStr
+  );
+  const todayAttendanceLabel = myTodayAttendance
+    ? myTodayAttendance.checkOut
+      ? `Checked out ${myTodayAttendance.checkOut}`
+      : `Checked in ${myTodayAttendance.checkIn}`
+    : 'Not clocked in today';
 
   const getProjectName = (projectId: string): string => {
     const p = projects.find((proj) => proj.id === projectId);
@@ -224,6 +235,35 @@ export const ProfileView: React.FC = () => {
       </div>
     );
   };
+
+  /* ─── Azeem Phase 2: Profile Stat Chip ────────────────────────────────────── */
+  const ProfileStatChip = ({
+    icon: Icon,
+    label,
+    color,
+  }: {
+    icon: React.ElementType;
+    label: string;
+    color: 'cyan' | 'violet' | 'emerald' | 'amber';
+  }) => {
+    const colorMap: Record<string, string> = {
+      cyan: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20',
+      violet: 'bg-purple-500/10 text-purple-300 border-purple-500/20',
+      emerald: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+      amber: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+    };
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold border ${
+          colorMap[color]
+        }`}
+      >
+        <Icon size={12} />
+        {label}
+      </span>
+    );
+  };
+  /* ───────────────────────────────────────────────────────────────────── */
 
   /* ───────── Empty State ───────── */
   const EmptyState = ({ icon: Icon, title, message }: { icon: React.ElementType; title: string; message: string }) => (
@@ -526,7 +566,7 @@ export const ProfileView: React.FC = () => {
       <div className="glass-panel-glow p-6 sm:p-8 border-cyan-500/30">
         <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
           <AvatarImage size="lg" />
-          <div className="min-w-0 text-center sm:text-left">
+          <div className="min-w-0 text-center sm:text-left flex-1">
             <div className="flex items-center justify-center sm:justify-start gap-2.5 mb-2 flex-wrap">
               <h1 className="text-2xl font-extrabold text-white">{currentUser.name}</h1>
               <StatusBadge status={currentUser.role.replace('_', ' ')} size="sm" />
@@ -550,6 +590,25 @@ export const ProfileView: React.FC = () => {
                   </span>
                 </>
               )}
+            </div>
+
+            {/* Azeem Phase 2 - Quick stats row */}
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mt-4">
+              <ProfileStatChip
+                icon={CheckSquare}
+                label={`${myTasks.filter(t => t.status !== 'Done').length} Active Tasks`}
+                color="violet"
+              />
+              <ProfileStatChip
+                icon={FolderKanban}
+                label={`${myProjects.length} Projects`}
+                color="cyan"
+              />
+              <ProfileStatChip
+                icon={Clock}
+                label={todayAttendanceLabel}
+                color={myTodayAttendance ? 'emerald' : 'amber'}
+              />
             </div>
           </div>
         </div>

@@ -17,12 +17,51 @@ import {
   FileCheck2,
   Calendar,
   Activity,
-  ChevronRight
+  ChevronRight,
+  MessageSquare,
+  Users
 } from 'lucide-react';
 
 interface DashboardViewProps {
   onNavigate: (tab: string, filterId?: string) => void;
 }
+
+/* ─── Azeem Phase 2: Members Summary Widget ─────────────────────────────── */
+const MembersWidget: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
+  const { users } = useApp();
+  const active = users.filter((u) => u.status === 'active').length;
+  const leads = users.filter((u) => u.role === 'Team_Lead').length;
+  const hrs = users.filter((u) => u.role === 'HR').length;
+
+  const rows = [
+    { label: 'Total Members', value: users.length, color: 'text-white' },
+    { label: 'Active Now', value: active, color: 'text-emerald-400' },
+    { label: 'Team Leads', value: leads, color: 'text-purple-400' },
+    { label: 'HR Staff', value: hrs, color: 'text-pink-400' },
+  ];
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r) => (
+        <div
+          key={r.label}
+          className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/40 border border-white/5 text-[11px]"
+        >
+          <span className="text-slate-400 font-mono">{r.label}</span>
+          <span className={`font-bold font-mono ${r.color}`}>{r.value}</span>
+        </div>
+      ))}
+      <button
+        onClick={() => onNavigate('members')}
+        className="w-full mt-2 py-1.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/20 text-[10px] sm:text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+      >
+        <UserCheck size={12} />
+        View All Members
+      </button>
+    </div>
+  );
+};
+/* ─────────────────────────────────────────────────────────────────────────── */
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const {
@@ -100,6 +139,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           >
             <Sparkles size={12} />
             <span>AI</span>
+          </button>
+
+          {/* Azeem Phase 2 - Chat quick-action */}
+          <button
+            onClick={() => onNavigate('project-chats')}
+            className="flex-1 md:flex-none px-2 sm:px-2.5 md:px-3 py-1.5 sm:py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] sm:text-[11px] md:text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+          >
+            <MessageSquare size={12} />
+            <span>Chat</span>
           </button>
         </div>
       </div>
@@ -451,6 +499,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Azeem Phase 2 - Members Summary Widget */}
+        <div className="glass-panel p-3 sm:p-4 md:p-5 border border-purple-500/20">
+          <div className="flex items-center justify-between mb-2 sm:mb-3 pb-2 sm:pb-3 border-b border-white/10">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <Users size={14} className="text-purple-400" />
+              <h3 className="font-bold text-[11px] sm:text-xs md:text-sm text-white">Team Members</h3>
+            </div>
+            <button
+              onClick={() => onNavigate('members')}
+              className="text-[10px] sm:text-xs text-purple-400 hover:underline font-mono flex items-center gap-1"
+            >
+              <span className="hidden sm:inline">Manage</span>
+              <ChevronRight size={12} />
+            </button>
+          </div>
+
+          <MembersWidget onNavigate={onNavigate} />
+        </div>
+
+        {/* Azeem Phase 2 - Project Chat Shortcut */}
+        <div
+          className="glass-panel p-3 sm:p-4 border border-emerald-500/20 flex items-center gap-3 cursor-pointer hover:border-emerald-400/40 transition-all group"
+          onClick={() => onNavigate('project-chats')}
+        >
+          <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0 group-hover:bg-emerald-500/20 transition-all">
+            <MessageSquare size={18} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] sm:text-xs font-bold text-white block">Project Chats</span>
+            <span className="text-[10px] sm:text-[11px] text-slate-400 font-mono">Open team discussions</span>
+          </div>
+          <ChevronRight size={14} className="text-emerald-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
         </div>
       </div>
     </div>
