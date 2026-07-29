@@ -4,9 +4,37 @@ import { fromProjectPk, fromTaskPk, fromUserPk, toUserPk } from '../utils/idMapp
 import { userStore } from '../store/userStore.js';
 import * as repo from './activity.repository.js';
 import { getEffectiveRoles, EffectiveRoles } from './activity.rbac.js';
-import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput, ActivitySensitivity } from './activity.types.js';
+import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput } from './activity.types.js';
 
 const SENSITIVE_FIELD = /(password|secret|token|cookie|credential|authorization|api.?key|session)/i;
+const MAX_METADATA_DEPTH = 5;
+const MAX_METADATA_ARRAY_ITEMS = 100;
+const MAX_METADATA_STRING_LENGTH = 2_000;
+
+const sanitizeMetadataValue = (value: unknown, depth = 0): unknown => {
+  if (depth > MAX_METADATA_DEPTH) return '[truncated]';
+  if (typeof value === 'string') {
+    return value.length > MAX_METADATA_STRING_LENGTH
+      ? `${value.slice(0, MAX_METADATA_STRING_LENGTH)}…`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_METADATA_ARRAY_ITEMS)
+      .map((item) => sanitizeMetadataValue(item, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !SENSITIVE_FIELD.test(key))
+        .map(([key, nestedValue]) => [key, sanitizeMetadataValue(nestedValue, depth + 1)])
+    );
+  }
+  return value;
+};
+
+const sanitizeMetadata = (metadata: Record<string, unknown>): Record<string, unknown> =>
+  sanitizeMetadataValue(metadata) as Record<string, unknown>;
 
 type StoredEvent = {
   id: string; correlationId: string; occurredAt: Date;
@@ -17,7 +45,6 @@ type StoredEvent = {
   result: string; source: string; important: boolean; reason?: string;
   linkRoute?: string; ipAddress?: string; changes: ActivityChange[];
   metadata: Record<string, unknown>;
-  sensitivity?: ActivitySensitivity; scope?: string;
 };
 
 const memStore: StoredEvent[] = [];
@@ -51,7 +78,7 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
 
 export const recordActivity = async (input: ActivityRecordInput): Promise<string | null> => {
   const safeChanges = (input.changes || []).filter((change) => !SENSITIVE_FIELD.test(change.field));
-  const safeMetadata = Object.fromEntries(Object.entries(input.metadata || {}).filter(([key]) => !SENSITIVE_FIELD.test(key)));
+  const safeMetadata = sanitizeMetadata(input.metadata || {});
   if (!isDatabaseConfigured()) {
     const event: StoredEvent = {
       id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -72,8 +99,7 @@ export const recordActivity = async (input: ActivityRecordInput): Promise<string
       result: input.result || 'Successful', source: input.source || 'API',
       important: Boolean(input.important), reason: input.reason || undefined,
       linkRoute: input.linkRoute || undefined, ipAddress: input.ipAddress || undefined,
-      changes: safeChanges, metadata: safeMetadata,
-      sensitivity: input.sensitivity || 'Normal', scope: input.scope
+      changes: safeChanges, metadata: safeMetadata
     };
     memStore.push(event);
     if (memStore.length > 500) memStore.shift();
@@ -86,16 +112,14 @@ export const recordActivitySafe = (input: ActivityRecordInput): void => {
   recordActivity(input).catch((error) => console.warn('[activity] Audit write failed.', error));
 };
 
-const getEffectiveRolesForViewer = async (viewerId: string, viewerRole: string): Promise<EffectiveRoles> => {
-  const effective = await getEffectiveRoles(viewerId);
-  if (effective.permanentRole !== viewerRole) {
-    return { ...effective, permanentRole: viewerRole };
-  }
-  return effective;
+const getEffectiveRolesForViewer = async (viewerId: string): Promise<EffectiveRoles> => {
+  // Database role assignments are authoritative. Never widen Activity Log access using a
+  // potentially stale role embedded in an older JWT.
+  return getEffectiveRoles(viewerId);
 };
 
-export const listActivities = async (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
-  const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
+export const listActivities = async (filters: ActivityFilters, viewerId: string, _viewerRole: string) => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
   if (!isDatabaseConfigured()) {
     throw new Error('Activity Log requires a database. Database is not configured.');
   }
@@ -111,8 +135,8 @@ export const listActivities = async (filters: ActivityFilters, viewerId: string,
   };
 };
 
-export const getActivity = async (id: string, viewerId: string, viewerRole: string): Promise<ActivityDTO | null> => {
-  const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
+export const getActivity = async (id: string, viewerId: string, _viewerRole: string): Promise<ActivityDTO | null> => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
   if (!isDatabaseConfigured()) {
     throw new Error('Activity Log requires a database. Database is not configured.');
   }
@@ -122,14 +146,81 @@ export const getActivity = async (id: string, viewerId: string, viewerRole: stri
   return toDto(row, changes.get(String(row.auditeventid)) || []);
 };
 
+const EXPORT_LIMIT = 5_000;
+
+interface ActivityExport<T> {
+  content: T;
+  exportedCount: number;
+  total: number;
+}
+
 const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-export const exportCsv = async (filters: ActivityFilters, viewerId: string, viewerRole: string): Promise<string> => {
-  if (viewerRole !== 'Admin' && viewerRole !== 'HR') throw new Error('Only administrators and HR can export audit logs.');
-  const result = await listActivities({ ...filters, page: 1, pageSize: 5000 }, viewerId, viewerRole);
-  const filterSummary = JSON.stringify(Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '')));
+
+const activeFilterSummary = (filters: ActivityFilters): string => JSON.stringify(
+  Object.fromEntries(
+    Object.entries(filters).filter(([key, value]) =>
+      !['page', 'pageSize'].includes(key)
+      && value !== undefined
+      && value !== ''
+      && value !== false
+    )
+  )
+);
+
+const assertCanExport = async (viewerId: string): Promise<EffectiveRoles> => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
+  const canExport = effectiveRoles.permanentRole === 'Admin'
+    || effectiveRoles.permanentRole === 'HR'
+    || effectiveRoles.isActiveHR;
+  if (!canExport) throw new Error('Only administrators and HR can export audit logs.');
+  return effectiveRoles;
+};
+
+const recordExport = (
+  format: 'CSV' | 'PDF',
+  viewerId: string,
+  viewerRole: string,
+  exportedCount: number,
+  total: number,
+  filterSummary: string
+): void => {
+  const actor = userStore.findById(viewerId);
+  recordActivitySafe({
+    actorId: viewerId,
+    actorName: actor?.name,
+    actorEmail: actor?.email,
+    actorRole: viewerRole,
+    action: 'Exported',
+    module: 'Activity Log',
+    entityType: 'Audit Export',
+    entityId: `export-${Date.now()}`,
+    entityName: `Filtered activity log ${format}`,
+    description: `${actor?.name || 'Authorized user'} exported ${exportedCount} of ${total} matching audit events as ${format}.`,
+    source: 'Web',
+    important: true,
+    metadata: { format, exportedCount, totalMatching: total, limit: EXPORT_LIMIT, filters: filterSummary },
+  });
+};
+
+export const exportCsv = async (
+  filters: ActivityFilters,
+  viewerId: string,
+  viewerRole: string
+): Promise<ActivityExport<string>> => {
+  const effectiveRoles = await assertCanExport(viewerId);
+  const result = await listActivities(
+    { ...filters, page: 1, pageSize: EXPORT_LIMIT },
+    viewerId,
+    effectiveRoles.permanentRole
+  );
+  const filterSummary = activeFilterSummary(filters);
   const lines = [
     ['Exported At UTC', new Date().toISOString()].map(csvCell).join(','),
-    ['Active Filters', filterSummary].map(csvCell).join(','), '',
+    ['Exported Events', result.items.length].map(csvCell).join(','),
+    ['Total Matching Events', result.total].map(csvCell).join(','),
+    ['Export Limit', EXPORT_LIMIT].map(csvCell).join(','),
+    ['Active Filters', filterSummary].map(csvCell).join(','),
+    '',
     ['Event ID','Timestamp UTC','Actor','Email','Role','Action','Module','Entity Type','Entity ID','Entity','Project','Task','Result','Source','Description','Changes'].map(csvCell).join(',')
   ];
   for (const item of result.items) {
@@ -137,16 +228,13 @@ export const exportCsv = async (filters: ActivityFilters, viewerId: string, view
       item.id, item.timestamp, item.actor.name, item.actor.email, item.actor.role, item.action,
       item.module, item.entityType, item.entityId, item.entityName, item.project?.name,
       item.task?.name, item.result, item.source, item.description,
-      item.changes.map((c) => `${c.field}: ${c.previousValue ?? '—'} -> ${c.newValue ?? '—'}`).join('; ')
+      item.changes.map((change) => `${change.field}: ${change.previousValue ?? '—'} -> ${change.newValue ?? '—'}`).join('; ')
     ].map(csvCell).join(','));
   }
-  recordActivitySafe({
-    actorId: viewerId, actorName: userStore.findById(viewerId)?.name, actorRole: viewerRole,
-    action: 'Exported', module: 'Activity Log', entityType: 'Audit Export', entityId: `export-${Date.now()}`,
-    entityName: 'Filtered activity log CSV', description: `${userStore.findById(viewerId)?.name || 'Admin'} exported ${result.total} audit events.`,
-    important: true, metadata: { exportedCount: result.total, filters: filterSummary }
-  });
-  return lines.join('\r\n');
+
+  const exportedCount = result.items.length;
+  recordExport('CSV', viewerId, effectiveRoles.permanentRole, exportedCount, result.total, filterSummary);
+  return { content: lines.join('\r\n'), exportedCount, total: result.total };
 };
 
 const PDF_COLORS = {
@@ -155,10 +243,18 @@ const PDF_COLORS = {
   success: '#34d399', danger: '#f87171', warning: '#fbbf24',
 };
 
-export const exportPdf = async (filters: ActivityFilters, viewerId: string, viewerRole: string): Promise<Buffer> => {
-  if (viewerRole !== 'Admin' && viewerRole !== 'HR') throw new Error('Only administrators and HR can export audit logs.');
-  const result = await listActivities({ ...filters, page: 1, pageSize: 5000 }, viewerId, viewerRole);
-  const filterSummary = JSON.stringify(Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '')));
+export const exportPdf = async (
+  filters: ActivityFilters,
+  viewerId: string,
+  viewerRole: string
+): Promise<ActivityExport<Buffer>> => {
+  const effectiveRoles = await assertCanExport(viewerId);
+  const result = await listActivities(
+    { ...filters, page: 1, pageSize: EXPORT_LIMIT },
+    viewerId,
+    effectiveRoles.permanentRole
+  );
+  const filterSummary = activeFilterSummary(filters);
 
   const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30 });
   const buffers: Buffer[] = [];
@@ -203,7 +299,7 @@ export const exportPdf = async (filters: ActivityFilters, viewerId: string, view
   const drawFooter = () => {
     doc.fontSize(7).fillColor(PDF_COLORS.muted).font('Helvetica');
     doc.text(
-      `Page ${pageNum} | WorkSync Audit Export | ${result.total} events`,
+      `Page ${pageNum} | WorkSync Audit Export | ${result.items.length} of ${result.total} matching events`,
       30, docHeight - 30,
       { width: docWidth - 60, align: 'center' }
     );
@@ -243,8 +339,12 @@ export const exportPdf = async (filters: ActivityFilters, viewerId: string, view
   drawFooter();
   doc.end();
 
-  return new Promise((resolve, reject) => {
+  const content = await new Promise<Buffer>((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
   });
+
+  const exportedCount = result.items.length;
+  recordExport('PDF', viewerId, effectiveRoles.permanentRole, exportedCount, result.total, filterSummary);
+  return { content, exportedCount, total: result.total };
 };
