@@ -275,7 +275,7 @@ export const getTaskStatusDistribution = async (
 ): Promise<DistRow[]> => {
   if (projectIds.length === 0) return [];
 
-  const result = await query<{ statuscode: string; value: number }>(
+  const result = await query<{ name: string; value: number }>(
     `SELECT ts.statuscode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
@@ -297,7 +297,7 @@ export const getTaskStatusDistribution = async (
   };
 
   return result.rows.map((r) => ({
-    name: statusNames[r.statuscode] || r.statuscode,
+    name: statusNames[r.name] || r.name,
     value: r.value,
   }));
 };
@@ -313,7 +313,7 @@ export const getTaskPriorityDistribution = async (
 ): Promise<DistRow[]> => {
   if (projectIds.length === 0) return [];
 
-  const result = await query<{ prioritycode: string; value: number }>(
+  const result = await query<{ name: string; value: number }>(
     `SELECT pr.prioritycode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.priorities pr ON pr.priorityid = t.priorityid
@@ -335,7 +335,7 @@ export const getTaskPriorityDistribution = async (
   };
 
   return result.rows.map((r) => ({
-    name: priorityNames[r.prioritycode] || r.prioritycode,
+    name: priorityNames[r.name] || r.name,
     value: r.value,
   }));
 };
