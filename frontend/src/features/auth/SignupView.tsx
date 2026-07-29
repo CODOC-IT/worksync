@@ -170,7 +170,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         className="absolute bottom-1/4 -left-20 w-96 h-96 bg-cyan-600/20 rounded-full blur-3xl pointer-events-none"
       />
 
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 lg:min-h-[600px]">
+      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 lg:min-h-[600px] lg:max-h-[90vh]">
         <div className="lg:col-span-5 relative p-6 md:p-8 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-white/10 bg-gradient-to-br from-purple-950/60 via-slate-950/80 to-slate-950/90">
           <div className="flex items-center gap-3 relative z-10">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-purple-600 p-0.5 shadow-lg shadow-cyan-500/20">
