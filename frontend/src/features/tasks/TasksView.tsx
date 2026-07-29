@@ -99,7 +99,6 @@ export const TasksView: React.FC = () => {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [dueDateDirection, setDueDateDirection] = useState<'asc' | 'desc'>('asc');
-  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [subtaskStep, setSubtaskStep] = useState<'ask' | 'count' | 'details' | null>(null);
   const [subtaskCount, setSubtaskCount] = useState(1);
   const [subtaskDrafts, setSubtaskDrafts] = useState<SubtaskFormInput[]>([]);
@@ -260,19 +259,6 @@ export const TasksView: React.FC = () => {
       setSubtaskStep('ask');
       return;
     }
-    if (!editingTaskId && subtaskStep === 'details') {
-      const nextErrors: Record<string, string> = {};
-      subtaskDrafts.forEach((draft, index) => {
-        const errors = validateTaskInput({ ...draft, projectId: form.projectId }, selectedProject, users, true, form.startDate);
-        Object.entries(errors).forEach(([field, message]) => { nextErrors[`${index}.${field}`] = message; });
-        if (draft.dueDate > form.dueDate) nextErrors[`${index}.dueDate`] = 'Due date cannot be after the parent task due date.';
-      });
-      if (Object.keys(nextErrors).length > 0) {
-        setSubtaskErrors(nextErrors);
-        return;
-      }
-    }
-
     setIsSubmitting(true);
     try {
       const existingTask = editingTaskId
@@ -305,8 +291,7 @@ export const TasksView: React.FC = () => {
               dueDate: form.dueDate,
               assigneeId: form.assigneeIds[0],
               assigneeIds: form.assigneeIds,
-              status: form.status,
-              subtasks: subtaskDrafts
+              status: form.status
             })
       );
 
@@ -323,17 +308,8 @@ export const TasksView: React.FC = () => {
         return;
       }
 
-      if (editingTaskId) {
-        resetForm();
-        setNotice({ type: 'success', message: result.message });
-      } else {
-        setPendingTaskId(result.task?.id || null);
-        setSubtaskStep('ask');
-        setSubtaskCount(1);
-        setSubtaskDrafts([]);
-        setIsFormOpen(false);
-        setNotice({ type: 'success', message: 'Task created. Add subtasks below.' });
-      }
+      resetForm();
+      setNotice({ type: 'success', message: result.message });
     } finally {
       setIsSubmitting(false);
     }
@@ -348,21 +324,39 @@ export const TasksView: React.FC = () => {
 
   const updateSubtask = (index: number, patch: Partial<SubtaskFormInput>) => {
     setSubtaskDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? { ...draft, ...patch } : draft));
+    setSubtaskErrors((current) => {
+      const next = { ...current };
+      Object.keys(patch).forEach((field) => delete next[`${index}.${field}`]);
+      return next;
+    });
   };
 
   const handleSubtasksSubmit = async () => {
-    if (!pendingTaskId || isCreatingSubtasks) return;
-    const validDrafts = subtaskDrafts.filter((d) => d.title.trim());
-    if (validDrafts.length === 0) {
-      setPendingTaskId(null);
-      setSubtaskStep(null);
-      setNotice({ type: 'success', message: 'Task created successfully.' });
+    if (isCreatingSubtasks) return;
+    const nextErrors: Record<string, string> = {};
+    subtaskDrafts.forEach((draft, index) => {
+      const errors = validateTaskInput(
+        { ...draft, projectId: form.projectId },
+        selectedProject,
+        users,
+        true,
+        form.startDate
+      );
+      Object.entries(errors).forEach(([field, message]) => {
+        if (field !== 'projectId') nextErrors[`${index}.${field}`] = message;
+      });
+      if (draft.dueDate > form.dueDate) {
+        nextErrors[`${index}.dueDate`] = 'Due date cannot be after the parent task due date.';
+      }
+    });
+    if (Object.keys(nextErrors).length > 0) {
+      setSubtaskErrors(nextErrors);
       return;
     }
 
     setIsCreatingSubtasks(true);
     try {
-      await createTask({
+      const result = await createTask({
         projectId: form.projectId,
         title: form.title,
         description: form.description,
@@ -372,27 +366,47 @@ export const TasksView: React.FC = () => {
         assigneeId: form.assigneeIds[0],
         assigneeIds: form.assigneeIds,
         status: form.status,
-        parentTaskId: pendingTaskId,
-        subtasks: validDrafts
+        subtasks: subtaskDrafts
       });
-      setPendingTaskId(null);
-      setSubtaskStep(null);
+      if (!result.success) {
+        setNotice({ type: 'error', message: result.message });
+        return;
+      }
+      resetForm();
       setNotice({ type: 'success', message: 'Task and subtasks created successfully.' });
     } catch {
-      setNotice({ type: 'error', message: 'Task created but subtasks failed. You can add them later.' });
-      setPendingTaskId(null);
-      setSubtaskStep(null);
+      setNotice({ type: 'error', message: 'Task and subtasks could not be created. Please try again.' });
     } finally {
       setIsCreatingSubtasks(false);
-      setSubtaskDrafts([]);
     }
   };
 
-  const handleCancelSubtasks = () => {
-    setPendingTaskId(null);
-    setSubtaskStep(null);
-    setSubtaskDrafts([]);
-    setNotice({ type: 'success', message: 'Task created successfully.' });
+  const handleCancelSubtasks = async () => {
+    if (isCreatingSubtasks) return;
+    setIsCreatingSubtasks(true);
+    try {
+      const result = await createTask({
+        projectId: form.projectId,
+        title: form.title,
+        description: form.description,
+        priority: form.priority as TaskModulePriority,
+        startDate: form.startDate,
+        dueDate: form.dueDate,
+        assigneeId: form.assigneeIds[0],
+        assigneeIds: form.assigneeIds,
+        status: form.status
+      });
+      if (!result.success) {
+        setNotice({ type: 'error', message: result.message });
+        return;
+      }
+      resetForm();
+      setNotice({ type: 'success', message: 'Task created successfully.' });
+    } catch {
+      setNotice({ type: 'error', message: 'Task could not be created. Please try again.' });
+    } finally {
+      setIsCreatingSubtasks(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -754,20 +768,115 @@ export const TasksView: React.FC = () => {
             <div className="flex-1 space-y-3 overflow-y-auto p-5">
               {subtaskDrafts.map((sub, index) => (
                 <div key={index} className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-                  <p className="mb-2 text-xs font-semibold text-slate-400">Subtask {index + 1}</p>
-                  <input
-                    value={sub.title}
-                    onChange={(e) => updateSubtask(index, { title: e.target.value })}
-                    className="w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10"
-                    placeholder="Subtask title"
-                  />
-                  <textarea
-                    value={sub.description}
-                    onChange={(e) => updateSubtask(index, { description: e.target.value })}
-                    rows={2}
-                    className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10"
-                    placeholder="Description (optional)"
-                  />
+                  <div className="flex flex-col gap-3 border-b border-white/5 pb-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
+                        Subtask {index + 1}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">Set this subtask's workflow details here.</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:w-[300px]">
+                      <Field label="Priority *" error={subtaskErrors[`${index}.priority`]}>
+                        <select
+                          value={sub.priority}
+                          onChange={(event) => updateSubtask(index, { priority: event.target.value as TaskModulePriority })}
+                          className={`${inputClass} py-1.5 text-xs`}
+                        >
+                          {TASK_PRIORITIES.map((priority) => (
+                            <option key={priority} value={priority}>{priority}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Status *" error={subtaskErrors[`${index}.status`]}>
+                        <select
+                          value={sub.status}
+                          onChange={(event) => updateSubtask(index, { status: event.target.value as TaskStatus })}
+                          className={`${inputClass} py-1.5 text-xs`}
+                        >
+                          {TASK_STATUSES.map((status) => (
+                            <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Field label="Subtask name *" error={subtaskErrors[`${index}.title`]} className="sm:col-span-2">
+                      <input
+                        value={sub.title}
+                        onChange={(event) => updateSubtask(index, { title: event.target.value })}
+                        className={inputClass}
+                        placeholder="What needs to be done?"
+                      />
+                    </Field>
+                    <Field label="Description *" error={subtaskErrors[`${index}.description`]} className="sm:col-span-2">
+                      <textarea
+                        value={sub.description}
+                        onChange={(event) => updateSubtask(index, { description: event.target.value })}
+                        rows={2}
+                        className={inputClass}
+                        placeholder="Describe the expected outcome."
+                      />
+                    </Field>
+                    <Field label="Start date *" error={subtaskErrors[`${index}.startDate`]}>
+                      <input
+                        type="date"
+                        value={sub.startDate}
+                        min={getLatestDate(form.startDate, selectedProject?.startDate)}
+                        max={form.dueDate}
+                        onChange={(event) => updateSubtask(index, { startDate: event.target.value })}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field label="Due date *" error={subtaskErrors[`${index}.dueDate`]}>
+                      <input
+                        type="date"
+                        value={sub.dueDate}
+                        min={getLatestDate(sub.startDate, form.startDate)}
+                        max={form.dueDate}
+                        onChange={(event) => updateSubtask(index, { dueDate: event.target.value })}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label={`Assignees * (${sub.assigneeIds.length} selected)`}
+                      error={subtaskErrors[`${index}.assigneeIds`]}
+                      className="sm:col-span-2"
+                    >
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {availableAssignees.map((user) => {
+                          const selected = sub.assigneeIds.includes(user.id);
+                          return (
+                            <button
+                              key={user.id}
+                              type="button"
+                              onClick={() => updateSubtask(index, {
+                                assigneeIds: selected
+                                  ? sub.assigneeIds.filter((id) => id !== user.id)
+                                  : [...sub.assigneeIds, user.id]
+                              })}
+                              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                                selected
+                                  ? 'border-cyan-400/45 bg-cyan-500/10 text-white'
+                                  : 'border-white/10 bg-slate-950/40 text-slate-300 hover:border-white/20'
+                              }`}
+                            >
+                              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                selected ? 'border-cyan-400 bg-cyan-400 text-slate-950' : 'border-slate-600'
+                              }`}>
+                                {selected && <Check size={11} />}
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate text-xs font-semibold">{user.name}</span>
+                                <span className="block truncate text-[10px] text-slate-500">{user.title}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </Field>
+                  </div>
                 </div>
               ))}
             </div>
