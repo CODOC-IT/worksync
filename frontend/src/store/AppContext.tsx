@@ -942,6 +942,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, now);
     if (!validationResult.success) return validationResult;
 
+    // Team Members submit task creation requests to the selected project's Team Lead.
+    // The task is only created in the backend after that Team Lead approves the request.
+    if (currentRole === 'Team_Member') {
+      const project = projects.find((item) => item.id === input.projectId);
+
+      if (!project) {
+        return { success: false, message: 'The selected project was not found.' };
+      }
+
+      if (!project.teamLeadId) {
+        return { success: false, message: 'This project does not have a Team Lead.' };
+      }
+
+      const requestId = `app-${Date.now()}`;
+      const approval: SystemApproval = {
+        id: requestId,
+        type: 'Task_Creation',
+        targetId: `pending-task-${Date.now()}`,
+        targetTitle: input.title,
+        requestedBy: currentUser.id,
+        requestedRole: currentRole,
+        projectId: project.id,
+        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        details: `${currentUser.name} requested creation of task "${input.title}" in project "${project.title}".`,
+        status: 'Pending',
+        proposedTask: {
+          projectId: input.projectId,
+          title: input.title,
+          description: input.description,
+         priority:
+  input.priority === 'Critical'
+    ? 'Urgent'
+    : input.priority || 'Medium',
+          startDate: input.startDate,
+          dueDate: input.dueDate,
+          assigneeIds: input.assigneeIds,
+          status: input.status,
+          parentTaskId: data.parentTaskId
+        }
+      };
+
+      recentTaskSubmission.current = { signature, submittedAt: now };
+      setSystemApprovals((prev) => [approval, ...prev]);
+
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
+        type: 'approval',
+        title: 'Task Creation Requested',
+        message: `${currentUser.name} requested creation of "${input.title}" in ${project.title}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId: project.id
+      });
+
+      pushActivity('Requested task creation', 'Approval', requestId, input.title);
+      confirmActionSuccess(
+        'Task Request Submitted',
+        `"${input.title}" was sent to ${project.title}'s Team Lead for approval.`
+      );
+
+      return {
+        success: true,
+        message: 'Task creation request submitted for Team Lead approval.'
+      };
+    }
+
     const result = await createTaskViaApi(data);
     if (!result.success || !result.task) return result;
 
@@ -1153,6 +1220,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         result = await approveProject(item.targetId);
       } else if (item.type === 'Project_Deletion') {
         result = await approveProjectDeletion(item.targetId);
+      } else if (item.type === 'Task_Creation') {
+        const project = projects.find((candidate) => candidate.id === item.projectId);
+
+        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+          return {
+            success: false,
+            message: 'Only this project’s Team Lead can approve the task request.'
+          };
+        }
+
+        if (!item.proposedTask) {
+          return { success: false, message: 'The proposed task details are missing.' };
+        }
+
+        const proposed = item.proposedTask;
+        const creationResult = await createTaskViaApi({
+          projectId: proposed.projectId,
+          parentTaskId: proposed.parentTaskId,
+          title: proposed.title,
+          description: proposed.description,
+          priority: proposed.priority === 'Urgent' ? 'Critical' : proposed.priority,
+          startDate: proposed.startDate,
+          dueDate: proposed.dueDate,
+          assigneeIds: proposed.assigneeIds,
+          status: proposed.status
+        });
+
+        if (!creationResult.success || !creationResult.task) {
+          return creationResult;
+        }
+
+        setTasks((prev) => [creationResult.task!, ...prev]);
+        setSystemApprovals((prev) =>
+          prev.map((approval) =>
+            approval.id === approvalId
+              ? { ...approval, status: 'Approved', targetId: creationResult.task!.id }
+              : approval
+          )
+        );
+
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+          type: 'approval',
+          title: 'Task Request Approved',
+          message: `${currentUser.name} approved your task request for "${item.targetTitle}" in ${project.title}.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'tasks',
+          projectId: project.id,
+          taskId: creationResult.task.id
+        });
+
+        result = {
+          success: true,
+          message: `You approved "${item.targetTitle}" and created the task successfully.`
+        };
+        confirmActionSuccess('Task Request Approved', result.message);
       } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
         const { field, newValue } = item.proposedDiff;
         setTasks((prev) =>
@@ -1212,12 +1336,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return rejectProject(item.targetId, reason);
       }
 
+      if (item.type === 'Task_Creation') {
+        const project = projects.find((candidate) => candidate.id === item.projectId);
+
+        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+          return {
+            success: false,
+            message: 'Only this project’s Team Lead can reject the task request.'
+          };
+        }
+      }
+
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
 
       const targetsProject = item.type === 'Project_Deletion';
-      const relatedProjectId = targetsProject ? item.targetId : tasks.find((t) => t.id === item.targetId)?.projectId;
+      const relatedProjectId = targetsProject
+        ? item.targetId
+        : item.type === 'Task_Creation'
+          ? item.projectId
+          : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
@@ -1227,8 +1366,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         actorId: currentUser.id,
         actorName: currentUser.name,
         linkRoute: targetsProject ? 'projects' : 'tasks',
-        taskId: targetsProject ? undefined : item.targetId,
-        projectId: targetsProject ? item.targetId : undefined
+        taskId: targetsProject || item.type === 'Task_Creation' ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : relatedProjectId
       });
       const message = `You rejected the request for "${item.targetTitle}" successfully.`;
       confirmActionSuccess('Request Rejected', message);

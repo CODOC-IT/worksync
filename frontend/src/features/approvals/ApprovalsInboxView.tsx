@@ -55,6 +55,10 @@ const getApprovalProject = (
     return projects.find((project) => project.id === approval.targetId);
   }
 
+  if (approval.type === 'Task_Creation' && approval.projectId) {
+    return projects.find((project) => project.id === approval.projectId);
+  }
+
   const task = tasks.find((item) => item.id === approval.targetId);
 
   return task
@@ -68,18 +72,35 @@ const canDecide = (
   approval: SystemApproval,
   project: Project | undefined
 ): boolean => {
-  if (role === 'Admin') {
-    return true;
+  if (approval.requestedBy === userId) {
+    return false;
   }
 
   if (
     approval.type === 'Project_Creation' ||
     approval.type === 'Project_Deletion'
   ) {
-    return false;
+    return role === 'Admin';
   }
 
-  return Boolean(project && project.teamLeadId === userId);
+  if (approval.type === 'Task_Creation') {
+    return Boolean(
+      role === 'Team_Lead' &&
+      project &&
+      project.teamLeadId === userId
+    );
+  }
+
+  if (approval.type === 'Controlled_Edit') {
+    return Boolean(
+      role === 'Admin' ||
+      (role === 'Team_Lead' &&
+        project &&
+        project.teamLeadId === userId)
+    );
+  }
+
+  return false;
 };
 
 export const ApprovalsInboxView: React.FC = () => {
