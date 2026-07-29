@@ -209,14 +209,19 @@ router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Respon
 });
 
 // GET /api/auth/users
-router.get('/users', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user || req.user.role !== 'Admin') {
-    res.status(403).json({ success: false, message: 'Admin access required.' });
+router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: 'Not authenticated.' });
     return;
   }
 
-  const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
-  res.status(200).json({ success: true, users });
+  try {
+    await userStore.syncUsersToDb();
+    const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
+    res.status(200).json({ success: true, users });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to load users.' });
+  }
 });
 
 // POST /api/auth/logout

@@ -293,13 +293,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fetch('/api/auth/users', {
       headers: { Authorization: `Bearer ${token}` }
     })
-      .then((res) => res.json())
+      .then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(data?.message || 'Failed to load users.');
+        }
+        return data;
+      })
       .then((data) => {
         if (data.success && Array.isArray(data.users) && data.users.length > 0) {
           setUsers(data.users as User[]);
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        console.warn('User directory API unavailable; keeping current in-memory user list.', error);
         // Silently keep the authenticated user if the directory is unavailable.
       });
   };
@@ -322,7 +329,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(user);
     setTaskReloadVersion((version) => version + 1);
-    if (user.role === 'Admin') refreshUsers();
+    refreshUsers();
   };
 
   const logoutUser = () => {
@@ -341,6 +348,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       root.classList.add('light');
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (!currentUser.id) return;
+    refreshUsers();
+  }, [currentUser.id]);
 
   useEffect(() => {
     let isActive = true;
