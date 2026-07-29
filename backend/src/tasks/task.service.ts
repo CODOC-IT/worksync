@@ -75,17 +75,39 @@ const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): 
   throw new TaskAuthorizationError('Only the project Team Lead may delete this task.');
 };
 
+// Recipients are always assignees + the project's Team Lead (PRD §6.3/§6.6: a Team Lead must
+// see the full task lifecycle for their own projects, not only when they're also personally
+// assigned) -- resolveTeamLeadUserId falls back to the project Owner when there's no separate
+// 'TeamLead' membership row, matching the same fallback already used for authorization
+// (project.service.ts's isProjectLead) and for the Review-decision notification this used to be
+// special-cased for. The actor is still always excluded from their own event's recipient list.
 const notifyTaskRecipients = (
   row: TaskRow,
   assigneeIds: string[],
   actorId: string,
   event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds'>
-) => {
-  const recipientIds = Array.from(new Set(assigneeIds)).filter((id) => id !== actorId);
-  if (recipientIds.length === 0) return;
-  notificationService.publishEvent({ ...event, recipientIds }).catch((error) => {
-    console.warn('[task.service] Failed to publish notification event.', error);
-  });
+): void => {
+  void (async () => {
+    const recipientSet = new Set(assigneeIds);
+    try {
+      const projectRow = await projectRepo.findProjectById(row.projectid);
+      if (projectRow) {
+        const members = await projectRepo.findMembersForProject(row.projectid);
+        recipientSet.add(resolveTeamLeadUserId(projectRow, members));
+      }
+    } catch (error) {
+      console.error('[task.service] Failed to resolve project Team Lead for notification recipients.', error);
+    }
+
+    const recipientIds = Array.from(recipientSet).filter((id) => id !== actorId);
+    if (recipientIds.length === 0) return;
+
+    try {
+      await notificationService.publishEvent({ ...event, recipientIds });
+    } catch (error) {
+      console.error('[task.service] Failed to publish notification event.', event.type, error);
+    }
+  })();
 };
 
 export const listTasksForUser = async (
@@ -378,19 +400,9 @@ export const changeTaskStatus = async (
   const actorName = userStore.findById(actorId)?.name || 'Someone';
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
-  const recipients = new Set(dto.assigneeIds);
-  if (input.status === 'Review' && projectRow) {
-    // The project's Team Lead specifically needs to know a review decision is waiting on them.
-    // resolveTeamLeadUserId falls back to the project Owner when there's no separate 'TeamLead'
-    // membership row (the common case for a project a Team Lead created for themselves -- see
-    // project.repository.ts's insertProject) -- a raw '.find TeamLead' here would silently drop
-    // this notification for every self-led project, the same bug already fixed for project
-    // authorization in project.service.ts's isProjectLead/assertCanManage.
-    const members = await projectRepo.findMembersForProject(row.projectid);
-    recipients.add(resolveTeamLeadUserId(projectRow, members));
-  }
-
-  notifyTaskRecipients(updatedRow!, Array.from(recipients), actorId, {
+  // notifyTaskRecipients now always includes the project's Team Lead alongside the assignees,
+  // so the Review-specific manual add that used to live here is redundant.
+  notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: (input.status === 'Review'
       ? 'task_review_requested'
       : TASK_STATUS_NOTIFICATION_TYPE[input.status]) as Parameters<typeof notificationService.publishEvent>[0]['type'],

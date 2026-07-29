@@ -246,7 +246,12 @@ class UserStore {
     return Array.from(this.fallbackUsers.values()).find((user) => user.id === id);
   }
 
-  public getAllUsers(): UserRecord[] {
+  // Unlike every other accessor in this class, this one is safe to call before login/
+  // registration has warmed the cache on this process (e.g. the very first request a fresh
+  // serverless instance handles) -- so it must hydrate itself rather than silently returning
+  // whatever happens to already be in `fallbackUsers` (which, on a cold instance, is nothing).
+  public async getAllUsers(): Promise<UserRecord[]> {
+    await this.ensureInit();
     return Array.from(this.fallbackUsers.values());
   }
 

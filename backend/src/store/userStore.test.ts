@@ -81,7 +81,7 @@ test('configured database replaces fallback users without backfilling them', asy
 
   await userStore.syncUsersToDb();
 
-  const loadedUsers = userStore.getAllUsers();
+  const loadedUsers = await userStore.getAllUsers();
   assert.deepEqual(loadedUsers.map((user) => user.email), ['database.user@example.com']);
 
   const result = await pool.query<{ count: number }>('SELECT COUNT(*)::int AS count FROM iam.users');
