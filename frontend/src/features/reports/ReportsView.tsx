@@ -65,7 +65,20 @@ interface DateRange {
 }
 
 function todayStr(): string {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(dateStr: string, days: number): string {
+  const [y, m, day] = dateStr.split('-').map(Number);
+  const d = new Date(y, m - 1, day + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatHumanDate(d: string | undefined): string {
+  if (!d) return '\u2014';
+  const date = new Date(d.slice(0, 10) + 'T00:00:00');
+  return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function validateDateRange(from: string, to: string): string | null {
@@ -149,6 +162,10 @@ export const ReportsView: React.FC = () => {
   const [workloadSearchQuery, setWorkloadSearchQuery] = useState('');
   const [workloadFilterRole, setWorkloadFilterRole] = useState('');
   const [workloadFilterWorkload, setWorkloadFilterWorkload] = useState('');
+  const [deadlineFilterProject, setDeadlineFilterProject] = useState('');
+  const [deadlineFilterAssignee, setDeadlineFilterAssignee] = useState('');
+  const [deadlineFilterDateRange, setDeadlineFilterDateRange] = useState('all');
+  const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -546,20 +563,77 @@ export const ReportsView: React.FC = () => {
     setDetailMemberLoading(false);
   }, [selectedMemberId, workloadData]);
 
-  const deadlineData = useMemo(() => {
-    if (apiAvailable) {
-      return reportData.deadlines;
+  const deadlineBaseTasks = useMemo(() => {
+    let tasks = (apiAvailable ? roleFiltered.tasks : roleFilteredLocal.tasks) as any[];
+    if (deadlineFilterProject) {
+      tasks = tasks.filter((t: any) => t.projectId === deadlineFilterProject);
     }
-    const { tasks: rt } = roleFilteredLocal;
+    if (deadlineFilterAssignee) {
+      tasks = tasks.filter((t: any) => t.assigneeId === deadlineFilterAssignee);
+    }
+    if (deadlineFilterStatus) {
+      tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
+    }
+    return tasks;
+  }, [apiAvailable, roleFiltered.tasks, roleFilteredLocal.tasks, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+
+  const deadlineData = useMemo(() => {
     const today = todayStr();
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-    const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
-    const dueToday = rt.filter((t) => t.status !== 'Done' && t.dueDate === today);
-    const dueTomorrow = rt.filter((t) => t.status !== 'Done' && t.dueDate === tomorrow);
-    const upcoming = rt.filter((t) => t.status !== 'Done' && t.dueDate > tomorrow && t.dueDate <= weekFromNow);
-    const overdue = rt.filter((t) => t.status !== 'Done' && t.dueDate < today);
+    const tomorrow = addDays(today, 1);
+    const tasks = deadlineBaseTasks.filter((t: any) => t.dueDate && t.status !== 'Done');
+
+    // Apply date range filter
+    let filtered = tasks;
+    if (deadlineFilterDateRange === 'today') {
+      filtered = tasks.filter((t: any) => t.dueDate === today);
+    } else if (deadlineFilterDateRange === 'tomorrow') {
+      filtered = tasks.filter((t: any) => t.dueDate === tomorrow);
+    } else if (deadlineFilterDateRange === 'next7') {
+      const endDate = addDays(today, 7);
+      filtered = tasks.filter((t: any) => t.dueDate >= today && t.dueDate <= endDate);
+    } else if (deadlineFilterDateRange === 'next30') {
+      const endDate = addDays(today, 30);
+      filtered = tasks.filter((t: any) => t.dueDate >= today && t.dueDate <= endDate);
+    }
+    // 'all' — no additional date filter
+
+    const dueToday = filtered.filter((t: any) => t.dueDate === today)
+      .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
+    const dueTomorrow = filtered.filter((t: any) => t.dueDate === tomorrow)
+      .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
+    const upcoming = filtered.filter((t: any) => t.dueDate > tomorrow)
+      .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
+    const overdue = filtered.filter((t: any) => t.dueDate < today)
+      .sort((a: any, b: any) => b.dueDate.localeCompare(a.dueDate)); // most overdue first
     return { dueToday, dueTomorrow, upcoming, overdue };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+  }, [deadlineBaseTasks, deadlineFilterDateRange]);
+
+  const deadlineKpiTotals = useMemo(() => ({
+    dueToday: deadlineData.dueToday.length,
+    dueTomorrow: deadlineData.dueTomorrow.length,
+    upcoming: deadlineData.upcoming.length,
+    overdue: deadlineData.overdue.length,
+  }), [deadlineData]);
+
+  const deadlineTotalCount = useMemo(() =>
+    deadlineKpiTotals.dueToday + deadlineKpiTotals.dueTomorrow + deadlineKpiTotals.upcoming + deadlineKpiTotals.overdue,
+  [deadlineKpiTotals]);
+
+  const deadlineProjectOptions = useMemo(() => {
+    const projectIds = new Set((deadlineBaseTasks as any[]).map((t: any) => t.projectId).filter(Boolean));
+    return [...projectIds].map((pid) => {
+      const p = roleFiltered.projects.find((p: any) => p.id === pid);
+      return { id: pid, name: p?.title || pid };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [deadlineBaseTasks, roleFiltered.projects]);
+
+  const deadlineAssigneeOptions = useMemo(() => {
+    const assigneeIds = new Set((deadlineBaseTasks as any[]).map((t: any) => t.assigneeId).filter(Boolean));
+    return [...assigneeIds].map((uid) => {
+      const u = users.find((u: any) => u.id === uid);
+      return { id: uid, name: u?.name || uid };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [deadlineBaseTasks, users]);
 
   const attendanceStats = useMemo(() => {
     if (apiAvailable && reportData.attendance) {
@@ -979,6 +1053,10 @@ ${bodyHtml}
       contentWindow.print();
       setTimeout(() => document.body.removeChild(printFrame), 1000);
     }, 300);
+  };
+
+  const handleDeadlinePdfExport = () => {
+    handlePdfExport();
   };
 
   const handleTaskPdfExport = () => {
@@ -1763,12 +1841,6 @@ ${bodyHtml}
     };
     projectTasks.forEach((t: any) => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
 
-    const formatHumanDate = (d: string | undefined) => {
-      if (!d) return '\u2014';
-      const date = new Date(d.slice(0, 10) + 'T00:00:00');
-      return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-    };
-
     const formatFileSize = (bytes: number): string => {
       if (bytes < 1024) return `${bytes} B`;
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -2324,106 +2396,189 @@ ${bodyHtml}
     );
   };
 
-  const renderDeadlinesTab = () => (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {renderKPICard('Due Today', deadlineData.dueToday.length, <Clock size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Due Tomorrow', deadlineData.dueTomorrow.length, <Calendar size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Upcoming', deadlineData.upcoming.length, <Target size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Overdue', deadlineData.overdue.length, <AlertTriangle size={14} className="text-amber-400" />, 'amber',
-          deadlineData.overdue.length > 0 ? renderInsightBadge(false, `${deadlineData.overdue.length} overdue`) : undefined
-        )}
-      </div>
-
-      <div className="space-y-4">
-        {deadlineData.dueToday.length > 0 && (
-          <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-            <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Due Today', `${deadlineData.dueToday.length} tasks`)}
-              <div className="mt-3 space-y-2">
-                {deadlineData.dueToday.map((t: any) => (
-                  <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-cyan-500/20 text-xs">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <StatusBadge status={t.priority} size="sm" />
-                      <span className="text-slate-200 truncate">{t.title}</span>
-                    </div>
-                    <StatusBadge status={t.status} size="sm" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </GlassCard>
-        )}
-
-        {deadlineData.dueTomorrow.length > 0 && (
-          <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-            <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Calendar size={16} className="text-violet-400" />, 'Due Tomorrow', `${deadlineData.dueTomorrow.length} tasks`)}
-              <div className="mt-3 space-y-2">
-                {deadlineData.dueTomorrow.map((t: any) => (
-                  <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-purple-500/20 text-xs">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <StatusBadge status={t.priority} size="sm" />
-                      <span className="text-slate-200 truncate">{t.title}</span>
-                    </div>
-                    <StatusBadge status={t.status} size="sm" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </GlassCard>
-        )}
-
-        {deadlineData.upcoming.length > 0 && (
-          <GlassCard glowColor="emerald" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-            <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Target size={16} className="text-emerald-400" />, 'Upcoming Deadlines', `${deadlineData.upcoming.length} tasks`)}
-              <div className="mt-3 space-y-2">
-                {deadlineData.upcoming.map((t: any) => (
-                  <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-emerald-500/20 text-xs">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <StatusBadge status={t.priority} size="sm" />
-                      <span className="text-slate-200 truncate">{t.title}</span>
-                    </div>
-                    <span className="font-mono text-[10px] text-purple-300">{t.dueDate}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </GlassCard>
-        )}
-
-        {deadlineData.overdue.length > 0 && (
-          <GlassCard glowColor="amber" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-            <div className="glass-panel p-4 rounded-lg border border-rose-500/20">
-              {renderSectionHeader(<AlertTriangle size={16} className="text-rose-400" />, 'Overdue Tasks', `${deadlineData.overdue.length} overdue`)}
-              <div className="mt-3 space-y-2">
-                {deadlineData.overdue.map((t: any) => (
-                  <div key={t.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-rose-500/20 text-xs">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <StatusBadge status={t.priority} size="sm" />
-                      <span className="text-slate-200 truncate">{t.title}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={t.status} size="sm" />
-                      <span className="font-mono text-[10px] text-rose-400">{t.dueDate}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </GlassCard>
-        )}
-
-        {deadlineData.dueToday.length === 0 && deadlineData.dueTomorrow.length === 0 && deadlineData.upcoming.length === 0 && deadlineData.overdue.length === 0 && (
-          <div className="text-center py-12 text-slate-500">
-            <Calendar size={32} className="mx-auto mb-2 opacity-30" />
-            <p className="text-xs">No deadlines in the selected date range</p>
+  const renderDeadlineRow = (t: any) => {
+    const assignee = users.find((u: any) => u.id === t.assigneeId);
+    const project = roleFiltered.projects.find((p: any) => p.id === t.projectId);
+    return (
+      <div
+        key={t.id}
+        onClick={() => setSelectedTaskId(t.id)}
+        className="flex items-center gap-2 p-2 rounded-lg bg-slate-900/60 border border-white/5 text-xs cursor-pointer hover:bg-slate-800/60 hover:border-cyan-500/30 transition-all group"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <StatusBadge status={t.priority} size="sm" />
+            <span className="text-slate-200 truncate group-hover:text-cyan-300 transition-colors">{t.title}</span>
+            <span className="text-[10px] text-slate-500 shrink-0 hidden sm:inline">{project?.title || ''}</span>
           </div>
-        )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {assignee && <span className="text-[10px] text-slate-500 hidden md:inline">{assignee.name}</span>}
+          <StatusBadge status={t.status} size="sm" />
+          <span className="font-mono text-[10px] text-slate-400 w-16 text-right">{t.dueDate ? formatHumanDate(t.dueDate) : ''}</span>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderDeadlineSection = (title: string, icon: React.ReactNode, subtitle: string, tasks: any[], glowColor: any, borderCls?: string) => {
+    if (tasks.length === 0) return null;
+    const needsScroll = tasks.length > 6;
+    return (
+      <GlassCard glowColor={glowColor} hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+        <div className={`glass-panel p-4 rounded-lg ${borderCls || ''}`}>
+          {renderSectionHeader(icon, title, subtitle)}
+          <div className={`mt-3 ${needsScroll ? 'max-h-[320px] overflow-y-auto custom-scrollbar' : 'space-y-2'}`}>
+            {tasks.map(renderDeadlineRow)}
+          </div>
+        </div>
+      </GlassCard>
+    );
+  };
+
+  const renderDeadlinesTab = () => {
+    const dd = deadlineData;
+    const total = deadlineTotalCount;
+    const today = todayStr();
+
+    const groupedUpcoming: Record<string, any[]> = {};
+    dd.upcoming.forEach((t: any) => {
+      const d = t.dueDate;
+      if (!groupedUpcoming[d]) groupedUpcoming[d] = [];
+      groupedUpcoming[d].push(t);
+    });
+    const sortedUpcomingDates = Object.keys(groupedUpcoming).sort();
+
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-slate-500">Track and prioritize time-sensitive work</div>
+          <button
+            onClick={handleDeadlinePdfExport}
+            className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+          >
+            <FileText size={11} />
+            Export PDF ({total})
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {renderKPICard('Due Today', deadlineKpiTotals.dueToday, <Clock size={14} className="text-cyan-400" />, 'cyan')}
+          {renderKPICard('Due Tomorrow', deadlineKpiTotals.dueTomorrow, <Calendar size={14} className="text-violet-400" />, 'violet')}
+          {renderKPICard('Upcoming', deadlineKpiTotals.upcoming, <Target size={14} className="text-emerald-400" />, 'emerald')}
+          {renderKPICard('Overdue', deadlineKpiTotals.overdue, <AlertTriangle size={14} className="text-amber-400" />, 'amber',
+            deadlineKpiTotals.overdue > 0 ? renderInsightBadge(false, `${deadlineKpiTotals.overdue} overdue`) : undefined
+          )}
+        </div>
+
+        <GlassCard>
+          <div className="p-4 space-y-3">
+            {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filters')}
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={deadlineFilterProject}
+                onChange={(e) => setDeadlineFilterProject(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
+              >
+                <option value="">All Projects</option>
+                {deadlineProjectOptions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <select
+                value={deadlineFilterAssignee}
+                onChange={(e) => setDeadlineFilterAssignee(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
+              >
+                <option value="">All Assignees</option>
+                {deadlineAssigneeOptions.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+              <select
+                value={deadlineFilterDateRange}
+                onChange={(e) => setDeadlineFilterDateRange(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
+              >
+                <option value="all">All Deadlines</option>
+                <option value="today">Today</option>
+                <option value="tomorrow">Tomorrow</option>
+                <option value="next7">Next 7 Days</option>
+                <option value="next30">Next 30 Days</option>
+              </select>
+              <select
+                value={deadlineFilterStatus}
+                onChange={(e) => setDeadlineFilterStatus(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[100px]"
+              >
+                <option value="">Active Tasks</option>
+                <option value="Todo">Not Started</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Review">Review</option>
+                <option value="Blocked">Blocked</option>
+              </select>
+              {(deadlineFilterProject || deadlineFilterAssignee || deadlineFilterDateRange !== 'all' || deadlineFilterStatus) && (
+                <button
+                  onClick={() => { setDeadlineFilterProject(''); setDeadlineFilterAssignee(''); setDeadlineFilterDateRange('all'); setDeadlineFilterStatus(''); }}
+                  className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
+                >
+                  <X size={11} /> Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </GlassCard>
+
+        <div className="space-y-4">
+          {renderDeadlineSection(
+            'Overdue', <AlertTriangle size={16} className="text-rose-400" />,
+            `${dd.overdue.length} overdue`, dd.overdue, 'amber', 'border border-rose-500/20'
+          )}
+
+          {renderDeadlineSection(
+            `Due Today \u00B7 ${formatHumanDate(today)}`, <Clock size={16} className="text-cyan-400" />,
+            `${dd.dueToday.length} tasks`, dd.dueToday, 'cyan'
+          )}
+
+          {renderDeadlineSection(
+            `Due Tomorrow \u00B7 ${formatHumanDate(addDays(today, 1))}`, <Calendar size={16} className="text-violet-400" />,
+            `${dd.dueTomorrow.length} tasks`, dd.dueTomorrow, 'violet'
+          )}
+
+          {dd.upcoming.length > 0 && (
+            <GlassCard glowColor="emerald" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+              <div className="glass-panel p-4 rounded-lg">
+                {renderSectionHeader(<Target size={16} className="text-emerald-400" />, 'Upcoming', `${dd.upcoming.length} tasks`)}
+                <div className="mt-3">
+                  {sortedUpcomingDates.map((date) => {
+                    const dateTasks = groupedUpcoming[date];
+                    const needsScroll = dateTasks.length > 6;
+                    return (
+                      <div key={date} className="mb-3">
+                        <div className="text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-2">
+                          <span>{formatHumanDate(date)}</span>
+                        </div>
+                        <div className={needsScroll ? 'max-h-[240px] overflow-y-auto custom-scrollbar space-y-2' : 'space-y-2'}>
+                          {dateTasks.map(renderDeadlineRow)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </GlassCard>
+          )}
+
+          {total === 0 && (
+            <div className="text-center py-12 text-slate-500">
+              <Calendar size={32} className="mx-auto mb-2 opacity-30" />
+              <p className="text-xs">No deadlines match the current filters</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   // ── Tasks tab ─────────────────────────────────────────────────────
   const renderTasksTab = () => (
