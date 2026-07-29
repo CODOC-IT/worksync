@@ -579,6 +579,8 @@ export const ProjectsView: React.FC = () => {
                         type="date"
                         value={m.dueDate}
                         onChange={(e) => updateMilestone(m.id, 'dueDate', e.target.value)}
+                        min={form.startDate || undefined}
+                        max={form.targetDate || undefined}
                         className="px-2.5 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                       />
                       <button
