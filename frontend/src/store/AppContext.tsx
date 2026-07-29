@@ -79,20 +79,9 @@ import {
 import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
 
 const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
-const HR_REQUESTS_STORAGE_KEY = 'worksync-hr-requests';
 
-const loadHRRequests = (): HRRequest[] => {
-  try {
-    const savedRequests = localStorage.getItem(HR_REQUESTS_STORAGE_KEY);
-    if (!savedRequests) return [];
 
-    const parsedRequests = JSON.parse(savedRequests);
-    return Array.isArray(parsedRequests) ? parsedRequests : [];
-  } catch (error) {
-    console.error('Failed to load HR requests from localStorage.', error);
-    return [];
-  }
-};
+
 
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
@@ -176,9 +165,9 @@ interface AppState {
     recordId: string,
     updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
   ) => { success: boolean; message: string };
-  submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details']) => void;
-  approveHRRequest: (requestId: string, decisionReason?: string) => void;
-  rejectHRRequest: (requestId: string, decisionReason?: string) => void;
+  submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details'], requestDate?: string) => Promise<{ success: boolean; message: string }>;
+  approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
+  rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
@@ -212,7 +201,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>(loadHRRequests);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
@@ -254,16 +243,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [attendanceRecords]);
 
 
+  
+
+
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        HR_REQUESTS_STORAGE_KEY,
-        JSON.stringify(hrRequests)
-      );
-    } catch (error) {
-      console.error('Failed to save HR requests.', error);
-    }
-  }, [hrRequests]);
+    if (!currentUser.id) return;
+
+    let isActive = true;
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) return;
+
+    fetch('/api/hr-requests', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Failed to load HR requests.');
+        }
+        if (isActive && Array.isArray(data.requests)) {
+          setHrRequests(data.requests as HRRequest[]);
+        }
+      })
+     .catch((error) => {
+  console.error('Failed to load HR requests from API.', error);
+  if (isActive) {
+    setHrRequests([]);
+  }
+});
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser.id]);
 
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
@@ -317,19 +329,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loginUser = (user: User) => {
     setUsers((prev) => {
       const exists = prev.some((u) => u.email.toLowerCase() === user.email.toLowerCase());
-      if (exists) return prev;
+      if (exists) {
+        return prev.map((existingUser) =>
+          existingUser.email.toLowerCase() === user.email.toLowerCase()
+            ? user
+            : existingUser
+        );
+      }
       return [...prev, user];
     });
     setCurrentUser(user);
     setTaskReloadVersion((version) => version + 1);
-    if (user.role === 'Admin') refreshUsers();
+    if (user.role === 'Admin' || user.role === 'HR') refreshUsers();
   };
 
   const logoutUser = () => {
-    localStorage.removeItem('worksync_auth_token');
-    setCurrentUser({ id: '', name: '', email: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive' });
-    setUsers([]);
-  };
+  localStorage.removeItem('worksync_auth_token');
+  setHrRequests([]);
+  setCurrentUser({
+    id: '',
+    name: '',
+    email: '',
+    role: 'Team_Member',
+    department: '',
+    avatar: '',
+    title: '',
+    status: 'inactive'
+  });
+};
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1414,91 +1441,139 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // the generic 'approval' type already used elsewhere in this file for every other
     // pending-decision flow (project creation, controlled edits) — see approveApprovalItem/
     // rejectApprovalItem above for the same convention.
-    const submitHRRequest = (type: HRRequest['type'], reason: string, details: HRRequest['details']) => {
-      const newReq: HRRequest = {
-        id: `hrq-${Date.now()}`,
-        userId: currentUser.id,
-        type,
-        date: new Date().toISOString().split('T')[0],
-        reason,
-        status: 'Pending',
-        details,
-        submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
-      };
+    const submitHRRequest = async (
+      type: HRRequest['type'],
+      reason: string,
+      details: HRRequest['details'],
+      requestDate?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch('/api/hr-requests', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            userName: currentUser.name,
+            type,
+            date: requestDate || new Date().toISOString().split('T')[0],
+            reason,
+            details
+          })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || 'Failed to submit HR request.');
+        }
 
-      setHrRequests((prev) => [newReq, ...prev]);
+        const newReq = data.request as HRRequest;
+        setHrRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
 
-      dispatchNotifications({
-        recipientIds: resolveHRRecipients(),
-        type: type === 'Correction' ? 'attendance_correction_submitted' : 'approval',
-        title: `New ${type.replace('_', ' ')} Request`,
-        message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'attendance'
-      });
-      confirmActionSuccess('Request Submitted', `Your ${type.toLowerCase().replace('_', ' ')} request was submitted successfully.`);
-      pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
+        dispatchNotifications({
+          recipientIds: resolveHRRecipients(),
+          type: type === 'Correction' ? 'attendance_correction_submitted' : 'approval',
+          title: `New ${type.replace('_', ' ')} Request`,
+          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
+        confirmActionSuccess('Request Submitted', `Your ${type.toLowerCase().replace('_', ' ')} request was submitted successfully.`);
+        pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
+        return { success: true, message: data.message || 'HR request submitted successfully.' };
+      } catch (error: any) {
+        const message = error?.message || 'Failed to submit HR request.';
+        pushToast('error', 'Request Failed', message);
+        return { success: false, message };
+      }
     };
 
-    const approveHRRequest = (requestId: string, decisionReason?: string) => {
-      const request = hrRequests.find((r) => r.id === requestId);
-      setHrRequests((prev) =>
-        prev.map((r) =>
-          r.id === requestId
-            ? { ...r, status: 'Approved', decidedBy: currentUser.id, decisionReason }
-            : r
-        )
-      );
-      if (request) {
+    const approveHRRequest = async (
+      requestId: string,
+      decisionReason?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch(`/api/hr-requests/${requestId}/approve`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ decisionReason })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || 'Failed to approve HR request.');
+        }
+
+        const updatedRequest = data.request as HRRequest;
+        setHrRequests((prev) =>
+          prev.map((request) => request.id === requestId ? updatedRequest : request)
+        );
+
         const notifType =
-          request.type === 'Correction'
+          updatedRequest.type === 'Correction'
             ? 'attendance_correction_approved'
-            : request.type === 'Break_Exception'
+            : updatedRequest.type === 'Break_Exception'
               ? 'break_approved'
               : 'approval';
         dispatchNotifications({
-          recipientIds: resolveSingleRecipient(request.userId, currentUser.id),
+          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${request.type.replace('_', ' ')} Request Approved`,
-          message: `${currentUser.name} approved your ${request.type.toLowerCase().replace('_', ' ')} request.`,
+          title: `${updatedRequest.type.replace('_', ' ')} Request Approved`,
+          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
         });
-        confirmActionSuccess('Request Approved', `You approved the ${request.type.toLowerCase().replace('_', ' ')} request successfully.`);
+        confirmActionSuccess('Request Approved', `You approved the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
+        pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
+        return { success: true, message: data.message || 'HR request approved successfully.' };
+      } catch (error: any) {
+        const message = error?.message || 'Failed to approve HR request.';
+        pushToast('error', 'Approval Failed', message);
+        return { success: false, message };
       }
-      pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
     };
 
-    const rejectHRRequest = (requestId: string, decisionReason?: string) => {
-      const request = hrRequests.find((r) => r.id === requestId);
-      setHrRequests((prev) =>
-        prev.map((r) =>
-          r.id === requestId
-            ? { ...r, status: 'Rejected', decidedBy: currentUser.id, decisionReason }
-            : r
-        )
-      );
-      if (request) {
+    const rejectHRRequest = async (
+      requestId: string,
+      decisionReason?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch(`/api/hr-requests/${requestId}/reject`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ decisionReason })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || 'Failed to reject HR request.');
+        }
+
+        const updatedRequest = data.request as HRRequest;
+        setHrRequests((prev) =>
+          prev.map((request) => request.id === requestId ? updatedRequest : request)
+        );
+
         const notifType =
-          request.type === 'Correction'
+          updatedRequest.type === 'Correction'
             ? 'attendance_correction_rejected'
-            : request.type === 'Break_Exception'
+            : updatedRequest.type === 'Break_Exception'
               ? 'break_rejected'
               : 'approval';
         dispatchNotifications({
-          recipientIds: resolveSingleRecipient(request.userId, currentUser.id),
+          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${request.type.replace('_', ' ')} Request Rejected`,
-          message: `${currentUser.name} rejected your ${request.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
+          title: `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
+          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
         });
-        confirmActionSuccess('Request Rejected', `You rejected the ${request.type.toLowerCase().replace('_', ' ')} request successfully.`);
+        confirmActionSuccess('Request Rejected', `You rejected the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
+        pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
+        return { success: true, message: data.message || 'HR request rejected successfully.' };
+      } catch (error: any) {
+        const message = error?.message || 'Failed to reject HR request.';
+        pushToast('error', 'Rejection Failed', message);
+        return { success: false, message };
       }
-      pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
     };
 
     // Chat
