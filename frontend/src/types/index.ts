@@ -471,16 +471,3 @@ export interface CalendarEvent {
   projectId?: string;
   taskId?: string;
 }
-
-export interface WeeklySummaryDraft {
-  id: string;
-  projectId: string;
-  weekEnding: string;
-  progressSummary: string;
-  blockersText: string;
-  overdueTasksCount: number;
-  completedTasksCount: number;
-  keyHighlights: string[];
-  recipientChannel: 'Project Chat' | 'Email Digest' | 'Executive Report';
-  generatedAt: string;
-}
