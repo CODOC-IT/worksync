@@ -99,7 +99,15 @@ export const getProjectMemberIds = (project: Project): string[] =>
 
 export const getAssignableProjectUsers = (project: Project, users: User[]): User[] => {
   const memberIds = new Set(getProjectMemberIds(project));
-  return users.filter((user) => user.status !== 'inactive' && memberIds.has(user.id));
+  // Administrative and HR accounts may belong to a project for oversight, but are not
+  // work assignees. Keeping this in the shared selector also protects validation and
+  // every task/subtask creation control that consumes it.
+  return users.filter((user) =>
+    user.status !== 'inactive'
+    && memberIds.has(user.id)
+    && user.role !== 'Admin'
+    && user.role !== 'HR'
+  );
 };
 
 export const getTaskStatusLabel = (status: TaskStatus): string =>

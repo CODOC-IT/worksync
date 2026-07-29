@@ -1528,12 +1528,12 @@ const TaskDetailsModal: React.FC<{
       role="dialog"
       aria-modal="true"
       aria-labelledby="task-details-title"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-x-hidden bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
+      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
         <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-slate-950/25 px-5 py-3.5 sm:px-6">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task overview</p>
@@ -1554,12 +1554,12 @@ const TaskDetailsModal: React.FC<{
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
           <div className="space-y-7">
             <section aria-labelledby="project-context-heading">
               <SectionHeading id="project-context-heading" eyebrow="Project" title={project ? getProjectName(project) : 'Unknown project'} />
               {project?.description && (
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">{project.description}</p>
+                <p className="mt-2 max-w-2xl break-all text-sm leading-6 text-slate-400">{project.description}</p>
               )}
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <DetailBox label="Status" value={project?.status || 'Unknown'} />
@@ -1594,7 +1594,7 @@ const TaskDetailsModal: React.FC<{
 
               <div className="mt-5">
                 <h4 className="text-xs font-semibold text-slate-300">Description</h4>
-                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
+                <p className="mt-1.5 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -1674,7 +1674,7 @@ const TaskDetailsModal: React.FC<{
                           </div>
                         </div>
 
-                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                        <p className="mt-3 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">
                           {subtask.description?.trim() || 'No description provided.'}
                         </p>
 
