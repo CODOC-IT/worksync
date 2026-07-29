@@ -280,7 +280,7 @@ export const getTaskStatusDistribution = async (
       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
       GROUP BY ts.statuscode
       ORDER BY MIN(ts.sortorder)`,
-     [projectIds, from, to]
+     [projectIds]
    );
 
    // Map DB codes to display names
@@ -317,7 +317,7 @@ export const getTaskPriorityDistribution = async (
       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
       GROUP BY pr.prioritycode
       ORDER BY pr.prioritycode`,
-     [projectIds, from, to]
+     [projectIds]
   );
 
   // Map DB codes to display names
