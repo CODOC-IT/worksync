@@ -1,43 +1,81 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=220&section=header&text=WorkSync%20Core&fontSize=52&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=75&descSize=16" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=300&section=header&text=WorkSync&fontSize=70&fontAlignY=38&animation=twinkling&fontColor=ffffff&desc=Enterprise%20Office%20and%20Task%20Management%20System&descAlignY=60&descSize=20" width="100%"/>
 
-[![Vite](https://img.shields.io/badge/Vite-6.4.3-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
-[![React](https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.5.3-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-3.4.1-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+<br/>
+
+[![Vite](https://img.shields.io/badge/Vite-6.2.3-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![React](https://img.shields.io/badge/React-19.0.1-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8.2-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-4.1.14-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-MIT-22c55e.svg?style=for-the-badge)](LICENSE)
+[![Vercel](https://img.shields.io/badge/Live%20Demo-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync-taupe.vercel.app/)
+
+<br/>
 
 <img src="https://img.shields.io/github/stars/Salman-ahmed-2/worksync?style=social" alt="stars"/>
+&nbsp;
 <img src="https://img.shields.io/github/forks/Salman-ahmed-2/worksync?style=social" alt="forks"/>
+&nbsp;
 <img src="https://img.shields.io/github/contributors/Salman-ahmed-2/worksync?color=00F2FE" alt="contributors"/>
+&nbsp;
+<img src="https://img.shields.io/badge/Interns-10%20Active-brightgreen?style=flat-square" alt="10 interns"/>
+&nbsp;
+<img src="https://img.shields.io/badge/Status-All%20Modules%20Complete-00e676?style=flat-square&logo=checkmarx&logoColor=white" alt="status"/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=22&pause=1000&color=00F2FE&center=true&vCenter=true&width=650&lines=Team+Members+Management;Personal+Profile+%2B+Settings;Dashboard+%2B+Login+%2B+Frontend;Project+Management+%2B+Calendar;Task+Creation+%2B+Comments;Kanban+Board+%2B+Notifications;Reports+%2B+Activity+Log;Prompt+Builder+%2B+Attendance" alt="Typing SVG" />
+<br/><br/>
+
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=22&pause=1000&color=00F2FE&center=true&vCenter=true&width=700&lines=Team+Members+Management+%F0%9F%91%A5;Personal+Profile+%2B+Settings+%E2%9A%99%EF%B8%8F;Dashboard+%2B+Login+%2B+Frontend+%F0%9F%8F%A0;Project+Management+%2B+Calendar+%F0%9F%93%85;Task+Creation+%2B+Comments+%E2%9C%85;Kanban+Board+%2B+Notifications+%F0%9F%93%8B;Reports+%2B+Activity+Log+%F0%9F%93%88;Prompt+Builder+%2B+Attendance+%F0%9F%A4%96" alt="Typing SVG" />
+
+<br/><br/>
 
 <p align="center">
-  <a href="#-about-worksync"><b>🌟 About</b></a> •
-  <a href="#-team-and-module-assignments"><b>👥 Team Modules</b></a> •
-  <a href="#-all-10-interns-module-showcase"><b>🏆 Module Showcase</b></a> •
-  <a href="#️-database-architecture"><b>🗄️ Database</b></a> •
-  <a href="#-role-access-matrix"><b>🔐 Role Access</b></a> •
-  <a href="#-tech-stack"><b>💻 Tech Stack</b></a> •
-  <a href="#-getting-started"><b>⚡ Getting Started</b></a>
+  <a href="#-about-worksync"><b>🌟 About</b></a> &bull;
+  <a href="#-live-demo"><b>🚀 Live Demo</b></a> &bull;
+  <a href="#-team-and-module-assignments"><b>👥 Team</b></a> &bull;
+  <a href="#-module-showcase"><b>🏆 Modules</b></a> &bull;
+  <a href="#-database-architecture"><b>🗄️ Database</b></a> &bull;
+  <a href="#-role-access-matrix"><b>🔐 Roles</b></a> &bull;
+  <a href="#-tech-stack"><b>💻 Stack</b></a> &bull;
+  <a href="#-getting-started"><b>⚡ Start</b></a>
 </p>
 
 </div>
 
 <div align="center">
-<img src="https://media.giphy.com/media/qgQUggAC3Pfv687qPC/giphy.gif" width="380" alt="enterprise dashboard animation"/>
+<img src="https://media.giphy.com/media/qgQUggAC3Pfv687qPC/giphy.gif" width="420" alt="enterprise dashboard animation"/>
 </div>
 
 ---
 
 ## 🌟 About WorkSync
 
-**WorkSync** is a Cyberpunk Glassmorphism Enterprise Office Management System built for modern software engineering teams. It delivers real time task orchestration, granular role based access control (RBAC), attendance tracking, AI powered prompt generation, Kanban boards, project calendars, and complete audit trail logging.
+**WorkSync** is a Cyberpunk Glassmorphism Enterprise Office Management System built for modern software engineering teams. It delivers real time task orchestration, granular role based access control (RBAC), attendance tracking, AI powered prompt generation, Kanban boards, project calendars, and complete audit trail logging. 🧩
 
-> 🚀 Built by a team of **10 active interns**, each owning a dedicated module, following a **70 table PostgreSQL 3NF schema** and a functional specification that covers permanent and temporary access roles, approval workflows, and full notification routing.
+> 🚀 Built by a team of **10 interns**, each owning a dedicated module, following a **70 table PostgreSQL 3NF schema** and a functional specification covering permanent and temporary access roles, approval workflows, and full notification routing.
+
+<div align="center">
+
+| 🎯 Feature Highlights | | |
+|---|---|---|
+| 🔐 Role Based Access Control | 📋 Kanban Board | 🤖 AI Prompt Builder |
+| 🕐 Attendance Tracking | 📅 Project Calendar | 📈 Reports and Analytics |
+| 💬 Task Comments and Threads | 🔔 Real Time Notifications | 📜 Activity Audit Log |
+
+</div>
+
+---
+
+## 🚀 Live Demo
+
+<div align="center">
+
+[![🌐 View Live App](https://img.shields.io/badge/%F0%9F%8C%90%20View%20Live%20App-worksync--taupe.vercel.app-00C7B7?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync-taupe.vercel.app/)
+
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Salman--ahmed--2%2Fworksync-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Salman-ahmed-2/worksync)
+
+</div>
 
 ---
 
@@ -45,35 +83,40 @@
 
 <div align="center">
 
-| No. | 🧑‍💻 Intern | 🎯 Assigned Module | 📊 Status |
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=16&pause=2000&color=22c55e&center=true&vCenter=true&width=500&lines=All+10+Modules+100%25+Complete+%F0%9F%8E%89;WorkSync+is+Production+Ready+%F0%9F%9A%80" alt="Completed badge"/>
+
+<br/>
+
+| No. | 🧑‍💻 Intern | 🎯 Module | 📊 Status |
 |:---:|---|---|:---:|
-| 01 | [@Salman-ahmed-2](https://github.com/Salman-ahmed-2) | Dashboard / Login / Frontend | 🟡 In Progress |
-| 02 | [@TahaSohail-Goat](https://github.com/TahaSohail-Goat) | Dashboard / Frontend | 🟡 In Progress |
-| 03 | [@laibainqilab-ds](https://github.com/laibainqilab-ds) | Project Management / Calendar | 🟡 In Progress |
-| 04 | [@abihajibbran1-lang](https://github.com/abihajibbran1-lang) | Task Creation / Comments | 🟡 In Progress |
-| 05 | [@Bilalmughal-07](https://github.com/Bilalmughal-07) | Kanban Board / Notifications | 🟡 In Progress |
-| 06 | [@meowryam](https://github.com/meowryam) | Reports | 🟡 In Progress |
-| 07 | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | Team Members / Profile / Settings | 🟢 Completed |
-| 08 | [@hassaanahmed-dev](https://github.com/hassaanahmed-dev) | Prompt Builder | 🟡 In Progress |
-| 09 | [@inshrahmumtaz](https://github.com/inshrahmumtaz) | Attendance and Breaks | 🟡 In Progress |
-| 10 | [@muhammad-haris2](https://github.com/muhammad-haris2) | Activity Log | 🟡 In Progress |
+| 01 | [@Salman-ahmed-2](https://github.com/Salman-ahmed-2) | 🖥️ Dashboard, Login, Frontend | ✅ Completed |
+| 02 | [@TahaSohail-Goat](https://github.com/TahaSohail-Goat) | 🖥️ Dashboard, Frontend | ✅ Completed |
+| 03 | [@laibainqilab-ds](https://github.com/laibainqilab-ds) | 📅 Project Management, Calendar | ✅ Completed |
+| 04 | [@abihajibbran1-lang](https://github.com/abihajibbran1-lang) | ✅ Task Creation, Comments | ✅ Completed |
+| 05 | [@Bilalmughal-07](https://github.com/Bilalmughal-07) | 📋 Kanban Board, Notifications | ✅ Completed |
+| 06 | [@meowryam](https://github.com/meowryam) | 📈 Reports | ✅ Completed |
+| 07 | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | 👥 Team Members, Profile, Settings | ✅ Completed |
+| 08 | [@hassaanahmed-dev](https://github.com/hassaanahmed-dev) | 🤖 Prompt Builder | ✅ Completed |
+| 09 | [@inshrahmumtaz](https://github.com/inshrahmumtaz) | 🕐 Attendance and Breaks | ✅ Completed |
+| 10 | [@muhammad-haris2](https://github.com/muhammad-haris2) | 📜 Activity Log | ✅ Completed |
 
 </div>
 
 ---
 
-## 🏆 All 10 Interns Module Showcase
+## 🏆 Module Showcase
 
 <details open>
-<summary><b>1️⃣ 🖥️ Dashboard / Login / Frontend</b></summary>
+<summary><b>1️⃣ 🖥️ Dashboard, Login, Frontend</b></summary>
 <br/>
 
 **Assigned to**: [`@Salman-ahmed-2`](https://github.com/Salman-ahmed-2) and [`@TahaSohail-Goat`](https://github.com/TahaSohail-Goat)
 
 - 🏠 Central workspace dashboard with project, task, and attendance overview cards
 - 🔐 Role selector login screen for Admin, Team Lead, HR, and Team Member access
-- 🎨 Glassmorphism dark mode UI with cyan/purple gradient design system
+- 🎨 Glassmorphism dark mode UI with cyan and purple gradient design system
 - 📱 Responsive sidebar with collapsible navigation and keyboard shortcuts
+- ✨ Smooth micro animations and hover effects throughout the interface
 
 </details>
 
@@ -87,6 +130,7 @@
 - 🗓️ Calendar view showing deadlines, milestones, meetings, and leave events
 - 📊 Progress tracking with milestone completion and task status distribution
 - 🔒 Admin activation requirement configuration per project
+- 📌 Milestone management with dependency tracking and completion status
 
 </details>
 
@@ -97,9 +141,9 @@
 **Assigned to**: [`@abihajibbran1-lang`](https://github.com/abihajibbran1-lang)
 
 - 📝 Protected task creation with approval routing through Team Lead
-- 💬 Asynchronous discussion threads on tasks with @mentions
+- 💬 Asynchronous discussion threads on tasks with nested comments
 - 🚧 Blocker reporting with mandatory explanation requirement
-- 🔄 Status workflow: Todo, In Progress, Review, Done, Blocked
+- 🔄 Status workflow: Todo, In Progress, Review, Done, and Blocked
 - 📎 File attachment upload for tasks and completion evidence
 
 </details>
@@ -111,9 +155,10 @@
 **Assigned to**: [`@Bilalmughal-07`](https://github.com/Bilalmughal-07)
 
 - 🎯 Drag and drop Kanban board with column based task flow management
-- 🔔 Real time notification inbox with read/unread state management
+- 🔔 Real time notification inbox with read and unread state management
 - 🏷️ Priority and status filters on the Kanban view
 - 📲 Push notification routing matrix for all workspace events
+- 🔍 Smart filtering by assignee, priority, and due date
 
 </details>
 
@@ -125,16 +170,17 @@
 
 - 📊 Project progress, overdue tasks, workload distribution, and completion trends
 - 💾 Saved report filters with scheduled generation support
-- 📤 Report export in multiple formats
-- 🔐 Role scoped report access (Admin: all, Team Lead: assigned projects, HR: attendance)
+- 📤 Report export in multiple formats (PDF, CSV, Excel)
+- 🔐 Role scoped report access: Admin sees all, Team Lead sees assigned projects, HR sees attendance
+- 📉 Visual charts and graphs powered by Recharts
 
 </details>
 
 <details open>
-<summary><b>6️⃣ 👥 Team Members / Personal Profile / Settings</b></summary>
+<summary><b>6️⃣ 👥 Team Members, Personal Profile, Settings</b></summary>
 <br/>
 
-**Assigned to**: [`@AbdulAzeemHashmi`](https://github.com/AbdulAzeemHashmi) 🟢
+**Assigned to**: [`@AbdulAzeemHashmi`](https://github.com/AbdulAzeemHashmi) ✅
 
 **👥 Team Members**
 - 📊 Member Hub with grid card and compact table dual view modes
@@ -146,15 +192,15 @@
 **🧑 Personal Profile**
 - 🎨 Role aware profile hero banner with status indicator and GitHub link
 - ✏️ Edit Profile modal covering name, email, title, department, status, and GitHub handle
-- 🔴 Admin panel: System stats strip showing Active Users, Open Tasks, and Active Projects
-- 🟣 Team Lead panel: My Team tab showing reporting members with task counts
+- 🔴 Admin panel: System Stats strip with Active Users, Open Tasks, and Active Projects
+- 🟣 Team Lead panel: My Team tab with reporting members and task counts
 - 🩷 HR panel: My HR Requests tab for submitted and reviewed HR requests
 
 **⚙️ Settings**
-- 🌙 Dark/Light mode theme toggle
+- 🌙 Dark and Light mode theme toggle
 - 🔔 Email, In App, and Weekly Digest notification preference toggles
 - 🔒 Password update interface with inline validation feedback
-- ⏰ Office hours configuration (Admin/HR: edit, Team Lead: read only, Member: hidden)
+- ⏰ Office hours configuration (Admin and HR can edit, Team Lead read only, Member hidden)
 - 🛡️ Admin Safeguards: masked AI API key, JSON Vault export, and Sole Admin protection check
 
 </details>
@@ -169,6 +215,7 @@
 - 📝 Editable generated output with version history tracking
 - 🗃️ Saved prompts library organized by category
 - 🔐 Prompt Builder scoped to data accessible by the current user role
+- 🔁 One click regeneration with context awareness
 
 </details>
 
@@ -182,20 +229,21 @@
 - ☕ Break timer with Lunch, Short Break, and Other break type categorization
 - 📋 Leave request submission (Casual, Sick, Annual, Unpaid) with HR review routing
 - 🩷 Attendance correction requests with HR approval workflow
-- 🚫 HR self approval prevention and Administrator fallback routing
+- 🚫 HR self approval prevention with Administrator fallback routing
 
 </details>
 
 <details open>
-<summary><b>9️⃣ 📋 Activity Log</b></summary>
+<summary><b>9️⃣ 📜 Activity Log</b></summary>
 <br/>
 
 **Assigned to**: [`@muhammad-haris2`](https://github.com/muhammad-haris2)
 
 - 📜 Append only activity log for all workspace operations
 - 🔍 Filter by actor, action type, target entity, and date range
-- 🏷️ Scope filtered views per role (Admin: all activity, others: scoped)
+- 🏷️ Scope filtered views per role: Admin sees all, others see a scoped view
 - 🔗 Action entries linked to target projects, tasks, attendance, and settings records
+- 🕒 Timestamped entries with user context and IP metadata
 
 </details>
 
@@ -203,22 +251,24 @@
 
 ## 🗄️ Database Architecture
 
-The system runs on **PostgreSQL 16+** normalized to **Third Normal Form (3NF)** with **70 tables** across **11 business schemas**.
+The system runs on **PostgreSQL 16+** normalized to **Third Normal Form (3NF)** with **70 tables** across **11 business schemas** and **163 foreign key relations**. 🧠
 
 <div align="center">
 
 ```mermaid
 flowchart TD
-    A[(🗄️ PostgreSQL 16+ Database<br/>70 Tables, 11 Business Schemas)]
-    A --> B[org<br/>3 tables]
-    A --> C[iam<br/>10 tables]
-    A --> D[work<br/>18 tables]
-    A --> E[collab<br/>8 tables]
-    A --> F[hr<br/>13 tables]
-    A --> G[calendar<br/>3 tables]
-    A --> H[reporting<br/>4 tables]
-    A --> I[audit<br/>2 tables]
-    A --> J[ai<br/>2 tables]
+    A[(🗄️ PostgreSQL 16+\n70 Tables, 11 Schemas)]
+    A --> B[🏢 org\n3 tables]
+    A --> C[🔑 iam\n10 tables]
+    A --> D[📋 work\n18 tables]
+    A --> E[💬 collab\n8 tables]
+    A --> F[🩷 hr\n13 tables]
+    A --> G[📅 calendar\n3 tables]
+    A --> H[📈 reporting\n4 tables]
+    A --> I[🤖 ai\n2 tables]
+    A --> J[🔔 notify\n4 tables]
+    A --> K[⚙️ config\n3 tables]
+    A --> L[📜 audit\n2 tables]
 ```
 
 </div>
@@ -240,7 +290,7 @@ flowchart TD
 | 8 | `ai` | 2 | Prompt Output Types and Generation History |
 | 9 | `notify` | 4 | Notification Types, Preferences, Inbox |
 | 10 | `config` | 3 | Organization and User Settings |
-| 11 | `audit` | 2 | Append only Audit Events and Field Changes |
+| 11 | `audit` | 2 | Append Only Audit Events and Field Changes |
 
 </div>
 
@@ -255,14 +305,14 @@ flowchart TD
 
 <div align="center">
 
-| Feature | 🔴 Admin | 🟣 Team Lead | 🩷 HR | 🔵 Team Member |
+| Feature | 🔴 Admin | 🟣 Team Lead | 🩷 HR | 🔵 Member |
 |---|:---:|:---:|:---:|:---:|
-| Create/Edit/Delete Projects | ✅ | Assigned only | ❌ | ❌ |
-| Create/Assign Tasks | ✅ | Assigned projects | ❌ | ❌ |
+| Create, Edit, Delete Projects | ✅ | Assigned only | ❌ | ❌ |
+| Create and Assign Tasks | ❌ | Assigned projects | ❌ | ❌ |
 | Approve Protected Changes | ✅ Override | Assigned projects | ❌ | ❌ |
 | View All Reports | ✅ | Assigned scope | Attendance only | Personal only |
 | Manage All Attendance | ✅ | ❌ | Within HR scope | ❌ |
-| Grant/Revoke Temp Roles | ✅ | ❌ | ❌ | ❌ |
+| Grant and Revoke Temp Roles | ✅ | ❌ | ❌ | ❌ |
 | Edit Own Profile | ✅ | ✅ | ✅ | ✅ |
 | View Team Members Tab | ✅ | ✅ | ✅ | ✅ |
 | View Admin Quick Stats | ✅ | ❌ | ❌ | ❌ |
@@ -285,12 +335,18 @@ flowchart TD
 
 | Category | Technology |
 |---|---|
-| ⚛️ Framework | React 18 + TypeScript 5.5 |
-| ⚡ Build Tool | Vite 6.4 |
-| 🎨 Styling | Vanilla CSS + Tailwind CSS 3.4 + Custom Glassmorphism |
+| ⚛️ Framework | React 19 with TypeScript 5.8 |
+| ⚡ Build Tool | Vite 6.2 |
+| 🎨 Styling | Tailwind CSS 4.1 with Custom Glassmorphism |
 | 🧩 Icons | Lucide React |
-| 🧠 State | React Context API + LocalStorage Persistence |
+| 📊 Charts | Recharts 3.10 |
+| 🎞️ Animation | Motion 12 (Framer Motion) |
+| 🔐 Auth | JWT + bcryptjs |
+| 📧 Email | Nodemailer |
+| 🌐 Backend | Express.js with TypeScript |
 | 🗄️ Database | PostgreSQL 16+ (70 tables, 11 schemas, 163 FK relations) |
+| ☁️ Cloud DB | Supabase |
+| 🚀 Deployment | Vercel |
 
 <br/>
 
@@ -303,6 +359,12 @@ flowchart TD
 ![Tailwind](https://skillicons.dev/icons?i=tailwind)
 &nbsp;
 ![PostgreSQL](https://skillicons.dev/icons?i=postgres)
+&nbsp;
+![Express](https://skillicons.dev/icons?i=express)
+&nbsp;
+![Supabase](https://skillicons.dev/icons?i=supabase)
+&nbsp;
+![Vercel](https://skillicons.dev/icons?i=vercel)
 
 </div>
 
@@ -314,6 +376,7 @@ flowchart TD
 
 - Node.js v18.0.0 or higher
 - npm v9.0.0 or higher
+- PostgreSQL 16+ (optional for full backend mode)
 
 <details open>
 <summary><b>📦 Installation</b></summary>
@@ -332,36 +395,37 @@ cd worksync
 npm install
 ```
 
-**3️⃣ Start the development server:**
+**3️⃣ Configure environment variables:**
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+**4️⃣ Start the development server:**
 
 ```bash
 npm run dev
 ```
 
-**4️⃣ Open in browser:**
+**5️⃣ Open in browser:**
 
 ```
-http://localhost:5173
+http://localhost:3000
 ```
 
 </details>
 
-### 🔨 Build Verification
+### 🔨 Build for Production
 
 ```bash
 npm run build
 ```
 
-Expected output:
+### 🖥️ Run Backend Server
 
-```text
-vite v6.4.3 building for production...
-transforming...
-2088 modules transformed.
-dist/index.html                   0.87 kB
-dist/assets/index.css            73.73 kB
-dist/assets/index.js            471.38 kB
-built in 8.15s
+```bash
+npm run server
 ```
 
 ---
@@ -381,14 +445,32 @@ built in 8.15s
 
 ---
 
+## 🤝 Contributing
+
+This project was built by **10 interns** at a collaborative sprint. To contribute:
+
+1. 🍴 Fork the repository
+2. 🌿 Create a feature branch: `git checkout -b feature/your-feature`
+3. 💾 Commit your changes: `git commit -m "feat: add your feature"`
+4. 📤 Push to the branch: `git push origin feature/your-feature`
+5. 🔄 Open a Pull Request
+
+---
+
 <div align="center">
 
-### ⭐ If WorkSync impressed you, consider giving it a star
+### ⭐ If WorkSync impressed you, give it a star!
 
-Built with ❤️ by the **WorkSync Intern Team**
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=18&pause=2000&color=FFD700&center=true&vCenter=true&width=500&lines=Built+with+%E2%9D%A4%EF%B8%8F+by+10+Interns;WorkSync+Intern+Team+2026+%F0%9F%9A%80" alt="Footer Typing"/>
+
+<br/>
 
 [![GitHub Org](https://img.shields.io/badge/Repository-Salman--ahmed--2%2Fworksync-181717?style=flat-square&logo=github)](https://github.com/Salman-ahmed-2/worksync)
+&nbsp;
+[![Live App](https://img.shields.io/badge/Live%20App-worksync--taupe.vercel.app-00C7B7?style=flat-square&logo=vercel)](https://worksync-taupe.vercel.app/)
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=120&section=footer" width="100%"/>
+<br/>
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,10,25,30&height=150&section=footer" width="100%"/>
 
 </div>

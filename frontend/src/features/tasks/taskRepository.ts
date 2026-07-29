@@ -1,156 +1,195 @@
-import { supabase } from '../../../utils/supabase';
-import { Project, Task, TaskPriority, TaskStatus } from '../../types';
+import { Task, TaskStatus, TaskStatusHistoryEntry } from '../../types';
+import {
+  TaskMutationData,
+  TaskMutationResult,
+  TaskModuleTask
+} from './taskRules';
 
-interface TaskRow {
-  taskid: number;
-  projectid: number;
-  tasknumber: number;
-  title: string;
-  description: string;
-  taskstatusid: number;
-  priorityid: number;
-  startdate: string;
-  duedate: string;
-  createdbyuserid: number;
-  completionsummary: string | null;
-  createdatutc: string;
+interface TaskApiResponse {
+  success: boolean;
+  message?: string;
+  data?: TaskModuleTask | TaskModuleTask[];
+  fieldErrors?: Record<string, string>;
 }
 
-interface TaskAssigneeRow {
-  taskid: number;
-  userid: number;
-  unassignedatutc: string | null;
-}
+const getAuthToken = () => localStorage.getItem('worksync_auth_token');
 
-interface TaskDependencyRow {
-  taskid: number;
-  dependsontaskid: number;
-}
-
-const statusByCode: Record<string, TaskStatus> = {
-  Todo: 'Todo',
-  InProgress: 'In Progress',
-  Review: 'Review',
-  Done: 'Done',
-  Blocked: 'Blocked'
+const parseResponse = async (response: Response): Promise<TaskApiResponse> => {
+  try {
+    return await response.json() as TaskApiResponse;
+  } catch {
+    return {
+      success: false,
+      message: 'The task service returned an invalid response.'
+    };
+  }
 };
 
-const priorityByCode: Record<string, TaskPriority> = {
-  Low: 'Low',
-  Medium: 'Medium',
-  High: 'High',
-  Critical: 'Urgent'
-};
+export const loadTasksFromApi = async (): Promise<Task[] | null> => {
+  const token = getAuthToken();
+  if (!token) return null;
 
-const frontendId = (prefix: 'prj' | 'tsk' | 'usr', value: number | string) =>
-  `${prefix}-${value}`;
+  const response = await fetch('/api/tasks', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const payload = await parseResponse(response);
 
-export const loadTasksFromSupabase = async (
-  projects: Project[]
-): Promise<Task[] | null> => {
-  if (!supabase) return null;
-
-  const [
-    tasksResponse,
-    statusesResponse,
-    prioritiesResponse,
-    assigneesResponse,
-    dependenciesResponse
-  ] = await Promise.all([
-    supabase
-      .schema('work')
-      .from('tasks')
-      .select(
-        'taskid, projectid, tasknumber, title, description, taskstatusid, priorityid, startdate, duedate, createdbyuserid, completionsummary, createdatutc'
-      )
-      .is('archivedatutc', null)
-      .order('createdatutc', { ascending: false }),
-    supabase
-      .schema('work')
-      .from('taskstatuses')
-      .select('taskstatusid, statuscode'),
-    supabase
-      .schema('work')
-      .from('priorities')
-      .select('priorityid, prioritycode'),
-    supabase
-      .schema('work')
-      .from('taskassignees')
-      .select('taskid, userid, unassignedatutc')
-      .is('unassignedatutc', null),
-    supabase
-      .schema('work')
-      .from('taskdependencies')
-      .select('taskid, dependsontaskid')
-  ]);
-
-  const queryError = [
-    tasksResponse.error,
-    statusesResponse.error,
-    prioritiesResponse.error,
-    assigneesResponse.error,
-    dependenciesResponse.error
-  ].find(Boolean);
-
-  if (queryError) {
-    throw new Error(queryError.message);
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to load tasks.');
   }
 
-  const statuses = new Map(
-    (statusesResponse.data || []).map((row) => [
-      row.taskstatusid,
-      row.statuscode
-    ])
-  );
-  const priorities = new Map(
-    (prioritiesResponse.data || []).map((row) => [
-      row.priorityid,
-      row.prioritycode
-    ])
-  );
-  const assigneesByTask = new Map<number, string[]>();
-  const dependenciesByTask = new Map<number, string[]>();
+  return payload.data as Task[];
+};
 
-  ((assigneesResponse.data || []) as TaskAssigneeRow[]).forEach((row) => {
-    const assignees = assigneesByTask.get(row.taskid) || [];
-    assignees.push(frontendId('usr', row.userid));
-    assigneesByTask.set(row.taskid, assignees);
-  });
+export const loadTaskDetailFromApi = async (taskId: string): Promise<Task> => {
+  const token = getAuthToken();
+  if (!token) throw new Error('Sign in before viewing task details.');
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { headers: { Authorization: `Bearer ${token}` } });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || Array.isArray(payload.data) || !payload.data) throw new Error(payload.message || 'Unable to load task details.');
+  return { ...(payload.data as Task), subtasks: Array.isArray(payload.data.subtasks) ? payload.data.subtasks : [] };
+};
 
-  ((dependenciesResponse.data || []) as TaskDependencyRow[]).forEach((row) => {
-    const dependencies = dependenciesByTask.get(row.taskid) || [];
-    dependencies.push(frontendId('tsk', row.dependsontaskid));
-    dependenciesByTask.set(row.taskid, dependencies);
-  });
+export const createTaskViaApi = async (
+  data: TaskMutationData
+): Promise<TaskMutationResult> => {
+  const token = getAuthToken();
+  if (!token) {
+    return {
+      success: false,
+      message: 'Sign in before creating a task.'
+    };
+  }
 
-  return ((tasksResponse.data || []) as TaskRow[]).map((row) => {
-    const projectId = frontendId('prj', row.projectid);
-    const project = projects.find((item) => item.id === projectId);
-    const assigneeIds = assigneesByTask.get(row.taskid) || [];
-    const statusCode = statuses.get(row.taskstatusid) || 'Todo';
-    const priorityCode = priorities.get(row.priorityid) || 'Medium';
+  try {
+    const body: Record<string, unknown> = {
+      projectId: data.projectId,
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      startDate: data.startDate,
+      dueDate: data.dueDate,
+      assigneeIds: data.assigneeIds?.length
+        ? data.assigneeIds
+        : data.assigneeId
+          ? [data.assigneeId]
+          : [],
+      status: data.status || 'Todo'
+    };
+
+    if (data.parentTaskId) {
+      body.parentTaskId = data.parentTaskId;
+    }
+    if (data.subtasks && data.subtasks.length > 0) {
+      body.subtasks = data.subtasks;
+    }
+
+    const response = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    const payload = await parseResponse(response);
+    const task = !Array.isArray(payload.data) ? payload.data : undefined;
+
+    if (!response.ok || !payload.success || !task) {
+      return {
+        success: false,
+        message: payload.message || 'Unable to create the task.',
+        fieldErrors: payload.fieldErrors
+      };
+    }
 
     return {
-      id: frontendId('tsk', row.taskid),
-      taskNumber: `${project?.code || `PRJ-${row.projectid}`}-${row.tasknumber}`,
-      projectId,
-      title: row.title,
-      description: row.description,
-      status: statusByCode[statusCode] || 'Todo',
-      priority: priorityByCode[priorityCode] || 'Medium',
-      startDate: row.startdate,
-      dueDate: row.duedate,
-      assigneeId: assigneeIds[0] || '',
-      assigneeIds,
-      creatorId: frontendId('usr', row.createdbyuserid),
-      estimatedHours: 0,
-      subtasks: [],
-      dependencies: dependenciesByTask.get(row.taskid) || [],
-      tags: ['Task'],
-      attachments: [],
-      approvalStatus: 'Approved',
-      completionSummary: row.completionsummary || undefined,
-      createdAt: row.createdatutc.split('T')[0]
+      success: true,
+      message: payload.message || 'Task created successfully.',
+      task
     };
+  } catch {
+    return {
+      success: false,
+      message: 'Unable to reach the task service. Please try again.'
+    };
+  }
+};
+
+const authHeaders = (): Record<string, string> => {
+  const token = getAuthToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+};
+
+// The Project Board / Task Module's remaining mutations. Same "no local fallback, no fake
+// success" contract as createTaskViaApi/loadTasksFromApi above -- every one of these either
+// resolves with the server's authoritative task, or throws, and the caller (AppContext) never
+// updates local state on a rejected promise.
+export const updateTaskViaApi = async (taskId: string, data: TaskMutationData): Promise<Task> => {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      startDate: data.startDate,
+      dueDate: data.dueDate,
+      assigneeIds: data.assigneeIds
+    })
   });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to update the task.');
+  }
+  return payload.data as Task;
+};
+
+export const deleteTaskViaApi = async (taskId: string): Promise<void> => {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+    headers: authHeaders()
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || 'Unable to delete the task.');
+  }
+};
+
+const patchTaskStatus = async (taskId: string, path: string, body: object): Promise<Task> => {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}${path}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(body)
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to update the task status.');
+  }
+  return payload.data as Task;
+};
+
+export const changeTaskStatusViaApi = (taskId: string, status: TaskStatus, note: string): Promise<Task> =>
+  patchTaskStatus(taskId, '/status', { status, note });
+
+export const approveTaskViaApi = (taskId: string, note: string): Promise<Task> =>
+  patchTaskStatus(taskId, '/approve', { note });
+
+export const rejectTaskViaApi = (taskId: string, note: string): Promise<Task> =>
+  patchTaskStatus(taskId, '/reject', { note });
+
+export const fetchTaskHistoryViaApi = async (taskId: string): Promise<TaskStatusHistoryEntry[]> => {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/history`, {
+    headers: authHeaders()
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to load task history.');
+  }
+  return payload.data as unknown as TaskStatusHistoryEntry[];
 };

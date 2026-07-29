@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../store/AppContext';
 import {
+  Users,
   LayoutDashboard,
   FolderKanban,
   CheckSquare,
@@ -11,10 +12,8 @@ import {
   Clock,
   Sparkles,
   MessageSquare,
-  FileSpreadsheet,
   CheckCircle,
   Bell,
-  Settings,
   User,
   ShieldCheck,
   ChevronLeft,
@@ -27,15 +26,19 @@ interface SidebarProps {
   onTabChange: (tab: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onTabChange,
   collapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  mobileOpen,
+  onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, notifications } = useApp();
+  const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
   const pendingHrCount = hrRequests.filter((r) => r.status === 'Pending').length;
@@ -47,30 +50,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'kanban', label: 'Kanban Board', icon: KanbanSquare },
     { id: 'attendance', label: 'Attendance & Breaks', icon: Clock, badge: currentRole === 'HR' && pendingHrCount > 0 ? pendingHrCount : undefined },
-    {
-      id: 'approvals',
-      label: 'Approvals Inbox',
-      icon: CheckCircle,
-      badge: (currentRole === 'Admin' || currentRole === 'Team_Lead') && pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined,
-      hidden: currentRole === 'Team_Member' || currentRole === 'HR'
-    },
+   {
+  id: 'approvals',
+  label: 'Approvals Inbox',
+  icon: CheckCircle,
+  badge:
+    currentRole === 'HR' && pendingHrCount > 0
+      ? pendingHrCount
+      : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
+          pendingApprovalsCount > 0
+        ? pendingApprovalsCount
+        : undefined,
+  hidden: currentRole === 'Team_Member'
+},
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
-    { id: 'chat', label: 'Project Chat', icon: MessageSquare },
-    { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
+    { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
+    { id: 'members', label: 'Members', icon: Users },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
     { id: 'activity', label: 'Activity Log', icon: Activity },
     { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadNotifsCount > 0 ? unreadNotifsCount : undefined },
-    { id: 'profile', label: 'My Profile', icon: User },
-    { id: 'settings', label: 'Settings', icon: Settings }
+    { id: 'profile', label: 'My Profile', icon: User }
   ];
 
-  return (
-    <aside
-      className={`relative z-30 h-screen flex flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-all duration-300 ${
-        collapsed ? 'w-20' : 'w-64'
-      }`}
-    >
+const sidebarContent = (
+    <>
       {/* Brand Header */}
       <div className="h-16 px-4 flex items-center justify-between border-b border-white/10 shrink-0">
         {!collapsed && (
@@ -81,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
             <div>
-              <span className="font-bold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
+              <span data-sidebar-brand className="font-bold text-sm tracking-wide bg-gradient-to-r from-cyan-400 via-purple-300 to-pink-400 bg-clip-text text-transparent">
                 Worksync
               </span>
               <p className="text-[10px] text-slate-400 font-mono tracking-wider">OFFICE CORE</p>
@@ -136,7 +140,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             return (
               <button
                 key={item.id}
-                onClick={() => onTabChange(item.id)}
+                data-sidebar-nav
+                data-active={isActive}
+                onClick={() => {
+                  onTabChange(item.id);
+                  onMobileClose();
+                }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group relative ${
                   isActive
                     ? 'bg-gradient-to-r from-cyan-500/20 to-purple-600/20 text-white border border-cyan-500/40 shadow-[0_0_15px_rgba(0,242,254,0.15)]'
@@ -185,7 +194,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Footer / Logout */}
       <div className="p-3 border-t border-white/10 shrink-0">
         <button
-          onClick={() => onTabChange('login')}
+          data-sidebar-logout
+          onClick={() => { logoutUser(); onTabChange('login'); }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 border border-transparent transition-colors"
           title={collapsed ? 'Switch / Logout' : undefined}
         >
@@ -193,6 +203,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {!collapsed && <span>Switch Account / Logout</span>}
         </button>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile Overlay Backdrop - visible only on small screens */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+          onClick={onMobileClose}
+        />
+      )}
+
+      {/* Mobile Drawer (fixed, slides in from left) - visible only on mobile when open */}
+      <aside
+        data-app-sidebar
+        className={`
+          lg:hidden fixed left-0 top-0 z-50 h-screen flex flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-transform duration-300
+          ${collapsed ? 'w-20' : 'w-64'}
+          ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* Desktop Sidebar - always visible on large screens */}
+      <aside
+        data-app-sidebar
+        className={`
+          hidden lg:flex relative z-30 h-screen flex-col glass-panel rounded-none border-r border-y-0 border-l-0 transition-all duration-300 shrink-0
+          ${collapsed ? 'w-20' : 'w-64'}
+        `}
+      >
+        {sidebarContent}
+      </aside>
+    </>
   );
 };

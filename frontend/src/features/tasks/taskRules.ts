@@ -35,6 +35,8 @@ export interface TaskFormInput {
   status: TaskStatus;
 }
 
+export interface SubtaskFormInput extends Omit<TaskFormInput, 'projectId'> {}
+
 export type TaskModuleTask = Task & Partial<{
   assigneeIds: string[];
   startDate: string;
@@ -47,10 +49,12 @@ export interface TaskMutationResult {
   fieldErrors?: Record<string, string>;
 }
 
-export type TaskMutationData = Partial<Omit<Task, 'priority'>> & {
+export type TaskMutationData = Partial<Omit<Task, 'priority' | 'subtasks'>> & {
   priority?: TaskModulePriority;
   assigneeIds?: string[];
   startDate?: string;
+  parentTaskId?: string;
+  subtasks?: SubtaskFormInput[];
 };
 
 type CompatibleProject = Project & Partial<{
@@ -93,54 +97,91 @@ export const getProjectEndDate = (project: Project): string =>
 export const getProjectMemberIds = (project: Project): string[] =>
   (project as CompatibleProject).members || project.memberIds;
 
+export const getAssignableProjectUsers = (project: Project, users: User[]): User[] => {
+  const memberIds = new Set(getProjectMemberIds(project));
+  // Administrative and HR accounts may belong to a project for oversight, but are not
+  // work assignees. Keeping this in the shared selector also protects validation and
+  // every task/subtask creation control that consumes it.
+  return users.filter((user) =>
+    user.status !== 'inactive'
+    && memberIds.has(user.id)
+    && user.role !== 'Admin'
+    && user.role !== 'HR'
+  );
+};
+
 export const getTaskStatusLabel = (status: TaskStatus): string =>
   status === 'Todo' ? 'To Do' : status;
+
+export const getTodayIsoDate = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const getLatestDate = (...dates: Array<string | undefined>): string | undefined =>
+  dates
+    .filter((date): date is string => Boolean(date))
+    .reduce<string | undefined>(
+      (latest, date) => !latest || date > latest ? date : latest,
+      undefined
+    );
 
 export const isActiveProject = (project: Project): boolean =>
   project.status === 'Active' && project.approvalStatus === 'Approved';
 
-// The Vite prototype has no UserRole validity/scope records. teamLeadId is only
-// a display-data proxy; the future server must verify iam.UserRoles and
-// iam.TeamLeadProjectScopes for every request.
 export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  isActiveProject(project)
-  && (role === 'Admin' || (role === 'Team_Lead' && project.teamLeadId === userId));
+): boolean => {
+  if (!isActiveProject(project)) {
+    return false;
+  }
+
+  if (role === 'Team_Lead') {
+    return project.teamLeadId === userId;
+  }
+
+  if (role === 'Team_Member') {
+    return getProjectMemberIds(project).includes(userId);
+  }
+
+  return false;
+};
 
 export const canEditTask = (
   role: UserRole,
   userId: string,
   project: Project,
   task: Task
-): boolean => {
-  if (role === 'Admin') return true;
-  if (role === 'Team_Lead') {
-    return isActiveProject(project) && project.teamLeadId === userId;
-  }
-  return role === 'Team_Member' && getTaskAssigneeIds(task).includes(userId);
-};
+): boolean =>
+  Boolean(task.parentTaskId)
+    ? getTaskAssigneeIds(task).includes(userId)
+    : Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) === 0
+      && (getTaskAssigneeIds(task).includes(userId)
+        || (role === 'Team_Lead' && project.teamLeadId === userId));
 
 export const canDeleteTask = (
   role: UserRole,
   userId: string,
   project: Project,
-  teamLeadCanDeleteTasks = false
+  task: Task,
+  teamLeadCanDeleteTasks = true
 ): boolean => {
-  if (role === 'Admin') return true;
-  return role === 'Team_Lead'
-    && teamLeadCanDeleteTasks
-    && isActiveProject(project)
-    && project.teamLeadId === userId;
+  if (!teamLeadCanDeleteTasks || !isActiveProject(project)) return false;
+  return getTaskAssigneeIds(task).includes(userId)
+    || (role === 'Team_Lead' && project.teamLeadId === userId);
 };
 
 export const validateTaskInput = (
   input: TaskFormInput,
   project: Project | undefined,
   users: User[],
-  requireActiveProject = true
+  requireActiveProject = true,
+  minimumStartDate?: string
 ): Record<string, string> => {
   const errors: Record<string, string> = {};
 
@@ -160,6 +201,10 @@ export const validateTaskInput = (
     errors.dueDate = 'Due date cannot be before the start date.';
   }
 
+  if (minimumStartDate && input.startDate && input.startDate < minimumStartDate) {
+    errors.startDate = `Start date cannot be before ${minimumStartDate}.`;
+  }
+
   if (project && input.startDate && input.startDate < project.startDate) {
     errors.startDate = `Start date cannot be before ${project.startDate}.`;
   }
@@ -174,11 +219,7 @@ export const validateTaskInput = (
     errors.assigneeIds = 'Duplicate assignees are not allowed.';
   } else if (project) {
     const validMemberIds = new Set(
-      users
-        .filter((user) =>
-          user.status !== 'inactive' && getProjectMemberIds(project).includes(user.id)
-        )
-        .map((user) => user.id)
+      getAssignableProjectUsers(project, users).map((user) => user.id)
     );
     if (input.assigneeIds.some((id) => !validMemberIds.has(id))) {
       errors.assigneeIds = 'Every assignee must be an active project member.';

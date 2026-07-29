@@ -71,8 +71,9 @@ export const prepareTaskCreation = (
     };
   }
 
+  const localId = Math.floor(Math.random() * 900000) + 100000;
   const task: Task & { startDate: string; assigneeIds: string[] } = {
-    id: `tsk-${now}`,
+    id: `tsk-${localId}`,
     taskNumber: `${project.code}-${context.tasks.filter(
       (item) => item.projectId === project.id
     ).length + 1}`,
@@ -87,7 +88,7 @@ export const prepareTaskCreation = (
     assigneeIds: input.assigneeIds,
     creatorId: context.currentUserId,
     estimatedHours: data.estimatedHours || 8,
-    subtasks: data.subtasks || [],
+    subtasks: [],
     dependencies: data.dependencies || [],
     tags: data.tags || ['Task'],
     attachments: [],
@@ -118,23 +119,11 @@ export const prepareTaskUpdate = (
     return { success: false, message: 'You do not have permission to edit this task.' };
   }
 
-  if (context.currentRole === 'Team_Member') {
-    const restrictedFields: Array<keyof TaskMutationData> = [
-      'projectId',
-      'title',
-      'description',
-      'priority',
-      'startDate',
-      'dueDate',
-      'assigneeId',
-      'assigneeIds'
-    ];
-    if (restrictedFields.some((field) => data[field] !== undefined)) {
-      return {
-        success: false,
-        message: 'Team Members can only update task status until the protected-change workflow is available.'
-      };
-    }
+  if (data.assigneeId !== undefined || data.assigneeIds !== undefined) {
+    return {
+      success: false,
+      message: 'Task assignments cannot be changed from the assignee edit form.'
+    };
   }
 
   const assigneeIds = data.assigneeIds?.length
@@ -142,7 +131,7 @@ export const prepareTaskUpdate = (
     : data.assigneeId
       ? [data.assigneeId]
       : getTaskAssigneeIds(task);
-  const { priority, ...otherChanges } = data;
+  const { priority, subtasks: _subtasks, ...otherChanges } = data;
   const updatedTask: Task & Partial<{ startDate: string; assigneeIds: string[] }> = {
     ...task,
     ...otherChanges,
@@ -188,11 +177,9 @@ export const prepareTaskDeletion = (
 
   const project = context.projects.find((item) => item.id === task.projectId);
 
-  // The mock repository has no Team Lead scope-permission record. Keep delete
-  // denied for Team Leads until CanDeleteTasks is returned by the server.
   if (
     !project
-    || !canDeleteTask(context.currentRole, context.currentUserId, project, false)
+    || !canDeleteTask(context.currentRole, context.currentUserId, project, task)
   ) {
     return { success: false, message: 'You do not have permission to delete this task.' };
   }
