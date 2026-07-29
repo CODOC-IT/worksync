@@ -203,7 +203,7 @@ export const ProjectChatsView: React.FC = () => {
   };
 
   return (
-    <section data-project-chats className="project-chat-shell mx-auto flex h-full min-h-0 max-w-[1550px] flex-col gap-3 overflow-hidden rounded-2xl p-3 md:p-4">
+    <section data-project-chats className="project-chat-shell mx-auto flex h-auto min-h-[820px] max-w-[1550px] flex-col gap-3 overflow-visible rounded-2xl p-3 md:p-4">
       <header className="flex shrink-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <h1 className="project-chat-heading flex items-center gap-2.5 text-2xl font-bold"><span className="project-chat-icon flex h-9 w-9 items-center justify-center rounded-xl"><MessageSquare size={19} /></span>Project Chats</h1>
@@ -227,7 +227,7 @@ export const ProjectChatsView: React.FC = () => {
       </div>
 
       {error && <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><span>{error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/15">Try again</button></div>}
-      <div className="project-chat-layout grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-2xl lg:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="project-chat-layout grid min-h-[650px] flex-1 grid-cols-1 overflow-hidden rounded-2xl lg:grid-cols-[360px_minmax(0,1fr)]">
         <aside aria-label="Discussion list" className={`${mobileConversationOpen ? 'hidden lg:flex' : 'flex'} project-chat-sidebar min-h-0 flex-col overflow-hidden lg:border-r`}>
           <div className="project-chat-divider flex shrink-0 items-center justify-between border-b px-4 py-3">
             <span className="project-chat-heading text-sm font-bold">Discussions</span>
@@ -419,7 +419,7 @@ const DiscussionPanel: React.FC<any> = ({
         </div>
         {canResolve && <button type="button" onClick={onResolve} className="project-chat-action rounded-[10px] px-3 py-2 text-xs font-semibold">{thread.resolved ? 'Reopen discussion' : 'Resolve discussion'}</button>}
       </div>
-      <div ref={historyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 md:p-4">
+      <div ref={historyRef} className="min-h-0 flex-1 scroll-pb-6 overflow-y-auto overscroll-contain p-3 pb-6 md:p-4 md:pb-6">
         <div className="mx-auto max-w-5xl">
         {thread.comments.map((comment: DiscussionComment, index: number) => {
           const author = users.find((user: ProjectMemberSummary) => user.id === comment.authorId);
