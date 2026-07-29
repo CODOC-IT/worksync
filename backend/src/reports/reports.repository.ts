@@ -279,27 +279,25 @@ export const getTaskStatusDistribution = async (
     `SELECT ts.statuscode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)
-     GROUP BY ts.statuscode
-     ORDER BY MIN(ts.sortorder)`,
-    [projectIds, from, to]
-  );
+      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+      GROUP BY ts.statuscode
+      ORDER BY MIN(ts.sortorder)`,
+     [projectIds, from, to, projectIds, from, to]
+   );
 
-  // Map DB codes to display names
-  const statusNames: Record<string, string> = {
-    Todo: 'Todo',
-    InProgress: 'In Progress',
-    Review: 'Review',
-    Blocked: 'Blocked',
-    Done: 'Done',
-  };
+   // Map DB codes to display names
+   const statusNames: Record<string, string> = {
+     Todo: 'Todo',
+     InProgress: 'In Progress',
+     Review: 'Review',
+     Blocked: 'Blocked',
+     Done: 'Done',
+   };
 
-  return result.rows.map((r) => ({
-    name: statusNames[r.name] || r.name,
-    value: r.value,
-  }));
+   return result.rows.map((r) => ({
+     name: statusNames[r.name] || r.name,
+     value: r.value,
+   }));
 };
 
 // ────────────────────────────────────────────────────────────
@@ -318,12 +316,10 @@ export const getTaskPriorityDistribution = async (
      FROM work.tasks t
      JOIN work.priorities pr ON pr.priorityid = t.priorityid
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)
-     GROUP BY pr.prioritycode
-     ORDER BY pr.prioritycode`,
-    [projectIds, from, to]
+      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+      GROUP BY pr.prioritycode
+      ORDER BY pr.prioritycode`,
+     [projectIds, from, to]
   );
 
   // Map DB codes to display names
