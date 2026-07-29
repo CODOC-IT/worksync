@@ -71,12 +71,16 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
   }
 
   if (Number(row.subtaskcount || 0) > 0) {
-    throw new TaskAuthorizationError('A task with subtasks is read-only. Edit its assigned subtasks instead.');
+    if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+    throw new TaskAuthorizationError('Only this project\'s Team Lead can edit a task that has subtasks.');
   }
-  if (isAssignee) return;
 
   const projectId = projectFrontendId(row);
   if (role === 'Team_Lead' && await isProjectLead(projectId, userId, role)) return;
+  if (isAssignee && role !== 'Team_Member') return;
+  if (isAssignee) {
+    throw new TaskAuthorizationError('Submit this task edit for your Team Lead\'s approval.');
+  }
   throw new TaskAuthorizationError('You can only edit tasks assigned to you or in projects you lead.');
 };
 

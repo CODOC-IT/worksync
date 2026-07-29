@@ -157,12 +157,15 @@ export const canEditTask = (
   userId: string,
   project: Project,
   task: Task
-): boolean =>
-  Boolean(task.parentTaskId)
-    ? getTaskAssigneeIds(task).includes(userId)
-    : Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) === 0
-      && (getTaskAssigneeIds(task).includes(userId)
-        || (role === 'Team_Lead' && project.teamLeadId === userId));
+): boolean => {
+  if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
+
+  const isProjectLead = role === 'Team_Lead' && project.teamLeadId === userId;
+  if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
+    return isProjectLead;
+  }
+  return getTaskAssigneeIds(task).includes(userId) || isProjectLead;
+};
 
 export const canDeleteTask = (
   role: UserRole,
