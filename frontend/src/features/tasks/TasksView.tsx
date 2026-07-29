@@ -17,7 +17,7 @@ import {
   X
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { Task, TaskPriority, TaskStatus, User } from '../../types';
+import { Project, Task, TaskPriority, TaskStatus, User } from '../../types';
 import {
   canCreateTaskForProject,
   canDeleteTask,
@@ -64,6 +64,8 @@ const formatDate = (value: string) =>
     day: 'numeric',
     year: 'numeric'
   });
+
+const formatOptionalDate = (value?: string) => value ? formatDate(value) : 'Not set';
 
 export const TasksView: React.FC = () => {
   const {
@@ -1052,15 +1054,7 @@ export const TasksView: React.FC = () => {
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
-          projectName={
-            (() => {
-              const project = projects.find((item) => item.id === viewingTask.projectId);
-              return project ? getProjectName(project) : 'Unknown project';
-            })()
-          }
-          assigneeNames={getTaskAssigneeIds(viewingTask)
-            .map((id) => users.find((user) => user.id === id)?.name)
-            .filter((name): name is string => Boolean(name))}
+          project={projects.find((item) => item.id === viewingTask.projectId)}
           users={users}
           onClose={() => setViewingTask(null)}
         />
@@ -1201,68 +1195,181 @@ const DeleteTaskModal: React.FC<{
 
 const TaskDetailsModal: React.FC<{
   task: Task;
-  projectName: string;
-  assigneeNames: string[];
+  project?: Project;
   users: User[];
   onClose: () => void;
-}> = ({ task, projectName, assigneeNames, users, onClose }) => (
-  <div
-    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-    onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}
-  >
-    <div className="glass-panel-glow w-full max-w-2xl overflow-hidden">
-      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4">
-        <div className="min-w-0">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-cyan-400">
-            {task.taskNumber}
-          </span>
-          <h2 className="mt-1 text-lg font-bold text-white">{task.title}</h2>
-          <p className="mt-1 text-xs text-slate-400">{projectName}</p>
+}> = ({ task, project, users, onClose }) => {
+  const teamLead = project
+    ? users.find((user) => user.id === project.teamLeadId)
+    : undefined;
+  const taskAssignees = getTaskAssigneeIds(task)
+    .map((id) => users.find((user) => user.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
+  const taskOverdue = isTaskOverdue(task, today);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="task-details-title"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
+        <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-slate-950/25 px-5 py-3.5 sm:px-6">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task overview</p>
+            <div className="mt-0.5 flex min-w-0 items-center gap-2">
+              <h2 id="task-details-title" className="text-base font-bold text-white">Details</h2>
+              <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                {task.taskNumber}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+            aria-label="Close task details"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+          <div className="space-y-7">
+            <section aria-labelledby="project-context-heading">
+              <SectionHeading id="project-context-heading" eyebrow="Project" title={project ? getProjectName(project) : 'Unknown project'} />
+              {project?.description && (
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">{project.description}</p>
+              )}
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <DetailBox label="Status" value={project?.status || 'Unknown'} />
+                <DetailBox label="Start date" value={formatOptionalDate(project?.startDate)} />
+                <DetailBox label="Due date" value={formatOptionalDate(project?.targetDate)} />
+                <DetailBox label="Team lead" value={teamLead?.name || 'Not assigned'} />
+              </div>
+            </section>
+
+            <section aria-labelledby="task-information-heading" className="border-t border-white/10 pt-6">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task</p>
+              <h3 id="task-information-heading" className="mt-1.5 break-words text-xl font-bold leading-7 text-white sm:text-2xl">
+                {task.title}
+              </h3>
+
+              <div className="mt-3">
+                <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Priority</span>
+                <TaskBadge value={task.priority} kind="priority" />
+              </div>
+
+              <div className="mt-5">
+                <h4 className="text-xs font-semibold text-slate-300">Description</h4>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <DetailBox label="Status" value={getTaskStatusLabel(task.status)} />
+                <DetailBox label="Assigned to" value={taskAssignees.join(', ') || 'Unassigned'} />
+                <DetailBox label="Start date" value={formatOptionalDate(getTaskStartDate(task))} />
+                <DetailBox
+                  label="Due date"
+                  value={`${formatOptionalDate(task.dueDate)}${taskOverdue ? ' · Overdue' : ''}`}
+                  overdue={taskOverdue}
+                />
+              </div>
+            </section>
+
+            <section aria-labelledby="subtasks-heading" className="border-t border-white/10 pt-6">
+              <div className="flex items-end justify-between gap-3">
+                <SectionHeading
+                  id="subtasks-heading"
+                  eyebrow="Breakdown"
+                  title={`Subtasks (${task.subtasks.length})`}
+                />
+                {task.subtasks.length > 0 && (
+                  <span className="text-xs font-medium text-slate-500">
+                    {task.subtasks.filter((subtask) => subtask.completed || subtask.status === 'Done').length} complete
+                  </span>
+                )}
+              </div>
+
+              {task.subtasks.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-center">
+                  <p className="text-sm font-medium text-slate-300">No subtasks yet</p>
+                  <p className="mt-1 text-xs text-slate-500">This task has not been broken into smaller work items.</p>
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {task.subtasks.map((subtask, index) => {
+                    const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
+                    const subtaskPriority = subtask.priority || task.priority;
+                    const subtaskOverdue = Boolean(
+                      subtask.dueDate
+                      && subtaskStatus !== 'Done'
+                      && subtask.dueDate < today
+                    );
+                    const subtaskAssignees = (subtask.assigneeIds || [])
+                      .map((id) => users.find((user) => user.id === id)?.name)
+                      .filter((name): name is string => Boolean(name));
+
+                    return (
+                      <article key={subtask.id} className="rounded-2xl border border-white/10 bg-slate-950/30 p-4 sm:p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Subtask {index + 1}</p>
+                            <h4 className="mt-1 break-words text-base font-bold leading-6 text-white">{subtask.title}</h4>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <TaskBadge value={subtaskStatus} kind="status" />
+                            <TaskBadge value={subtaskPriority} kind="priority" />
+                          </div>
+                        </div>
+
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                          {subtask.description?.trim() || 'No description provided.'}
+                        </p>
+
+                        <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                          <DetailBox label="Assigned to" value={subtaskAssignees.join(', ') || 'Unassigned'} compact />
+                          <DetailBox label="Status" value={getTaskStatusLabel(subtaskStatus)} compact />
+                          <DetailBox label="Start date" value={formatOptionalDate(subtask.startDate)} compact />
+                          <DetailBox
+                            label="Due date"
+                            value={`${formatOptionalDate(subtask.dueDate)}${subtaskOverdue ? ' · Overdue' : ''}`}
+                            compact
+                            overdue={subtaskOverdue}
+                          />
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white"
-          aria-label="Close task details"
-        >
-          <X size={18} />
-        </button>
-      </div>
-      <div className="space-y-5 p-5">
-        <div className="flex flex-wrap gap-2">
-          <TaskBadge value={task.status} kind="status" />
-          <TaskBadge value={task.priority} kind="priority" />
-          {isTaskOverdue(task, today) && (
-            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
-              Overdue
-            </span>
-          )}
-        </div>
-        <div>
-          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Description
-          </h3>
-          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">{task.description}</p>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Detail label="Start date" value={formatDate(getTaskStartDate(task))} />
-          <Detail label="Due date" value={formatDate(task.dueDate)} />
-          <Detail label="Assignees" value={assigneeNames.join(', ') || 'Unassigned'} />
-        </div>
-        <section><h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Subtasks</h3>{task.subtasks.length === 0 ? <p className="text-sm text-slate-400">No subtasks attached.</p> : <div className="space-y-3">{task.subtasks.map((subtask) => <div key={subtask.id} className="rounded-xl border border-white/10 bg-slate-950/35 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><p className="break-words font-bold text-white">{subtask.title}</p><div className="flex gap-2">{subtask.status && <TaskBadge value={subtask.status} kind="status" />}{subtask.priority && <TaskBadge value={subtask.priority} kind="priority" />}</div></div><p className="mt-2 break-words whitespace-pre-wrap text-sm text-slate-300">{subtask.description}</p><p className="mt-3 text-xs text-slate-500">{formatDate(subtask.startDate || '')} – {formatDate(subtask.dueDate || '')} {subtask.dueDate && subtask.status !== 'Done' && subtask.dueDate < today ? '· Overdue' : ''}</p><p className="mt-1 text-xs text-slate-400">{(subtask.assigneeIds || []).map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(', ') || 'Unassigned'}</p></div>)}</div>}</section>
       </div>
     </div>
+  );
+};
+
+const SectionHeading: React.FC<{ id: string; eyebrow: string; title: string }> = ({ id, eyebrow, title }) => (
+  <div>
+    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">{eyebrow}</p>
+    <h3 id={id} className="mt-1 break-words text-lg font-bold leading-6 text-white">{title}</h3>
   </div>
 );
-const Detail: React.FC<{ label: string; value: string; compact?: boolean }> = ({
-  label,
-  value,
-  compact = false
-}) => (
-  <div className={`rounded-xl border border-white/10 bg-slate-950/40 ${compact ? 'p-2' : 'p-3'}`}>
-    <span className="block text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
-    <span className="mt-1 block text-xs font-semibold text-slate-200">{value}</span>
+
+const DetailBox: React.FC<{
+  label: string;
+  value: string;
+  compact?: boolean;
+  overdue?: boolean;
+}> = ({ label, value, compact = false, overdue = false }) => (
+  <div className={`rounded-xl border ${overdue ? 'border-rose-500/25 bg-rose-500/[0.06]' : 'border-white/10 bg-white/[0.025]'} ${compact ? 'px-3 py-2.5' : 'p-3.5'}`}>
+    <span className="block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</span>
+    <span className={`mt-1 block break-words text-xs font-semibold leading-5 ${overdue ? 'text-rose-300' : 'text-slate-200'}`}>{value}</span>
   </div>
 );
