@@ -230,6 +230,13 @@ export interface SystemApproval {
     oldValue: string;
     newValue: string;
   };
+  proposedTaskUpdate?: {
+    title: string;
+    description: string;
+    priority: TaskPriority | 'Critical';
+    startDate: string;
+    dueDate: string;
+  };
 }
 
 export interface ChatMessage {
