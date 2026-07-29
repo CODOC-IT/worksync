@@ -24,6 +24,7 @@ import {
 
 type SortOption = 'name' | 'role' | 'recent';
 type ViewMode = 'grid' | 'list';
+type SearchField = 'name' | 'email' | 'department' | 'title';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -91,6 +92,7 @@ export const TeamMembersView: React.FC = () => {
   const { users, tasks, projects, currentRole } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchField, setSearchField] = useState<SearchField>('name');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [sortBy, setSortBy] = useState<SortOption>('role');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -104,12 +106,15 @@ export const TeamMembersView: React.FC = () => {
       users
         .filter((member) => {
           const query = searchQuery.trim().toLowerCase();
-          const matchesQuery =
-            !query ||
-            member.name.toLowerCase().includes(query) ||
-            member.email.toLowerCase().includes(query) ||
-            member.department.toLowerCase().includes(query) ||
-            member.title.toLowerCase().includes(query);
+          const searchValue =
+            searchField === 'name'
+              ? member.name
+              : searchField === 'email'
+                ? member.email
+                : searchField === 'department'
+                  ? member.department
+                  : member.title;
+          const matchesQuery = !query || searchValue.toLowerCase().includes(query);
 
           const matchesRole = roleFilter === 'all' || member.role === roleFilter;
           return matchesQuery && matchesRole;
@@ -122,7 +127,7 @@ export const TeamMembersView: React.FC = () => {
 
           return left.name.localeCompare(right.name);
         }),
-    [roleFilter, searchQuery, sortBy, tasks, users],
+    [roleFilter, searchField, searchQuery, sortBy, tasks, users],
   );
 
   const selectedMember = useMemo(
@@ -235,12 +240,23 @@ export const TeamMembersView: React.FC = () => {
 
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+                <select
+                  value={searchField}
+                  onChange={(event) => setSearchField(event.target.value as SearchField)}
+                  className="rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-300 focus:border-cyan-500/40 focus:outline-none md:w-44"
+                >
+                  <option value="name">Name</option>
+                  <option value="email">Email</option>
+                  <option value="department">Department</option>
+                  <option value="title">Title</option>
+                </select>
+
                 <label className="relative flex-1 min-w-[16rem]">
                   <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Search by name, email, department, or title"
+                    placeholder={`Search by ${searchField}`}
                     className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-10 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none"
                   />
                 </label>
