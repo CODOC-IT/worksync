@@ -29,9 +29,6 @@ export interface DiscussionThread {
   title: string;
   type: DiscussionType;
   creatorId: string;
-  resolved: boolean;
-  resolvedBy?: string;
-  resolvedAt?: string;
   createdAt: string;
   updatedAt: string;
   comments: DiscussionComment[];
@@ -43,7 +40,6 @@ export interface DiscussionFilters {
   taskId: string;
   type: string;
   authorId: string;
-  state: '' | 'resolved' | 'unresolved';
   mentionedOnly: boolean;
   mineOnly: boolean;
   from: string;

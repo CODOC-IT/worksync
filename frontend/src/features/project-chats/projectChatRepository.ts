@@ -38,4 +38,3 @@ export const createDiscussion = (data: object) => request<DiscussionThread>('/',
 export const addDiscussionComment = (threadId: string, data: object) => request<DiscussionComment>(`/${threadId}/comments`, { method: 'POST', headers: headers(), body: JSON.stringify(data) });
 export const editDiscussionComment = (commentId: string, body: string) => request<DiscussionComment>(`/comments/${commentId}`, { method: 'PATCH', headers: headers(), body: JSON.stringify({ body }) });
 export const deleteDiscussionComment = (commentId: string) => request<DiscussionComment>(`/comments/${commentId}`, { method: 'DELETE', headers: headers() });
-export const setDiscussionResolved = (threadId: string, resolved: boolean) => request<DiscussionThread>(`/${threadId}/resolution`, { method: 'POST', headers: headers(), body: JSON.stringify({ resolved }) });

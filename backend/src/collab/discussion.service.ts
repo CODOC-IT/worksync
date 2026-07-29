@@ -5,7 +5,7 @@ import { fromProjectPk, fromTaskPk, fromUserPk, toCommentPk, toProjectPk, toTask
 import { userStore } from '../store/userStore.js';
 import * as projectRepo from '../projects/project.repository.js';
 import * as taskRepo from '../tasks/task.repository.js';
-import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
+import { isProjectAccessible } from '../projects/project.service.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import {
@@ -56,15 +56,21 @@ const assertAttachmentsHaveContent = (attachments: ChatAttachmentInput[]): void 
   }
 };
 
-const assertValidMentions = async (mentionIds: string[], projectId: number): Promise<number[]> => {
+const assertProjectDiscussionOpen = (statusCode: string): void => {
+  if (statusCode === 'Completed') {
+    throw new DiscussionAuthorizationError('This project has been completed and its discussions are now closed.');
+  }
+};
+
+const assertValidMentions = async (mentionIds: string[]): Promise<number[]> => {
   const mentionPks = Array.from(new Set(mentionIds.map(toUserPk)));
   if (mentionPks.length === 0) return [];
-  const members = await projectRepo.findMembersForProject(projectId);
-  const memberUserIds = new Set(members.map((member) => member.userid));
+  const activeUserIds = new Set((await userStore.getAllUsers())
+    .filter((user) => user.status === 'active')
+    .map((user) => user.id));
   for (const pk of mentionPks) {
-    const user = userStore.findById(fromUserPk(pk));
-    if (!memberUserIds.has(pk) || user?.status !== 'active') {
-      throw new DiscussionValidationError('Mentioned users must be active members of this project.', 'mentionIds');
+    if (!activeUserIds.has(fromUserPk(pk))) {
+      throw new DiscussionValidationError('Mentioned users must be active organization members.', 'mentionIds');
     }
   }
   return mentionPks;
@@ -106,12 +112,19 @@ const hydrateThread = async (row: DiscussionThreadRow): Promise<DiscussionThread
 const assertThreadAccessible = async (row: DiscussionThreadRow, userId: string, role: string): Promise<void> => {
   const accessible = await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role);
   if (!accessible) throw new DiscussionNotFoundError('Discussion not found.');
+  const project = await projectRepo.findProjectById(row.effectiveprojectid);
+  if (!project) throw new DiscussionNotFoundError('Discussion not found.');
+  assertProjectDiscussionOpen(project.statuscode);
 };
 
 export const listThreadsForUser = async (userId: string, role: string): Promise<DiscussionThreadDTO[]> => {
   const projectIds = await getAccessibleProjectIds(userId, role);
   const rows = await repo.findThreadsForProjects(projectIds);
-  return hydrateThreads(rows);
+  const openRows = (await Promise.all(rows.map(async (row) => {
+    const project = await projectRepo.findProjectById(row.effectiveprojectid);
+    return project?.statuscode === 'Completed' ? null : row;
+  }))).filter((row): row is DiscussionThreadRow => row !== null);
+  return hydrateThreads(openRows);
 };
 
 export const getThreadForUser = async (threadId: string, userId: string, role: string): Promise<DiscussionThreadDTO> => {
@@ -140,6 +153,7 @@ export const createThread = async (
 
   const projectRow = await projectRepo.findProjectById(toProjectPk(input.projectId));
   if (!projectRow) throw new DiscussionValidationError('Select a valid project.', 'projectId');
+  assertProjectDiscussionOpen(projectRow.statuscode);
   if (!(await isProjectAccessible(input.projectId, actorId, actorRole))) {
     throw new DiscussionValidationError('You do not have access to this project.', 'projectId');
   }
@@ -157,7 +171,7 @@ export const createThread = async (
 
   const title = input.title.trim();
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid);
+  const mentionPks = await assertValidMentions(input.mentionIds);
   assertAttachmentsHaveContent(input.attachments);
   const commentKind: CommentKindCode = API_TO_DB_DISCUSSION_TYPE[input.type];
 
@@ -249,7 +263,7 @@ export const addComment = async (
   }
 
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds, row.effectiveprojectid);
+  const mentionPks = await assertValidMentions(input.mentionIds);
   assertAttachmentsHaveContent(input.attachments);
 
   const commentId = await repo.insertComment({
@@ -356,7 +370,7 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
   if (!threadRow) throw new DiscussionNotFoundError('Comment not found.');
   await assertThreadAccessible(threadRow, actorId, actorRole);
   const actorPk = toUserPk(actorId);
-  if (commentRow.authoruserid !== actorPk && actorRole !== 'Admin') {
+  if (commentRow.authoruserid !== actorPk) {
     throw new DiscussionAuthorizationError('You can only delete your own comments.');
   }
 
@@ -376,41 +390,9 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
     entityName: threadRow.subject || undefined, projectId: fromProjectPk(threadRow.effectiveprojectid),
     projectName: projectRow?.projectname,
     description: `${actorName} deleted a comment on "${threadRow.subject}".`, reason: commentRow.commenttext,
-    linkRoute: 'project-chats', important: actorRole === 'Admin' && commentRow.authoruserid !== actorPk
+    linkRoute: 'project-chats'
   });
 
   return dto;
 };
 
-export const setResolution = async (
-  threadId: string,
-  resolved: boolean,
-  actorId: string,
-  actorRole: string
-): Promise<DiscussionThreadDTO> => {
-  const row = await repo.findThreadById(toThreadPk(threadId));
-  if (!row) throw new DiscussionNotFoundError('Discussion not found.');
-  await assertThreadAccessible(row, actorId, actorRole);
-  const canModerate = await isProjectLead(fromProjectPk(row.effectiveprojectid), actorId, actorRole);
-  if (!canModerate) {
-    throw new DiscussionAuthorizationError('Only an administrator or active scoped Team Lead can resolve discussions.');
-  }
-
-  await repo.setThreadResolved(row.threadid, resolved, toUserPk(actorId));
-  const updatedRow = await repo.findThreadById(row.threadid);
-  const dto = await hydrateThread(updatedRow!);
-
-  const projectRow = await projectRepo.findProjectById(row.effectiveprojectid);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
-  recordActivitySafe({
-    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    action: 'Status Changed', module: 'Project Chats', entityType: 'Comment', entityId: dto.id,
-    entityName: row.subject || undefined, projectId: fromProjectPk(row.effectiveprojectid),
-    projectName: projectRow?.projectname,
-    description: `${actorName} ${resolved ? 'resolved' : 'reopened'} discussion "${row.subject}".`,
-    linkRoute: 'project-chats',
-    changes: [{ field: 'Status', previousValue: resolved ? 'Open' : 'Resolved', newValue: resolved ? 'Resolved' : 'Open' }]
-  });
-
-  return dto;
-};
