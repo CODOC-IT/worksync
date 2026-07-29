@@ -9,7 +9,14 @@ const TASK_COLUMNS = `
   ts.statuscode, pr.prioritycode, t.startdate::text, t.duedate::text,
   t.createdbyuserid, t.completedatutc, t.completionsummary, t.archivedatutc,
   t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode,
-  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount
+  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount,
+  -- Completed-subtask tally, derived from work.TaskStatuses.IsCompletedState rather than a
+  -- hardcoded 'Done' string, so it stays correct if another completed state is ever added.
+  -- Selected alongside subtaskcount so the board's progress bar comes from the database on
+  -- every read (list AND detail) instead of being recomputed from client state.
+  (SELECT COUNT(*)::int FROM work.tasks st
+     JOIN work.taskstatuses sts ON sts.taskstatusid = st.taskstatusid
+   WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount
 `;
 
 const TASK_JOINS = `
@@ -292,6 +299,7 @@ export const findStatusHistoryForTask = async (taskId: number): Promise<TaskStat
      LEFT JOIN work.taskstatuses fs ON fs.taskstatusid = h.fromtaskstatusid
      LEFT JOIN iam.users u ON u.userid = h.changedbyuserid
      WHERE h.taskid = $1
+        OR h.taskid IN (SELECT taskid FROM work.tasks WHERE parenttaskid = $1 AND archivedatutc IS NULL)
      ORDER BY h.changedatutc ASC, h.taskstatushistoryid ASC`,
     [taskId]
   );
