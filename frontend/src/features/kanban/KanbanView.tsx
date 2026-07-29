@@ -1129,18 +1129,13 @@ const TaskDetailsModal: React.FC<{
     load(true);
   }, [load]);
 
-  // Per-subtask, not per-parent. Everyone can *see* every subtask; who may tick one is narrow:
-  //   - Team Member : only subtasks assigned to them (someone else's shows disabled/read-only)
-  //   - Team Lead   : any subtask on a project they lead (they close out unfinished work)
-  //   - Admin       : none — Admin observes delivery, it does not perform it, matching the same
-  //                   view-but-don't-act stance Admin already has on reopening a Done task
-  // The backend re-derives this per subtask in assertCanEditTask, so this is UX only and cannot
-  // be bypassed from the DOM.
-  const canToggleSubtask = (subtask: Subtask): boolean => {
-    if (currentRole === 'Admin') return false;
-    if (currentRole === 'Team_Lead') return project.teamLeadId === currentUserId;
-    return (subtask.assigneeIds || []).includes(currentUserId);
-  };
+  // Per-subtask, not per-parent: everyone can *see* every subtask, but only the people it is
+  // assigned to may tick it — no role overrides it, not Team Lead and not Admin. Mirrors exactly
+  // what the backend enforces in task.authorization.ts's getTaskEditDenialReason ("Only users
+  // assigned to this subtask can edit it"), so the UI never enables a control the server will
+  // reject. This is UX only; the server check is the authoritative one.
+  const canToggleSubtask = (subtask: Subtask): boolean =>
+    (subtask.assigneeIds || []).includes(currentUserId);
 
   const submitSubtask = async (note: string) => {
     if (!task || !pendingSubtask) return;
