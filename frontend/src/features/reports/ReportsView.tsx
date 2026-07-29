@@ -220,7 +220,7 @@ export const ReportsView: React.FC = () => {
           setReportData(null);
         }
       } catch {
-        setReportError('Report API unavailable — showing local fallback.');
+        setReportError('Report API unavailable — data may be incomplete.');
         setReportData(null);
       }
       setReportLoading(false);
@@ -317,12 +317,17 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return {
         projects: reportData.projects || [],
-        tasks: roleFilteredLocal.tasks, // use consistently-scoped tasks
+        tasks: roleFilteredLocal.tasks,
         attendance: reportData.attendance?.records || [],
         hrRequests: roleFilteredLocal.hrRequests,
       };
     }
-    return roleFilteredLocal;
+    return {
+      projects: [],
+      tasks: roleFilteredLocal.tasks,
+      attendance: [],
+      hrRequests: [],
+    };
   }, [apiAvailable, reportData, roleFilteredLocal]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
@@ -360,15 +365,8 @@ export const ReportsView: React.FC = () => {
         activeMembers: o.activeMembers ?? 0,
       };
     }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    const totalProjects = rp.length;
-    const activeTasks = rt.filter((t) => t.status !== 'Done').length;
-    const completedTasks = rt.filter((t) => t.status === 'Done').length;
-    const overdueTasks = rt.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
-    const completionRate = rt.length > 0 ? Math.round((completedTasks / rt.length) * 100) : 0;
-    const activeMembers = new Set(rp.flatMap((p) => p.memberIds).concat(rp.map((p) => p.teamLeadId))).size;
-    return { totalProjects, activeTasks, completedTasks, overdueTasks, completionRate, activeMembers };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return { totalProjects: 0, activeTasks: 0, completedTasks: 0, overdueTasks: 0, completionRate: 0, activeMembers: 0 };
+  }, [apiAvailable, reportData]);
 
   const projectHealthData = useMemo(() => {
     if (apiAvailable) {
@@ -377,53 +375,29 @@ export const ReportsView: React.FC = () => {
         progress: p.progress,
       }));
     }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    return rp.map((p) => ({
-      name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
-      progress: p.progress,
-    }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskStatusDist = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).statusDistribution || [];
     }
-    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
-    roleFilteredLocal.tasks.forEach((t) => { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskPriorityDist = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).priorityDistribution || [];
     }
-    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
-    roleFilteredLocal.tasks.forEach((t) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskCompletionTrend = useMemo(() => {
     if (apiAvailable) {
-      return reportData.tasks.completionTrend;
+      return reportData.tasks.completionTrend || [];
     }
-    const { from, to } = dateRange;
-    const days: Record<string, { completed: number; created: number }> = {};
-    let current = from;
-    while (current <= to) {
-      days[current] = { completed: 0, created: 0 };
-      current = addDays(current, 1);
-    }
-    roleFilteredLocal.tasks.forEach((t) => {
-      const cKey = t.createdAt?.slice(0, 10);
-      if (cKey && days[cKey]) days[cKey].created++;
-      if (t.status === 'Done' && t.dueDate && days[t.dueDate]) days[t.dueDate].completed++;
-    });
-    return Object.entries(days).map(([date, vals]) => ({
-      date: date.slice(5),
-      Completed: vals.completed,
-      Created: vals.created
-    }));
-  }, [apiAvailable, reportData, dateRange, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   // ── Tasks tab derived data ──────────────────────────────────────────
   const filteredTasks = useMemo(() => {
@@ -454,19 +428,15 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return (reportData.tasks || {}).statusDistribution || [];
     }
-    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
-    roleFiltered.tasks.forEach((t: any) => { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFiltered.tasks]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskPriorityDistData = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).priorityDistribution || [];
     }
-    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
-    roleFiltered.tasks.forEach((t: any) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFiltered.tasks]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskProjectOptions = useMemo(() => {
     const projectIds = new Set((roleFiltered.tasks as any[]).map((t: any) => t.projectId));
@@ -610,7 +580,7 @@ export const ReportsView: React.FC = () => {
   }, [selectedMemberId, workloadData]);
 
   const deadlineBaseTasks = useMemo(() => {
-    let tasks = (apiAvailable ? roleFiltered.tasks : roleFilteredLocal.tasks) as any[];
+    let tasks = roleFiltered.tasks as any[];
     if (deadlineSearchQuery) {
       const q = deadlineSearchQuery.toLowerCase();
       tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
@@ -625,7 +595,7 @@ export const ReportsView: React.FC = () => {
       tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
     }
     return tasks;
-  }, [apiAvailable, roleFiltered.tasks, roleFilteredLocal.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+  }, [roleFiltered.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineData = useMemo(() => {
     const today = todayStr();
@@ -696,18 +666,8 @@ export const ReportsView: React.FC = () => {
         pendingLeaves: a.pendingLeaves ?? 0,
       };
     }
-    const { attendance: att } = roleFilteredLocal;
-    const present = att.filter((a) => a.status === 'Present').length;
-    const late = att.filter((a) => a.status === 'Late').length;
-    const absent = att.filter((a) => a.status === 'Absent').length;
-    const onLeave = att.filter((a) => a.status === 'On Leave').length;
-    const halfDay = att.filter((a) => a.status === 'Half Day').length;
-    const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
-    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    const pendingCorrections = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    const pendingLeaves = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections, pendingLeaves };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return { present: 0, late: 0, absent: 0, onLeave: 0, halfDay: 0, avgHours: '0', total: 0, pendingCorrections: 0, pendingLeaves: 0 };
+  }, [apiAvailable, reportData]);
 
   const hrOverviewStats = useMemo(() => {
     if (apiAvailable && reportData.hrOverviewStats) {
@@ -722,55 +682,15 @@ export const ReportsView: React.FC = () => {
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    const today = todayStr();
-    const todayAtt = filteredData.validAttendance.filter((a) => a.date === today);
-    const presentToday = todayAtt.filter((a) => a.status === 'Present').length;
-    const absentToday = todayAtt.filter((a) => a.status === 'Absent').length;
-    const onLeaveToday = todayAtt.filter((a) => a.status === 'On Leave').length;
-    const lateToday = todayAtt.filter((a) => a.status === 'Late').length;
-    const avgHours = todayAtt.length > 0
-      ? (todayAtt.reduce((s, a) => s + (a.totalHours || 0), 0) / todayAtt.length).toFixed(1)
-      : '0';
-    const pendingLeaveReqs = filteredData.validHrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    const pendingCorrections = filteredData.validHrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    return { presentToday, absentToday, onLeaveToday, lateToday, avgHours, pendingLeaveReqs, pendingCorrections };
-  }, [apiAvailable, reportData, filteredData]);
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+  }, [apiAvailable, reportData]);
 
   const teamStats = useMemo(() => {
     if (apiAvailable) {
       return reportData.teams || [];
     }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    const deptMap: Record<string, { members: Set<string>; projects: number; tasks: number; completed: number }> = {};
-    rp.forEach((p) => {
-      p.memberIds.forEach((mid) => {
-        const u = users.find((u) => u.id === mid);
-        const dept = u?.department || 'Unknown';
-        if (!deptMap[dept]) deptMap[dept] = { members: new Set(), projects: 0, tasks: 0, completed: 0 };
-        deptMap[dept].members.add(mid);
-        deptMap[dept].projects++;
-      });
-    });
-    rt.forEach((t) => {
-      const p = rp.find((p) => p.id === t.projectId);
-      if (p) {
-        const u = users.find((u) => u.id === t.assigneeId);
-        const dept = u?.department || 'Unknown';
-        if (deptMap[dept]) {
-          deptMap[dept].tasks++;
-          if (t.status === 'Done') deptMap[dept].completed++;
-        }
-      }
-    });
-    return Object.entries(deptMap).map(([dept, data]) => ({
-      department: dept,
-      members: data.members.size,
-      projects: data.projects,
-      tasks: data.tasks,
-      completed: data.completed,
-      rate: data.tasks > 0 ? Math.round((data.completed / data.tasks) * 100) : 0
-    }));
-  }, [apiAvailable, reportData, roleFilteredLocal, users]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────
 
@@ -1738,7 +1658,7 @@ ${bodyHtml}
           {!apiAvailable && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-300">
               <AlertTriangle size={14} />
-              <span>Attendance data may be incomplete — API unavailable, showing locally recorded data only.</span>
+              <span>Attendance data unavailable — API request failed.</span>
             </div>
           )}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
