@@ -519,10 +519,7 @@ export const TasksView: React.FC = () => {
       const detail = await loadTaskDetailFromApi(task.id);
       setExpandedTaskDetails((current) => ({ ...current, [task.id]: detail }));
     } catch {
-      setExpandedTaskError({
-        taskId: task.id,
-        message: 'Subtask details could not be loaded. Please try again.'
-      });
+      setExpandedTaskError({ taskId: task.id, message: 'Subtask details could not be loaded. Please try again.' });
     } finally {
       setExpandingTaskId((current) => current === task.id ? null : current);
     }
@@ -1118,14 +1115,12 @@ export const TasksView: React.FC = () => {
                 .filter(Boolean);
               const overdue = isTaskOverdue(task, today);
               const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
-              const mayDelete = canDeleteTask(currentRole, currentUser.id, project);
+              const mayDelete = canDeleteTask(currentRole, currentUser.id, project, task);
 
               const loadedTask = expandedTaskDetails[task.id];
               const subtasks = loadedTask?.subtasks || task.subtasks || [];
               const subtaskCount = Math.max(task.subtaskCount || 0, subtasks.length);
-              const completedSubtasks = subtasks.filter((subtask) =>
-                subtask.completed || subtask.status === 'Done'
-              ).length;
+              const completedSubtasks = subtasks.filter((subtask) => subtask.completed || subtask.status === 'Done').length;
               const isExpanded = expandedTaskId === task.id;
               const isExpanding = expandingTaskId === task.id;
 
@@ -1231,28 +1226,6 @@ export const TasksView: React.FC = () => {
                         {assignees.map((user) => user?.name).join(', ') || 'Unassigned'}
                       </span>
                     </div>
-                    {subtaskCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void toggleTaskExpansion(task);
-                        }}
-                        className="mt-4 flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-500/[0.06] hover:text-cyan-200"
-                        aria-expanded={isExpanded}
-                      >
-                        <span className="inline-flex items-center gap-2">
-                          {isExpanding
-                            ? <LoaderCircle size={14} className="animate-spin text-cyan-400" />
-                            : <Layers size={14} className="text-cyan-400" />}
-                          {isExpanded ? 'Hide subtasks' : 'View subtasks'}
-                        </span>
-                        <ChevronDown
-                          size={14}
-                          className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-                    )}
                   </div>
 
                   {isExpanded && subtaskCount > 0 && (
