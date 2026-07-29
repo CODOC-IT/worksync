@@ -178,6 +178,11 @@ interface AppState {
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
+  addTeamMember: (data: Omit<User, 'id'>) => void;
+  updateTeamMember: (userId: string, data: Partial<User>) => void;
+  deleteTeamMember: (userId: string, targetReassignUserId?: string) => { success: boolean; message: string };
+  reassignMemberTasks: (sourceUserId: string, targetUserId: string) => { success: boolean; count: number };
+  getMemberAssignedTasksCount: (userId: string) => number;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -1684,6 +1689,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
   };
 
+  const getMemberAssignedTasksCount = (userId: string) => {
+    return tasks.filter((t) => t.assigneeId === userId && t.status !== 'Done').length;
+  };
+
+  const reassignMemberTasks = (sourceUserId: string, targetUserId: string) => {
+    const assignedTasks = tasks.filter((t) => t.assigneeId === sourceUserId);
+    if (assignedTasks.length === 0) return { success: true, count: 0 };
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const sourceUser = users.find((u) => u.id === sourceUserId);
+
+    setTasks((prev) =>
+      prev.map((t) => (t.assigneeId === sourceUserId ? { ...t, assigneeId: targetUserId } : t))
+    );
+
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Reassigned ${assignedTasks.length} task(s) from ${sourceUser?.name || sourceUserId} to ${targetUser?.name || targetUserId}`,
+        targetType: 'Task',
+        targetId: sourceUserId,
+        targetTitle: 'Task Bulk Reassignment',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+
+    return { success: true, count: assignedTasks.length };
+  };
+
+  const addTeamMember = (data: Omit<User, 'id'>) => {
+    const newUserId = `usr-${Date.now()}`;
+    const newUser: User = {
+      id: newUserId,
+      name: data.name,
+      email: data.email,
+      role: data.role || 'Team_Member',
+      department: data.department || 'Engineering',
+      avatar: data.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name)}`,
+      title: data.title || 'Team Specialist',
+      status: data.status || 'active',
+      lastActive: 'Just now',
+      githubUsername: data.githubUsername
+    };
+
+    setUsers((prev) => [newUser, ...prev]);
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Added new team member ${newUser.name} (${newUser.role})`,
+        targetType: 'Settings',
+        targetId: newUserId,
+        targetTitle: newUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const updateTeamMember = (userId: string, data: Partial<User>) => {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, ...data } : u))
+    );
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Updated profile details for member ${data.name || userId}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: data.name || 'Member',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const deleteTeamMember = (userId: string, targetReassignUserId?: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return { success: false, message: 'Member not found.' };
+
+    const assignedCount = getMemberAssignedTasksCount(userId);
+    if (assignedCount > 0 && !targetReassignUserId) {
+      return {
+        success: false,
+        message: `Safety Warning: Member ${targetUser.name} currently has ${assignedCount} active assigned tasks. Please select a team member to reassign their tasks before deletion.`
+      };
+    }
+
+    if (assignedCount > 0 && targetReassignUserId) {
+      reassignMemberTasks(userId, targetReassignUserId);
+    }
+
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Deleted team member ${targetUser.name}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: targetUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+    return { success: true, message: `Member ${targetUser.name} successfully deleted.` };
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1745,7 +1869,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dismissToast,
         deactivateUser,
         exportBackup,
-        updateCurrentUser
+        updateCurrentUser,
+        addTeamMember,
+        updateTeamMember,
+        deleteTeamMember,
+        reassignMemberTasks,
+        getMemberAssignedTasksCount
       }}
     >
       {children}
