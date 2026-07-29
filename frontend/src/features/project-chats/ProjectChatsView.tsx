@@ -184,7 +184,7 @@ export const ProjectChatsView: React.FC = () => {
   };
 
   return (
-    <section data-project-chats className="project-chat-shell mx-auto flex h-auto min-h-[820px] max-w-[1550px] flex-col gap-3 overflow-visible rounded-2xl p-3 md:p-4 lg:h-full lg:min-h-0 lg:overflow-hidden">
+    <section data-project-chats className="project-chat-shell mx-auto flex max-w-[1550px] flex-col gap-3 rounded-2xl p-3 md:p-4">
       <header className="flex shrink-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <h1 className="project-chat-heading flex items-center gap-2.5 text-2xl font-bold"><span className="project-chat-icon flex h-9 w-9 items-center justify-center rounded-xl"><MessageSquare size={19} /></span>Project Chats</h1>
@@ -207,7 +207,7 @@ export const ProjectChatsView: React.FC = () => {
       </div>
 
       {error && <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><span>{error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/15">Try again</button></div>}
-      <div className="project-chat-layout grid min-h-[650px] flex-1 grid-cols-1 overflow-hidden rounded-2xl lg:min-h-0 lg:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="project-chat-layout grid h-[clamp(500px,72dvh,780px)] min-h-[500px] grid-cols-1 overflow-hidden rounded-2xl md:h-[clamp(580px,72dvh,780px)] md:min-h-[580px] lg:grid-cols-[360px_minmax(0,1fr)]">
         <aside aria-label="Discussion list" className={`${mobileConversationOpen ? 'hidden lg:flex' : 'flex'} project-chat-sidebar min-h-0 flex-col overflow-hidden lg:border-r`}>
           <div className="project-chat-divider flex shrink-0 items-center justify-between border-b px-4 py-3">
             <span className="project-chat-heading text-sm font-bold">Discussions</span>
@@ -215,7 +215,7 @@ export const ProjectChatsView: React.FC = () => {
           </div>
           {loading ? <ListState label="Gathering your discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'Nothing matches those filters yet.' : 'No conversations yet. Start one when your team is ready.'} /> : <div className="project-chat-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => { setSelectedId(thread.id); setMobileConversationOpen(true); }} />)}</div>}
         </aside>
-        <main className={`${mobileConversationOpen ? 'flex' : 'hidden lg:flex'} project-chat-conversation min-h-0 min-w-0 flex-col overflow-hidden`}>
+        <main className={`${mobileConversationOpen ? 'grid' : 'hidden lg:grid'} project-chat-conversation min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden`}>
           {loading ? <ListState label="Opening the conversation…" /> : selected ? <DiscussionPanel thread={selected} users={chatUsers} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} onBack={() => setMobileConversationOpen(false)} onReply={(commentId) => { setReplyTo(commentId); replyRef.current?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Choose a discussion to join the conversation." />}
           {selected && (
             <form onSubmit={submitReply} className="project-chat-composer project-chat-divider relative z-10 m-3 mt-0 shrink-0 rounded-xl border p-3">
@@ -394,7 +394,7 @@ const DiscussionPanel: React.FC<any> = ({
   const participantCount = new Set(thread.comments.map((comment: DiscussionComment) => comment.authorId)).size;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="relative grid h-full min-h-0 grid-rows-[auto_minmax(280px,1fr)] overflow-hidden">
       <div className="project-chat-header project-chat-divider flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-4 md:px-5">
         <div className="min-w-0 flex-1">
           <button type="button" onClick={onBack} className="project-chat-action mb-3 inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold lg:hidden"><ArrowLeft size={14} />Back to Discussions</button>
