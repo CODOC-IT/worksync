@@ -128,10 +128,21 @@ export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  isActiveProject(project)
-  && role === 'Team_Lead'
-  && project.teamLeadId === userId;
+): boolean => {
+  if (!isActiveProject(project)) {
+    return false;
+  }
+
+  if (role === 'Team_Lead') {
+    return project.teamLeadId === userId;
+  }
+
+  if (role === 'Team_Member') {
+    return getProjectMemberIds(project).includes(userId);
+  }
+
+  return false;
+};
 
 export const canEditTask = (
   _role: UserRole,
