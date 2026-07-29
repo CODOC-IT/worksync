@@ -913,9 +913,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         priority: data.priority,
         startDate: data.startDate,
         targetDate: data.targetDate,
-        status: data.status
+        status: data.status,
+        teamLeadId: data.teamLeadId,
+        creationReason: data.creationReason
       });
-      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, ...updated, milestones: data.milestones ?? p.milestones, files: data.files ?? p.files }
+            : p
+        )
+      );
       pushActivity('Updated project', 'Project', projectId, updated.title);
 
       // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's

@@ -230,13 +230,13 @@ export const ProjectsView: React.FC = () => {
     if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
-    } else if (formMode === 'create' && data.startDate < todayStr) {
+    } else if (data.startDate < todayStr) {
       errors.startDate = "Start date cannot be before today's date.";
     }
 
     if (!data.targetDate) {
       errors.targetDate = 'Deadline is required.';
-    } else if (formMode === 'create' && data.targetDate < todayStr) {
+    } else if (data.targetDate < todayStr) {
       errors.targetDate = "Deadline cannot be before today's date.";
     } else if (data.startDate && data.targetDate < data.startDate) {
       errors.targetDate = 'Deadline cannot be before the start date.';
@@ -452,7 +452,7 @@ export const ProjectsView: React.FC = () => {
                     type="date"
                     value={form.startDate}
                     onChange={(e) => setForm((prev) => ({ ...prev, startDate: e.target.value }))}
-                    min={formMode === 'create' ? todayStr : undefined}
+                    min={todayStr}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.startDate && <p className="text-rose-400 mt-1">{formErrors.startDate}</p>}
@@ -463,7 +463,7 @@ export const ProjectsView: React.FC = () => {
                     type="date"
                     value={form.targetDate}
                     onChange={(e) => setForm((prev) => ({ ...prev, targetDate: e.target.value }))}
-                    min={formMode === 'create' ? form.startDate || todayStr : undefined}
+                    min={form.startDate || todayStr}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.targetDate && <p className="text-rose-400 mt-1">{formErrors.targetDate}</p>}

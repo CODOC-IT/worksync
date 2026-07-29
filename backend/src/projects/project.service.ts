@@ -259,7 +259,8 @@ export const updateProject = async (
     title: input.title?.trim(),
     description: input.description?.trim(),
     startDate: input.startDate,
-    targetDate: input.targetDate
+    targetDate: input.targetDate,
+    creationReason: input.creationReason?.trim()
   };
   if (input.priority) updates.priorityId = await repo.getPriorityId(API_TO_DB_PRIORITY[input.priority]);
   // Activating a pending project (Admin-only) goes through this same update path — status is
@@ -273,6 +274,12 @@ export const updateProject = async (
   }
 
   await repo.updateProject(row.projectid, updates);
+
+  // TeamLead is a ProjectMembers role, not a projects-table column (see reassignTeamLead's
+  // comment), so it's handled as its own step rather than through the updates object above.
+  if (input.teamLeadId !== undefined) {
+    await repo.reassignTeamLead(row.projectid, toUserPk(input.teamLeadId), row.owneruserid, toUserPk(actorId));
+  }
 
   const updatedRow = await repo.findProjectById(row.projectid);
   const members = await repo.findMembersForProject(row.projectid);
