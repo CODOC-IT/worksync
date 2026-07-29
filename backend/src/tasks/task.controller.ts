@@ -4,10 +4,11 @@ import * as service from './task.service.js';
 import {
   validateChangeStatusBody,
   validateCreateTaskBody,
+  validateReopenBody,
   validateReviewDecisionBody,
   validateUpdateTaskBody
 } from './task.validation.js';
-import { ChangeStatusInput, CreateTaskInput, UpdateTaskInput } from './task.types.js';
+import { ApiTaskStatus, ChangeStatusInput, CreateTaskInput, UpdateTaskInput } from './task.types.js';
 
 // Controller = thin HTTP adapter (matches backend/src/notifications / backend/src/projects).
 
@@ -117,6 +118,26 @@ export const changeStatus = async (req: AuthenticatedRequest, res: Response): Pr
     res.json({ success: true, message: 'Task status updated successfully.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to update task status.');
+  }
+};
+
+// PATCH /api/tasks/:id/reopen — the only route out of Done (Team Lead only, reason mandatory).
+export const reopenTask = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateReopenBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { status, reason } = req.body as { status: ApiTaskStatus; reason: string };
+    const data = await service.reopenTask(req.params.id, { status, reason }, user.id, user.role);
+    res.json({ success: true, message: `Task reopened to ${status}.`, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to reopen task.');
   }
 };
 

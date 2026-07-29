@@ -24,6 +24,10 @@ router.delete('/:id', controller.deleteTask);
 // PATCH /api/tasks/:id/status — body: { status, note } — every non-review-decision transition
 router.patch('/:id/status', controller.changeStatus);
 
+// PATCH /api/tasks/:id/reopen — body: { status, reason } — Done -> Review/In Progress/Todo.
+// The only route out of Done, and Team-Lead-only (see task.service.ts's reopenTask).
+router.patch('/:id/reopen', controller.reopenTask);
+
 // PATCH /api/tasks/:id/approve — body: { note } — Review -> Done (Team Lead/Admin only)
 router.patch('/:id/approve', controller.approveTask);
 

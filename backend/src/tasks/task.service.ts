@@ -1,6 +1,6 @@
 import * as repo from './task.repository.js';
 import { rowToHistoryDTO, rowToTaskDTO } from './task.mapper.js';
-import { fromUserPk, toProjectPkOrNull, toTaskPk, toUserPk } from '../utils/idMapping.js';
+import { fromProjectPk, fromTaskPk, fromUserPk, toProjectPkOrNull, toTaskPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
@@ -12,8 +12,10 @@ import {
   ApiTaskStatus,
   ChangeStatusInput,
   CreateTaskInput,
+  DB_TO_API_TASK_STATUS,
   TaskDTO,
   TaskRow,
+  TaskStatusCode,
   TaskStatusHistoryDTO,
   UpdateTaskInput
 } from './task.types.js';
@@ -119,6 +121,34 @@ const notifyTaskRecipients = (
       console.error('[task.service] Failed to publish notification event.', event.type, error);
     }
   })();
+};
+
+// The project's Team Lead — the recipient for every "someone finished work you oversee" signal
+// the subtask cascade raises. resolveTeamLeadUserId falls back to the project Owner when there
+// is no separate 'TeamLead' membership row (the common case for a project a Team Lead created
+// for themselves), matching how authorization already resolves the lead in project.service.ts.
+const resolveProjectTeamLead = async (projectPk: number): Promise<string> => {
+  const projectRow = await projectRepo.findProjectById(projectPk);
+  if (!projectRow) return '';
+  const members = await projectRepo.findMembersForProject(projectPk);
+  return resolveTeamLeadUserId(projectRow, members);
+};
+
+// Publishes to an explicit recipient list (deduped, actor and blanks removed). Distinct from
+// notifyTaskRecipients, which derives its own recipients from a task's assignees + Team Lead;
+// the subtask cascade already knows exactly who should hear about each event, so it passes them
+// in directly rather than re-deriving. Failures are logged, never thrown: a notification problem
+// must not roll back a status change that already committed.
+const publishSafely = (
+  event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds'>,
+  recipientIds: string[],
+  actorId: string
+): void => {
+  const ids = Array.from(new Set(recipientIds)).filter((id) => id && id !== actorId);
+  if (ids.length === 0) return;
+  notificationService.publishEvent({ ...event, recipientIds: ids }).catch((error) => {
+    console.error('[task.service] Failed to publish notification event.', event.type, error);
+  });
 };
 
 export const listTasksForUser = async (
@@ -247,6 +277,29 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     projectId: dto.projectId,
     taskId: dto.id
   });
+
+  // A subtask can be assigned to someone who is not on the parent task at all, so each one gets
+  // its own targeted notification rather than being folded into the parent's. Only the
+  // subtask's own assignees are told — the Team Lead already heard about the parent above and
+  // does not need one notification per checklist item at creation time.
+  if (childInserts.length > 0) {
+    const children = await repo.findChildTasks(taskId);
+    const childAssignees = await repo.findAssigneesForTasks(children.map((child) => child.taskid));
+    for (const child of children) {
+      publishSafely(
+        {
+          type: 'subtask_assigned',
+          title: 'Subtask Assigned',
+          message: `${actorName} assigned you subtask "${child.title}" of "${dto.title}".`,
+          actorId,
+          projectId: dto.projectId,
+          taskId: fromTaskPk(child.taskid)
+        },
+        childAssignees.filter((a) => a.taskid === child.taskid).map((a) => fromUserPk(a.userid)),
+        actorId
+      );
+    }
+  }
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -386,14 +439,23 @@ export const changeTaskStatus = async (
   await assertCanEditTask(row, actorId, actorRole);
 
   if (!input.note?.trim()) throw new TaskValidationError('A reason is required for every status change.');
+  // A Done task is locked to everyone on this generic path, including its assignees and Admins.
+  // Reopening it is a deliberate, separately-authorized act (Team Lead only) that must carry its
+  // own reason and history entry -- see reopenTask below.
   if (row.statuscode === 'Done' && input.status !== 'Done') {
-    throw new TaskValidationError('A completed task cannot be reopened from the board — use the Task module.');
+    throw new TaskValidationError(
+      'This task is completed and locked. Only the project\'s Team Lead can reopen it, with a reason.'
+    );
   }
 
   const fromMeta = await repo.getTaskStatusMeta(row.statuscode);
   const toMeta = await repo.getTaskStatusMeta(API_TO_DB_TASK_STATUS[input.status]);
   if (!toMeta) throw new TaskValidationError('Unknown task status.');
-  if (toMeta.requiresReview && input.status === 'Done') {
+  // The Review gate applies to top-level tasks only. A subtask is a checklist item: its assignee
+  // marks it done directly, and it is the *parent* that then requires the Team Lead's approval
+  // once every subtask is complete (see syncParentFromSubtasks -> Review, never straight to Done).
+  // Without this exemption a subtask could never be completed at all.
+  if (toMeta.requiresReview && input.status === 'Done' && !row.parenttaskid) {
     throw new TaskValidationError('Moving to Done requires the Approve action, not a direct status change.');
   }
 
@@ -434,6 +496,238 @@ export const changeTaskStatus = async (
     reason: input.note.trim(), linkRoute: 'kanban', important: input.status === 'Review' || input.status === 'Blocked',
     changes: [{ field: 'Status', previousValue: row.statuscode === 'InProgress' ? 'In Progress' : row.statuscode, newValue: input.status }],
     metadata: { requiresReview: input.status === 'Review', overdue: row.duedate < new Date().toISOString().slice(0, 10) }
+  });
+
+  // This task is itself a subtask -> tell whoever tracks the parent, and let the parent's own
+  // status follow the subtask-completion rules. Awaited (not fire-and-forget) so the response
+  // the board renders already reflects any parent transition this change triggered.
+  if (row.parenttaskid) {
+    await notifySubtaskStatusChange(updatedRow!, row.statuscode, input.status, actorId, actorName);
+    await syncParentFromSubtasks(row.parenttaskid, actorId, actorRole);
+  }
+
+  return dto;
+};
+
+// --- Subtask -> parent progress cascade ----------------------------------------------------
+// Subtasks are work.Tasks rows with ParentTaskId set (the Task Module's model — untouched here),
+// so a subtask's own status change already flows through changeTaskStatus above. What the Board
+// module adds is the *consequence* for the parent, per the board's subtask rules:
+//   - at least one subtask completed, parent still Todo  -> parent becomes In Progress
+//   - every subtask completed                            -> parent becomes Review (never Done;
+//     Done stays gated behind the Team Lead's explicit Approve, exactly as before)
+// A parent that is Done or Blocked is never auto-moved: Done is locked (only reopenTask may
+// leave it) and Blocked is owned by the Task Module's blocker workflow.
+
+const AUTO_ACTOR_NOTE = 'Automatic: subtask progress';
+
+const notifySubtaskStatusChange = async (
+  subtaskRow: TaskRow,
+  fromStatus: string,
+  toStatus: ApiTaskStatus,
+  actorId: string,
+  actorName: string
+): Promise<void> => {
+  const parentRow = await repo.findTaskById(subtaskRow.parenttaskid!);
+  if (!parentRow) return;
+
+  const becameComplete = toStatus === 'Done';
+  const wasComplete = fromStatus === 'Done';
+  if (!becameComplete && !wasComplete) return; // only completion/reopening is worth reporting
+
+  // Subtask completion is a Team Lead signal (they track throughput); reopening additionally
+  // concerns the subtask's own assignees, who now have work back on their plate.
+  const teamLeadId = await resolveProjectTeamLead(subtaskRow.projectid);
+  const assignees = (await repo.findAssigneesForTask(subtaskRow.taskid)).map((a) => fromUserPk(a.userid));
+  const recipients = becameComplete ? [teamLeadId] : [teamLeadId, ...assignees];
+
+  publishSafely(
+    {
+      type: becameComplete ? 'subtask_completed' : 'subtask_reopened',
+      title: becameComplete ? 'Subtask Completed' : 'Subtask Reopened',
+      message: becameComplete
+        ? `${actorName} completed subtask "${subtaskRow.title}" of "${parentRow.title}".`
+        : `${actorName} reopened subtask "${subtaskRow.title}" of "${parentRow.title}".`,
+      actorId,
+      projectId: fromProjectPk(subtaskRow.projectid),
+      taskId: fromTaskPk(subtaskRow.taskid)
+    },
+    recipients,
+    actorId
+  );
+};
+
+const syncParentFromSubtasks = async (
+  parentTaskId: number,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const parent = await repo.findTaskById(parentTaskId);
+  if (!parent) return;
+  if (parent.statuscode === 'Done' || parent.statuscode === 'Blocked') return;
+
+  const total = Number(parent.subtaskcount || 0);
+  const completed = Number(parent.completedsubtaskcount || 0);
+  if (total === 0) return;
+
+  const target: TaskStatusCode | null =
+    completed === total ? 'Review' : completed > 0 && parent.statuscode === 'Todo' ? 'InProgress' : null;
+  if (!target || target === parent.statuscode) return;
+
+  const fromMeta = await repo.getTaskStatusMeta(parent.statuscode);
+  const toMeta = await repo.getTaskStatusMeta(target);
+  if (!fromMeta || !toMeta) return;
+
+  await repo.changeTaskStatus({
+    taskId: parent.taskid,
+    fromStatusId: fromMeta.taskStatusId,
+    toStatusId: toMeta.taskStatusId,
+    changedByUserId: toUserPk(actorId),
+    note: `${AUTO_ACTOR_NOTE} (${completed}/${total} subtasks completed).`,
+    isCompletedState: toMeta.isCompletedState
+  });
+
+  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const teamLeadId = await resolveProjectTeamLead(parent.projectid);
+  const assignees = (await repo.findAssigneesForTask(parent.taskid)).map((a) => fromUserPk(a.userid));
+  const projectId = fromProjectPk(parent.projectid);
+  const parentFrontendId = fromTaskPk(parent.taskid);
+
+  if (target === 'Review') {
+    // Two distinct facts, two notifications: "the checklist is finished" and "a review is now
+    // waiting on you". The Team Lead is the actionable recipient of both; assignees are told
+    // their task moved so they don't keep looking for it in In Progress.
+    publishSafely(
+      {
+        type: 'checklist_completed',
+        title: 'All Subtasks Completed',
+        message: `Every subtask of "${parent.title}" is now complete (${total}/${total}).`,
+        actorId,
+        projectId,
+        taskId: parentFrontendId
+      },
+      [teamLeadId, ...assignees],
+      actorId
+    );
+    publishSafely(
+      {
+        type: 'task_review_requested',
+        title: 'Task Ready For Review',
+        message: `"${parent.title}" moved to Review automatically after ${actorName} completed its final subtask.`,
+        actorId,
+        projectId,
+        taskId: parentFrontendId
+      },
+      [teamLeadId],
+      actorId
+    );
+  } else {
+    publishSafely(
+      {
+        type: 'task_status_changed',
+        title: 'Task Status Changed',
+        message: `"${parent.title}" moved to In Progress automatically (${completed}/${total} subtasks completed).`,
+        actorId,
+        projectId,
+        taskId: parentFrontendId
+      },
+      [teamLeadId, ...assignees],
+      actorId
+    );
+  }
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Status Changed', module: 'Kanban', entityType: 'Task',
+    entityId: parentFrontendId, entityName: parent.title,
+    projectId, taskId: parentFrontendId, taskName: parent.title,
+    description: `“${parent.title}” moved to ${DB_TO_API_TASK_STATUS[target]} automatically after ${completed}/${total} subtasks completed.`,
+    reason: AUTO_ACTOR_NOTE, linkRoute: 'kanban', important: target === 'Review',
+    changes: [{ field: 'Status', previousValue: DB_TO_API_TASK_STATUS[parent.statuscode], newValue: DB_TO_API_TASK_STATUS[target] }]
+  });
+};
+
+// --- Team Lead reopen ----------------------------------------------------------------------
+// The only way a Done task may leave that state. Deliberately its own endpoint rather than a
+// special case inside changeTaskStatus: reopening reverses a completed, approved outcome, so it
+// carries a stricter authorization rule (project Team Lead only -- an Admin may view but not
+// reopen), a mandatory reason, and its own notification type. The generic status path stays
+// locked for Done (see changeTaskStatus), so there is exactly one auditable route back.
+
+export const REOPEN_TARGETS: ApiTaskStatus[] = ['Review', 'In Progress', 'Todo'];
+
+export const reopenTask = async (
+  taskId: string,
+  input: { status: ApiTaskStatus; reason: string },
+  actorId: string,
+  actorRole: string
+): Promise<TaskDTO> => {
+  const row = await repo.findTaskById(toTaskPk(taskId));
+  if (!row) throw new TaskNotFoundError('Task not found.');
+
+  // Admin is intentionally excluded here, unlike everywhere else in this service: reopening is a
+  // delivery decision owned by whoever leads the project, not a system-administration action.
+  if (actorRole !== 'Team_Lead') {
+    throw new TaskAuthorizationError('Only the project\'s Team Lead can reopen a completed task.');
+  }
+  if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
+    throw new TaskAuthorizationError('You can only reopen tasks in projects you lead.');
+  }
+
+  if (row.statuscode !== 'Done') {
+    throw new TaskValidationError('Only a completed task can be reopened.');
+  }
+  if (!input.reason?.trim()) {
+    throw new TaskValidationError('A reason is required to reopen a completed task.');
+  }
+  if (!REOPEN_TARGETS.includes(input.status)) {
+    throw new TaskValidationError(`A task can only be reopened into ${REOPEN_TARGETS.join(', ')}.`);
+  }
+
+  const fromMeta = await repo.getTaskStatusMeta('Done');
+  const toMeta = await repo.getTaskStatusMeta(API_TO_DB_TASK_STATUS[input.status]);
+  if (!fromMeta || !toMeta) throw new TaskValidationError('Unknown task status.');
+
+  // Same repository call every other transition uses, so the reopen lands in
+  // work.TaskStatusHistory with its reason exactly like any other status change -- one shared
+  // audit trail, no parallel history table.
+  await repo.changeTaskStatus({
+    taskId: row.taskid,
+    fromStatusId: fromMeta.taskStatusId,
+    toStatusId: toMeta.taskStatusId,
+    changedByUserId: toUserPk(actorId),
+    note: input.reason.trim(),
+    isCompletedState: toMeta.isCompletedState
+  });
+
+  const updatedRow = await repo.findTaskById(row.taskid);
+  const dto = await buildDTO(updatedRow!);
+  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const projectRow = await projectRepo.findProjectById(row.projectid);
+
+  // Assignees must know their finished work is live again; Admins are told too because
+  // reopening reverses a recorded completion (see the deny-list note in notificationTypes.ts).
+  const admins = (await userStore.getAllUsers()).filter((user) => user.role === 'Admin').map((user) => user.id);
+  publishSafely(
+    {
+      type: 'task_reopened',
+      title: 'Task Reopened',
+      message: `${actorName} reopened "${dto.title}" to ${input.status}. Reason: ${input.reason.trim()}`,
+      actorId,
+      projectId: dto.projectId,
+      taskId: dto.id
+    },
+    [...dto.assigneeIds, ...admins],
+    actorId
+  );
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Reopened', module: 'Kanban', entityType: 'Task', entityId: dto.id, entityName: dto.title,
+    projectId: dto.projectId, projectName: projectRow?.projectname, taskId: dto.id, taskName: dto.title,
+    description: `${actorName} reopened “${dto.title}” from Done to ${input.status}.`,
+    reason: input.reason.trim(), linkRoute: 'kanban', important: true,
+    changes: [{ field: 'Status', previousValue: 'Done', newValue: input.status }]
   });
 
   return dto;
