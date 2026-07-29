@@ -57,7 +57,7 @@ import {
   ClipboardList
 } from 'lucide-react';
 
-type ReportTab = 'overview' | 'projects' | 'teams' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
+type ReportTab = 'overview' | 'projects' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
 
 interface DateRange {
   from: string;
@@ -196,8 +196,6 @@ export const ReportsView: React.FC = () => {
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
-  const [teamSearchQuery, setTeamSearchQuery] = useState('');
-  const [expandedTeams, setExpandedTeams] = useState<Set<string>>(new Set());
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -512,7 +510,7 @@ export const ReportsView: React.FC = () => {
         projectCount: projectIds.length,
         totalTasks,
         hasTasks: totalTasks > 0,
-        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : 'Light',
+        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : totalTasks > 0 ? 'Light' : 'No Tasks',
       };
     }).sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
   }, [apiAvailable, reportData, roleFiltered.projects, users]);
@@ -551,7 +549,7 @@ export const ReportsView: React.FC = () => {
     return [...roles].sort();
   }, [workloadData]);
 
-  const workloadWorkloadOptions = ['Light', 'Moderate', 'Heavy'];
+  const workloadWorkloadOptions = ['No Tasks', 'Light', 'Moderate', 'Heavy'];
 
   // ── Member detail fetch ─────────────────────────────────────────────
   useEffect(() => {
@@ -719,32 +717,6 @@ export const ReportsView: React.FC = () => {
     return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
-  const teamStats = useMemo(() => {
-    if (apiAvailable) {
-      return reportData.teams || [];
-    }
-    return [];
-  }, [apiAvailable, reportData]);
-
-  const teamMemberMap = useMemo(() => {
-    const map: Record<string, { id: string; name: string; role: string }[]> = {};
-    users.forEach((u: any) => {
-      const dept = u.department || 'Unknown';
-      if (!map[dept]) map[dept] = [];
-      map[dept].push({ id: u.id, name: u.name || u.id, role: u.role || u.title || '' });
-    });
-    return map;
-  }, [users]);
-
-  const filteredTeamStats = useMemo(() => {
-    if (!teamSearchQuery) return teamStats;
-    const q = teamSearchQuery.toLowerCase();
-    return teamStats.filter((t: any) =>
-      t.department.toLowerCase().includes(q) ||
-      (teamMemberMap[t.department] || []).some((m) => m.name.toLowerCase().includes(q))
-    );
-  }, [teamStats, teamSearchQuery, teamMemberMap]);
-
   // ── Rest of the component: unchanged UI code ─────────────────────────
 
   const chartColors = useMemo(() => {
@@ -792,7 +764,7 @@ export const ReportsView: React.FC = () => {
   const visibleTabs = useMemo<ReportTab[]>(() => {
     switch (currentRole) {
       case 'Admin':
-        return ['overview', 'projects', 'tasks', 'teams', 'workload', 'deadlines', 'attendance'];
+        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'HR':
         return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'Team_Lead':
@@ -808,7 +780,6 @@ export const ReportsView: React.FC = () => {
     overview: 'Overview',
     projects: 'Projects',
     tasks: 'Tasks',
-    teams: 'Teams',
     workload: 'Workload',
     deadlines: 'Deadlines',
     attendance: 'Attendance',
@@ -833,7 +804,6 @@ export const ReportsView: React.FC = () => {
       overview: 'Overall Summary Report',
       projects: 'Project Analytics Report',
       tasks: 'Tasks Report',
-      teams: 'Team Analytics Report',
       workload: 'Member Workload Report',
       deadlines: 'Deadlines Report',
       attendance: 'Attendance Report',
@@ -872,21 +842,6 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.code || '\u2014')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
-    } else if (tab === 'teams') {
-      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
-      bodyHtml += kpi('Departments', teamStats.length);
-      bodyHtml += kpi('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0));
-      bodyHtml += kpi('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0));
-      const avgRate = teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%';
-      bodyHtml += kpi('Avg Rate', avgRate);
-      bodyHtml += `</div>`;
-      bodyHtml += section('Department Performance');
-      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
-      bodyHtml += `<thead><tr>${th('Department')}${th('Members')}${th('Projects')}${th('Tasks')}${th('Completed')}${th('Rate')}</tr></thead><tbody>`;
-      teamStats.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.department || '\u2014', '#0f172a')}${td(t.members ?? 0)}${td(t.projects ?? 0)}${td(t.tasks ?? 0)}${td(t.completed ?? 0)}${td((t.rate ?? 0) + '%')}</tr>`;
-      });
-      bodyHtml += `</tbody></table>`;
     } else if (tab === 'workload') {
       const wlMembers = workloadData as any[];
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
@@ -900,7 +855,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<thead><tr>${th('Member')}${th('Role')}${th('Active')}${th('Completed')}${th('Overdue')}${th('Projects')}${th('Workload')}</tr></thead><tbody>`;
       wlMembers.forEach((w: any) => {
         const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
-        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
         bodyHtml += `<tr>${td(w.shortName || w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
@@ -1149,6 +1104,49 @@ ${bodyHtml}
       return;
     }
     handlePdfExport();
+  };
+
+  const handleAttendancePdfExport = () => {
+    const now = new Date().toLocaleString();
+    const from = dateRange.from;
+    const to = dateRange.to;
+    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+    if (attendanceSearchQuery) {
+      filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+    }
+    if (filtered.length === 0) return;
+    const th = (text: string) => `<th style="background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;border-bottom:2px solid #e2e8f0;color:#334155;font-size:10px;">${text}</th>`;
+    const td = (text: string | number, cls?: string) => `<td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:${cls || '#475569'};font-size:10px;">${text}</td>`;
+    const kpi = (label: string, value: string | number) => `<div style="flex:1;min-width:100px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;text-align:center;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${label}</div><div style="font-size:20px;font-weight:700;color:#0f172a;margin-top:2px;">${value}</div></div>`;
+    let bodyHtml = '';
+    bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+    bodyHtml += kpi('Records', filtered.length);
+    const presentCount = filtered.filter((a: any) => a.status === 'Present').length;
+    const lateCount = filtered.filter((a: any) => a.status === 'Late').length;
+    const absentCount = filtered.filter((a: any) => a.status === 'Absent').length;
+    bodyHtml += kpi('Present', presentCount);
+    bodyHtml += kpi('Late', lateCount);
+    bodyHtml += kpi('Absent', absentCount);
+    bodyHtml += `</div>`;
+    bodyHtml += `<h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;color:#1e293b;border-left:3px solid #3b82f6;padding-left:8px;">Attendance Records</h3>`;
+    bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+    bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
+    filtered.forEach((a: any) => {
+      const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+      bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
+    });
+    bodyHtml += `</tbody></table>`;
+    const attTitle = `Attendance Report${attendanceStatusFilter ? ` (${attendanceStatusFilter})` : ''}`;
+    const fullHtml = `<!DOCTYPE html><html><head><title>${attTitle}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1e293b;margin:0;}.header{text-align:center;padding-bottom:16px;border-bottom:3px solid #3b82f6;margin-bottom:24px;}.header h1{margin:0;font-size:22px;font-weight:700;color:#0f172a;}.header .meta{font-size:11px;color:#64748b;margin-top:6px;}.footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}</style></head><body><div class="header"><h1>${attTitle}</h1><div class="meta">${from} \u2014 ${to} &nbsp;|&nbsp; ${filtered.length} records &nbsp;|&nbsp; Generated ${now}</div></div>${bodyHtml}<div class="footer">${attTitle} &middot; WorkSync Reports &middot; ${now}</div></body></html>`;
+    const printFrame = document.createElement('iframe');
+    printFrame.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;';
+    document.body.appendChild(printFrame);
+    const contentWindow = printFrame.contentWindow;
+    if (!contentWindow) { document.body.removeChild(printFrame); return; }
+    const doc = contentWindow.document;
+    doc.open(); doc.write(fullHtml); doc.close();
+    setTimeout(() => { contentWindow.print(); setTimeout(() => document.body.removeChild(printFrame), 1000); }, 300);
   };
 
   const handleTaskPdfExport = () => {
@@ -2205,121 +2203,6 @@ ${bodyHtml}
     );
   };
 
-  const renderTeamsTab = () => (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {renderKPICard('Departments', teamStats.length, <Users size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0), <CheckSquare size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
-      </div>
-
-      <GlassCard>
-        <div className="p-4 space-y-3">
-          {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filter Teams')}
-          <div className="flex flex-wrap gap-2">
-            <div className="relative flex-1 min-w-[160px] max-w-[300px]">
-              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-              <input
-                type="text"
-                value={teamSearchQuery}
-                onChange={(e) => setTeamSearchQuery(e.target.value)}
-                placeholder="Search department or member..."
-                className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
-              />
-              {teamSearchQuery && (
-                <button onClick={() => setTeamSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
-
-      <div className="max-h-[500px] overflow-y-auto space-y-3 pr-1">
-        {filteredTeamStats.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">
-            <Users size={32} className="mx-auto mb-2 opacity-30" />
-            <p className="text-xs">{teamSearchQuery ? 'No teams match the search' : 'No team data available'}</p>
-          </div>
-        ) : (
-          filteredTeamStats.map((t: any) => {
-            const members = teamMemberMap[t.department] || [];
-            const isExpanded = expandedTeams.has(t.department);
-            return (
-              <GlassCard key={t.department} glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-                <div className="p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          const next = new Set(expandedTeams);
-                          if (isExpanded) next.delete(t.department); else next.add(t.department);
-                          setExpandedTeams(next);
-                        }}
-                        className="text-slate-400 hover:text-slate-200 transition-colors"
-                      >
-                        <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                      </button>
-                      <span className="text-sm font-semibold text-white">{t.department}</span>
-                      <span className="text-[10px] text-slate-500 ml-1">{members.length} members</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
-                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
-                      <div className="text-[10px] text-slate-400">Members</div>
-                      <div className="text-sm font-bold text-slate-200">{t.members}</div>
-                    </div>
-                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
-                      <div className="text-[10px] text-slate-400">Projects</div>
-                      <div className="text-sm font-bold text-slate-200">{t.projects}</div>
-                    </div>
-                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
-                      <div className="text-[10px] text-slate-400">Tasks</div>
-                      <div className="text-sm font-bold text-cyan-400">{t.tasks}</div>
-                    </div>
-                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
-                      <div className="text-[10px] text-slate-400">Completed</div>
-                      <div className="text-sm font-bold text-emerald-400">{t.completed}</div>
-                    </div>
-                    <div className="bg-slate-800/60 rounded-md px-2.5 py-1.5 text-center">
-                      <div className="text-[10px] text-slate-400">Rate</div>
-                      <div className="flex items-center justify-center gap-1.5">
-                        <div className="w-10 h-1.5 rounded-full bg-slate-700">
-                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${t.rate}%` }} />
-                        </div>
-                        <span className="text-xs font-mono text-slate-300">{t.rate}%</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="mt-2 pt-3 border-t border-white/5">
-                      <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Team Members</div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                        {members.map((m) => (
-                          <div key={m.id} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-800/30 text-xs">
-                            <div className="w-5 h-5 rounded-full bg-cyan-500/20 flex items-center justify-center shrink-0">
-                              <span className="text-[9px] font-bold text-cyan-400">{m.name.charAt(0).toUpperCase()}</span>
-                            </div>
-                            <span className="text-slate-300 truncate">{m.name}</span>
-                            {m.role && <span className="text-[10px] text-slate-500 shrink-0">{m.role}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </GlassCard>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-
   const renderWorkloadTab = () => {
     const members = filteredWorkloadMembers;
     return (
@@ -2409,7 +2292,7 @@ ${bodyHtml}
                   <tbody>
                     {members.map((m: any) => {
                       const total = m.totalTasks;
-                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                       return (
                         <tr
                           key={m.userId}
@@ -2433,7 +2316,8 @@ ${bodyHtml}
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                               wlLabel === 'Heavy' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
                               wlLabel === 'Moderate' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-                              'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                              wlLabel === 'Light' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
+                              'text-slate-400 bg-slate-500/10 border-slate-500/20'
                             }`}>{wlLabel}</span>
                           </td>
                         </tr>
@@ -2459,7 +2343,7 @@ ${bodyHtml}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {members.map((m: any) => {
                     const total = m.totalTasks;
-                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                     const barWidth = Math.min(total / 12, 1) * 100;
                     return (
                       <div
@@ -2490,11 +2374,11 @@ ${bodyHtml}
                           <div className="mt-2">
                             <div className="flex justify-between text-[9px] text-slate-500 mb-1">
                               <span>Current workload</span>
-                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : 'text-emerald-400'}>{wlLabel}</span>
+                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : wlLabel === 'Light' ? 'text-emerald-400' : 'text-slate-400'}>{wlLabel}</span>
                             </div>
                             <div className="h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
                               <div className={`h-full rounded-full transition-all duration-300 ${
-                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'
+                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'
                               }`} style={{ width: `${barWidth}%` }} />
                             </div>
                           </div>
@@ -3154,7 +3038,7 @@ ${bodyHtml}
       .sort((a: any, b: any) => (b.timestamp || b.changedAt || '').localeCompare(a.timestamp || a.changedAt || ''));
 
     const total = m.totalTasks;
-    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
     const barWidth = Math.min(total / 12, 1) * 100;
 
     return (
@@ -3212,10 +3096,10 @@ ${bodyHtml}
               <div className="pt-2 border-t border-slate-700/30">
                 <div className="flex justify-between text-[10px] text-slate-500 mb-1">
                   <span>Workload Level</span>
-                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>{wlLabel}</span>
+                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : wlLabel === 'Light' ? 'text-emerald-400 font-semibold' : 'text-slate-400 font-semibold'}>{wlLabel}</span>
                 </div>
                 <div className="h-2 rounded-full bg-slate-700/50 overflow-hidden">
-                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${barWidth}%` }} />
+                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'}`} style={{ width: `${barWidth}%` }} />
                 </div>
               </div>
             )}
@@ -3441,6 +3325,16 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
+      <div className="flex justify-end">
+        <button
+          onClick={handleAttendancePdfExport}
+          className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+        >
+          <FileText size={11} />
+          Export Filtered PDF
+        </button>
+      </div>
+
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
         <div className="flex flex-wrap gap-1.5">
@@ -3469,21 +3363,28 @@ ${bodyHtml}
             );
           })}
         </div>
-        <div className="relative flex-1 min-w-[160px] max-w-[280px]">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-          <input
-            type="text"
-            value={attendanceSearchQuery}
-            onChange={(e) => setAttendanceSearchQuery(e.target.value)}
-            placeholder="Search user name..."
-            className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
-          />
-          {attendanceSearchQuery && (
-            <button onClick={() => setAttendanceSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-              <X size={12} />
-            </button>
-          )}
-        </div>
+        <select
+          value={attendanceSearchQuery}
+          onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+        >
+          <option value="">All Users</option>
+          {(() => {
+            const seenIds = new Set<string>();
+            return (roleFiltered.attendance || []).filter((a: any) => {
+              if (seenIds.has(a.userId)) return false;
+              seenIds.add(a.userId);
+              return true;
+            }).sort((a: any, b: any) => {
+              const nameA = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              const nameB = users.find((u: any) => u.id === b.userId)?.name || b.userId;
+              return nameA.localeCompare(nameB);
+            }).map((a: any) => {
+              const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              return <option key={a.userId} value={a.userId}>{userName}</option>;
+            });
+          })()}
+        </select>
       </div>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
@@ -3513,11 +3414,7 @@ ${bodyHtml}
                 const raw: any[] = (roleFiltered.attendance || []) as any[];
                 let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
                 if (attendanceSearchQuery) {
-                  const q = attendanceSearchQuery.toLowerCase();
-                  filtered = filtered.filter((a: any) => {
-                    const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
-                    return userName.toLowerCase().includes(q);
-                  });
+                  filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
                 }
                 if (filtered.length === 0) {
                   return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
@@ -3568,8 +3465,6 @@ ${bodyHtml}
           return selectedProjectId ? renderProjectDetail() : renderProjectsTab();
         case 'tasks':
           return selectedTaskId ? renderTaskDetail() : renderTasksTab();
-        case 'teams':
-          return renderTeamsTab();
         case 'workload':
           return selectedMemberId ? renderMemberDetail() : renderWorkloadTab();
         case 'deadlines':

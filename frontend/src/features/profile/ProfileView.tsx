@@ -579,31 +579,13 @@ export const ProfileView: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="glass-panel p-4 border border-white/5">
-              <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider mb-1">Activity Entries</p>
-              <p className="text-2xl font-bold text-white">{dateFilteredActivity.length}</p>
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-1 gap-3">
             <div className="glass-panel p-4 border border-white/5">
               <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider mb-1">Unread Notifications</p>
               <p className="text-2xl font-bold text-white">{unreadCount}</p>
               <p className="text-[11px] text-slate-500 mt-0.5">{dateFilteredNotifications.length} total</p>
             </div>
           </div>
-          {recentActivity.length > 0 && (
-            <div className="glass-panel p-5 border border-white/5">
-              <SectionHeader icon={ActivityIcon} label="Recent Activity" />
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {recentActivity.map((log) => (
-                  <div key={log.id} className="flex items-start gap-3 text-xs">
-                    <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestamp}</span>
-                    <span className="text-slate-300">{log.action}</span>
-                    <span className="text-cyan-400 truncate">{log.targetTitle}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       );
     }
