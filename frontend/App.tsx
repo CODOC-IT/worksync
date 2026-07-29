@@ -24,7 +24,7 @@ import { ProjectChatsView } from '../frontend/src/features/project-chats/Project
 import { TeamMembersView } from '../frontend/src/features/members/TeamMembersView';
 import { ActivityLogView } from '../frontend/src/features/activity/ActivityLogView';
 
-import { Shield, Sparkles, Download, Database, Key } from "lucide-react";
+import { Shield, Sparkles } from "lucide-react";
 
 const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>("login");
@@ -39,9 +39,6 @@ const AppContent: React.FC = () => {
   const {
     currentRole,
     activeBreak,
-    settings,
-    deactivateUser,
-    exportBackup,
     loginUser,
     logoutUser,
   } = useApp();
@@ -264,51 +261,7 @@ const AppContent: React.FC = () => {
           {currentTab === "calendar" && <CalendarView />}
 
 
-          {/* Settings Tab */}
-          {currentTab === "settings" && (
-            <div className="space-y-6 max-w-4xl mx-auto">
-              <div className="glass-panel p-6 border border-cyan-500/30">
-                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-white/10">
-                  <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-                    <Shield size={22} />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-white">
-                      System Settings & Controls
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Manage workspace configurations, API keys, and account
-                      safeguards
-                    </p>
-                  </div>
-                </div>
 
-                <div className="space-y-6 text-xs">
-                  {/* Backup & Export Data */}
-                  <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-white flex items-center gap-2">
-                          <Database size={16} className="text-purple-400" />{" "}
-                          Export JSON Vault Backup
-                        </span>
-                        <p className="text-slate-400 mt-0.5">
-                          Download complete system state snapshot (users,
-                          projects, tasks, attendance, logs).
-                        </p>
-                      </div>
-                      <button
-                        onClick={exportBackup}
-                        className="px-4 py-2 rounded-xl glass-button-neon font-bold flex items-center gap-1.5 shrink-0"
-                      >
-                        <Download size={14} /> Export Backup
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </main>
       </div>
 

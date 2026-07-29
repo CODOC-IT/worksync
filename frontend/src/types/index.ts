@@ -129,6 +129,7 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string;
+  assigneeIds?: string[];
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
@@ -495,17 +496,4 @@ export interface CalendarEvent {
   type: 'Deadline' | 'Milestone' | 'Leave' | 'Meeting' | 'Review';
   projectId?: string;
   taskId?: string;
-}
-
-export interface WeeklySummaryDraft {
-  id: string;
-  projectId: string;
-  weekEnding: string;
-  progressSummary: string;
-  blockersText: string;
-  overdueTasksCount: number;
-  completedTasksCount: number;
-  keyHighlights: string[];
-  recipientChannel: 'Project Chat' | 'Email Digest' | 'Executive Report';
-  generatedAt: string;
 }

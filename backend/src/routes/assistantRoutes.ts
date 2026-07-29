@@ -1,65 +1,68 @@
 import { Router, Response } from 'express';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
-import { projectStore } from '../store/projectStore.js';
 import { promptStore } from '../store/promptStore.js';
 import { userStore } from '../store/userStore.js';
 import { discussionStore } from '../store/discussionStore.js';
 import { generatePrompt } from '../services/aiService.js';
 import * as notificationService from '../notifications/notification.service.js';
+import * as projectService from '../projects/project.service.js';
+import * as taskService from '../tasks/task.service.js';
 
 const router = Router();
 
-// All routes require authentication
 router.use(authenticateJWT);
 
-// GET /api/assistant/projects — authorized projects for current user
-router.get('/projects', (req: AuthenticatedRequest, res: Response): void => {
+router.get('/projects', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const projects = projectStore.getProjectsForUser(req.user.id, req.user.role);
-  const safe = projects.map((p) => ({
-    id: p.id,
-    code: p.code,
-    title: p.title,
-    description: p.description,
-    status: p.status,
-    priority: p.priority,
-    startDate: p.startDate,
-    endDate: p.endDate,
-    milestoneCount: p.milestones.length,
-  }));
+  try {
+    const projects = await projectService.listProjectsForUser(req.user.id, req.user.role);
+    const safe = projects.map((p) => ({
+      id: p.id,
+      code: p.code,
+      title: p.title,
+      description: p.description,
+      status: p.status,
+      priority: p.priority,
+      startDate: p.startDate,
+      endDate: p.targetDate,
+      milestoneCount: p.milestones.length,
+    }));
 
-  res.json({ success: true, data: safe });
-});
-
-// GET /api/assistant/projects/:projectId/tasks — authorized tasks
-router.get('/projects/:projectId/tasks', (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
-
-  const { projectId } = req.params;
-
-  if (!projectStore.isProjectAccessible(projectId, req.user.id, req.user.role)) {
-    res.status(403).json({ success: false, message: 'Project not found or access denied.' });
-    return;
+    res.json({ success: true, data: safe });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load projects.' });
   }
-
-  const tasks = projectStore.getTasksForProject(projectId, req.user.id, req.user.role);
-  const safe = tasks.map((t) => ({
-    id: t.id,
-    taskNumber: t.taskNumber,
-    title: t.title,
-    description: t.description,
-    status: t.status,
-    priority: t.priority,
-    assigneeId: t.assigneeId,
-    dueDate: t.dueDate,
-    dependencies: t.dependencies,
-  }));
-
-  res.json({ success: true, data: safe });
 });
 
-// GET /api/assistant/categories — available prompt categories
+router.get('/projects/:projectId/tasks', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
+
+  try {
+    const { projectId } = req.params;
+    const tasks = await taskService.listTasksForUser(req.user.id, req.user.role, projectId);
+    const safe = tasks.map((t) => ({
+      id: t.id,
+      taskNumber: t.taskNumber,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      priority: t.priority,
+      assigneeId: t.assigneeId,
+      dueDate: t.dueDate,
+      dependencies: t.dependencies,
+    }));
+
+    res.json({ success: true, data: safe });
+  } catch (error: any) {
+    if (error instanceof projectService.ProjectAuthorizationError) {
+      res.status(403).json({ success: false, message: 'Project not found or access denied.' });
+      return;
+    }
+    res.status(500).json({ success: false, message: error.message || 'Failed to load tasks.' });
+  }
+});
+
 router.get('/categories', (_req: AuthenticatedRequest, res: Response): void => {
   const categories = [
     { code: 'ProjectOverview', name: 'Project Overview', requiresProject: true, requiresTask: false },
@@ -73,40 +76,43 @@ router.get('/categories', (_req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: categories });
 });
 
-// POST /api/assistant/generate — generate a prompt using AI
 router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
   try {
-    const { projectId, taskId, category, additionalInstructions, style, projectName: clientProjectName, projectDescription: clientProjectDesc, taskTitle: clientTaskTitle, taskDescription: clientTaskDesc } = req.body;
+    const { projectId, taskId, category, additionalInstructions, style } = req.body;
 
     if (!projectId || !category) {
       res.status(400).json({ success: false, message: 'Project ID and category are required.' });
       return;
     }
 
-    if (!projectStore.isProjectAccessible(projectId, req.user.id, req.user.role)) {
+    if (!(await projectService.isProjectAccessible(projectId, req.user.id, req.user.role))) {
       res.status(403).json({ success: false, message: 'Project not found or access denied.' });
       return;
     }
 
-    const project = projectStore.getProjectById(projectId)!;
+    const project = await projectService.getProjectForUser(projectId, req.user.id, req.user.role);
 
     let task = null;
     if (taskId) {
-      if (!projectStore.isTaskAccessible(taskId, req.user.id, req.user.role)) {
+      try {
+        task = await taskService.getTaskForUser(taskId, req.user.id, req.user.role);
+      } catch {
         res.status(403).json({ success: false, message: 'Task not found or access denied.' });
         return;
       }
-      task = projectStore.getTaskById(taskId)!;
     }
 
-    const allTasks = projectStore.getTasksForProject(projectId, req.user.id, req.user.role);
+    const allTasks = await taskService.listTasksForUser(req.user.id, req.user.role, projectId);
     const allDiscussions = discussionStore.list().filter((d) => d.projectId === projectId);
+
+    const taskById = new Map(allTasks.map((t) => [t.id, t]));
+
     const projectTasksStr = allTasks
       .map((t) => {
         const depNames = t.dependencies
-          .map((depId) => projectStore.getTaskById(depId)?.taskNumber)
+          .map((depId) => taskById.get(depId)?.taskNumber)
           .filter(Boolean)
           .join(', ');
 
@@ -133,12 +139,12 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
       .join(', ');
 
     const context = {
-      projectName: clientProjectName || project.title,
-      projectDescription: clientProjectDesc || project.description,
+      projectName: project.title,
+      projectDescription: project.description,
       projectStatus: project.status,
       projectPriority: project.priority,
-      taskTitle: clientTaskTitle || task?.title,
-      taskDescription: clientTaskDesc || task?.description,
+      taskTitle: task?.title,
+      taskDescription: task?.description,
       taskStatus: task?.status,
       taskPriority: task?.priority,
       taskDeadline: task?.dueDate,
@@ -149,7 +155,7 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
       dependencies: task?.dependencies?.length
         ? task.dependencies
             .map((depId) => {
-              const dep = projectStore.getTaskById(depId);
+              const dep = taskById.get(depId);
               return dep ? `- ${dep.taskNumber}: ${dep.title}` : null;
             })
             .filter(Boolean)
@@ -174,6 +180,10 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
       },
     });
   } catch (error: any) {
+    if (error instanceof projectService.ProjectAuthorizationError || error instanceof projectService.ProjectNotFoundError) {
+      res.status(403).json({ success: false, message: 'Project not found or access denied.' });
+      return;
+    }
     res.status(500).json({
       success: false,
       message: error?.message || 'Failed to generate prompt.',
@@ -181,8 +191,7 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
   }
 });
 
-// POST /api/assistant/prompts — save a generated prompt
-router.post('/prompts', (req: AuthenticatedRequest, res: Response): void => {
+router.post('/prompts', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
   try {
@@ -193,8 +202,7 @@ router.post('/prompts', (req: AuthenticatedRequest, res: Response): void => {
       return;
     }
 
-    // Validate project access if projectId provided
-    if (projectId && !projectStore.isProjectAccessible(projectId, req.user.id, req.user.role)) {
+    if (projectId && !(await projectService.isProjectAccessible(projectId, req.user.id, req.user.role))) {
       res.status(403).json({ success: false, message: 'Project not found or access denied.' });
       return;
     }
@@ -211,16 +219,6 @@ router.post('/prompts', (req: AuthenticatedRequest, res: Response): void => {
       isAiGenerated: isAiGenerated !== false,
     });
 
-    // Minimal integration hook (per the notification backend spec — this module is not being
-    // redesigned): the AI Assistant has no team-visibility concept of its own, saved prompts are
-    // private to their author (see promptStore.getPromptsForUser above), so this is a
-    // self-notification confirming generation completed, the same "confirm to the actor" pattern
-    // already used by the frontend's confirmActionSuccess for other modules. ProjectBreakdown is
-    // the one category that produces an actual task breakdown; every other category maps to the
-    // generic "recommendation available" type. The other AI type codes seeded in
-    // database/18_notify_seed.sql (sprint/meeting/deadline/overdue) have no producing feature in
-    // this codebase yet — they stay reserved for when those AI features are built, per "minimal
-    // hook, no new subsystems."
     const latestVersion = prompt.versions[prompt.versions.length - 1];
     if (latestVersion?.isAiGenerated && req.user) {
       notificationService
@@ -242,7 +240,8 @@ router.post('/prompts', (req: AuthenticatedRequest, res: Response): void => {
   }
 });
 
-// GET /api/assistant/prompts — list saved prompts for current user
+// All remaining routes (GET/PUT/DELETE prompts) are unchanged since they use promptStore directly
+
 router.get('/prompts', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -279,7 +278,6 @@ router.get('/prompts', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: safe });
 });
 
-// GET /api/assistant/prompts/:id — get prompt with versions
 router.get('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -292,7 +290,6 @@ router.get('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: prompt });
 });
 
-// PUT /api/assistant/prompts/:id — update prompt content (creates new version)
 router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -311,7 +308,6 @@ router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: updated });
 });
 
-// GET /api/assistant/prompts/:id/versions — get version history
 router.get('/prompts/:id/versions', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -334,7 +330,6 @@ router.get('/prompts/:id/versions', (req: AuthenticatedRequest, res: Response): 
   res.json({ success: true, data: safe });
 });
 
-// POST /api/assistant/prompts/:id/restore/:versionId — restore a previous version
 router.post('/prompts/:id/restore/:versionId', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -347,7 +342,6 @@ router.post('/prompts/:id/restore/:versionId', (req: AuthenticatedRequest, res: 
   res.json({ success: true, data: updated });
 });
 
-// DELETE /api/assistant/prompts/:id — archive a prompt (soft delete)
 router.delete('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
@@ -360,7 +354,6 @@ router.delete('/prompts/:id', (req: AuthenticatedRequest, res: Response): void =
   res.json({ success: true, message: 'Prompt archived.' });
 });
 
-// PATCH /api/assistant/prompts/:id/unarchive
 router.patch('/prompts/:id/unarchive', (req: AuthenticatedRequest, res: Response): void => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 

@@ -77,46 +77,87 @@ const visibilitySql = (
   const params: unknown[] = [viewerPk];
   const pi = paramIndex;
 
+  // ── Admin: unrestricted within the organization ──────────────────────────────
   if (effectiveRoles.permanentRole === 'Admin') {
     return { clause: 'TRUE', extraParams: [] };
   }
 
-  const parts: string[] = [];
+  // ── Base scope: events the viewer is the actor for (all roles) ──────────────
+  const ownParts: string[] = [
+    `a.actoruserid = $${pi}`,
+  ];
 
-  parts.push(`a.actoruserid = $${pi}`);
-  parts.push(`a.projectid IN (
+  // ── Team Member / Team Lead base: own events + events from projects they
+  //    are members of (project membership rows only; HR alone does not grant this) ──
+  const projectMemberPart = `a.projectid IN (
     SELECT vpm.projectid FROM work.projectmembers vpm
     WHERE vpm.userid = $${pi} AND vpm.leftatutc IS NULL
-  )`);
-  parts.push(`a.projectid IN (
+  )`;
+
+  const taskAssigneePart = `a.projectid IN (
     SELECT vt.projectid FROM work.taskassignees vta
     JOIN work.tasks vt ON vt.taskid = vta.taskid
     WHERE vta.userid = $${pi} AND vta.unassignedatutc IS NULL
-  )`);
+  )`;
 
+  // Combine base project/task access with module restriction for plain Team Members
+  const buildMemberClause = (): string => {
+    const parts = [...ownParts, projectMemberPart, taskAssigneePart];
+    const scopeClause = `(${parts.join(' OR ')})`;
+    // Restrict to non-sensitive modules for pure Team Members
+    if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
+      return `${scopeClause} AND a.modulecode NOT IN ('Permissions', 'Authentication', 'Settings', 'System')`;
+    }
+    return scopeClause;
+  };
+
+  // ── HR only (no Team Lead active): own + attendance/HR + own project membership ──
+  if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
+    const hrParts = [
+      ...ownParts,
+      projectMemberPart,
+      taskAssigneePart,
+      `a.modulecode IN ('Attendance', 'HR')`,
+    ];
+    return {
+      clause: `(${hrParts.join(' OR ')})`,
+      extraParams: params.slice(1),
+    };
+  }
+
+  // ── Team Lead (permanent or temporary): own + project-member + led-project scope ──
+  // If also HR, combine both scopes. Plain Team Members who are not Lead/HR also
+  // flow through here — buildMemberClause applies the module restriction for them.
+  if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
+    return { clause: buildMemberClause(), extraParams: params.slice(1) };
+  }
+
+  const scopeParts: string[] = [...ownParts, projectMemberPart, taskAssigneePart];
+
+  // Permanent Team Lead: also include formal lead membership rows
   if (effectiveRoles.permanentRole === 'Team_Lead') {
-    parts.push(`a.projectid IN (
+    scopeParts.push(`a.projectid IN (
       SELECT pmlead.projectid FROM work.projectmembers pmlead
       WHERE pmlead.userid = $${pi} AND pmlead.leftatutc IS NULL AND pmlead.memberrolecode = 'TeamLead'
     )`);
   }
 
+  // Temporary Team Lead: include scoped projects from the role assignment
   if (effectiveRoles.isActiveTeamLead && effectiveRoles.leadProjectPks.length > 0) {
     const leadIdx = params.length + 1;
     params.push(effectiveRoles.leadProjectPks);
-    parts.push(`a.projectid = ANY($${leadIdx}::int[])`);
+    scopeParts.push(`a.projectid = ANY($${leadIdx}::int[])`);
   }
 
-  if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
-    parts.push(`a.modulecode IN ('Attendance', 'HR')`);
+  // HR+TeamLead combined: also add attendance/HR scope
+  if (effectiveRoles.isHRandTeamLead) {
+    scopeParts.push(`a.modulecode IN ('Attendance', 'HR')`);
   }
 
-  if (effectiveRoles.permanentRole === 'Team_Member' && !effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
-    parts.push(`a.modulecode NOT IN ('Permissions', 'Authentication')`);
-  }
-
-  const clause = parts.length === 0 ? 'FALSE' : parts.join(' OR ');
-  return { clause, extraParams: params.slice(1) };
+  return {
+    clause: `(${scopeParts.join(' OR ')})`,
+    extraParams: params.slice(1),
+  };
 };
 
 const buildWhere = (
@@ -125,13 +166,32 @@ const buildWhere = (
   effectiveRoles: EffectiveRoles
 ) => {
   const viewerPk = toUserPkOrNull(viewerId);
-  const values: unknown[] = [viewerPk];
-  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk!, effectiveRoles, 1);
+  if (viewerPk === null) throw new Error('Invalid authenticated user identifier.');
+
+  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1);
+
+  // For Admin the visibility clause is TRUE and no parameter is needed.
+  // For all other roles $1 is the viewerPk used inside the scoped predicates.
+  const isAdminPath = effectiveRoles.permanentRole === 'Admin';
+  const values: unknown[] = isAdminPath ? [] : [viewerPk];
   values.push(...extraParams);
 
-  const clauses: string[] = [visibilityClause];
+  // Current WorkSync authentication is organization 1 scoped. Keep every read explicitly
+  // bounded to the same organization as inserts, including administrator queries.
+  const clauses: string[] = ['a.organizationid = 1', `(${visibilityClause})`];
+
+  // myActivityOnly uses $1 (viewerPk). For Admin that param slot doesn't exist yet, so we
+  // push viewerPk on demand and reference its position dynamically.
+  let myActivityOnlyParamIdx: number | null = null;
 
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace('?', `$${values.length}`)); };
+
+  if (filters.myActivityOnly) {
+    values.push(viewerPk);
+    myActivityOnlyParamIdx = values.length;
+    clauses.push(`a.actoruserid = $${myActivityOnlyParamIdx}`);
+  }
+
   if (filters.from) add('a.occurredatutc >= ?::timestamptz', filters.from);
   if (filters.to) add('a.occurredatutc <= ?::timestamptz', filters.to);
   if (filters.userId) add('a.actoruserid = ?', toUserPkOrNull(filters.userId));
@@ -143,14 +203,14 @@ const buildWhere = (
   if (filters.entityType) add('a.entitytypecode = ?', filters.entityType);
   if (filters.result) add('a.resultcode = ?', filters.result);
   if (filters.source) add('a.sourcecode = ?', filters.source);
-  if (filters.myActivityOnly) clauses.push('a.actoruserid = $1');
   if (filters.importantOnly) clauses.push('a.isimportant = TRUE');
-  if (filters.deletedOnly) clauses.push("a.actioncode IN ('Deleted', 'Archived', 'Attachment Deleted')");
+  if (filters.deletedOnly) clauses.push("a.actioncode IN ('Deleted', 'Archived', 'Attachment Deleted', 'Deleted Attachment')");
   if (filters.failedOrBlockedOnly) clauses.push("a.resultcode IN ('Failed', 'Blocked')");
+  if (filters.hrActivityOnly) clauses.push("a.modulecode IN ('Attendance', 'HR')");
   if (filters.hasAttachments) clauses.push("COALESCE(a.metadatajson->>'hasAttachments', 'false') = 'true'");
   if (filters.hasMentions) clauses.push("COALESCE(a.metadatajson->>'hasMentions', 'false') = 'true'");
-  if (filters.status) add(`EXISTS (SELECT 1 FROM audit.auditeventchanges sc WHERE sc.auditeventid=a.auditeventid AND lower(sc.fieldname)='status' AND sc.newvalue = ?)`, filters.status);
-  if (filters.priority) add(`EXISTS (SELECT 1 FROM audit.auditeventchanges pc WHERE pc.auditeventid=a.auditeventid AND lower(pc.fieldname)='priority' AND pc.newvalue = ?)`, filters.priority);
+  if (filters.status) add(`EXISTS (SELECT 1 FROM audit.auditeventchanges sc WHERE sc.auditeventid=a.auditeventid AND lower(sc.fieldname)='status' AND lower(sc.newvalue) = lower(?))`, filters.status);
+  if (filters.priority) add(`EXISTS (SELECT 1 FROM audit.auditeventchanges pc WHERE pc.auditeventid=a.auditeventid AND lower(pc.fieldname)='priority' AND lower(pc.newvalue) = lower(?))`, filters.priority);
   if (filters.changedField) add(`EXISTS (SELECT 1 FROM audit.auditeventchanges fc WHERE fc.auditeventid=a.auditeventid AND lower(fc.fieldname)=lower(?))`, filters.changedField);
   if (filters.search) {
     add(`(a.actornamesnapshot ILIKE '%' || ? || '%' OR a.actoremailsnapshot ILIKE '%' || $VALUE || '%'
