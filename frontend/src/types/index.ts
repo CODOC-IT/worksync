@@ -194,15 +194,22 @@ export type HRRequestType = 'Correction' | 'Leave' | 'Break_Exception';
 export interface HRRequest {
   id: string;
   userId: string;
+  userName?: string;
   type: HRRequestType;
   date: string;
   reason: string;
   status: 'Pending' | 'Approved' | 'Rejected';
+  approvalStage?: 'HR' | 'Admin';
+  requesterRole?: UserRole;
   details: {
+    currentCheckIn?: string;
+    currentCheckOut?: string;
     requestedCheckIn?: string;
     requestedCheckOut?: string;
+    currentBreaks?: WorkBreak[];
+    requestedBreaks?: WorkBreak[];
     attendanceChangeReason?: string;
-    leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
+    leaveType?: 'Full Day Leave' | 'Half Day Leave';
     leaveDays?: number;
     extraBreakMinutes?: number;
   };
