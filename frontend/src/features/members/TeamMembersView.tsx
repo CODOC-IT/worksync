@@ -148,7 +148,7 @@ export const TeamMembersView: React.FC = () => {
 
   const roleQuickFilters: Array<{ label: string; value: 'all' | UserRole; count: number }> = [
     { label: 'All', value: 'all', count: users.length },
-    { label: 'Admins', value: 'Admin', count: users.filter((member) => member.role === 'Admin').length },
+    { label: 'Admin', value: 'Admin', count: users.filter((member) => member.role === 'Admin').length },
     { label: 'Team Leads', value: 'Team_Lead', count: users.filter((member) => member.role === 'Team_Lead').length },
     { label: 'HR', value: 'HR', count: users.filter((member) => member.role === 'HR').length },
     { label: 'Members', value: 'Team_Member', count: teamMemberCount },
