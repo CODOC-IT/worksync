@@ -1534,6 +1534,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [newRec, ...prev];
       });
 
+      // Persist check-in to backend
+      const checkInUtc = new Date().toISOString();
+      const token = localStorage.getItem('worksync_auth_token');
+      if (token) {
+        fetch('/api/attendance/check-in', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ workDate: todayStr, checkInUtc, isLate }),
+        }).catch((err) => console.error('[Attendance] Failed to persist check-in:', err));
+      }
+
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
         type: isLate ? 'attendance_late_check_in' : 'attendance_check_in',
@@ -1575,6 +1586,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
         endBreak();
+      }
+
+      // Persist check-out to backend
+      const checkOutUtc = new Date().toISOString();
+      const token = localStorage.getItem('worksync_auth_token');
+      if (token) {
+        fetch('/api/attendance/check-out', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ workDate: todayStr, checkOutUtc }),
+        }).catch((err) => console.error('[Attendance] Failed to persist check-out:', err));
       }
 
       dispatchNotifications({

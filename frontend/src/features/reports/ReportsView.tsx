@@ -481,13 +481,18 @@ export const ReportsView: React.FC = () => {
       });
     });
 
-    return (reportData.workload as any[]).map((w: any) => {
-      const u = users.find((u: any) => u.id === w.userId);
-      const name = u?.name || w.name || w.userId;
-      const projectIds = [...(userProjectMap[w.userId] || new Set())] as string[];
-      const totalTasks = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
+    const workloadById = new Map((reportData.workload as any[]).map((w: any) => [w.userId, w]));
+
+    const allUserIds = new Set([...workloadById.keys(), ...Object.keys(userProjectMap)]);
+
+    return [...allUserIds].map((uid: string) => {
+      const w = workloadById.get(uid);
+      const u = users.find((u: any) => u.id === uid);
+      const name = u?.name || w?.name || uid;
+      const projectIds = [...(userProjectMap[uid] || new Set())] as string[];
+      const totalTasks = (w?.active || 0) + (w?.completed || 0) + (w?.review || 0) + (w?.overdue || 0);
       return {
-        userId: w.userId,
+        userId: uid,
         name,
         shortName: getShortName(name),
         role: u?.role || '',
@@ -495,10 +500,10 @@ export const ReportsView: React.FC = () => {
         title: u?.title || '',
         avatar: u?.avatar || '',
         status: u?.status || 'active',
-        active: w.active || 0,
-        completed: w.completed || 0,
-        review: w.review || 0,
-        overdue: w.overdue || 0,
+        active: w?.active || 0,
+        completed: w?.completed || 0,
+        review: w?.review || 0,
+        overdue: w?.overdue || 0,
         projectIds,
         projectCount: projectIds.length,
         totalTasks,
@@ -939,6 +944,39 @@ export const ReportsView: React.FC = () => {
       (roleFiltered.attendance || []).forEach((a: any) => {
         const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
         bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    } else if (tab === 'tasks') {
+      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+      bodyHtml += kpi('Total', taskKpiStats.total);
+      bodyHtml += kpi('Todo', taskKpiStats.todo);
+      bodyHtml += kpi('In Progress', taskKpiStats.inProgress);
+      bodyHtml += kpi('Review', taskKpiStats.review);
+      bodyHtml += kpi('Done', taskKpiStats.completed);
+      bodyHtml += kpi('Blocked', taskKpiStats.blocked);
+      bodyHtml += kpi('Overdue', taskKpiStats.overdue);
+      bodyHtml += `</div>`;
+      bodyHtml += section('Status Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Status')}${th('Count')}</tr></thead><tbody>`;
+      (taskStatusDistData || []).forEach((s: any) => {
+        bodyHtml += `<tr>${td(s.name || '\u2014')}${td(s.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section('Priority Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Priority')}${th('Count')}</tr></thead><tbody>`;
+      (taskPriorityDistData || []).forEach((p: any) => {
+        bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section(`Task Details (${filteredTasks.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('ID')}${th('Title')}${th('Status')}${th('Priority')}${th('Assignee')}${th('Project')}${th('Due Date')}${th('Completed')}</tr></thead><tbody>`;
+      filteredTasks.forEach((t: any) => {
+        const assigneeNames = getTaskAssigneeIds(t).map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
+        const projName = roleFiltered.projects.find((p: any) => p.id === t.projectId)?.title || '\u2014';
+        bodyHtml += `<tr>${td(t.taskNumber || (t.id || '').slice(0, 8), '#64748b')}${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(assigneeNames)}${td(projName)}${td(t.dueDate ? t.dueDate.slice(0, 10) : '\u2014')}${td(t.completedAt ? t.completedAt.slice(0, 10) : '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else {
@@ -1479,14 +1517,15 @@ ${bodyHtml}
     emerald: 'p-1.5 rounded-lg bg-emerald-500/20',
     amber: 'p-1.5 rounded-lg bg-amber-500/20',
     magenta: 'p-1.5 rounded-lg bg-pink-500/20',
-    rose: 'p-1.5 rounded-lg bg-rose-500/20'
+    rose: 'p-1.5 rounded-lg bg-rose-500/20',
+    slate: 'p-1.5 rounded-lg bg-slate-500/20'
   };
 
   const renderKPICard = (
     label: string,
     value: string | number,
     icon: React.ReactNode,
-    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' = 'cyan',
+    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' | 'slate' = 'cyan',
     insight?: React.ReactNode
   ) => (
     <GlassCard glowColor={glow === 'rose' ? 'magenta' : glow} hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1734,7 +1773,7 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Total Projects', roleFiltered.projects.length, <FolderKanban size={14} className="text-cyan-400" />, 'cyan')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}</div>
-        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Avg Rate', roleFiltered.projects.length > 0 ? `${Math.round(roleFiltered.projects.reduce((s: number, p: any) => s + (p.progress || 0), 0) / roleFiltered.projects.length)}%` : '0%', <TrendingUp size={14} className="text-violet-400" />, 'violet')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Archived Projects', reportData?.overview?.archivedCount ?? 0, <History size={14} className="text-slate-400" />, 'slate')}</div>
       </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1788,8 +1827,7 @@ ${bodyHtml}
               <option value="">All Statuses</option>
               <option value="Active">Active</option>
               <option value="Completed">Completed</option>
-              <option value="On Hold">On Hold</option>
-              <option value="Cancelled">Cancelled</option>
+              <option value="Archived">Archived</option>
             </select>
             {(projectSearchTerm || projectFilterStatus) && (
               <button
@@ -1860,6 +1898,7 @@ ${bodyHtml}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                             healthLabel === 'On Track' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
                             healthLabel === 'At Risk' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                            healthLabel === 'Archived' ? 'text-slate-400 bg-slate-500/10 border-slate-500/20' :
                             'text-rose-400 bg-rose-500/10 border-rose-500/20'
                           }`}>{healthLabel}</span>
                         </td>
@@ -2286,6 +2325,7 @@ ${bodyHtml}
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={members.map((m: any) => ({
                       name: m.name,
+                      shortName: m.shortName,
                       rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
                     }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
@@ -2715,14 +2755,15 @@ ${bodyHtml}
                 <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={taskStatusDistData} cx="50%" cy="50%" outerRadius={70} dataKey="value" nameKey="name" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                        {taskStatusDistData.map((entry, idx) => (
-                          <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    </PieChart>
+                  <PieChart>
+                    <Pie data={taskStatusDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                      {taskStatusDistData.map((_entry: any, idx: number) => (
+                        <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} stroke={chartPieStroke} strokeWidth={2} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
+                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
+                  </PieChart>
                 </ResponsiveContainer>
               )}
             </div>
@@ -2737,17 +2778,15 @@ ${bodyHtml}
                 <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={taskPriorityDistData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {taskPriorityDistData.map((entry, idx) => (
-                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} />
+                  <PieChart>
+                    <Pie data={taskPriorityDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                      {taskPriorityDistData.map((_entry: any, idx: number) => (
+                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} stroke={chartPieStroke} strokeWidth={2} />
                       ))}
-                    </Bar>
-                  </BarChart>
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
+                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
+                  </PieChart>
                 </ResponsiveContainer>
               )}
             </div>
