@@ -7,15 +7,19 @@ import {
   Building, Eye,
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { downloadActivityCsv, downloadActivityPdf, fetchActivities } from './activityApi';
-import { ActivityFilters, ActivityItem, EMPTY_ACTIVITY_FILTERS } from './activityTypes';
+import { downloadActivityCsv, downloadActivityPdf, fetchActivities, fetchActivity } from './activityApi';
+import {
+  ActivityFilters,
+  ActivityItem,
+  DEFAULT_ACTIVITY_FILTERS,
+} from './activityTypes';
 import type { UserRole } from '../../types';
 
-const ALL_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Permissions', 'Authentication', 'Activity Log'];
-const ALL_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported'];
-const ENTITY_TYPES = ['Project', 'Task', 'Comment', 'User', 'Attendance Record', 'Approval', 'Permission'];
-const STATUSES = ['Todo', 'In Progress', 'Review', 'Done', 'Approved', 'Rejected'];
-const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+const ALL_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'HR', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Permissions', 'Authentication', 'Activity Log', 'Settings', 'System'];
+const ALL_ACTIONS = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported'];
+const ENTITY_TYPES = ['Project', 'Task', 'Comment', 'Thread', 'Message', 'User', 'Attendance Record', 'Approval', 'Permission', 'Audit Export'];
+const STATUSES = ['Todo', 'In Progress', 'Review', 'Pending Approval', 'Blocked', 'Done', 'Approved', 'Rejected', 'Archived'];
+const PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'];
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom', 'All'];
 const ATTENDANCE_ACTIONS = ['Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected'];
 const REQUEST_STATUSES = ['Approved', 'Rejected', 'Pending'];
@@ -30,9 +34,13 @@ interface Props { onNavigate?: (tab: string, id?: string) => void }
 
 export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const { users, projects, tasks, currentRole, currentUser } = useApp();
-  const [filters, setFilters] = useState<ActivityFilters>({ ...EMPTY_ACTIVITY_FILTERS });
+  const [filters, setFilters] = useState<ActivityFilters>({ ...DEFAULT_ACTIVITY_FILTERS });
+  const [searchInput, setSearchInput] = useState('');
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [selected, setSelected] = useState<ActivityItem | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -92,10 +100,12 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       roleRef.current = currentRole;
       setItems([]);
       setSelected(null);
+      setDetailError('');
+      setSearchInput('');
       setPage(1);
       setTotal(0);
-      setTotalPages(0);
-      setFilters({ ...EMPTY_ACTIVITY_FILTERS });
+      setTotalPages(1);
+      setFilters({ ...DEFAULT_ACTIVITY_FILTERS });
       setHrViewTab('my-work');
     }
   }, [currentRole]);
@@ -103,36 +113,87 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const activeFiltersForRole = useMemo((): ActivityFilters => {
     let f = { ...filters };
     if (isHR && hrViewTab === 'hr') {
-      f = { ...f, module: 'Attendance' };
+      f = { ...f, module: '', myActivityOnly: false, hrActivityOnly: true };
     }
     if (isHR && hrViewTab === 'my-work') {
-      f = { ...f, myActivityOnly: true };
+      f = { ...f, myActivityOnly: true, hrActivityOnly: false };
     }
     return f;
   }, [filters, isHR, hrViewTab]);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setFilters((current) => current.search === searchInput ? current : { ...current, search: searchInput });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError('');
     try {
-      const result = await fetchActivities(activeFiltersForRole, page);
+      const result = await fetchActivities(activeFiltersForRole, page, 20, signal);
+      if (signal?.aborted) return;
       setItems(result.items);
       setTotal(result.total);
       setTotalPages(result.totalPages);
     } catch (reason) {
+      if (signal?.aborted || (reason instanceof Error && reason.name === 'AbortError')) return;
       setError(reason instanceof Error ? reason.message : 'Could not load activity.');
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [activeFiltersForRole, page, refreshKey]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
   useEffect(() => { setPage(1); }, [activeFiltersForRole]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const controller = new AbortController();
+    setDetailLoading(true);
+    setDetailError('');
+
+    fetchActivity(selected.id, controller.signal)
+      .then((item) => {
+        if (!controller.signal.aborted) setSelected(item);
+      })
+      .catch((reason) => {
+        if (controller.signal.aborted || (reason instanceof Error && reason.name === 'AbortError')) return;
+        setDetailError(reason instanceof Error ? reason.message : 'Could not load activity details.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDetailLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [selected?.id, detailRefreshKey]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelected(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [selected]);
 
   const activeChips = useMemo(() => {
     const chips: Array<{ key: keyof ActivityFilters; label: string }> = [];
-    if (filters.datePreset !== 'All') chips.push({ key: 'datePreset', label: filters.datePreset });
+    if (filters.datePreset !== 'All') {
+      const customRange = [filters.customFrom, filters.customTo].filter(Boolean).join(' → ');
+      chips.push({
+        key: 'datePreset',
+        label: filters.datePreset === 'Custom' && customRange ? `Custom: ${customRange}` : filters.datePreset,
+      });
+    }
     const labels: Array<[keyof ActivityFilters, string]> = [
+      ['search', filters.search ? `Search: ${filters.search}` : ''],
       ['userId', users.find((u) => u.id === filters.userId)?.name || ''],
       ['userRole', filters.userRole],
       ['projectId', accessibleProjects.find((p) => p.id === filters.projectId)?.title || ''],
@@ -144,17 +205,49 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       ['priority', filters.priority],
       ['result', filters.result],
       ['source', filters.source],
+      ['changedField', filters.changedField ? `Changed: ${filters.changedField}` : ''],
     ];
     labels.forEach(([key, label]) => { if (label) chips.push({ key, label }); });
     if (filters.myActivityOnly) chips.push({ key: 'myActivityOnly', label: 'My activity' });
     if (filters.importantOnly) chips.push({ key: 'importantOnly', label: 'Important only' });
+    if (filters.hasAttachments) chips.push({ key: 'hasAttachments', label: 'Has attachments' });
+    if (filters.hasMentions) chips.push({ key: 'hasMentions', label: 'Has mentions' });
+    if (filters.deletedOnly) chips.push({ key: 'deletedOnly', label: 'Deleted or archived' });
+    if (filters.failedOrBlockedOnly) chips.push({ key: 'failedOrBlockedOnly', label: 'Failed or blocked' });
     return chips;
   }, [filters, users, accessibleProjects, accessibleTasks]);
 
-  const clearChip = (key: keyof ActivityFilters) => setFilters((previous) => ({
-    ...previous,
-    [key]: key === 'datePreset' ? 'All' : typeof previous[key] === 'boolean' ? false : ''
-  }));
+  const clearChip = (key: keyof ActivityFilters) => {
+    if (key === 'search') setSearchInput('');
+    setFilters((previous) => {
+      if (key === 'datePreset') {
+        return { ...previous, datePreset: 'All', customFrom: '', customTo: '' };
+      }
+      return {
+        ...previous,
+        [key]: typeof previous[key] === 'boolean' ? false : '',
+      };
+    });
+  };
+
+  const clearAllFilters = () => {
+    setSearchInput('');
+    setFilters({ ...DEFAULT_ACTIVITY_FILTERS });
+    setPage(1);
+  };
+
+  const changeHrViewTab = (tab: 'my-work' | 'hr') => {
+    setHrViewTab(tab);
+    setFilters((current) => ({
+      ...current,
+      module: '',
+      action: '',
+      status: '',
+      myActivityOnly: false,
+      hrActivityOnly: false,
+    }));
+    setPage(1);
+  };
 
   const handleExport = async (format: 'csv' | 'pdf') => {
     setExporting(format);
@@ -232,8 +325,8 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
         <div className="flex items-center gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-2">
           <Eye size={14} className="text-cyan-400 shrink-0" />
           <p className="text-xs text-cyan-200">
-            Showing activity for projects you currently lead.{' '}
-            <span className="text-slate-400">({ledProjects.length} project{ledProjects.length > 1 ? 's' : ''})</span>
+            Showing your activity and authorized project or team events, including{' '}
+            <span className="text-slate-400">{ledProjects.length} project{ledProjects.length > 1 ? 's' : ''} you lead.</span>
           </p>
         </div>
       )}
@@ -246,7 +339,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
             return (
               <button
                 key={tab.id}
-                onClick={() => setHrViewTab(tab.id)}
+                onClick={() => changeHrViewTab(tab.id)}
                 className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   active
                     ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
@@ -277,6 +370,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           isAdmin={isAdmin}
           hrViewTab={hrViewTab}
           onClose={() => setFiltersOpen(false)}
+          onClear={clearAllFilters}
         />
 
         <div className="glass-panel flex min-w-0 flex-1 flex-col overflow-hidden border border-white/10">
@@ -285,8 +379,8 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
               <div className="relative min-w-0 flex-1">
                 <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
-                  value={filters.search}
-                  onChange={(event) => setFilters((f) => ({ ...f, search: event.target.value }))}
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
                   placeholder="Search actor, project, task, description, ID, field or text..."
                   className="w-full rounded-xl border border-white/10 bg-slate-950/50 py-2.5 pl-9 pr-3 text-xs text-slate-200 outline-none focus:border-cyan-500/40"
                 />
@@ -312,7 +406,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
                   </button>
                 ))}
                 <button
-                  onClick={() => setFilters({ ...EMPTY_ACTIVITY_FILTERS })}
+                  onClick={clearAllFilters}
                   className="shrink-0 px-2 text-[10px] font-semibold text-rose-300"
                 >
                   Clear all
@@ -331,7 +425,14 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
             ) : (
               <div className="divide-y divide-white/5">
                 {items.map((item) => (
-                  <ActivityRow key={item.id} item={item} onClick={() => setSelected(item)} />
+                  <ActivityRow
+                    key={item.id}
+                    item={item}
+                    onClick={() => {
+                      setDetailError('');
+                      setSelected(item);
+                    }}
+                  />
                 ))}
               </div>
             )}
@@ -363,7 +464,14 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       </div>
       <AnimatePresence>
         {selected && (
-          <ActivityDetail item={selected} onClose={() => setSelected(null)} onNavigate={onNavigate} />
+          <ActivityDetail
+            item={selected}
+            loading={detailLoading}
+            error={detailError}
+            onRetry={() => setDetailRefreshKey((key) => key + 1)}
+            onClose={() => setSelected(null)}
+            onNavigate={onNavigate}
+          />
         )}
       </AnimatePresence>
     </section>
@@ -385,11 +493,12 @@ interface FilterPanelProps {
   isAdmin: boolean;
   hrViewTab: 'my-work' | 'hr';
   onClose: () => void;
+  onClear: () => void;
 }
 
 const FilterPanel: React.FC<FilterPanelProps> = ({
   open, filters, setFilters, currentRole, currentUserId, users, projects,
-  tasks, ledProjects, isTeamLead, isHR, isAdmin, hrViewTab, onClose,
+  tasks, ledProjects, isTeamLead, isHR, isAdmin, hrViewTab, onClose, onClear,
 }) => {
   const update = (key: keyof ActivityFilters, value: string | boolean) =>
     setFilters((current) => ({ ...current, [key]: value }));
@@ -407,7 +516,13 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         <button onClick={onClose} className="lg:hidden"><X size={17} /></button>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        <FilterSelect label="Date range" value={filters.datePreset} onChange={(v) => update('datePreset', v)} options={DATE_PRESETS} />
+        <FilterSelect
+          label="Date range"
+          value={filters.datePreset}
+          onChange={(value) => update('datePreset', value)}
+          options={DATE_PRESETS}
+          includeNoneOption={false}
+        />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
             <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} />
@@ -460,11 +575,11 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           <FilterSelect label="Request status" value={filters.status} onChange={(v) => update('status', v)} options={REQUEST_STATUSES} />
         )}
 
-        {!isHR && (
+        {(!isHR || hrViewTab === 'my-work') && (
           <FilterSelect label="Module" value={filters.module} onChange={(v) => update('module', v)} options={ALL_MODULES} />
         )}
 
-        {!isHR && (
+        {(!isHR || hrViewTab === 'my-work') && (
           <FilterSelect label="Action type" value={filters.action} onChange={(v) => update('action', v)} options={ALL_ACTIONS} />
         )}
 
@@ -493,10 +608,26 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         {isAdmin && (
           <Toggle checked={filters.importantOnly} onChange={(v) => update('importantOnly', v)} label="Important activity only" />
         )}
+
+        <div className="border-t border-white/5 pt-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Advanced filters</p>
+          <div className="space-y-2">
+            <FilterInput
+              type="text"
+              label="Changed field"
+              value={filters.changedField}
+              onChange={(value) => update('changedField', value)}
+            />
+            <Toggle checked={filters.hasAttachments} onChange={(v) => update('hasAttachments', v)} label="Has attachments" />
+            <Toggle checked={filters.hasMentions} onChange={(v) => update('hasMentions', v)} label="Has mentions" />
+            <Toggle checked={filters.deletedOnly} onChange={(v) => update('deletedOnly', v)} label="Deleted or archived only" />
+            <Toggle checked={filters.failedOrBlockedOnly} onChange={(v) => update('failedOrBlockedOnly', v)} label="Failed or blocked only" />
+          </div>
+        </div>
       </div>
       <div className="shrink-0 border-t border-white/10 p-3">
         <button
-          onClick={() => setFilters({ ...EMPTY_ACTIVITY_FILTERS })}
+          onClick={onClear}
           className="w-full rounded-lg border border-rose-500/20 py-2 text-xs font-semibold text-rose-300"
         >
           Clear all filters
@@ -511,7 +642,8 @@ const FilterSelect: React.FC<{
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string } | string>;
-}> = ({ label, value, onChange, options }) => (
+  includeNoneOption?: boolean;
+}> = ({ label, value, onChange, options, includeNoneOption = true }) => (
   <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
     {label}
     <select
@@ -519,7 +651,7 @@ const FilterSelect: React.FC<{
       onChange={(e) => onChange(e.target.value)}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none"
     >
-      <option value="">All</option>
+      {includeNoneOption && <option value="">None</option>}
       {options.map((option) => {
         const optValue = typeof option === 'string' ? option : option.value;
         const optLabel = typeof option === 'string' ? option.replaceAll('_', ' ') : option.label;
@@ -615,9 +747,12 @@ const ActivityRow: React.FC<{ item: ActivityItem; onClick: () => void }> = ({ it
 
 const ActivityDetail: React.FC<{
   item: ActivityItem;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
   onClose: () => void;
   onNavigate?: Props['onNavigate'];
-}> = ({ item, onClose, onNavigate }) => (
+}> = ({ item, loading, error, onRetry, onClose, onNavigate }) => (
   <motion.div
     initial={{ opacity: 0 }}
     animate={{ opacity: 1 }}
@@ -650,6 +785,22 @@ const ActivityDetail: React.FC<{
         </button>
       </header>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+        {loading && (
+          <div className="flex items-center gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-200" role="status">
+            <RefreshCw size={14} className="animate-spin" /> Verifying the latest event details...
+          </div>
+        )}
+        {error && (
+          <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3 text-xs text-rose-200">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <p>{error}</p>
+            </div>
+            <button onClick={onRetry} className="mt-2 font-semibold text-cyan-300 hover:underline">
+              Retry detail request
+            </button>
+          </div>
+        )}
         <section>
           <p className="text-sm leading-6 text-slate-200">{item.description}</p>
           {item.reason && (

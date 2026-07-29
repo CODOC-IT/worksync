@@ -104,11 +104,13 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
     }
 
     const activeTemporaryRoles = Array.from(roleMap.values());
-    const isActiveTeamLead = activeTemporaryRoles.some((r) => r.roleCode === 'Team_Lead');
-    const isActiveHR = activeTemporaryRoles.some((r) => r.roleCode === 'HR');
+    const isActiveTeamLead = permanentRole === 'Team_Lead'
+      || activeTemporaryRoles.some((role) => role.roleCode === 'Team_Lead');
+    const isActiveHR = permanentRole === 'HR'
+      || activeTemporaryRoles.some((role) => role.roleCode === 'HR');
 
     const leadProjectPks = Array.from(
-      new Set(activeTemporaryRoles.flatMap((r) => r.leadProjectPks))
+      new Set(activeTemporaryRoles.flatMap((role) => role.leadProjectPks))
     );
 
     return { permanentRole, activeTemporaryRoles, isActiveTeamLead, isActiveHR, leadProjectPks };
@@ -121,22 +123,4 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
       leadProjectPks: [],
     };
   }
-};
-
-export const hasAccessToSensitivity = (
-  viewerPermanentRole: string,
-  _isActiveTeamLead: boolean,
-  _isActiveHR: boolean,
-  viewerId: string,
-  sensitivity?: string
-): boolean => {
-  if (viewerPermanentRole === 'Admin') return true;
-  if (!sensitivity || sensitivity === 'Normal') return true;
-  if (sensitivity === 'Sensitive') {
-    return viewerPermanentRole === 'Admin';
-  }
-  if (sensitivity === 'Restricted') {
-    return false;
-  }
-  return true;
 };
