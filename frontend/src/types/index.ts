@@ -56,6 +56,7 @@ export interface Project {
   pinnedMessagesCount?: number;
   tags: string[];
   creationReason?: string;
+  createdAt?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';

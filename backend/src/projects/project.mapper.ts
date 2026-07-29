@@ -1,5 +1,5 @@
 import { fromProjectPk, fromUserPk } from '../utils/idMapping.js';
-import { ProjectMemberRow, ProjectRow, DB_TO_API_PRIORITY, DB_TO_API_PROJECT_STATUS, ProjectDTO } from './project.types.js';
+import { MilestoneRow, ProjectFileRow, ProjectMemberRow, ProjectRow, DB_TO_API_PRIORITY, DB_TO_API_PROJECT_STATUS, ProjectDTO } from './project.types.js';
 
 const formatDate = (value: string | Date): string =>
   typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
@@ -23,7 +23,9 @@ export const resolveTeamLeadUserId = (row: ProjectRow, members: ProjectMemberRow
 export const rowToProjectDTO = (
   row: ProjectRow,
   members: ProjectMemberRow[],
-  progress: number
+  progress: number,
+  milestones?: MilestoneRow[],
+  files?: ProjectFileRow[]
 ): ProjectDTO => {
   const isPendingActivation = row.statuscode === 'PendingActivation';
 
@@ -55,6 +57,25 @@ export const rowToProjectDTO = (
     priority: DB_TO_API_PRIORITY[row.prioritycode],
     progress,
     tags: [],
-    creationReason: row.creationreason || undefined
+    creationReason: row.creationreason || undefined,
+    createdAt: formatDate(row.createdatutc),
+    milestones: (milestones || []).map((m) => ({
+      id: String(m.milestoneid),
+      title: m.milestonename,
+      description: m.description,
+      dueDate: m.duedate.slice(0, 10),
+      completed: m.completedatutc !== null,
+      completedAt: m.completedatutc ? m.completedatutc.toISOString() : null,
+      createdBy: fromUserPk(m.createdbyuserid),
+      createdAt: m.createdatutc.toISOString()
+    })),
+    files: (files || []).map((f) => ({
+      id: String(f.fileid),
+      name: f.originalfilename,
+      size: Number(f.sizebytes),
+      mimeType: f.mimetype,
+      uploadedBy: fromUserPk(f.uploadedbyuserid),
+      uploadedAt: f.uploadedatutc.toISOString()
+    }))
   };
 };
