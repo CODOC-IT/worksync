@@ -233,7 +233,14 @@ export interface SystemApproval {
   proposedTaskUpdate?: {
     title: string;
     description: string;
-    priority: TaskPriority | 'Critical';
+    priority: TaskPriority;
+    startDate: string;
+    dueDate: string;
+  };
+  previousTaskSnapshot?: {
+    title: string;
+    description: string;
+    priority: TaskPriority;
     startDate: string;
     dueDate: string;
   };

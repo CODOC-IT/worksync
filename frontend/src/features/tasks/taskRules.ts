@@ -15,13 +15,13 @@ export const TASK_STATUSES: TaskStatus[] = [
   'Done'
 ];
 
-export type TaskModulePriority = Exclude<TaskPriority, 'Urgent'> | 'Critical';
+export type TaskModulePriority = TaskPriority;
 
 export const TASK_PRIORITIES: TaskModulePriority[] = [
   'Low',
   'Medium',
   'High',
-  'Critical'
+  'Urgent'
 ];
 
 export interface TaskFormInput {
@@ -82,11 +82,9 @@ export const getTaskAssigneeIds = (task: Task): string[] =>
 export const getTaskStartDate = (task: Task): string =>
   (task as TaskModuleTask).startDate || task.createdAt;
 
-export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority =>
-  priority === 'Urgent' ? 'Critical' : priority;
+export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority => priority;
 
-export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority =>
-  priority === 'Critical' ? 'Urgent' : priority;
+export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority => priority;
 
 export const getProjectName = (project: Project): string =>
   (project as CompatibleProject).name || project.title;
