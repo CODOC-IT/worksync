@@ -183,6 +183,11 @@ export const approveTaskViaApi = (taskId: string, note: string): Promise<Task> =
 export const rejectTaskViaApi = (taskId: string, note: string): Promise<Task> =>
   patchTaskStatus(taskId, '/reject', { note });
 
+// Team-Lead-only route out of Done. Sends `reason` (not `note`) to match the endpoint's own
+// contract — see backend/src/tasks/task.validation.ts's validateReopenBody for why they differ.
+export const reopenTaskViaApi = (taskId: string, status: TaskStatus, reason: string): Promise<Task> =>
+  patchTaskStatus(taskId, '/reopen', { status, reason });
+
 export const fetchTaskHistoryViaApi = async (taskId: string): Promise<TaskStatusHistoryEntry[]> => {
   const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/history`, {
     headers: authHeaders()
