@@ -35,6 +35,15 @@ const buildDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<P
   return rowToProjectDTO(row, members, progress);
 };
 
+const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<ProjectDTO> => {
+  const [progress, milestones, files] = await Promise.all([
+    repo.getProjectProgress(row.projectid),
+    repo.findMilestonesForProject(row.projectid),
+    repo.findProjectFiles(row.projectid)
+  ]);
+  return rowToProjectDTO(row, members, progress, milestones, files);
+};
+
 const assertCanCreate = (role: string) => {
   if (role !== 'Admin' && role !== 'Team_Lead') {
     throw new ProjectAuthorizationError('Only Admins and Team Leads can create projects.');
@@ -62,7 +71,7 @@ const notifyRecipients = (
   );
   if (recipientIds.length === 0) return;
   notificationService.publishEvent({ ...event, recipientIds }).catch((error) => {
-    console.warn('[project.service] Failed to publish notification event.', error);
+    console.error('[project.service] Failed to publish notification event.', event.type, error);
   });
 };
 
@@ -109,7 +118,33 @@ export const getProjectForUser = async (projectId: string, userId: string, role:
     throw new ProjectAuthorizationError('You do not have access to this project.');
   }
 
-  return buildDTO(row, members);
+  return buildDetailDTO(row, members);
+};
+
+export const getProjectMemberDirectoryForUser = async (
+  projectId: string,
+  userId: string,
+  role: string
+) => {
+  const project = await getProjectForUser(projectId, userId, role);
+  const members = project.memberIds
+    .map((memberId) => userStore.findById(memberId))
+    .filter((member): member is NonNullable<typeof member> => Boolean(member))
+    .map((member) => ({
+      id: member.id,
+      name: member.name,
+      role: member.role,
+      department: member.department,
+      avatar: member.avatar,
+      title: member.title,
+      status: member.status
+    }));
+
+  return {
+    teamLeadId: project.teamLeadId,
+    memberIds: project.memberIds,
+    members
+  };
 };
 
 export const createProject = async (
@@ -173,19 +208,19 @@ export const createProject = async (
       actorId,
       projectId: dto.id
     });
-    notificationService
-      .publishEvent({
+    (async () => {
+      const admins = (await userStore.getAllUsers()).filter(
+        (user) => user.role === 'Admin' && user.id !== actorId
+      );
+      await notificationService.publishEvent({
         type: 'approval',
         title: 'Project Activation Requested',
         message: `${actorName} submitted "${dto.title}" for activation.`,
         actorId,
         projectId: dto.id,
-        recipientIds: userStore
-          .getAllUsers()
-          .filter((user) => user.role === 'Admin' && user.id !== actorId)
-          .map((user) => user.id)
-      })
-      .catch((error) => console.warn('[project.service] Failed to publish approval-request event.', error));
+        recipientIds: admins.map((user) => user.id)
+      });
+    })().catch((error) => console.error('[project.service] Failed to publish approval-request event.', error));
   }
 
   recordActivitySafe({
@@ -330,7 +365,7 @@ export const addMember = async (
       projectId: dto.id,
       recipientIds: [memberUserId]
     })
-    .catch((error) => console.warn('[project.service] Failed to publish member-added event.', error));
+    .catch((error) => console.error('[project.service] Failed to publish member-added event.', error));
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -376,7 +411,7 @@ export const removeMember = async (
       projectId: dto.id,
       recipientIds: [memberUserId]
     })
-    .catch((error) => console.warn('[project.service] Failed to publish member-removed event.', error));
+    .catch((error) => console.error('[project.service] Failed to publish member-removed event.', error));
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,

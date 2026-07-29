@@ -4,10 +4,14 @@ import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
 import {
+  NotificationCategory,
   NotificationDTO,
   NotificationEvent,
   NotificationListQuery,
-  NotificationPreferencesDTO
+  NotificationPreferencesDTO,
+  UserAnalyticsListQuery,
+  UserNotificationAnalyticsDTO,
+  UserNotificationCategoryBreakdownDTO
 } from './notification.types.js';
 
 export interface NotificationAnalyticsDTO {
@@ -90,10 +94,19 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
   }
 
   const priority = event.priority ?? typeMeta.defaultPriority;
-  const recipientPks = Array.from(new Set(event.recipientIds.map(toUserPk)));
+  const requestedPks = Array.from(new Set(event.recipientIds.map(toUserPk)));
+
+  // Drop recipients who could never read the notification anyway (locked service accounts,
+  // deactivated/pending users) before anything is written — see filterDeliverableRecipients.
+  const deliverablePks = new Set(await repo.filterDeliverableRecipients(requestedPks));
+  const recipientIds = Array.from(new Set(event.recipientIds)).filter((id) =>
+    deliverablePks.has(toUserPk(id))
+  );
+  if (recipientIds.length === 0) return [];
+  event = { ...event, recipientIds };
 
   const suppressedUserIds = new Set<number>();
-  for (const recipientPk of recipientPks) {
+  for (const recipientPk of deliverablePks) {
     if (await isSuppressedForRecipient(recipientPk, event.type)) {
       suppressedUserIds.add(recipientPk);
     }
@@ -198,6 +211,48 @@ export const getDeliveryAnalytics = async (): Promise<NotificationAnalyticsDTO[]
   }));
 };
 
+// Admin per-user analytics — who saw which notification, what they're actually reading
+// ("interest" = the category they read the most of), and their personal read percentage.
+// Two queries (list + top-category) rather than one combined window-function query, matching
+// this file's existing preference for readable, separately-testable repository calls.
+export const getUserAnalytics = async (
+  filters: UserAnalyticsListQuery = {}
+): Promise<{ items: UserNotificationAnalyticsDTO[]; total: number }> => {
+  const { rows, total } = await repo.getUserAnalyticsList(filters);
+  if (rows.length === 0) return { items: [], total };
+
+  const topCategories = await repo.getTopCategoriesForUsers(rows.map((row) => row.userid));
+  const topCategoryByUser = new Map(topCategories.map((row) => [row.userid, row.categorycode]));
+
+  const items = rows.map((row) => ({
+    userId: fromUserPk(row.userid),
+    name: row.displayname,
+    email: row.email,
+    totalReceived: row.total,
+    totalDelivered: row.delivered,
+    totalRead: row.read,
+    readRate: row.delivered > 0 ? Math.round((row.read / row.delivered) * 1000) / 10 : 0,
+    topInterest: (topCategoryByUser.get(row.userid) as NotificationCategory) ?? null,
+    lastNotifiedAt: row.lastnotifiedatutc,
+    lastReadAt: row.lastreadatutc
+  }));
+
+  return { items, total };
+};
+
+export const getUserAnalyticsDetail = async (
+  userId: string
+): Promise<UserNotificationCategoryBreakdownDTO[]> => {
+  const rows = await repo.getUserAnalyticsDetail(toUserPk(userId));
+  return rows.map((row) => ({
+    category: row.categorycode as NotificationCategory,
+    type: row.typecode as UserNotificationCategoryBreakdownDTO['type'],
+    total: row.total,
+    read: row.read,
+    readRate: row.total > 0 ? Math.round((row.read / row.total) * 1000) / 10 : 0
+  }));
+};
+
 export const getNotificationsForUser = async (
   userId: string,
   filters: NotificationListQuery = {}
@@ -242,7 +297,7 @@ export const getPreferences = async (userId: string): Promise<NotificationPrefer
     mentions: byType.get(REPRESENTATIVE_TYPE_CODES.mentions)?.inAppEnabled ?? true,
     comments: byType.get(REPRESENTATIVE_TYPE_CODES.comments)?.inAppEnabled ?? true,
     assignments: byType.get(REPRESENTATIVE_TYPE_CODES.assignments)?.inAppEnabled ?? true,
-    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? false
+    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? true
   };
 };
 

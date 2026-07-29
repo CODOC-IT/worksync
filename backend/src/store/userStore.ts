@@ -2,10 +2,8 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
-import { isDatabaseConfigured, query } from '../db/pool.js';
+import { isDatabaseConfigured, query, withTransaction } from '../db/pool.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
-
-const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('password123', 10);
 
 const ROLE_TO_DB: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -28,13 +26,38 @@ const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
   Deactivated: 'inactive'
 };
 
+// The GrantedByUserId for every self-service registration's initial role grant. Never a real
+// registrant's own id (it's a fixed, permanently-Locked row seeded once by
+// database/23_system_actor_bootstrap.sql, before any real user can occupy it) -- so unlike a
+// hardcoded numeric id, this can never coincide with the very user being granted the role and
+// trip iam.UserRoles' CK_UserRoles_NoSelfGrant check.
+const SYSTEM_ACTOR_EMAIL = 'system@worksync.internal';
+let systemActorUserIdCache: number | null = null;
+
+const getSystemActorUserId = async (): Promise<number> => {
+  if (systemActorUserIdCache !== null) return systemActorUserIdCache;
+  const result = await query<{ userid: number }>(
+    'SELECT userid FROM iam.users WHERE organizationid = 1 AND email = $1',
+    [SYSTEM_ACTOR_EMAIL]
+  );
+  if (!result.rows[0]) {
+    throw new Error(
+      'System actor user not found -- run database/23_system_actor_bootstrap.sql (included in setup.sql) before registering users.'
+    );
+  }
+  systemActorUserIdCache = result.rows[0].userid;
+  return systemActorUserIdCache;
+};
+
 const USER_QUERY = `
   SELECT u.userid, u.email, u.displayname, u.designation,
          u.accountstatus, u.createdatutc,
          r.rolecode, d.departmentname,
          uc.passwordhash, uc.passwordalgorithm
   FROM iam.users u
-  LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
+  LEFT JOIN iam.userroles ur ON ur.userid = u.userid
+    AND ur.revokedatutc IS NULL
+    AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
   LEFT JOIN iam.roles r ON r.roleid = ur.roleid
   LEFT JOIN org.departments d ON d.departmentid = u.departmentid
   LEFT JOIN iam.usercredentials uc ON uc.userid = u.userid
@@ -58,7 +81,8 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     id: fromUserPk(row.userid),
     name: row.displayname,
     email: row.email,
-    passwordHash: row.passwordhash ? row.passwordhash.toString('utf-8') : DEFAULT_PASSWORD_HASH,
+    // Accounts without a credential must never receive an application fallback password.
+    passwordHash: row.passwordhash?.toString('utf-8') || '',
     role: row.rolecode ? (DB_TO_ROLE[row.rolecode] || 'Team_Member') : 'Team_Member',
     department: row.departmentname || 'Engineering',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -75,7 +99,14 @@ class UserStore {
   private dbLoadStarted = false;
 
   constructor() {
-    this.initFileStore();
+    if (this.isLegacyFileAuthEnabled()) {
+      this.initFileStore();
+    }
+  }
+
+  private isLegacyFileAuthEnabled(): boolean {
+    return process.env.NODE_ENV !== 'production'
+      && process.env.ENABLE_LEGACY_FILE_AUTH === 'true';
   }
 
   private async ensureInit(): Promise<void> {
@@ -89,46 +120,19 @@ class UserStore {
         const result = await query<DbUserRow>(
           USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
         );
+        this.dbAvailable = true;
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
+        this.fallbackUsers.clear();
+        for (const row of result.rows) {
+          const user = rowToUserRecord(row);
+          this.fallbackUsers.set(user.email.toLowerCase(), user);
+        }
         if (result.rows.length > 0) {
-          this.dbAvailable = true;
-          for (const row of result.rows) {
-            const user = rowToUserRecord(row);
-            this.fallbackUsers.set(user.email.toLowerCase(), user);
-          }
           console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
-        } else {
-          this.dbAvailable = true;
         }
 
-        // Sync file store users into DB so foreign keys (FK_Projects_OwnerOrganization etc.)
-        // resolve. File store users with id="usr-N" are backfilled if they don't exist yet.
-        if (this.dbAvailable) {
-          const PG_INT_MAX = 2147483647;
-          for (const [email, user] of this.fallbackUsers) {
-            const uid = parseInt(user.id.replace('usr-', ''), 10);
-            if (isNaN(uid) || uid > PG_INT_MAX) {
-              console.warn(`[UserStore] Skipping backfill for ${email}: ID ${user.id} exceeds PostgreSQL INT range.`);
-              continue;
-            }
-            try {
-              await query(
-                `INSERT INTO iam.users (userid, organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-                 VALUES ($1, 1, $2, $3, $4, $5, $6, 'Active')
-                 ON CONFLICT (userid) DO NOTHING`,
-                [
-                  uid,
-                  user.email.toLowerCase(),
-                  user.name.split(' ')[0] || user.name,
-                  user.name.split(' ').slice(1).join(' ') || user.name,
-                  user.name,
-                  user.title
-                ]
-              );
-            } catch {
-              // User may already exist with different id — skip
-            }
-          }
-        }
+        await this.alignDatabaseUserSequence();
 
         return;
       } catch (err: any) {
@@ -137,75 +141,54 @@ class UserStore {
     }
   }
 
-  private initFileStore(): void {
-    const DATA_ROOT = process.env.VERCEL === '1'
-      ? '/tmp/database'
-      : path.resolve(process.cwd(), 'database');
-    const DB_FILE_PATH = path.resolve(DATA_ROOT, 'users_db.json');
-
-    const INITIAL_USERS: UserRecord[] = [
-      {
-        id: 'usr-1', name: 'Fazal Khan', email: 'fazal.k@codoc.com',
-        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Admin',
-        department: 'Executive Operations', avatar: '/assets/images/fazal.png',
-        title: 'Managing Director & Operations Oversight', status: 'active',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'usr-2', name: 'Adolf', email: 'adolf.h@codoc.com',
-        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Team_Lead',
-        department: 'IT', avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-        title: 'Lead Software Architect', status: 'active',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'usr-3', name: 'Maryam', email: 'maryam@codoc.com',
-        passwordHash: DEFAULT_PASSWORD_HASH, role: 'HR',
-        department: 'Human Resources & People Ops', avatar: '/assets/images/maryam.png',
-        title: 'Head of People Operations', status: 'active',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'usr-4', name: 'Salman Ahmed', email: 'salman.c@codoc.com',
-        passwordHash: DEFAULT_PASSWORD_HASH, role: 'Team_Member',
-        department: 'Engineering', avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=150&auto=format&fit=crop&q=80',
-        title: 'Senior Frontend Engineer', status: 'active',
-        createdAt: new Date().toISOString()
-      }
-    ];
+  private async alignDatabaseUserSequence(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return;
 
     try {
-      const dbDir = path.dirname(DB_FILE_PATH);
-      if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-
-      if (fs.existsSync(DB_FILE_PATH)) {
-        const parsedUsers: UserRecord[] = JSON.parse(fs.readFileSync(DB_FILE_PATH, 'utf-8'));
-        for (const user of parsedUsers) {
-          this.fallbackUsers.set(user.email.toLowerCase(), user);
-        }
-        for (const user of INITIAL_USERS) {
-          if (!this.fallbackUsers.has(user.email.toLowerCase())) {
-            this.fallbackUsers.set(user.email.toLowerCase(), user);
-          }
-        }
-        this.persistFile(DB_FILE_PATH);
-        console.log(`[UserStore] Loaded ${this.fallbackUsers.size} users from file ✓`);
-      } else {
-        for (const user of INITIAL_USERS) {
-          this.fallbackUsers.set(user.email.toLowerCase(), user);
-        }
-        this.persistFile(DB_FILE_PATH);
-        console.log(`[UserStore] Initialized file store with seed users ✓`);
-      }
+      // Imports and seed scripts can insert explicit IDs without advancing the
+      // serial sequence. Align it before accepting a registration so the next
+      // INSERT receives an unused primary key.
+      await query(`
+        SELECT setval(
+          'iam.users_userid_seq',
+          COALESCE(MAX(userid), 1),
+          MAX(userid) IS NOT NULL
+        )
+        FROM iam.users
+      `);
     } catch (err: any) {
-      console.error(`[UserStore] File store error: ${err.message}. Using in-memory seed.`);
-      for (const user of INITIAL_USERS) {
+      // Report an environment/schema mismatch without preventing the current
+      // user list from loading.
+      console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
+    }
+  }
+
+  private initFileStore(): void {
+    const dataRoot = process.env.VERCEL === '1'
+      ? '/tmp/database'
+      : path.resolve(process.cwd(), 'database');
+    const filePath = path.resolve(dataRoot, 'users_db.json');
+
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.warn('[UserStore] Legacy file authentication enabled, but no user file exists.');
+        return;
+      }
+
+      const parsedUsers: UserRecord[] = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      for (const user of parsedUsers) {
         this.fallbackUsers.set(user.email.toLowerCase(), user);
       }
+      console.warn(`[UserStore] Legacy file authentication enabled for ${this.fallbackUsers.size} users.`);
+    } catch (err: any) {
+      this.fallbackUsers.clear();
+      console.error(`[UserStore] Legacy user file could not be loaded: ${err.message}`);
     }
   }
 
   private persistFile(filePath: string): void {
+    if (!this.isLegacyFileAuthEnabled()) return;
+
     try {
       fs.writeFileSync(filePath, JSON.stringify(Array.from(this.fallbackUsers.values()), null, 2), 'utf-8');
     } catch (err: any) {
@@ -240,26 +223,16 @@ class UserStore {
       );
       if (result.rows[0]) {
         const dbUser = rowToUserRecord(result.rows[0]);
-        const existing = this.fallbackUsers.get(dbUser.email.toLowerCase());
-
-        // Merge: prefer DB for identity, file store for credentials/roles when DB is incomplete
-        const merged: UserRecord = {
-          ...dbUser,
-          passwordHash: dbUser.passwordHash !== DEFAULT_PASSWORD_HASH
-            ? dbUser.passwordHash
-            : (existing?.passwordHash || DEFAULT_PASSWORD_HASH),
-          role: dbUser.role !== 'Team_Member' || !existing
-            ? dbUser.role
-            : existing.role
-        };
-
-        this.fallbackUsers.set(merged.email.toLowerCase(), merged);
-        return merged;
+        // Database identity, credentials, and roles are authoritative. Never fill missing
+        // credentials or elevated roles from the legacy local file.
+        this.fallbackUsers.set(dbUser.email.toLowerCase(), dbUser);
+        return dbUser;
       }
     } catch (err: any) {
       console.warn(`[UserStore] DB findByEmail failed: ${err.message}`);
+      return undefined;
     }
-    return this.fallbackUsers.get(email.toLowerCase());
+    return undefined;
   }
 
   public findByName(name: string): UserRecord | undefined {
@@ -273,7 +246,12 @@ class UserStore {
     return Array.from(this.fallbackUsers.values()).find((user) => user.id === id);
   }
 
-  public getAllUsers(): UserRecord[] {
+  // Unlike every other accessor in this class, this one is safe to call before login/
+  // registration has warmed the cache on this process (e.g. the very first request a fresh
+  // serverless instance handles) -- so it must hydrate itself rather than silently returning
+  // whatever happens to already be in `fallbackUsers` (which, on a cold instance, is nothing).
+  public async getAllUsers(): Promise<UserRecord[]> {
+    await this.ensureInit();
     return Array.from(this.fallbackUsers.values());
   }
 
@@ -309,32 +287,47 @@ class UserStore {
         const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
 
-        const insertUser = await query<{ userid: number }>(
-          `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-           VALUES ($1, $2, $3, $4, $5, $6, 'Active')
-           RETURNING userid`,
-          [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
-        );
-        const userId = insertUser.rows[0].userid;
-
-        await query(
-          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
-           VALUES ($1, $2, 'bcryptjs')`,
-          [userId, Buffer.from(passwordHash, 'utf-8')]
-        );
-
         const roleCode = ROLE_TO_DB[userData.role];
-        const roleResult = await query<{ roleid: number }>(
-          'SELECT roleid FROM iam.roles WHERE rolecode = $1',
+        const roleResult = await query<{ roleid: number; istemporary: boolean }>(
+          'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
           [roleCode]
         );
-        if (roleResult.rows[0]) {
-          await query(
-            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
-             VALUES ($1, $2, 1)`,
-            [userId, roleResult.rows[0].roleid]
-          );
+        const role = roleResult.rows[0];
+        if (!role) {
+          throw new Error(`Database role ${roleCode} is not configured.`);
         }
+        const systemActorUserId = await getSystemActorUserId();
+
+        // Users + credentials + role grant are inserted atomically so a failure cannot leave
+        // an orphaned user row that permanently occupies the email without a usable account.
+        const userId = await withTransaction(async (runQuery) => {
+          const insertUser = await runQuery<{ userid: number }>(
+            `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+             RETURNING userid`,
+            [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
+          );
+          const newUserId = insertUser.rows[0].userid;
+
+          await runQuery(
+            `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
+             VALUES ($1, $2, 'bcryptjs')`,
+            [newUserId, Buffer.from(passwordHash, 'utf-8')]
+          );
+
+          // TeamLead/HRRepresentative are marked temporary in the schema, whose trigger
+          // requires EndsAtUtc. A far-future expiry preserves the existing signup behavior.
+          const endsAtUtc = role.istemporary
+            ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+            : null;
+          await runQuery(
+            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+             VALUES ($1, $2, $3, $4)`,
+            [newUserId, role.roleid, systemActorUserId, endsAtUtc]
+          );
+
+          return newUserId;
+        });
 
         const newUser: UserRecord = {
           id: fromUserPk(userId),
@@ -353,8 +346,17 @@ class UserStore {
         console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
         return newUser;
       } catch (err: any) {
-        console.warn(`[UserStore] DB createUser failed: ${err.message}. Using file store.`);
+        console.error(`[UserStore] DB createUser failed: ${err.message}`);
+        throw new Error('Database user creation failed.');
       }
+    }
+
+    if (isDatabaseConfigured()) {
+      throw new Error('The configured database is currently unavailable. Please try again.');
+    }
+
+    if (!this.isLegacyFileAuthEnabled()) {
+      throw new Error('User registration is unavailable because database persistence is not configured.');
     }
 
     const maxUserId = Array.from(this.fallbackUsers.values())
@@ -389,22 +391,31 @@ class UserStore {
 
   public async updatePassword(email: string, newPasswordHash: string): Promise<void> {
     await this.ensureInit();
-    const user = this.fallbackUsers.get(email.toLowerCase());
+    const user = await this.findByEmailAsync(email);
     if (!user) throw new Error('User not found.');
 
     if (this.dbAvailable) {
       try {
         const uid = toUserPk(user.id);
         await query(
-          `UPDATE iam.usercredentials SET passwordhash = $1, passwordchangedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
-          [Buffer.from(newPasswordHash, 'utf-8'), uid]
+          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm, passwordchangedatutc)
+           VALUES ($1, $2, 'bcryptjs', CURRENT_TIMESTAMP)
+           ON CONFLICT (userid) DO UPDATE
+           SET passwordhash = EXCLUDED.passwordhash,
+               passwordalgorithm = EXCLUDED.passwordalgorithm,
+               passwordchangedatutc = CURRENT_TIMESTAMP`,
+          [uid, Buffer.from(newPasswordHash, 'utf-8')]
         );
       } catch (err: any) {
         console.warn(`[UserStore] DB updatePassword failed: ${err.message}`);
+        throw new Error('Database password update failed.');
       }
+    } else if (!this.isLegacyFileAuthEnabled()) {
+      throw new Error('Password updates require database persistence.');
     }
 
     user.passwordHash = newPasswordHash;
+    this.fallbackUsers.set(user.email.toLowerCase(), user);
     this.persistFile(this.getFileStorePath());
     console.log(`[UserStore] Password updated for ${email} ✓`);
   }

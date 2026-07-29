@@ -314,14 +314,17 @@ export interface EmailCandidateRow {
 }
 
 // Finds not-yet-processed, non-suppressed, non-cleared notifications at the given priorities,
-// alongside whether that recipient currently has the single global "Email" preference toggle on
+// alongside whether that recipient currently has the single global "Email" preference toggle on.
+// Defaults to TRUE (opt-out) when the recipient has no preference row yet -- Critical/High
+// events (task review requests, approvals, etc.) must actually reach a real inbox out of the
+// box, not silently depend on every user first discovering and enabling a settings toggle.
 // (see notification.service.ts's REPRESENTATIVE_TYPE_CODES.email — keyed off the 'system' type,
 // since the frontend has no per-category email control).
 export const findEmailCandidates = async (priorities: DbPriority[]): Promise<EmailCandidateRow[]> => {
   const result = await query<EmailCandidateRow>(
     `SELECT un.notificationid, un.recipientuserid, n.title, n.safepreviewtext, nt.typecode,
             n.prioritycode, n.createdatutc, u.email AS recipientemail, u.displayname AS recipientname,
-            COALESCE(pref.emailenabled, FALSE) AS emailenabled
+            COALESCE(pref.emailenabled, TRUE) AS emailenabled
      FROM notify.usernotifications un
      JOIN notify.notifications n ON n.notificationid = un.notificationid
      JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
@@ -392,6 +395,179 @@ export const getDeliveryAnalytics = async (): Promise<NotificationAnalyticsRow[]
   }));
 };
 
+// Drops recipients who cannot actually receive a notification: the seeded system actor
+// (AccountStatus 'Locked'), plus any deactivated/pending account. Without this, a locked
+// service account that happens to be listed as a task assignee silently accumulates
+// notifications forever and skews the Admin per-user analytics -- it can never sign in to read
+// them. Returns the subset of `userIds` that are genuinely deliverable.
+export const filterDeliverableRecipients = async (userIds: number[]): Promise<number[]> => {
+  if (userIds.length === 0) return [];
+  const result = await query<{ userid: number }>(
+    `SELECT userid FROM iam.users
+     WHERE userid = ANY($1::int[]) AND accountstatus = 'Active' AND deactivatedatutc IS NULL`,
+    [userIds]
+  );
+  return result.rows.map((row) => row.userid);
+};
+
+// --- Admin per-user analytics --------------------------------------------------------------
+// Same delivery data as getDeliveryAnalytics above, grouped by NotificationRow.recipientuserid
+// instead of by type — "which user saw which notification, how much of it they read, and what
+// they engage with most" (per-user drill-down), rather than an org-wide type breakdown.
+
+export interface UserAnalyticsFilters {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'total' | 'readRate' | 'name';
+}
+
+export interface UserAnalyticsRow {
+  userid: number;
+  displayname: string;
+  email: string;
+  total: number;
+  delivered: number;
+  read: number;
+  lastnotifiedatutc: string | null;
+  lastreadatutc: string | null;
+}
+
+export const getUserAnalyticsList = async (
+  filters: UserAnalyticsFilters = {}
+): Promise<{ rows: UserAnalyticsRow[]; total: number }> => {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.search) {
+    params.push(`%${filters.search}%`);
+    conditions.push(`(u.displayname ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countResult = await query<{ count: string }>(
+    `SELECT COUNT(DISTINCT un.recipientuserid)::text AS count
+     FROM notify.usernotifications un
+     JOIN iam.users u ON u.userid = un.recipientuserid
+     ${whereClause}`,
+    params
+  );
+  const total = Number(countResult.rows[0]?.count || 0);
+
+  const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 20;
+  const page = filters.page && filters.page > 0 ? filters.page : 1;
+  const offset = (page - 1) * pageSize;
+
+  const orderClause =
+    filters.sortBy === 'name'
+      ? 'u.displayname ASC'
+      // Read rate can't be computed until after the query returns (division happens in the
+      // service layer), so "sort by read rate" is approximated here by read-count share --
+      // exact enough for ordering, and avoids a division-by-zero case in raw SQL.
+      : filters.sortBy === 'readRate'
+        ? '(SUM(CASE WHEN un.readatutc IS NOT NULL THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0)) DESC'
+        : 'total DESC';
+
+  const dataResult = await query<{
+    userid: string;
+    displayname: string;
+    email: string;
+    total: string;
+    delivered: string;
+    read: string;
+    lastnotifiedatutc: string | null;
+    lastreadatutc: string | null;
+  }>(
+    `SELECT un.recipientuserid AS userid, u.displayname, u.email,
+            COUNT(*)::text AS total,
+            SUM(CASE WHEN un.deliverystatus = 'Delivered' THEN 1 ELSE 0 END)::text AS delivered,
+            SUM(CASE WHEN un.readatutc IS NOT NULL THEN 1 ELSE 0 END)::text AS read,
+            MAX(n.createdatutc) AS lastnotifiedatutc,
+            MAX(un.readatutc) AS lastreadatutc
+     FROM notify.usernotifications un
+     JOIN notify.notifications n ON n.notificationid = un.notificationid
+     JOIN iam.users u ON u.userid = un.recipientuserid
+     ${whereClause}
+     GROUP BY un.recipientuserid, u.displayname, u.email
+     ORDER BY ${orderClause}
+     LIMIT ${pageSize} OFFSET ${offset}`,
+    params
+  );
+
+  return {
+    rows: dataResult.rows.map((row) => ({
+      userid: Number(row.userid),
+      displayname: row.displayname,
+      email: row.email,
+      total: Number(row.total),
+      delivered: Number(row.delivered),
+      read: Number(row.read),
+      lastnotifiedatutc: row.lastnotifiedatutc,
+      lastreadatutc: row.lastreadatutc
+    })),
+    total
+  };
+};
+
+export interface UserTopCategoryRow {
+  userid: number;
+  categorycode: string;
+  readcount: number;
+}
+
+// "Interest" = the category this user reads the most of, one row per user. DISTINCT ON picks
+// the highest-readcount row per recipientuserid (Postgres-specific, matches the ORDER BY it's
+// paired with) -- users with zero reads are simply absent, handled by the service layer.
+export const getTopCategoriesForUsers = async (userIds: number[]): Promise<UserTopCategoryRow[]> => {
+  if (userIds.length === 0) return [];
+  const result = await query<{ userid: string; categorycode: string; readcount: string }>(
+    `SELECT DISTINCT ON (un.recipientuserid)
+            un.recipientuserid AS userid, nt.categorycode, COUNT(*)::text AS readcount
+     FROM notify.usernotifications un
+     JOIN notify.notifications n ON n.notificationid = un.notificationid
+     JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
+     WHERE un.readatutc IS NOT NULL AND un.recipientuserid = ANY($1::int[])
+     GROUP BY un.recipientuserid, nt.categorycode
+     ORDER BY un.recipientuserid, COUNT(*) DESC`,
+    [userIds]
+  );
+  return result.rows.map((row) => ({
+    userid: Number(row.userid),
+    categorycode: row.categorycode,
+    readcount: Number(row.readcount)
+  }));
+};
+
+export interface UserCategoryBreakdownRow {
+  categorycode: string;
+  typecode: string;
+  total: number;
+  read: number;
+}
+
+// Full per-type breakdown for one user -- backs the analytics drill-down drawer's "interest"
+// chart (which categories/types this specific person actually reads vs. just receives).
+export const getUserAnalyticsDetail = async (userId: number): Promise<UserCategoryBreakdownRow[]> => {
+  const result = await query<{ categorycode: string; typecode: string; total: string; read: string }>(
+    `SELECT nt.categorycode, nt.typecode,
+            COUNT(*)::text AS total,
+            SUM(CASE WHEN un.readatutc IS NOT NULL THEN 1 ELSE 0 END)::text AS read
+     FROM notify.usernotifications un
+     JOIN notify.notifications n ON n.notificationid = un.notificationid
+     JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
+     WHERE un.recipientuserid = $1
+     GROUP BY nt.categorycode, nt.typecode
+     ORDER BY total DESC`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    categorycode: row.categorycode,
+    typecode: row.typecode,
+    total: Number(row.total),
+    read: Number(row.read)
+  }));
+};
+
 // --- Preferences -------------------------------------------------------------------------
 // The schema's UserNotificationPreferences is per (User, NotificationType) — far more granular
 // than the existing frontend's 7-toggle NotificationPreferences UI (which this branch must not
@@ -417,11 +593,12 @@ export const getPreferencesForTypes = async (
   );
   return result.rows.map((row) => ({
     typeCode: row.typecode,
-    // NULL means "no explicit row yet" — default to enabled in-app, disabled email, matching
-    // the frontend's original in-memory defaults (see AppContext's notificationPreferences
-    // initial state prior to this branch).
+    // NULL means "no explicit row yet" — default both to enabled (opt-out, not opt-in): a
+    // Critical/High-priority event (task review requests, approvals, etc.) must reach a real
+    // inbox out of the box, not silently depend on every user first discovering and enabling an
+    // email settings toggle. See the matching default in findEmailCandidates below.
     inAppEnabled: row.inappenabled ?? true,
-    emailEnabled: row.emailenabled ?? false
+    emailEnabled: row.emailenabled ?? true
   }));
 };
 

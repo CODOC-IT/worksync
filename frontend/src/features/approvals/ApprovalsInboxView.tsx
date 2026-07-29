@@ -204,23 +204,23 @@ export const ApprovalsInboxView: React.FC = () => {
     });
   };
 
-  const handleHRApprove = (requestId: string) => {
+  const handleHRApprove = async (requestId: string) => {
     const approvalNote = window.prompt(
       'Enter an optional approval note:'
     );
 
-    approveHRRequest(
+    const result = await approveHRRequest(
       requestId,
       approvalNote?.trim() || undefined
     );
 
     setNotice({
-      type: 'success',
-      message: 'HR request approved successfully.'
+      type: result.success ? 'success' : 'error',
+      message: result.message
     });
   };
 
-  const handleHRReject = (requestId: string) => {
+  const handleHRReject = async (requestId: string) => {
     const rejectionReason = window.prompt(
       'Enter a reason for rejecting this request:'
     );
@@ -234,14 +234,14 @@ export const ApprovalsInboxView: React.FC = () => {
       return;
     }
 
-    rejectHRRequest(
+    const result = await rejectHRRequest(
       requestId,
       rejectionReason.trim()
     );
 
     setNotice({
-      type: 'success',
-      message: 'HR request rejected successfully.'
+      type: result.success ? 'success' : 'error',
+      message: result.message
     });
   };
 
@@ -391,7 +391,7 @@ export const ApprovalsInboxView: React.FC = () => {
                       </div>
 
                       <h3 className="font-semibold text-slate-100">
-                        {employee?.name || 'Unknown Employee'}
+                        {employee?.name || (request as any).userName || 'Unknown Employee'}
                       </h3>
 
                       <p className="text-xs text-slate-400">

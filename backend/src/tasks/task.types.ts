@@ -89,8 +89,6 @@ export interface TaskDTO {
   approvalStatus: 'Approved';
   completionSummary?: string;
   createdAt: string;
-  // Derived, not stored — see task.mapper.ts. 'Pending' whenever status === 'Review' (a task
-  // only leaves that state via the explicit Approve/Reject endpoints), undefined otherwise.
   reviewApproval?: 'Pending';
 }
 
@@ -104,6 +102,16 @@ export interface TaskStatusHistoryDTO {
   timestamp: string;
 }
 
+export interface CreateSubtaskInput {
+  title: string;
+  description: string;
+  priority: ApiTaskPriority;
+  startDate: string;
+  dueDate: string;
+  assigneeIds: string[];
+  status?: ApiTaskStatus;
+}
+
 export interface CreateTaskInput {
   projectId: string;
   title: string;
@@ -113,17 +121,8 @@ export interface CreateTaskInput {
   dueDate: string;
   assigneeIds: string[];
   status?: ApiTaskStatus;
+  parentTaskId?: string;
   subtasks?: CreateSubtaskInput[];
-}
-
-export interface CreateSubtaskInput {
-  title: string;
-  description: string;
-  priority: ApiTaskPriority;
-  startDate: string;
-  dueDate: string;
-  assigneeIds: string[];
-  status?: ApiTaskStatus;
 }
 
 export interface UpdateTaskInput {

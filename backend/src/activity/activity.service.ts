@@ -3,10 +3,38 @@ import { isDatabaseConfigured } from '../db/pool.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as repo from './activity.repository.js';
-import { getEffectiveRoles, hasAccessToSensitivity, EffectiveRoles } from './activity.rbac.js';
-import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput, ActivitySensitivity } from './activity.types.js';
+import { getEffectiveRoles, EffectiveRoles } from './activity.rbac.js';
+import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput } from './activity.types.js';
 
 const SENSITIVE_FIELD = /(password|secret|token|cookie|credential|authorization|api.?key|session)/i;
+const MAX_METADATA_DEPTH = 5;
+const MAX_METADATA_ARRAY_ITEMS = 100;
+const MAX_METADATA_STRING_LENGTH = 2_000;
+
+const sanitizeMetadataValue = (value: unknown, depth = 0): unknown => {
+  if (depth > MAX_METADATA_DEPTH) return '[truncated]';
+  if (typeof value === 'string') {
+    return value.length > MAX_METADATA_STRING_LENGTH
+      ? `${value.slice(0, MAX_METADATA_STRING_LENGTH)}…`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_METADATA_ARRAY_ITEMS)
+      .map((item) => sanitizeMetadataValue(item, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !SENSITIVE_FIELD.test(key))
+        .map(([key, nestedValue]) => [key, sanitizeMetadataValue(nestedValue, depth + 1)])
+    );
+  }
+  return value;
+};
+
+const sanitizeMetadata = (metadata: Record<string, unknown>): Record<string, unknown> =>
+  sanitizeMetadataValue(metadata) as Record<string, unknown>;
 
 type StoredEvent = {
   id: string; correlationId: string; occurredAt: Date;
@@ -17,7 +45,6 @@ type StoredEvent = {
   result: string; source: string; important: boolean; reason?: string;
   linkRoute?: string; ipAddress?: string; changes: ActivityChange[];
   metadata: Record<string, unknown>;
-  sensitivity?: ActivitySensitivity; scope?: string;
 };
 
 const memStore: StoredEvent[] = [];
@@ -49,22 +76,9 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
   };
 };
 
-const memToDto = (event: StoredEvent): ActivityDTO => ({
-  id: event.id, correlationId: event.correlationId, actor: event.actor,
-  affectedUser: event.affectedUser, action: event.action, module: event.module,
-  entityType: event.entityType, entityId: event.entityId, entityName: event.entityName,
-  description: event.description, project: event.project, task: event.task,
-  timestamp: event.occurredAt.toISOString(),
-  result: event.result as ActivityDTO['result'], source: event.source as ActivityDTO['source'],
-  important: event.important, reason: event.reason, linkRoute: event.linkRoute,
-  ipAddress: event.ipAddress, changes: event.changes, metadata: event.metadata,
-  sensitivity: event.sensitivity, scope: event.scope,
-  isNew: Date.now() - event.occurredAt.getTime() < 5 * 60 * 1000
-});
-
 export const recordActivity = async (input: ActivityRecordInput): Promise<string | null> => {
   const safeChanges = (input.changes || []).filter((change) => !SENSITIVE_FIELD.test(change.field));
-  const safeMetadata = Object.fromEntries(Object.entries(input.metadata || {}).filter(([key]) => !SENSITIVE_FIELD.test(key)));
+  const safeMetadata = sanitizeMetadata(input.metadata || {});
   if (!isDatabaseConfigured()) {
     const event: StoredEvent = {
       id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -85,8 +99,7 @@ export const recordActivity = async (input: ActivityRecordInput): Promise<string
       result: input.result || 'Successful', source: input.source || 'API',
       important: Boolean(input.important), reason: input.reason || undefined,
       linkRoute: input.linkRoute || undefined, ipAddress: input.ipAddress || undefined,
-      changes: safeChanges, metadata: safeMetadata,
-      sensitivity: input.sensitivity || 'Normal', scope: input.scope
+      changes: safeChanges, metadata: safeMetadata
     };
     memStore.push(event);
     if (memStore.length > 500) memStore.shift();
@@ -99,71 +112,40 @@ export const recordActivitySafe = (input: ActivityRecordInput): void => {
   recordActivity(input).catch((error) => console.warn('[activity] Audit write failed.', error));
 };
 
-const memberOfProject = (event: StoredEvent, userId: string): boolean => {
-  return event.actor.id === userId || event.entityId === userId;
+export interface ViewerScope {
+  permanentRole: string;
+  isActiveTeamLead: boolean;
+  isActiveHR: boolean;
+  isHRandTeamLead: boolean;
+  leadProjectPks: number[];
+  canExport: boolean;
+}
+
+export const getViewerScope = async (viewerId: string): Promise<ViewerScope> => {
+  const roles = await getEffectiveRoles(viewerId);
+  return {
+    permanentRole: roles.permanentRole,
+    isActiveTeamLead: roles.isActiveTeamLead,
+    isActiveHR: roles.isActiveHR,
+    isHRandTeamLead: roles.isHRandTeamLead,
+    leadProjectPks: roles.leadProjectPks,
+    canExport:
+      roles.permanentRole === 'Admin' ||
+      roles.permanentRole === 'HR' ||
+      roles.isActiveHR,
+  };
 };
 
-const MEMORY_MODULE_SCOPES: Record<string, string[]> = {
-  Team_Member: [],
-  Team_Lead: [],
-  HR: ['Attendance', 'HR'],
-  Admin: [],
+const getEffectiveRolesForViewer = async (viewerId: string): Promise<EffectiveRoles> => {
+  // Database role assignments are authoritative. Never widen Activity Log access using a
+  // potentially stale role embedded in an older JWT.
+  return getEffectiveRoles(viewerId);
 };
 
-const matchesFilters = (
-  event: StoredEvent,
-  filters: ActivityFilters,
-  viewerId: string,
-  effectiveRoles: EffectiveRoles
-): boolean => {
-  if (!hasAccessToSensitivity(effectiveRoles.permanentRole, effectiveRoles.isActiveTeamLead, effectiveRoles.isActiveHR, viewerId, event.sensitivity)) return false;
-
-  const role = effectiveRoles.permanentRole;
-  if (role !== 'Admin') {
-    if (event.actor.id !== viewerId) {
-      if (role === 'HR' && !effectiveRoles.isActiveTeamLead) {
-        if (!MEMORY_MODULE_SCOPES.HR.includes(event.module)) return false;
-      } else if (role === 'Team_Member' && !effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
-        if (event.module === 'Permissions' || event.module === 'Authentication') return false;
-      }
-    }
-  }
-
-  if (filters.module && event.module !== filters.module) return false;
-  if (filters.action && event.action !== filters.action) return false;
-  if (filters.result && event.result !== filters.result) return false;
-  if (filters.source && event.source !== filters.source) return false;
-  if (filters.userId && event.actor.id !== filters.userId) return false;
-  if (filters.projectId && event.project?.id !== filters.projectId) return false;
-  if (filters.taskId && event.task?.id !== filters.taskId) return false;
-  if (filters.search) {
-    const q = filters.search.toLowerCase();
-    if (!event.actor.name.toLowerCase().includes(q) && !event.description.toLowerCase().includes(q) &&
-        !event.entityName.toLowerCase().includes(q) && !event.entityId.toLowerCase().includes(q)) return false;
-  }
-  if (filters.myActivityOnly && event.actor.id !== viewerId) return false;
-  if (filters.importantOnly && !event.important) return false;
-  if (filters.from && event.occurredAt < new Date(filters.from)) return false;
-  if (filters.to && event.occurredAt > new Date(filters.to)) return false;
-  return true;
-};
-
-const getEffectiveRolesForViewer = async (viewerId: string, viewerRole: string): Promise<EffectiveRoles> => {
-  const effective = await getEffectiveRoles(viewerId);
-  if (effective.permanentRole !== viewerRole) {
-    return { ...effective, permanentRole: viewerRole };
-  }
-  return effective;
-};
-
-export const listActivities = async (filters: ActivityFilters, viewerId: string, viewerRole: string) => {
-  const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
+export const listActivities = async (filters: ActivityFilters, viewerId: string, _viewerRole: string) => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
   if (!isDatabaseConfigured()) {
-    const filtered = memStore.filter((event) => matchesFilters(event, filters, viewerId, effectiveRoles));
-    const sorted = filters.sort === 'oldest' ? filtered : [...filtered].reverse();
-    const start = (filters.page - 1) * filters.pageSize;
-    const items = sorted.slice(start, start + filters.pageSize).map(memToDto);
-    return { items, page: filters.page, pageSize: filters.pageSize, total: filtered.length, totalPages: Math.max(1, Math.ceil(filtered.length / filters.pageSize)) };
+    throw new Error('Activity Log requires a database. Database is not configured.');
   }
   const { rows, total } = await repo.findActivities(filters, effectiveRoles, viewerId);
   const changes = await repo.findChanges(rows.map((row) => String(row.auditeventid)));
@@ -177,18 +159,10 @@ export const listActivities = async (filters: ActivityFilters, viewerId: string,
   };
 };
 
-export const getActivity = async (id: string, viewerId: string, viewerRole: string): Promise<ActivityDTO | null> => {
-  const effectiveRoles = await getEffectiveRolesForViewer(viewerId, viewerRole);
+export const getActivity = async (id: string, viewerId: string, _viewerRole: string): Promise<ActivityDTO | null> => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
   if (!isDatabaseConfigured()) {
-    const event = memStore.find((e) => e.id === id);
-    if (!event) return null;
-    if (!hasAccessToSensitivity(effectiveRoles.permanentRole, effectiveRoles.isActiveTeamLead, effectiveRoles.isActiveHR, viewerId, event.sensitivity)) return null;
-    if (effectiveRoles.permanentRole !== 'Admin' && event.actor.id !== viewerId) {
-      if (effectiveRoles.permanentRole === 'HR' && !effectiveRoles.isActiveTeamLead) {
-        if (event.module !== 'Attendance' && event.module !== 'HR') return null;
-      }
-    }
-    return memToDto(event);
+    throw new Error('Activity Log requires a database. Database is not configured.');
   }
   const row = await repo.findVisibleActivityById(id, viewerId, effectiveRoles);
   if (!row) return null;
@@ -196,14 +170,81 @@ export const getActivity = async (id: string, viewerId: string, viewerRole: stri
   return toDto(row, changes.get(String(row.auditeventid)) || []);
 };
 
+const EXPORT_LIMIT = 5_000;
+
+interface ActivityExport<T> {
+  content: T;
+  exportedCount: number;
+  total: number;
+}
+
 const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-export const exportCsv = async (filters: ActivityFilters, viewerId: string, viewerRole: string): Promise<string> => {
-  if (viewerRole !== 'Admin' && viewerRole !== 'HR') throw new Error('Only administrators and HR can export audit logs.');
-  const result = await listActivities({ ...filters, page: 1, pageSize: 5000 }, viewerId, viewerRole);
-  const filterSummary = JSON.stringify(Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '')));
+
+const activeFilterSummary = (filters: ActivityFilters): string => JSON.stringify(
+  Object.fromEntries(
+    Object.entries(filters).filter(([key, value]) =>
+      !['page', 'pageSize'].includes(key)
+      && value !== undefined
+      && value !== ''
+      && value !== false
+    )
+  )
+);
+
+const assertCanExport = async (viewerId: string): Promise<EffectiveRoles> => {
+  const effectiveRoles = await getEffectiveRolesForViewer(viewerId);
+  const canExport = effectiveRoles.permanentRole === 'Admin'
+    || effectiveRoles.permanentRole === 'HR'
+    || effectiveRoles.isActiveHR;
+  if (!canExport) throw new Error('Only administrators and HR can export audit logs.');
+  return effectiveRoles;
+};
+
+const recordExport = (
+  format: 'CSV' | 'PDF',
+  viewerId: string,
+  viewerRole: string,
+  exportedCount: number,
+  total: number,
+  filterSummary: string
+): void => {
+  const actor = userStore.findById(viewerId);
+  recordActivitySafe({
+    actorId: viewerId,
+    actorName: actor?.name,
+    actorEmail: actor?.email,
+    actorRole: viewerRole,
+    action: 'Exported',
+    module: 'Activity Log',
+    entityType: 'Audit Export',
+    entityId: `export-${Date.now()}`,
+    entityName: `Filtered activity log ${format}`,
+    description: `${actor?.name || 'Authorized user'} exported ${exportedCount} of ${total} matching audit events as ${format}.`,
+    source: 'Web',
+    important: true,
+    metadata: { format, exportedCount, totalMatching: total, limit: EXPORT_LIMIT, filters: filterSummary },
+  });
+};
+
+export const exportCsv = async (
+  filters: ActivityFilters,
+  viewerId: string,
+  viewerRole: string
+): Promise<ActivityExport<string>> => {
+  const effectiveRoles = await assertCanExport(viewerId);
+  const result = await listActivities(
+    { ...filters, page: 1, pageSize: EXPORT_LIMIT },
+    viewerId,
+    effectiveRoles.permanentRole
+  );
+  const filterSummary = activeFilterSummary(filters);
   const lines = [
     ['Exported At UTC', new Date().toISOString()].map(csvCell).join(','),
-    ['Active Filters', filterSummary].map(csvCell).join(','), '',
+    ['Exported Events', result.items.length].map(csvCell).join(','),
+    ['Total Matching Events', result.total].map(csvCell).join(','),
+    ['Export Limit', EXPORT_LIMIT].map(csvCell).join(','),
+    ['Active Filters', filterSummary].map(csvCell).join(','),
+    '',
     ['Event ID','Timestamp UTC','Actor','Email','Role','Action','Module','Entity Type','Entity ID','Entity','Project','Task','Result','Source','Description','Changes'].map(csvCell).join(',')
   ];
   for (const item of result.items) {
@@ -211,114 +252,314 @@ export const exportCsv = async (filters: ActivityFilters, viewerId: string, view
       item.id, item.timestamp, item.actor.name, item.actor.email, item.actor.role, item.action,
       item.module, item.entityType, item.entityId, item.entityName, item.project?.name,
       item.task?.name, item.result, item.source, item.description,
-      item.changes.map((c) => `${c.field}: ${c.previousValue ?? '—'} -> ${c.newValue ?? '—'}`).join('; ')
+      item.changes.map((change) => `${change.field}: ${change.previousValue ?? '—'} -> ${change.newValue ?? '—'}`).join('; ')
     ].map(csvCell).join(','));
   }
-  recordActivitySafe({
-    actorId: viewerId, actorName: userStore.findById(viewerId)?.name, actorRole: viewerRole,
-    action: 'Exported', module: 'Activity Log', entityType: 'Audit Export', entityId: `export-${Date.now()}`,
-    entityName: 'Filtered activity log CSV', description: `${userStore.findById(viewerId)?.name || 'Admin'} exported ${result.total} audit events.`,
-    important: true, metadata: { exportedCount: result.total, filters: filterSummary }
+
+  const exportedCount = result.items.length;
+  recordExport('CSV', viewerId, effectiveRoles.permanentRole, exportedCount, result.total, filterSummary);
+  return { content: lines.join('\r\n'), exportedCount, total: result.total };
+};
+
+// ─── PDF colour palette (clean professional white theme) ─────────────────────
+const PDF = {
+  // Page
+  pageBg:        '#FFFFFF',
+  // Cover / header band
+  brandDark:     '#0F172A',   // slate-900
+  brandAccent:   '#0EA5E9',   // sky-500
+  brandLight:    '#F0F9FF',   // sky-50
+  // Table
+  tableHeaderBg: '#1E293B',   // slate-800
+  tableHeaderFg: '#F8FAFC',   // slate-50
+  rowEven:       '#F8FAFC',   // slate-50
+  rowOdd:        '#FFFFFF',
+  rowBorder:     '#E2E8F0',   // slate-200
+  // Text
+  textPrimary:   '#0F172A',   // slate-900
+  textSecondary: '#475569',   // slate-600
+  textMuted:     '#94A3B8',   // slate-400
+  // Result badges
+  success:       '#15803D',   // green-700
+  successBg:     '#DCFCE7',   // green-100
+  danger:        '#B91C1C',   // red-700
+  dangerBg:      '#FEE2E2',   // red-100
+  warning:       '#B45309',   // amber-700
+  warningBg:     '#FEF3C7',   // amber-100
+  // Module badge
+  moduleBg:      '#EFF6FF',   // blue-50
+  moduleFg:      '#1D4ED8',   // blue-700
+};
+
+// Readable human date
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+  }) + ' UTC';
+
+// Strip underscores and title-case
+const fmtRole = (role: string) =>
+  role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+// Truncate text with ellipsis
+const trunc = (text: string, maxLen: number) =>
+  text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
+
+// Draw a rounded badge-like result label
+const drawResultBadge = (
+  doc: PDFKit.PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  w: number,
+) => {
+  const bg  = text === 'Successful' ? PDF.successBg : text === 'Failed' ? PDF.dangerBg : PDF.warningBg;
+  const fg  = text === 'Successful' ? PDF.success   : text === 'Failed' ? PDF.danger   : PDF.warning;
+  doc.save();
+  doc.roundedRect(x, y + 1, w, 11, 3).fill(bg);
+  doc.fillColor(fg).fontSize(6.5).font('Helvetica-Bold')
+    .text(text, x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
+  doc.restore();
+};
+
+// Draw a pill module label
+const drawModuleBadge = (
+  doc: PDFKit.PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  w: number,
+) => {
+  doc.save();
+  doc.roundedRect(x, y + 1, w, 11, 3).fill(PDF.moduleBg);
+  doc.fillColor(PDF.moduleFg).fontSize(6.5).font('Helvetica-Bold')
+    .text(trunc(text, 14), x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
+  doc.restore();
+};
+
+export const exportPdf = async (
+  filters: ActivityFilters,
+  viewerId: string,
+  viewerRole: string
+): Promise<ActivityExport<Buffer>> => {
+  const effectiveRoles = await assertCanExport(viewerId);
+  const result = await listActivities(
+    { ...filters, page: 1, pageSize: EXPORT_LIMIT },
+    viewerId,
+    effectiveRoles.permanentRole
+  );
+  const filterSummary = activeFilterSummary(filters);
+  const exportedAt = new Date();
+
+  // ── Document setup ──────────────────────────────────────────────────────
+  const doc = new PDFDocument({
+    size: 'A4',
+    layout: 'landscape',
+    margin: 0,
+    info: {
+      Title: 'WorkSync Activity Log Export',
+      Author: userStore.findById(viewerId)?.name || 'WorkSync',
+      Subject: 'Audit Trail',
+      Creator: 'WorkSync',
+    },
   });
-  return lines.join('\r\n');
-};
-
-const PDF_COLORS = {
-  header: '#0a1628', rowEven: '#0d1e33', rowOdd: '#0a1628',
-  border: '#1e3a5f', text: '#e2e8f0', muted: '#94a3b8', accent: '#22d3ee',
-  success: '#34d399', danger: '#f87171', warning: '#fbbf24',
-};
-
-export const exportPdf = async (filters: ActivityFilters, viewerId: string, viewerRole: string): Promise<Buffer> => {
-  if (viewerRole !== 'Admin' && viewerRole !== 'HR') throw new Error('Only administrators and HR can export audit logs.');
-  const result = await listActivities({ ...filters, page: 1, pageSize: 5000 }, viewerId, viewerRole);
-  const filterSummary = JSON.stringify(Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined && value !== '')));
-
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30 });
   const buffers: Buffer[] = [];
   doc.on('data', (chunk: Buffer) => buffers.push(chunk));
 
-  const docHeight = doc.page.height;
-  const docWidth = doc.page.width;
-  const usableWidth = docWidth - 60;
-  const tableTop = 70;
-  const rowHeight = 18;
-  const bottomMargin = 40;
+  const PW = doc.page.width;   // 841.89
+  const PH = doc.page.height;  // 595.28
+  const MARGIN   = 32;
+  const CONTENT  = PW - MARGIN * 2;
 
-  const headers = ['Event ID', 'Timestamp', 'Actor', 'Role', 'Action', 'Module', 'Entity', 'Project / Task', 'Result', 'Description'];
-  const colWidths = [70, 130, 100, 55, 80, 75, 90, 110, 55, 0];
-  colWidths[9] = usableWidth - colWidths.slice(0, 9).reduce((a, b) => a + b, 0);
+  // ── Column definitions ──────────────────────────────────────────────────
+  // Order: Timestamp | Actor | Role | Action | Module | Project / Task | Result | Description
+  const COLS = [
+    { header: 'Timestamp',       key: 'ts',     w: 105 },
+    { header: 'Actor',           key: 'actor',  w: 100 },
+    { header: 'Role',            key: 'role',   w: 72  },
+    { header: 'Action',          key: 'action', w: 90  },
+    { header: 'Module',          key: 'module', w: 72  },
+    { header: 'Project / Task',  key: 'proj',   w: 110 },
+    { header: 'Result',          key: 'result', w: 58  },
+    { header: 'Description',     key: 'desc',   w: 0   }, // fills remainder
+  ] as const;
+
+  // Calculate description column width
+  const fixedW = COLS.slice(0, -1).reduce((s, c) => s + c.w, 0);
+  const descW  = CONTENT - fixedW;
+
+  const colWidths = [...COLS.slice(0, -1).map((c) => c.w), descW];
+
+  const ROW_H       = 20;
+  const HEADER_H    = 18;
+  const BAND_H      = 54;   // top brand band
+  const COVER_H     = 110;  // full cover section on page 1
+  const TABLE_TOP_P1 = COVER_H + 4;
+  const TABLE_TOP_PN = BAND_H + 4;
+  const FOOTER_H    = 24;
 
   let pageNum = 0;
-  let y = 0;
+  let y       = 0;
 
-  const drawHeader = () => {
-    pageNum++;
-    doc.rect(0, 0, docWidth, 60).fill(PDF_COLORS.header);
-    doc.fillColor(PDF_COLORS.accent).fontSize(18).font('Helvetica-Bold')
-      .text('WorkSync — Activity Log Export', 30, 18);
-    doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
-      .text(`Exported at: ${new Date().toISOString()}`, docWidth - 250, 22, { width: 220, align: 'right' });
+  // ── Page-level helpers ──────────────────────────────────────────────────
+  const drawBrandBand = (height: number) => {
+    // Gradient-like effect: two rectangles
+    doc.rect(0, 0, PW, height).fill(PDF.brandDark);
+    doc.rect(0, height - 3, PW, 3).fill(PDF.brandAccent);
+    // Logo area
+    doc.fillColor(PDF.brandAccent).fontSize(16).font('Helvetica-Bold')
+      .text('WorkSync', MARGIN, 14, { lineBreak: false });
+    doc.fillColor(PDF.pageBg).fontSize(8).font('Helvetica')
+      .text('Activity Log Export', MARGIN + 90, 18, { lineBreak: false });
+    // Right: page number
+    doc.fillColor(PDF.textMuted).fontSize(8).font('Helvetica')
+      .text(`Page ${pageNum}`, PW - MARGIN - 40, 18, { width: 40, align: 'right', lineBreak: false });
+  };
+
+  const drawCoverMeta = () => {
+    // White meta block
+    const metaY = BAND_H + 8;
+    const metaH = COVER_H - BAND_H - 12;
+    doc.rect(MARGIN, metaY, CONTENT, metaH).fill(PDF.brandLight);
+    doc.rect(MARGIN, metaY, 4, metaH).fill(PDF.brandAccent);
+
+    const col1 = MARGIN + 14;
+    const col2 = MARGIN + CONTENT / 2;
+    const lineH = 14;
+    let metaLine = metaY + 8;
+
+    const drawMeta = (label: string, value: string, x: number) => {
+      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+        .text(label.toUpperCase(), x, metaLine, { lineBreak: false });
+      doc.fillColor(PDF.textPrimary).fontSize(8).font('Helvetica-Bold')
+        .text(value, x, metaLine + 8, { lineBreak: false });
+    };
+
+    drawMeta('Exported at',      fmtDate(exportedAt.toISOString()),    col1);
+    drawMeta('Exported by',      userStore.findById(viewerId)?.name || 'System', col2);
+    metaLine += lineH + 8;
+    drawMeta('Records exported', `${result.items.length} of ${result.total} matching`, col1);
+    drawMeta('Export limit',     `${EXPORT_LIMIT.toLocaleString()} rows`, col2);
+
     if (filterSummary !== '{}') {
-      doc.fillColor(PDF_COLORS.muted).fontSize(7)
-        .text(`Filters: ${filterSummary}`, 30, 44, { width: docWidth - 60 });
+      metaLine += lineH + 4;
+      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+        .text('ACTIVE FILTERS', col1, metaLine, { lineBreak: false });
+      doc.fillColor(PDF.textSecondary).fontSize(7).font('Helvetica')
+        .text(filterSummary, col1, metaLine + 9, {
+          width: CONTENT - 18, lineBreak: false,
+        });
     }
+  };
 
-    let x = 30;
-    doc.rect(30, tableTop, usableWidth, rowHeight).fill('#1a2744');
-    doc.fillColor(PDF_COLORS.accent).fontSize(7).font('Helvetica-Bold');
-    headers.forEach((h, i) => {
-      doc.text(h, x + 4, tableTop + 5, { width: colWidths[i] - 8, lineBreak: false });
+  const drawTableHeader = (topY: number) => {
+    doc.rect(MARGIN, topY, CONTENT, HEADER_H).fill(PDF.tableHeaderBg);
+    let x = MARGIN;
+    COLS.slice(0, -1).forEach((col, i) => {
+      doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+        .text(col.header, x + 4, topY + 5, { width: colWidths[i] - 8, lineBreak: false });
       x += colWidths[i];
     });
-    y = tableTop + rowHeight;
+    // Description header
+    doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+      .text('Description', x + 4, topY + 5, { width: descW - 8, lineBreak: false });
   };
 
-  const drawFooter = () => {
-    doc.fontSize(7).fillColor(PDF_COLORS.muted).font('Helvetica');
-    doc.text(
-      `Page ${pageNum} | WorkSync Audit Export | ${result.total} events`,
-      30, docHeight - 30,
-      { width: docWidth - 60, align: 'center' }
-    );
+  const drawFooterBar = () => {
+    doc.rect(0, PH - FOOTER_H, PW, FOOTER_H).fill(PDF.brandLight);
+    doc.rect(0, PH - FOOTER_H, PW, 1).fill(PDF.rowBorder);
+    doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+      .text(
+        `WorkSync Audit Export  ·  ${fmtDate(exportedAt.toISOString())}  ·  Page ${pageNum}`,
+        MARGIN, PH - FOOTER_H + 8,
+        { width: CONTENT, align: 'center', lineBreak: false },
+      );
   };
 
-  drawHeader();
+  // ── First page ───────────────────────────────────────────────────────────
+  const newPage = (isFirst = false) => {
+    pageNum++;
+    doc.rect(0, 0, PW, PH).fill(PDF.pageBg);
+    const bandH = isFirst ? COVER_H : BAND_H;
+    drawBrandBand(isFirst ? BAND_H : BAND_H);
+    if (isFirst) drawCoverMeta();
+    y = (isFirst ? TABLE_TOP_P1 : TABLE_TOP_PN);
+    drawTableHeader(y);
+    y += HEADER_H;
+    drawFooterBar();
+  };
 
+  newPage(true);
+
+  // ── Data rows ────────────────────────────────────────────────────────────
   let rowNum = 0;
   for (const item of result.items) {
-    if (y + rowHeight > docHeight - bottomMargin) {
-      drawFooter();
-      doc.addPage();
-      drawHeader();
+    const availH = PH - FOOTER_H - y;
+    if (availH < ROW_H) {
+      doc.addPage({ size: 'A4', layout: 'landscape' });
+      newPage(false);
     }
 
-    const bg = rowNum % 2 === 0 ? PDF_COLORS.rowEven : PDF_COLORS.rowOdd;
-    doc.rect(30, y, usableWidth, rowHeight).fill(bg);
+    const bg = rowNum % 2 === 0 ? PDF.rowEven : PDF.rowOdd;
+    doc.rect(MARGIN, y, CONTENT, ROW_H).fill(bg);
 
-    let x = 34;
-    const row = [
-      item.id.slice(0, 8), new Date(item.timestamp).toLocaleString(),
-      item.actor.name, item.actor.role.replace('_', ' '), item.action,
-      item.module, `${item.entityType}: ${item.entityName}`,
-      [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—',
-      item.result, item.description.slice(0, 80),
+    // Bottom border
+    doc.rect(MARGIN, y + ROW_H - 0.5, CONTENT, 0.5).fill(PDF.rowBorder);
+
+    const projectTask = [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—';
+    const cellData = [
+      fmtDate(item.timestamp),
+      trunc(item.actor.name, 18),
+      fmtRole(item.actor.role),
+      trunc(item.action, 20),
+      item.module,
+      trunc(projectTask, 22),
+      item.result,
+      trunc(item.description, 120),
     ];
-    doc.fillColor(PDF_COLORS.text).fontSize(6.5).font('Helvetica');
-    row.forEach((cell, i) => {
-      doc.text(cell, x, y + 5, { width: colWidths[i] - 4, lineBreak: false });
+
+    let x = MARGIN;
+    cellData.forEach((cell, i) => {
+      const cx = x + 4;
+      const cy = y + (ROW_H - 9) / 2;   // vertically centered
+      const cw = colWidths[i] - 8;
+
+      if (i === 6) {
+        // Result — badge
+        drawResultBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
+      } else if (i === 4) {
+        // Module — badge
+        drawModuleBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
+      } else {
+        doc.fillColor(i === 0 ? PDF.textSecondary : PDF.textPrimary)
+          .fontSize(i === 7 ? 7 : 7.5)
+          .font('Helvetica')
+          .text(cell, cx, cy, { width: cw, lineBreak: false });
+      }
       x += colWidths[i];
     });
 
-    y += rowHeight;
+    y += ROW_H;
     rowNum++;
   }
 
-  drawFooter();
+  // ── Trailing summary ─────────────────────────────────────────────────────
+  if (result.items.length === 0) {
+    doc.fillColor(PDF.textMuted).fontSize(10).font('Helvetica')
+      .text('No events matched the applied filters.', MARGIN, y + 20, {
+        width: CONTENT, align: 'center',
+      });
+  }
+
   doc.end();
 
-  return new Promise((resolve, reject) => {
+  const content = await new Promise<Buffer>((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
   });
+
+  const exportedCount = result.items.length;
+  recordExport('PDF', viewerId, effectiveRoles.permanentRole, exportedCount, result.total, filterSummary);
+  return { content, exportedCount, total: result.total };
 };

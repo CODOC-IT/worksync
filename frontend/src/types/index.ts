@@ -11,6 +11,8 @@ export interface User {
   status: 'active' | 'inactive' | 'away';
   lastActive?: string;
   githubUsername?: string;
+  passwordHash?: string;
+  createdAt?: string;
 }
 
 // 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that
@@ -54,6 +56,7 @@ export interface Project {
   pinnedMessagesCount?: number;
   tags: string[];
   creationReason?: string;
+  createdAt?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
@@ -126,6 +129,7 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string;
+  assigneeIds?: string[];
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
@@ -179,6 +183,7 @@ export interface HRRequest {
   details: {
     requestedCheckIn?: string;
     requestedCheckOut?: string;
+    attendanceChangeReason?: string;
     leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
     leaveDays?: number;
     extraBreakMinutes?: number;
@@ -432,6 +437,31 @@ export interface NotificationAnalyticsRow {
   readRate: number; // percentage, 0-100
 }
 
+// One row per user — who received/read what, and their "interest" (the category they read the
+// most of), for the Admin-only per-user analytics drill-down (backend's getUserAnalytics).
+export interface UserNotificationAnalyticsRow {
+  userId: string;
+  name: string;
+  email: string;
+  totalReceived: number;
+  totalDelivered: number;
+  totalRead: number;
+  readRate: number; // percentage, 0-100
+  topInterest: string | null;
+  lastNotifiedAt: string | null;
+  lastReadAt: string | null;
+}
+
+// One row per notification type, for a single user — backs the analytics drawer's interest
+// breakdown chart.
+export interface UserNotificationCategoryBreakdown {
+  category: string;
+  type: NotificationType;
+  total: number;
+  read: number;
+  readRate: number;
+}
+
 export type ToastTone = 'success' | 'info' | 'warning' | 'error';
 
 export interface ToastItem {
@@ -466,17 +496,4 @@ export interface CalendarEvent {
   type: 'Deadline' | 'Milestone' | 'Leave' | 'Meeting' | 'Review';
   projectId?: string;
   taskId?: string;
-}
-
-export interface WeeklySummaryDraft {
-  id: string;
-  projectId: string;
-  weekEnding: string;
-  progressSummary: string;
-  blockersText: string;
-  overdueTasksCount: number;
-  completedTasksCount: number;
-  keyHighlights: string[];
-  recipientChannel: 'Project Chat' | 'Email Digest' | 'Executive Report';
-  generatedAt: string;
 }

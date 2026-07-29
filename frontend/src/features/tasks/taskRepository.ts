@@ -64,27 +64,35 @@ export const createTaskViaApi = async (
   }
 
   try {
+    const body: Record<string, unknown> = {
+      projectId: data.projectId,
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      startDate: data.startDate,
+      dueDate: data.dueDate,
+      assigneeIds: data.assigneeIds?.length
+        ? data.assigneeIds
+        : data.assigneeId
+          ? [data.assigneeId]
+          : [],
+      status: data.status || 'Todo'
+    };
+
+    if (data.parentTaskId) {
+      body.parentTaskId = data.parentTaskId;
+    }
+    if (data.subtasks && data.subtasks.length > 0) {
+      body.subtasks = data.subtasks;
+    }
+
     const response = await fetch('/api/tasks', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        projectId: data.projectId,
-        title: data.title,
-        description: data.description,
-        priority: data.priority,
-        startDate: data.startDate,
-        dueDate: data.dueDate,
-        assigneeIds: data.assigneeIds?.length
-          ? data.assigneeIds
-          : data.assigneeId
-            ? [data.assigneeId]
-            : [],
-        status: data.status || 'Todo',
-        subtasks: data.subtasks
-      })
+      body: JSON.stringify(body)
     });
     const payload = await parseResponse(response);
     const task = !Array.isArray(payload.data) ? payload.data : undefined;

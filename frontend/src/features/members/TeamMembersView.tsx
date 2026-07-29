@@ -1,956 +1,714 @@
-﻿import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { GlassCard } from '../../components/common/GlassCard';
+import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
-import { User, UserRole } from '../../types';
+import { Project, Task, User, UserRole } from '../../types';
 import {
-  Users,
-  UserPlus,
-  Search,
-  Filter,
-  Shield,
-  Trash2,
-  Edit3,
-  AlertTriangle,
-  CheckCircle2,
-  ArrowRightLeft,
-  Mail,
-  Github,
-  Briefcase,
-  Grid,
-  List,
-  Sparkles,
   Check,
-  X,
+  Briefcase,
+  Building2,
+  CheckCircle2,
+  ChevronRight,
+  Copy,
+  FolderKanban,
+  LayoutGrid,
+  List,
+  Mail,
+  Search,
   ShieldCheck,
-  Building,
-  UserCheck
+  Sparkles,
+  UserRoundSearch,
+  Users,
+  X,
 } from 'lucide-react';
 
+type SortOption = 'name' | 'role' | 'recent';
+type ViewMode = 'grid' | 'list';
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  Admin: 'Administrator',
+  Team_Lead: 'Team Lead',
+  HR: 'HR',
+  Team_Member: 'Team Member',
+};
+
+const ROLE_BADGE_CLASS: Record<UserRole, string> = {
+  Admin: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  Team_Lead: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+  HR: 'bg-pink-500/15 text-pink-300 border-pink-500/30',
+  Team_Member: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+};
+
+const ROLE_SORT_ORDER: Record<UserRole, number> = {
+  Admin: 0,
+  Team_Lead: 1,
+  HR: 2,
+  Team_Member: 3,
+};
+
+interface MemberInsights {
+  activeProjects: Project[];
+  leadProjects: Project[];
+  activeTasks: Task[];
+  completedTasks: Task[];
+  overdueTasks: Task[];
+}
+
+const isTaskAssignedToUser = (task: Task, userId: string) =>
+  task.assigneeId === userId || task.assigneeIds?.includes(userId) === true;
+
+const getMemberInsights = (member: User, projects: Project[], tasks: Task[]): MemberInsights => {
+  const projectMembership = projects.filter((project) =>
+    project.memberIds.includes(member.id) || project.teamLeadId === member.id,
+  );
+
+  const leadProjects = projects.filter((project) => project.teamLeadId === member.id);
+  const activeProjects = projectMembership.filter((project) => project.status === 'Active');
+  const assignedTasks = tasks.filter((task) => isTaskAssignedToUser(task, member.id));
+  const activeTasks = assignedTasks.filter((task) => task.status !== 'Done');
+  const completedTasks = assignedTasks.filter((task) => task.status === 'Done');
+  const overdueTasks = activeTasks.filter((task) => new Date(task.dueDate) < new Date());
+
+  return {
+    activeProjects,
+    leadProjects,
+    activeTasks,
+    completedTasks,
+    overdueTasks,
+  };
+};
+
+const formatDate = (value?: string) => {
+  if (!value) return 'Not available';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+const formatRole = (role: UserRole) => ROLE_LABELS[role] || role.replace('_', ' ');
+
 export const TeamMembersView: React.FC = () => {
-  const {
-    users,
-    tasks,
-    currentRole,
-    addTeamMember,
-    updateTeamMember,
-    deleteTeamMember,
-    reassignMemberTasks,
-    getMemberAssignedTasksCount
-  } = useApp();
+  const { users, tasks, projects, currentRole } = useApp();
 
-  // View & Filter states
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [roleFilter, setRoleFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'name' | 'tasks' | 'role'>('name');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('role');
+  const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
 
-  // Modal states
-  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [deletingUser, setDeletingUser] = useState<User | null>(null);
-  const [reassigningUser, setReassigningUser] = useState<User | null>(null);
+  const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
 
-  // Form states for Add / Edit
-  const [formData, setFormData] = useState<{
-    name: string;
-    email: string;
-    role: UserRole;
-    department: string;
-    title: string;
-    status: 'active' | 'inactive' | 'away';
-    githubUsername: string;
-    avatar: string;
-  }>({
-    name: '',
-    email: '',
-    role: 'Team_Member',
-    department: 'Engineering',
-    title: 'Software Engineer',
-    status: 'active',
-    githubUsername: '',
-    avatar: ''
-  });
+  const members = useMemo(
+    () =>
+      users
+        .filter((member) => {
+          const query = searchQuery.trim().toLowerCase();
+          const matchesQuery =
+            !query ||
+            member.name.toLowerCase().includes(query) ||
+            member.email.toLowerCase().includes(query) ||
+            member.department.toLowerCase().includes(query) ||
+            member.title.toLowerCase().includes(query);
 
-  // Reassignment modal target state
-  const [targetReassignUserId, setTargetReassignUserId] = useState<string>('');
+          const matchesRole = roleFilter === 'all' || member.role === roleFilter;
+          return matchesQuery && matchesRole;
+        })
+        .sort((left, right) => {
+          if (sortBy === 'role') {
+            return ROLE_SORT_ORDER[left.role] - ROLE_SORT_ORDER[right.role] || left.name.localeCompare(right.name);
+          }
+          if (sortBy === 'recent') return (right.createdAt || '').localeCompare(left.createdAt || '');
 
-  // Stats computation
+          return left.name.localeCompare(right.name);
+        }),
+    [roleFilter, searchQuery, sortBy, tasks, users],
+  );
+
+  const selectedMember = useMemo(
+    () => users.find((member) => member.id === selectedMemberId) ?? null,
+    [selectedMemberId, users],
+  );
+
+  const selectedMemberInsights = useMemo(
+    () => (selectedMember ? getMemberInsights(selectedMember, projects, tasks) : null),
+    [projects, selectedMember, tasks],
+  );
+
+  useEffect(() => {
+    if (!canInspectMembers) {
+      setSelectedMemberId(null);
+    }
+  }, [canInspectMembers]);
+
   const totalMembers = users.length;
-  const activeMembersCount = users.filter((u) => u.status === 'active').length;
-  const teamLeadsCount = users.filter((u) => u.role === 'Team_Lead').length;
-  const hrCount = users.filter((u) => u.role === 'HR').length;
-  const totalAssignedTasksCount = tasks.filter((t) => t.status !== 'Done').length;
+  const teamLeadCount = users.filter((member) => member.role === 'Team_Lead').length;
+  const hrCount = users.filter((member) => member.role === 'HR').length;
+  const teamMemberCount = users.filter((member) => member.role === 'Team_Member').length;
 
-  // Filter & Sort logic
-  const filteredUsers = users
-    .filter((u) => {
-      const matchesSearch =
-        u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (u.githubUsername && u.githubUsername.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        u.department.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.title.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesRole = roleFilter === 'all' || u.role === roleFilter;
-      const matchesStatus = statusFilter === 'all' || u.status === statusFilter;
-      return matchesSearch && matchesRole && matchesStatus;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'name') {
-        return a.name.localeCompare(b.name);
-      } else if (sortBy === 'tasks') {
-        return getMemberAssignedTasksCount(b.id) - getMemberAssignedTasksCount(a.id);
-      } else if (sortBy === 'role') {
-        return a.role.localeCompare(b.role);
-      }
-      return 0;
-    });
+  const roleQuickFilters: Array<{ label: string; value: 'all' | UserRole; count: number }> = [
+    { label: 'All', value: 'all', count: users.length },
+    { label: 'Admin', value: 'Admin', count: users.filter((member) => member.role === 'Admin').length },
+    { label: 'Team Leads', value: 'Team_Lead', count: users.filter((member) => member.role === 'Team_Lead').length },
+    { label: 'HR', value: 'HR', count: users.filter((member) => member.role === 'HR').length },
+    { label: 'Members', value: 'Team_Member', count: teamMemberCount },
+  ];
 
-  // Form Handlers
-  const handleOpenAdd = () => {
-    setFormData({
-      name: '',
-      email: '',
-      role: 'Team_Member',
-      department: 'Engineering',
-      title: 'Software Engineer',
-      status: 'active',
-      githubUsername: '',
-      avatar: ''
-    });
-    setIsAddModalOpen(true);
-  };
-
-  const handleOpenEdit = (user: User) => {
-    setEditingUser(user);
-    setFormData({
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      department: user.department,
-      title: user.title,
-      status: user.status,
-      githubUsername: user.githubUsername || '',
-      avatar: user.avatar
-    });
-  };
-
-  const handleSaveAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.name || !formData.email) {
-      alert('Please fill in required fields (Name and Email).');
-      return;
-    }
-    addTeamMember({
-      name: formData.name,
-      email: formData.email,
-      role: formData.role,
-      department: formData.department,
-      title: formData.title,
-      status: formData.status,
-      githubUsername: formData.githubUsername || undefined,
-      avatar: formData.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(formData.name)}`
-    });
-    setIsAddModalOpen(false);
-  };
-
-  const handleSaveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingUser) return;
-    updateTeamMember(editingUser.id, {
-      name: formData.name,
-      email: formData.email,
-      role: formData.role,
-      department: formData.department,
-      title: formData.title,
-      status: formData.status,
-      githubUsername: formData.githubUsername || undefined,
-      avatar: formData.avatar || editingUser.avatar
-    });
-    setEditingUser(null);
-  };
-
-  const handleConfirmDelete = () => {
-    if (!deletingUser) return;
-    const taskCount = getMemberAssignedTasksCount(deletingUser.id);
-    if (taskCount > 0 && !targetReassignUserId) {
-      alert(`Safety Check Failed: Please select a team member to reassign ${deletingUser.name}'s ${taskCount} active task(s) before deleting.`);
-      return;
-    }
-    const res = deleteTeamMember(deletingUser.id, targetReassignUserId || undefined);
-    alert(res.message);
-    setDeletingUser(null);
-    setTargetReassignUserId('');
-  };
-
-  const handleConfirmReassignOnly = () => {
-    if (!reassigningUser || !targetReassignUserId) {
-      alert('Please select a target team member for reassignment.');
-      return;
-    }
-    const res = reassignMemberTasks(reassigningUser.id, targetReassignUserId);
-    alert(`Successfully reassigned ${res.count} task(s) to selected team member.`);
-    setReassigningUser(null);
-    setTargetReassignUserId('');
-  };
-
-  const getRoleBadgeClass = (role: UserRole) => {
-    switch (role) {
-      case 'Admin':
-        return 'bg-amber-500/20 text-amber-300 border-amber-500/40';
-      case 'Team_Lead':
-        return 'bg-purple-500/20 text-purple-300 border-purple-500/40';
-      case 'HR':
-        return 'bg-pink-500/20 text-pink-300 border-pink-500/40';
-      case 'Team_Member':
-      default:
-        return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40';
+  const handleCopyEmail = async (email: string) => {
+    try {
+      await navigator.clipboard.writeText(email);
+      setCopiedEmail(email);
+      window.setTimeout(() => {
+        setCopiedEmail((current) => (current === email ? null : current));
+      }, 1800);
+    } catch {
+      setCopiedEmail(null);
     }
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header Banner */}
-      <div className="glass-panel p-6 border border-cyan-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="p-3 rounded-2xl bg-gradient-to-tr from-cyan-500/20 via-purple-500/20 to-pink-500/20 text-cyan-400 border border-cyan-500/30">
-            <Users size={28} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-white tracking-wide">Team Members Hub</h1>
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                MODULE 06 (AbdulAzeemHashmi)
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Manage organization users, role scopes, active assignments, and safety reassignment protocols.
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={handleOpenAdd}
-          className="px-4 py-2.5 rounded-xl glass-button-neon font-bold text-xs flex items-center gap-2 shrink-0 shadow-[0_0_15px_rgba(0,242,254,0.3)]"
-        >
-          <UserPlus size={16} /> Add Team Member
-        </button>
-      </div>
-
-      {/* Overview Metric Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="glass-panel p-4 border border-white/10 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-            <Users size={20} />
-          </div>
-          <div>
-            <span className="text-xs text-slate-400 font-medium block">Total Members</span>
-            <span className="text-lg font-extrabold text-white font-mono">{totalMembers}</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-4 border border-white/10 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <UserCheck size={20} />
-          </div>
-          <div>
-            <span className="text-xs text-slate-400 font-medium block">Active Members</span>
-            <span className="text-lg font-extrabold text-emerald-400 font-mono">{activeMembersCount}</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-4 border border-white/10 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
-            <ShieldCheck size={20} />
-          </div>
-          <div>
-            <span className="text-xs text-slate-400 font-medium block">Team Leads & HR</span>
-            <span className="text-lg font-extrabold text-purple-300 font-mono">{teamLeadsCount + hrCount}</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-4 border border-white/10 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            <Briefcase size={20} />
-          </div>
-          <div>
-            <span className="text-xs text-slate-400 font-medium block">Active Task Workload</span>
-            <span className="text-lg font-extrabold text-amber-300 font-mono">{totalAssignedTasksCount} Tasks</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Control Toolbar: Search, Filter, Sort & View Modes */}
-      <div className="glass-panel p-4 border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex-1 flex flex-wrap items-center gap-3">
-          {/* Search Box */}
-          <div className="relative flex-1 min-w-[220px]">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search member, email, github handle..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-
-          {/* Role Filter */}
-          <div className="flex items-center gap-2">
-            <Filter size={14} className="text-slate-400" />
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-300 focus:outline-none focus:border-cyan-500/50"
-            >
-              <option value="all">All Roles</option>
-              <option value="Admin">Admin</option>
-              <option value="Team_Lead">Team Lead</option>
-              <option value="HR">HR</option>
-              <option value="Team_Member">Team Member</option>
-            </select>
-          </div>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-300 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="all">All Statuses</option>
-            <option value="active">Active</option>
-            <option value="away">Away</option>
-            <option value="inactive">Inactive</option>
-          </select>
-
-          {/* Sort By */}
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-300 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="name">Sort by Name</option>
-            <option value="tasks">Sort by Assigned Tasks</option>
-            <option value="role">Sort by Role</option>
-          </select>
-        </div>
-
-        {/* View Toggle */}
-        <div className="flex items-center gap-1 p-1 rounded-xl bg-black/40 border border-white/10 shrink-0">
-          <button
-            onClick={() => setViewMode('grid')}
-            className={`p-1.5 rounded-lg transition-colors ${
-              viewMode === 'grid' ? 'bg-cyan-500/20 text-cyan-400 font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-            title="Grid View"
-          >
-            <Grid size={16} />
-          </button>
-          <button
-            onClick={() => setViewMode('table')}
-            className={`p-1.5 rounded-lg transition-colors ${
-              viewMode === 'table' ? 'bg-cyan-500/20 text-cyan-400 font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-            title="Table View"
-          >
-            <List size={16} />
-          </button>
-        </div>
-      </div>
-
-      {/* Grid View */}
-      {viewMode === 'grid' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredUsers.map((member) => {
-            const taskCount = getMemberAssignedTasksCount(member.id);
-            return (
-              <div
-                key={member.id}
-                className="glass-panel p-5 border border-white/10 hover:border-cyan-500/40 transition-all duration-200 flex flex-col justify-between space-y-4 group"
-              >
+    <>
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="glass-panel-glow border border-cyan-500/25 p-5 md:p-6">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+            <div className="max-w-3xl space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-cyan-300">
+                  <Users size={24} />
+                </div>
                 <div>
-                  {/* Top Avatar & Status Row */}
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="relative">
-                        <img
-                          src={member.avatar}
-                          alt={member.name}
-                          className="w-12 h-12 rounded-xl object-cover border border-white/20 shadow-md"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                        <span
-                          className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-slate-950 ${
-                            member.status === 'active'
-                              ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
-                              : member.status === 'away'
-                              ? 'bg-amber-400'
-                              : 'bg-slate-500'
-                          }`}
-                          title={`Status: ${member.status}`}
-                        />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
-                          {member.name}
-                        </h3>
-                        <p className="text-[11px] text-slate-400 flex items-center gap-1">
-                          <Briefcase size={12} className="text-slate-500" /> {member.title}
-                        </p>
-                      </div>
-                    </div>
-
-                    <span
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border ${getRoleBadgeClass(
-                        member.role
-                      )}`}
-                    >
-                      {member.role.replace('_', ' ')}
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-[0.25em] text-cyan-300">
+                      Member Directory
                     </span>
                   </div>
-
-                  {/* Info details */}
-                  <div className="space-y-2 text-xs text-slate-300 pt-2 border-t border-white/5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 flex items-center gap-1">
-                        <Mail size={12} /> Email:
-                      </span>
-                      <a href={`mailto:${member.email}`} className="text-slate-300 hover:text-cyan-400 truncate max-w-[180px]">
-                        {member.email}
-                      </a>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 flex items-center gap-1">
-                        <Building size={12} /> Department:
-                      </span>
-                      <span className="text-slate-300 font-medium">{member.department}</span>
-                    </div>
-
-                    {member.githubUsername && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500 flex items-center gap-1">
-                          <Github size={12} /> GitHub:
-                        </span>
-                        <a
-                          href={`https://github.com/${member.githubUsername}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-cyan-400 hover:underline font-mono"
-                        >
-                          @{member.githubUsername}
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Bottom Workload & Actions Row */}
-                <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-400">Assigned Tasks:</span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
-                        taskCount > 0
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          : 'bg-slate-800 text-slate-400 border border-white/5'
-                      }`}
-                    >
-                      {taskCount} Active
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    {taskCount > 0 && (
-                      <button
-                        onClick={() => {
-                          setReassigningUser(member);
-                          setTargetReassignUserId('');
-                        }}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-500/10 transition-colors"
-                        title="Reassign Tasks"
-                      >
-                        <ArrowRightLeft size={14} />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleOpenEdit(member)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-cyan-500/10 transition-colors"
-                      title="Edit Member"
-                    >
-                      <Edit3 size={14} />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setDeletingUser(member);
-                        setTargetReassignUserId('');
-                      }}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                      title="Delete Member (Safety Check)"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  <h1 className="mt-3 text-2xl font-bold text-white md:text-[2rem]">Team directory and member contact overview.</h1>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Table View */}
-      {viewMode === 'table' && (
-        <div className="glass-panel overflow-hidden border border-white/10">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="bg-slate-900/80 text-slate-400 font-mono uppercase text-[10px] tracking-wider border-b border-white/10">
-                <tr>
-                  <th className="p-4">Member Name</th>
-                  <th className="p-4">Role</th>
-                  <th className="p-4">Department & Title</th>
-                  <th className="p-4">Email / GitHub</th>
-                  <th className="p-4">Assigned Tasks</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {filteredUsers.map((member) => {
-                  const taskCount = getMemberAssignedTasksCount(member.id);
-                  return (
-                    <tr key={member.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="p-4 font-semibold text-white">
-                        <div className="flex items-center gap-3">
-                          <img src={member.avatar} alt="" className="w-8 h-8 rounded-lg object-cover border border-white/10" />
-                          <div>
-                            <span className="block font-bold text-white">{member.name}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">{member.id}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${getRoleBadgeClass(member.role)}`}>
-                          {member.role.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <span className="block text-slate-200">{member.title}</span>
-                        <span className="text-[10px] text-slate-400">{member.department}</span>
-                      </td>
-                      <td className="p-4">
-                        <span className="block text-slate-300">{member.email}</span>
-                        {member.githubUsername && (
-                          <span className="text-[10px] text-cyan-400 font-mono">@{member.githubUsername}</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded font-mono font-bold text-[10px] ${taskCount > 0 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                          {taskCount} Active
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <span className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-full ${member.status === 'active' ? 'bg-emerald-400' : member.status === 'away' ? 'bg-amber-400' : 'bg-slate-500'}`} />
-                          <span className="capitalize">{member.status}</span>
-                        </span>
-                      </td>
-                      <td className="p-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {taskCount > 0 && (
-                            <button
-                              onClick={() => {
-                                setReassigningUser(member);
-                                setTargetReassignUserId('');
-                              }}
-                              className="p-1.5 rounded text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
-                              title="Reassign Tasks"
-                            >
-                              <ArrowRightLeft size={14} />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleOpenEdit(member)}
-                            className="p-1.5 rounded text-slate-400 hover:text-cyan-300 hover:bg-cyan-500/10"
-                            title="Edit"
-                          >
-                            <Edit3 size={14} />
-                          </button>
-                          <button
-                            onClick={() => {
-                              setDeletingUser(member);
-                              setTargetReassignUserId('');
-                            }}
-                            className="p-1.5 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-500/10"
-                            title="Delete"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Add Team Member */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
-          <div className="glass-panel max-w-md w-full p-6 border border-cyan-500/40 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <UserPlus size={18} className="text-cyan-400" /> Add New Team Member
-              </h3>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
-                <X size={18} />
-              </button>
+              <p className="text-sm leading-6 text-slate-400">
+                Review the team roster, role coverage, and member contact details in a cleaner directory view aligned with the rest of WorkSync.
+              </p>
             </div>
 
-            <form onSubmit={handleSaveAdd} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Full Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Abdul Azeem Hashmi"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Email Address *</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="e.g. abdulazeemhashmi29@gmail.com"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">GitHub Username</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. AbdulAzeemHashmi"
-                    value={formData.githubUsername}
-                    onChange={(e) => setFormData({ ...formData, githubUsername: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Assign Role</label>
-                  <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                  >
-                    <option value="Team_Member">Team Member</option>
-                    <option value="Team_Lead">Team Lead</option>
-                    <option value="HR">HR</option>
-                    <option value="Admin">Admin</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Department</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Engineering"
-                    value={formData.department}
-                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Job Title</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Frontend Specialist"
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-white/10 text-slate-400 hover:text-white"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 rounded-xl glass-button-neon font-bold text-white">
-                  Create Member
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Edit Team Member */}
-      {editingUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
-          <div className="glass-panel max-w-md w-full p-6 border border-cyan-500/40 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-white/10">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Edit3 size={18} className="text-cyan-400" /> Edit Member: {editingUser.name}
-              </h3>
-              <button onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-white">
-                <X size={18} />
-              </button>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:min-w-[32rem]">
+              <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Members</div>
+                <div className="mt-2 text-2xl font-bold text-white">{totalMembers}</div>
+              </GlassCard>
+              <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Showing</div>
+                <div className="mt-2 text-2xl font-bold text-emerald-300">{members.length}</div>
+              </GlassCard>
+              <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Team Leads</div>
+                <div className="mt-2 text-2xl font-bold text-purple-300">{teamLeadCount}</div>
+              </GlassCard>
+              <GlassCard glowColor="magenta" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">HR</div>
+                <div className="mt-2 text-2xl font-bold text-fuchsia-300">{hrCount}</div>
+              </GlassCard>
             </div>
-
-            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Full Name</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Email</label>
-                <input
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Role</label>
-                  <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                  >
-                    <option value="Team_Member">Team Member</option>
-                    <option value="Team_Lead">Team Lead</option>
-                    <option value="HR">HR</option>
-                    <option value="Admin">Admin</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Status</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                  >
-                    <option value="active">Active</option>
-                    <option value="away">Away</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Department</label>
-                  <input
-                    type="text"
-                    value={formData.department}
-                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Title</label>
-                  <input
-                    type="text"
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingUser(null)}
-                  className="px-4 py-2 rounded-xl border border-white/10 text-slate-400"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 rounded-xl glass-button-neon font-bold text-white">
-                  Save Changes
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+        </section>
 
-      {/* Modal: Delete & Task Reassignment Safety Warning (Tricky Test Compliance) */}
-      {deletingUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-          <div className="glass-panel max-w-lg w-full p-6 border border-rose-500/40 space-y-4">
-            <div className="flex items-center gap-3 pb-3 border-b border-rose-500/20">
-              <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/40">
-                <AlertTriangle size={22} />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Delete Member Safety Verification</h3>
-                <p className="text-xs text-rose-300">Target Member: {deletingUser.name}</p>
-              </div>
-            </div>
-
-            {getMemberAssignedTasksCount(deletingUser.id) > 0 ? (
-              <div className="space-y-3 text-xs">
-                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-1">
-                  <span className="font-bold block flex items-center gap-1.5">
-                    <AlertTriangle size={16} /> TRICKY TEST SAFETY WARNING: ACTIVE TASKS FOUND!
-                  </span>
-                  <p className="text-amber-200/80">
-                    {deletingUser.name} currently has <strong>{getMemberAssignedTasksCount(deletingUser.id)} active assigned task(s)</strong>. To prevent orphaned tasks, you must reassign these tasks to another active team member before completing deletion.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Reassign Active Tasks To *</label>
-                  <select
-                    value={targetReassignUserId}
-                    onChange={(e) => setTargetReassignUserId(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-black/60 border border-amber-500/40 text-white font-medium focus:outline-none"
-                  >
-                    <option value="">-- Select Active Team Member --</option>
-                    {users
-                      .filter((u) => u.id !== deletingUser.id && u.status === 'active')
-                      .map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name} ({u.role.replace('_', ' ')}) - {getMemberAssignedTasksCount(u.id)} current tasks
-                        </option>
-                      ))}
-                  </select>
-                </div>
-
-                <div className="pt-2 flex justify-end gap-2">
+        <section className="glass-panel border border-white/10 p-4 md:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {roleQuickFilters.map((filter) => {
+                const active = roleFilter === filter.value;
+                return (
                   <button
-                    onClick={() => setDeletingUser(null)}
-                    className="px-4 py-2 rounded-xl border border-white/10 text-slate-300"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfirmDelete}
-                    disabled={!targetReassignUserId}
-                    className={`px-4 py-2 rounded-xl font-bold text-white flex items-center gap-2 ${
-                      targetReassignUserId
-                        ? 'bg-rose-600 hover:bg-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.4)]'
-                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    key={filter.label}
+                    type="button"
+                    onClick={() => setRoleFilter(filter.value)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                      active
+                        ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300'
+                        : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:text-white'
                     }`}
                   >
-                    <ArrowRightLeft size={14} /> Reassign Tasks & Delete Member
+                    {filter.label} <span className="ml-1 text-slate-500">{filter.count}</span>
                   </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+                <label className="relative flex-1 min-w-[16rem]">
+                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search by name, email, department, or title"
+                    className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-10 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none"
+                  />
+                </label>
+
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('grid')}
+                    className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                      viewMode === 'grid' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                    aria-label="Grid view"
+                  >
+                    <LayoutGrid size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('list')}
+                    className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                      viewMode === 'list' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                    }`}
+                    aria-label="List view"
+                  >
+                    <List size={15} />
+                  </button>
+                </div>
+
+                <select
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as SortOption)}
+                  className="rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-300 focus:border-cyan-500/40 focus:outline-none"
+                >
+                  <option value="name">Sort: Name</option>
+                  <option value="role">Sort: Role</option>
+                  <option value="recent">Sort: Recently Added</option>
+                </select>
+
+                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400 sm:text-right">
+                  Showing <span className="font-semibold text-white">{members.length}</span> of <span className="font-semibold text-white">{totalMembers}</span>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-3 text-xs">
-                <p className="text-slate-300">
-                  Are you sure you want to delete <strong>{deletingUser.name}</strong> from the team? This member has 0 active assigned tasks.
-                </p>
-                <div className="pt-2 flex justify-end gap-2">
-                  <button
-                    onClick={() => setDeletingUser(null)}
-                    className="px-4 py-2 rounded-xl border border-white/10 text-slate-300"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfirmDelete}
-                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 font-bold text-white shadow-[0_0_15px_rgba(244,63,94,0.4)]"
-                  >
-                    Confirm Delete
-                  </button>
-                </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="glass-panel border border-white/10 xl:flex xl:h-[min(72vh,48rem)] xl:flex-col xl:overflow-hidden">
+          <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Member roster</h2>
+              <p className="mt-1 text-xs text-slate-400">
+                {canInspectMembers
+                  ? 'Select a member to inspect assignments, project participation, and role ownership in detail.'
+                  : 'Browse the current team roster and general member information.'}
+              </p>
+            </div>
+            {canInspectMembers && (
+              <div className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-[11px] font-mono text-cyan-300">
+                Admin / HR detail access enabled
               </div>
             )}
           </div>
-        </div>
-      )}
 
-      {/* Modal: Direct Task Reassignment Utility */}
-      {reassigningUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-          <div className="glass-panel max-w-md w-full p-6 border border-amber-500/40 space-y-4">
-            <div className="flex items-center gap-3 pb-3 border-b border-amber-500/20">
-              <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40">
-                <ArrowRightLeft size={20} />
+          <div className="px-4 py-4 md:px-5 md:py-5 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+            {members.length === 0 ? (
+              <div className="flex min-h-[16rem] flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-black/20 px-6 text-center">
+                <UserRoundSearch size={28} className="text-slate-500" />
+                <h3 className="mt-4 text-base font-semibold text-white">No members match the current filters.</h3>
+                <p className="mt-2 max-w-md text-sm text-slate-400">
+                  Adjust the search criteria or role filter to widen the roster view.
+                </p>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Bulk Task Reassignment</h3>
-                <p className="text-xs text-amber-300">Source Member: {reassigningUser.name}</p>
+            ) : viewMode === 'grid' ? (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {members.map((member) => {
+                  const isClickable = canInspectMembers;
+
+                  return (
+                    <GlassCard
+                      key={member.id}
+                      glowColor={member.role === 'Admin' ? 'amber' : member.role === 'HR' ? 'magenta' : member.role === 'Team_Lead' ? 'violet' : 'cyan'}
+                      hover3dTilt={false}
+                      onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
+                      className={`h-full p-4 md:p-5 ${isClickable ? 'cursor-pointer' : 'cursor-default'}`}
+                    >
+                      <div className="flex h-full flex-col gap-4 rounded-[1.15rem] bg-gradient-to-b from-white/[0.02] to-transparent">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <img
+                              src={member.avatar}
+                              alt={member.name}
+                              className="h-13 w-13 rounded-2xl border border-white/10 object-cover bg-white/5 md:h-14 md:w-14"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="truncate text-[15px] font-semibold text-white md:text-base">{member.name}</h3>
+                              </div>
+                              <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-400">
+                                  <Building2 size={13} />
+                                  <span className="truncate">{member.department}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
+                            {formatRole(member.role)}
+                          </span>
+                        </div>
+
+                        <div className="grid gap-2.5 border-t border-white/10 pt-4 text-sm text-slate-300">
+                          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                            <div className="flex min-w-0 items-center gap-2 truncate">
+                            <Mail size={14} className="shrink-0 text-slate-500" />
+                            <span className="truncate">{member.email}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleCopyEmail(member.email);
+                              }}
+                              className="rounded-lg border border-white/10 bg-black/20 p-1.5 text-slate-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                              aria-label={`Copy ${member.name} email`}
+                            >
+                              {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 truncate rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                            <Users size={14} className="shrink-0 text-slate-500" />
+                            <span className="truncate">Joined {formatDate(member.createdAt)}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-auto flex items-center justify-end border-t border-white/10 pt-4 text-xs text-slate-400">
+                          {isClickable ? (
+                            <span className="inline-flex items-center gap-1 font-semibold text-cyan-300">
+                              View details
+                              <ChevronRight size={14} />
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">&nbsp;</span>
+                          )}
+                        </div>
+                      </div>
+                    </GlassCard>
+                  );
+                })}
               </div>
+            ) : (
+                <div className="space-y-3">
+                {members.map((member) => {
+                  const isClickable = canInspectMembers;
+
+                  return (
+                    <div
+                      key={member.id}
+                      onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
+                      className={`rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 transition ${
+                        isClickable ? 'cursor-pointer hover:border-cyan-500/30 hover:bg-white/[0.06]' : 'cursor-default'
+                      }`}
+                    >
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex min-w-0 items-center gap-4">
+                          <img
+                            src={member.avatar}
+                            alt={member.name}
+                            className="h-12 w-12 rounded-2xl border border-white/10 object-cover bg-white/5"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="truncate text-sm font-semibold text-white md:text-base">{member.name}</h3>
+                              <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
+                                {formatRole(member.role)}
+                              </span>
+                            </div>
+                            <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 text-sm text-slate-300 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto] md:items-center lg:min-w-[42rem]">
+                          <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                            <Mail size={14} className="shrink-0 text-slate-500" />
+                            <span className="truncate">{member.email}</span>
+                          </div>
+                          <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-slate-400">
+                            <Building2 size={14} className="shrink-0 text-slate-500" />
+                            <span className="truncate">{member.department}</span>
+                          </div>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleCopyEmail(member.email);
+                              }}
+                              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                            >
+                              <span className="inline-flex items-center gap-1.5">
+                                {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
+                                {copiedEmail === member.email ? 'Copied' : 'Copy email'}
+                              </span>
+                            </button>
+                            {isClickable && (
+                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300">
+                                Details
+                                <ChevronRight size={14} />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      {canInspectMembers && selectedMember && selectedMemberInsights && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedMemberId(null);
+          }}
+        >
+          <div className="glass-panel-glow flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border border-cyan-500/25">
+            <div className="border-b border-white/10 bg-gradient-to-r from-cyan-500/8 via-transparent to-purple-500/8 px-6 py-5">
+              <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 items-start gap-4">
+                <img
+                  src={selectedMember.avatar}
+                  alt={selectedMember.name}
+                  className="h-16 w-16 rounded-2xl border border-white/10 object-cover bg-white/5"
+                />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-xl font-bold text-white">{selectedMember.name}</h2>
+                    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${ROLE_BADGE_CLASS[selectedMember.role]}`}>
+                      {formatRole(selectedMember.role)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-400">{selectedMember.title}</p>
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
+                    Member overview covering project participation, leadership ownership, and active delivery workload.
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Building2 size={13} />
+                      {selectedMember.department}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Mail size={13} />
+                      {selectedMember.email}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedMemberId(null)}
+                className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                aria-label="Close member detail"
+              >
+                <X size={18} />
+              </button>
+            </div>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <p className="text-slate-300">
-                Transfer all <strong>{getMemberAssignedTasksCount(reassigningUser.id)} active task(s)</strong> assigned to {reassigningUser.name} to another team member:
-              </p>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Target Team Member *</label>
-                <select
-                  value={targetReassignUserId}
-                  onChange={(e) => setTargetReassignUserId(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-black/60 border border-amber-500/40 text-white font-medium focus:outline-none"
-                >
-                  <option value="">-- Select Target Member --</option>
-                  {users
-                    .filter((u) => u.id !== reassigningUser.id && u.status === 'active')
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.role.replace('_', ' ')})
-                      </option>
-                    ))}
-                </select>
+            <div className="overflow-y-auto px-6 py-5">
+              <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+                <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4">
+                  <div className="text-xs font-mono text-slate-400">Active projects</div>
+                  <div className="mt-2 text-2xl font-bold text-white">{selectedMemberInsights.activeProjects.length}</div>
+                </GlassCard>
+                <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4">
+                  <div className="text-xs font-mono text-slate-400">Projects leading</div>
+                  <div className="mt-2 text-2xl font-bold text-purple-300">{selectedMemberInsights.leadProjects.length}</div>
+                </GlassCard>
+                <GlassCard glowColor="amber" hover3dTilt={false} className="cursor-default p-4">
+                  <div className="text-xs font-mono text-slate-400">Open tasks</div>
+                  <div className="mt-2 text-2xl font-bold text-amber-300">{selectedMemberInsights.activeTasks.length}</div>
+                </GlassCard>
+                <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4">
+                  <div className="text-xs font-mono text-slate-400">Completed tasks</div>
+                  <div className="mt-2 text-2xl font-bold text-emerald-300">{selectedMemberInsights.completedTasks.length}</div>
+                </GlassCard>
               </div>
 
-              <div className="pt-2 flex justify-end gap-2">
-                <button
-                  onClick={() => setReassigningUser(null)}
-                  className="px-4 py-2 rounded-xl border border-white/10 text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmReassignOnly}
-                  disabled={!targetReassignUserId}
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 font-bold text-black disabled:opacity-50"
-                >
-                  Confirm Reassign
-                </button>
+              <div className="mt-5 grid gap-5 xl:grid-cols-12">
+                <div className="space-y-5 xl:col-span-5">
+                  <div className="glass-panel border border-white/10 p-5">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-cyan-300" />
+                      <h3 className="text-sm font-semibold text-white">Member summary</h3>
+                    </div>
+                    <div className="mt-4 space-y-3 text-sm text-slate-300">
+                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                        <span className="text-slate-400">Created in system</span>
+                        <span className="font-medium text-white">{formatDate(selectedMember.createdAt)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                        <span className="text-slate-400">Current role</span>
+                        <span className="font-medium text-white">{formatRole(selectedMember.role)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                        <span className="text-slate-400">Overdue work items</span>
+                        <span className="font-medium text-white">{selectedMemberInsights.overdueTasks.length}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                        <span className="text-slate-400">Current workload</span>
+                        <span className="font-medium text-white">{selectedMemberInsights.activeTasks.length} open tasks</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="glass-panel border border-white/10 p-5">
+                    <div className="flex items-center gap-2">
+                      <FolderKanban size={16} className="text-purple-300" />
+                      <h3 className="text-sm font-semibold text-white">Active project participation</h3>
+                    </div>
+                    <div className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
+                      {selectedMemberInsights.activeProjects.length === 0 ? (
+                        <p className="rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-5 text-sm text-slate-500">
+                          No active projects are assigned to this member right now.
+                        </p>
+                      ) : (
+                        selectedMemberInsights.activeProjects.map((project) => (
+                          <div key={project.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-white">{project.title}</div>
+                                <div className="mt-1 text-xs text-slate-400">{project.code}</div>
+                              </div>
+                              <StatusBadge status={project.status} size="sm" />
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1">
+                                Deadline {formatDate(project.targetDate)}
+                              </span>
+                              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1">
+                                {project.progress}% progress
+                              </span>
+                              {project.teamLeadId === selectedMember.id && (
+                                <span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-purple-300">
+                                  Project lead
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-5 xl:col-span-7">
+                  <div className="glass-panel border border-white/10 p-5">
+                    <div className="flex items-center gap-2">
+                      <Briefcase size={16} className="text-amber-300" />
+                      <h3 className="text-sm font-semibold text-white">Current work items</h3>
+                    </div>
+                    <div className="mt-4 max-h-80 space-y-3 overflow-y-auto pr-1">
+                      {selectedMemberInsights.activeTasks.length === 0 ? (
+                        <p className="rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-5 text-sm text-slate-500">
+                          No active tasks are currently assigned.
+                        </p>
+                      ) : (
+                        selectedMemberInsights.activeTasks.map((task) => {
+                          const project = projects.find((item) => item.id === task.projectId);
+                          return (
+                            <div key={task.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-mono text-slate-400">
+                                      {task.taskNumber}
+                                    </span>
+                                    <StatusBadge status={task.status} size="sm" />
+                                  </div>
+                                  <h4 className="mt-2 text-sm font-semibold text-white">{task.title}</h4>
+                                  <p className="mt-1 line-clamp-2 text-sm text-slate-400">{task.description}</p>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-slate-400">
+                                    {project?.title || 'Unlinked project'}
+                                  </span>
+                                  <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-300">
+                                    Due {formatDate(task.dueDate)}
+                                  </span>
+                                  <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-cyan-300">
+                                    {task.priority} priority
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    <div className="glass-panel border border-white/10 p-5">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={16} className="text-purple-300" />
+                        <h3 className="text-sm font-semibold text-white">Projects led</h3>
+                      </div>
+                      <div className="mt-4 max-h-56 space-y-3 overflow-y-auto pr-1">
+                        {selectedMemberInsights.leadProjects.length === 0 ? (
+                          <p className="rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-5 text-sm text-slate-500">
+                            This member is not leading any projects right now.
+                          </p>
+                        ) : (
+                          selectedMemberInsights.leadProjects.map((project) => (
+                            <div key={project.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                              <div className="text-sm font-semibold text-white">{project.title}</div>
+                              <div className="mt-1 text-xs text-slate-400">{project.code}</div>
+                              <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-400">
+                                <span>{project.memberIds.length} members</span>
+                                <span>{project.progress}% progress</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="glass-panel border border-white/10 p-5">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 size={16} className="text-emerald-300" />
+                        <h3 className="text-sm font-semibold text-white">Completed delivery</h3>
+                      </div>
+                      <div className="mt-4 max-h-56 space-y-3 overflow-y-auto pr-1">
+                        {selectedMemberInsights.completedTasks.length === 0 ? (
+                          <p className="rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-5 text-sm text-slate-500">
+                            No completed tasks are available for this member yet.
+                          </p>
+                        ) : (
+                          selectedMemberInsights.completedTasks.slice(0, 8).map((task) => (
+                            <div key={task.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-white">{task.title}</div>
+                                  <div className="mt-1 text-xs text-slate-400">{task.taskNumber}</div>
+                                </div>
+                                <StatusBadge status={task.status} size="sm" />
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };

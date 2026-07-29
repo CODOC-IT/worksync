@@ -16,6 +16,7 @@ export interface EffectiveRoles {
   activeTemporaryRoles: ActiveTemporaryRole[];
   isActiveTeamLead: boolean;
   isActiveHR: boolean;
+  isHRandTeamLead: boolean;
   leadProjectPks: number[];
 }
 
@@ -29,13 +30,15 @@ interface DbTemporaryRoleRow {
 }
 
 const ROLE_CODE_MAP: Record<string, string> = {
+  Administrator: 'Admin',
+  TeamMember: 'Team_Member',
   TeamLead: 'Team_Lead',
   HRRepresentative: 'HR',
 };
 
 export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles> => {
   const user = userStore.findById(userId);
-  const permanentRole = user?.role || 'Team_Member';
+  let permanentRole: string = user?.role || 'Team_Member';
 
   if (!isDatabaseConfigured()) {
     return {
@@ -43,12 +46,31 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
       activeTemporaryRoles: [],
       isActiveTeamLead: permanentRole === 'Team_Lead',
       isActiveHR: permanentRole === 'HR',
+      isHRandTeamLead: false,
       leadProjectPks: [],
     };
   }
 
   try {
     const userPk = toUserPk(userId);
+    const permanentRoleResult = await query<{ rolecode: string }>(
+      `SELECT r.rolecode
+       FROM iam.userroles ur
+       JOIN iam.roles r ON r.roleid = ur.roleid
+       WHERE ur.userid = $1
+         AND ur.revokedatutc IS NULL
+         AND ur.startsatutc <= now()
+         AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+         AND r.istemporary = FALSE
+       ORDER BY ur.startsatutc DESC
+       LIMIT 1`,
+      [userPk]
+    );
+    if (permanentRoleResult.rows[0]) {
+      permanentRole = ROLE_CODE_MAP[permanentRoleResult.rows[0].rolecode]
+        || permanentRoleResult.rows[0].rolecode;
+    }
+
     const result = await query<DbTemporaryRoleRow>(
       `SELECT ur.userroleid, r.rolecode,
                ur.startsatutc, ur.endsatutc,
@@ -84,39 +106,25 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
     }
 
     const activeTemporaryRoles = Array.from(roleMap.values());
-    const isActiveTeamLead = activeTemporaryRoles.some((r) => r.roleCode === 'Team_Lead');
-    const isActiveHR = activeTemporaryRoles.some((r) => r.roleCode === 'HR');
+    const isActiveTeamLead = permanentRole === 'Team_Lead'
+      || activeTemporaryRoles.some((role) => role.roleCode === 'Team_Lead');
+    const isActiveHR = permanentRole === 'HR'
+      || activeTemporaryRoles.some((role) => role.roleCode === 'HR');
+    const isHRandTeamLead = isActiveHR && isActiveTeamLead;
 
     const leadProjectPks = Array.from(
-      new Set(activeTemporaryRoles.flatMap((r) => r.leadProjectPks))
+      new Set(activeTemporaryRoles.flatMap((role) => role.leadProjectPks))
     );
 
-    return { permanentRole, activeTemporaryRoles, isActiveTeamLead, isActiveHR, leadProjectPks };
+    return { permanentRole, activeTemporaryRoles, isActiveTeamLead, isActiveHR, isHRandTeamLead, leadProjectPks };
   } catch (err) {
     return {
       permanentRole,
       activeTemporaryRoles: [],
       isActiveTeamLead: permanentRole === 'Team_Lead',
       isActiveHR: permanentRole === 'HR',
+      isHRandTeamLead: false,
       leadProjectPks: [],
     };
   }
-};
-
-export const hasAccessToSensitivity = (
-  viewerPermanentRole: string,
-  _isActiveTeamLead: boolean,
-  _isActiveHR: boolean,
-  viewerId: string,
-  sensitivity?: string
-): boolean => {
-  if (viewerPermanentRole === 'Admin') return true;
-  if (!sensitivity || sensitivity === 'Normal') return true;
-  if (sensitivity === 'Sensitive') {
-    return viewerPermanentRole === 'Admin';
-  }
-  if (sensitivity === 'Restricted') {
-    return false;
-  }
-  return true;
 };

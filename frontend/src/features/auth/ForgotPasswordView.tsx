@@ -302,7 +302,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onBackTo
                       onKeyDown={(e) => handleOtpKeyDown(i, e)}
                       whileFocus={{ scale: 1.08 }}
                       autoFocus={i === 0}
-                      className={`w-10 h-12 sm:w-12 sm:h-14 text-lg sm:text-xl font-bold rounded-xl border-2 bg-slate-800/60 text-white outline-none transition-all duration-200 ${
+                      className={`w-10 h-12 sm:w-12 sm:h-14 text-lg sm:text-xl font-bold text-center rounded-xl border-2 bg-slate-800/60 text-white outline-none transition-all duration-200 ${
                         digit ? 'border-cyan-400 shadow-[0_0_12px_rgba(0,212,255,0.3)]' : 'border-slate-700'
                       } ${errorMsg ? 'border-red-500/60' : ''} focus:border-cyan-400 focus:shadow-[0_0_12px_rgba(0,212,255,0.3)]`}
                     />
