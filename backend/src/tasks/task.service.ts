@@ -52,6 +52,7 @@ const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 // permission check.
 const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'Admin') return;
+  if (role === 'HR') throw new TaskAuthorizationError('HR users cannot edit tasks.');
   const projectId = projectFrontendId(row);
   if (role === 'Team_Lead') {
     if (await isProjectLead(projectId, userId, role)) return;
@@ -167,6 +168,10 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
     }
+    const hrAssignee = taskInput.assigneeIds.find((assigneeId) => userStore.findById(assigneeId)?.role === 'HR');
+    if (hrAssignee) {
+      throw new TaskValidationError('HR users cannot be assigned tasks.');
+    }
   }
 
   const toInsertRow = async (taskInput: CreateTaskInput | NonNullable<CreateTaskInput['subtasks']>[number]) => ({
@@ -241,6 +246,10 @@ export const updateTask = async (
     ? (await repo.findAssigneesForTask(row.taskid)).map((a) => fromUserPk(a.userid))
     : [];
   const assigneePks = input.assigneeIds?.map(toUserPk);
+  if (input.assigneeIds) {
+    const hrAssignee = input.assigneeIds.find((id) => userStore.findById(id)?.role === 'HR');
+    if (hrAssignee) throw new TaskValidationError('HR users cannot be assigned tasks.');
+  }
   await repo.updateTask(row.taskid, updates, assigneePks, toUserPk(actorId));
 
   const updatedRow = await repo.findTaskById(row.taskid);
