@@ -96,6 +96,19 @@ const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): 
   throw new TaskAuthorizationError('You can only delete tasks assigned to you or in projects you lead.');
 };
 
+// Kanban status movement is intentionally independent from the controlled task-detail edit
+// workflow. An assigned Team Member can move their work through To Do/In Progress/Review
+// directly; only field edits such as title, dates, description, and priority require approval.
+const assertCanChangeTaskStatus = async (row: TaskRow, userId: string, role: string): Promise<void> => {
+  if (role === 'HR') throw new TaskAuthorizationError('HR users cannot change task status.');
+  if (role === 'Admin') return;
+  if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+
+  const assignees = await repo.findAssigneesForTask(row.taskid);
+  if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
+  throw new TaskAuthorizationError('Only an assignee or this project\'s Team Lead can change task status.');
+};
+
 // Recipients are always assignees + the project's Team Lead (PRD §6.3/§6.6: a Team Lead must
 // see the full task lifecycle for their own projects, not only when they're also personally
 // assigned) -- resolveTeamLeadUserId falls back to the project Owner when there's no separate
@@ -630,7 +643,7 @@ export const changeTaskStatus = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId, actorRole);
+  await assertCanChangeTaskStatus(row, actorId, actorRole);
 
   if (!input.note?.trim()) throw new TaskValidationError('A reason is required for every status change.');
   // A Done task is locked to everyone on this generic path, including its assignees and Admins.
