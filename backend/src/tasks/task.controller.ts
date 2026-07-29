@@ -8,7 +8,13 @@ import {
   validateReviewDecisionBody,
   validateUpdateTaskBody
 } from './task.validation.js';
-import { ApiTaskStatus, ChangeStatusInput, CreateTaskInput, UpdateTaskInput } from './task.types.js';
+import {
+  ApiTaskStatus,
+  ChangeStatusInput,
+  CreateTaskInput,
+  TaskEditApprovalInput,
+  UpdateTaskInput
+} from './task.types.js';
 
 // Controller = thin HTTP adapter (matches backend/src/notifications / backend/src/projects).
 
@@ -187,5 +193,48 @@ export const getHistory = async (req: AuthenticatedRequest, res: Response): Prom
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load task history.');
+  }
+};
+
+export const createTaskEditApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.createTaskEditApproval(
+      req.params.id,
+      req.body as TaskEditApprovalInput,
+      user.id,
+      user.role
+    );
+    res.status(201).json({ success: true, message: 'Task update requested.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to submit task update request.');
+  }
+};
+
+export const listTaskEditApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.listTaskEditApprovals(user.id, user.role);
+    res.json({ success: true, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to load task update requests.');
+  }
+};
+
+export const decideTaskEditApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const decision = req.body?.decision;
+  if (decision !== 'Approved' && decision !== 'Rejected') {
+    res.status(400).json({ success: false, message: 'Decision must be Approved or Rejected.' });
+    return;
+  }
+  try {
+    const data = await service.decideTaskEditApproval(req.params.approvalId, decision, user.id, user.role);
+    res.json({ success: true, message: `Task update ${decision.toLowerCase()}.`, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to decide task update request.');
   }
 };

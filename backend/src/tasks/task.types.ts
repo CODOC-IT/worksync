@@ -149,3 +149,24 @@ export interface ChangeStatusInput {
   status: ApiTaskStatus;
   note: string;
 }
+
+export interface TaskEditApprovalInput {
+  title: string;
+  description: string;
+  priority: ApiTaskPriority;
+  startDate: string;
+  dueDate: string;
+}
+
+export interface TaskEditApprovalRow {
+  changerequestid: number;
+  taskid: number;
+  projectid: number;
+  tasktitle: string;
+  requestedbyuserid: number;
+  requeststatus: 'Pending' | 'Approved' | 'Rejected';
+  submittedatutc: Date;
+  fieldcode: string | null;
+  oldvaluejson: string | null;
+  proposedvaluejson: string | null;
+}

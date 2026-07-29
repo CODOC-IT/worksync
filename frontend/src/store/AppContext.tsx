@@ -39,8 +39,11 @@ import {
   approveTaskViaApi,
   changeTaskStatusViaApi,
   createTaskViaApi,
+  createTaskEditApprovalViaApi,
+  decideTaskEditApprovalViaApi,
   deleteTaskViaApi,
   loadTaskDetailFromApi,
+  loadTaskEditApprovalsViaApi,
   loadTasksFromApi,
   rejectTaskViaApi,
   reopenTaskViaApi,
@@ -574,6 +577,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
   }, [projects, tasks]);
+
+  useEffect(() => {
+    if (!currentUser.id || currentRole !== 'Team_Lead' || projects.length === 0 || tasks.length === 0) return;
+    let isActive = true;
+
+    void loadTaskEditApprovalsViaApi()
+      .then((persistedApprovals) => {
+        if (!isActive) return;
+        const validApprovals = persistedApprovals.filter((approval) => {
+          const project = projects.find((candidate) => candidate.id === approval.projectId);
+          if (!project || project.teamLeadId !== currentUser.id) return false;
+          return tasks.some((task) =>
+            task.id === approval.targetId ||
+            task.subtasks.some((subtask) => subtask.id === approval.targetId)
+          );
+        });
+        setSystemApprovals((prev) => {
+          const persistedIds = new Set(validApprovals.map((approval) => approval.id));
+          return [
+            ...validApprovals,
+            ...prev.filter((approval) =>
+              !persistedIds.has(approval.id) &&
+              !(approval.type === 'Controlled_Edit' &&
+                approval.proposedTaskUpdate &&
+                approval.status === 'Pending')
+            )
+          ];
+        });
+        if (validApprovals.length === 0) return;
+        setTasks((prev) => prev.map((task) => {
+          const directApproval = validApprovals.find((approval) => approval.targetId === task.id);
+          if (directApproval) {
+            return {
+              ...task,
+              approvalStatus: 'Pending Approval',
+              pendingEdit: {
+                id: directApproval.id,
+                taskId: task.id,
+                requestedBy: directApproval.requestedBy,
+                field: 'description',
+                oldValue: 'Current task details',
+                newValue: 'Proposed task details',
+                reason: 'Task update requested by the assignee.',
+                status: 'Pending',
+                createdAt: directApproval.createdAt
+              }
+            };
+          }
+          return {
+            ...task,
+            subtasks: task.subtasks.map((subtask) => {
+              const approval = validApprovals.find((candidate) => candidate.targetId === subtask.id);
+              return approval
+                ? {
+                    ...subtask,
+                    approvalStatus: 'Pending Approval',
+                    pendingEdit: {
+                      id: approval.id,
+                      taskId: subtask.id,
+                      requestedBy: approval.requestedBy,
+                      field: 'description',
+                      oldValue: 'Current task details',
+                      newValue: 'Proposed task details',
+                      reason: 'Task update requested by the assignee.',
+                      status: 'Pending',
+                      createdAt: approval.createdAt
+                    }
+                  }
+                : subtask;
+            })
+          };
+        }));
+      })
+      .catch((error) => console.warn('Failed to load persisted task edit approvals.', error));
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser.id, currentRole, projects, tasks.length]);
 
   // Break Timer Interval Effect
   useEffect(() => {
@@ -1218,31 +1300,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'Pending',
         createdAt
       };
-      const approval: SystemApproval = {
-        id: `app-${requestId}`,
-        type: 'Controlled_Edit',
-        targetId: taskId,
-        targetTitle: existingTask.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt,
-        details: `${currentUser.name} requested an update to "${existingTask.title}". Pending Team Lead approval.`,
-        status: 'Pending',
-        projectId: existingTask.projectId,
-        proposedDiff: { field: 'Task details', oldValue: 'Current task details', newValue: 'Proposed task details' },
-        proposedTaskUpdate,
-        previousTaskSnapshot: {
-          title: existingTask.title,
-          description: existingTask.description,
-          priority: existingTask.priority,
-          startDate: validationResult.task?.startDate || existingTask.createdAt.slice(0, 10),
-          dueDate: existingTask.dueDate
-        }
-      };
+      let approval: SystemApproval;
+      try {
+        approval = await createTaskEditApprovalViaApi(taskId, proposedTaskUpdate);
+      } catch (error: any) {
+        return { success: false, message: error?.message || 'Unable to submit the task update request.' };
+      }
 
       const pendingTask = {
         ...existingTask,
-        ...proposedTaskUpdate,
         approvalStatus: 'Pending Approval' as const,
         pendingEdit
       };
@@ -1252,11 +1318,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           ...task,
           subtasks: task.subtasks.map((subtask) => subtask.id === taskId
-            ? { ...subtask, ...proposedTaskUpdate, approvalStatus: 'Pending Approval', pendingEdit }
+            ? { ...subtask, approvalStatus: 'Pending Approval', pendingEdit }
             : subtask)
         };
       }));
-      setSystemApprovals((prev) => [approval, ...prev]);
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
         type: 'approval',
@@ -1576,8 +1641,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
         }
         try {
-          const approvedUpdate: TaskMutationData = item.proposedTaskUpdate;
-          const updated = await updateTaskViaApi(item.targetId, approvedUpdate);
+          const updated = await decideTaskEditApprovalViaApi(approvalId, 'Approved');
+          if (!updated) return { success: false, message: 'The approved task was not returned by the server.' };
           setTasks((prev) => prev.map((task) => {
             if (task.id === item.targetId) return { ...updated, approvalStatus: 'Approved', pendingEdit: undefined };
             if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
@@ -1677,19 +1742,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
+      if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        const project = item.projectId && projects.find((candidate) => candidate.id === item.projectId);
+        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+          return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
+        }
+        try {
+          await decideTaskEditApprovalViaApi(approvalId, 'Rejected');
+        } catch (error: any) {
+          return { success: false, message: error?.message || 'Unable to reject the task update.' };
+        }
+      }
+
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
       if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
         setTasks((prev) => prev.map((task) => {
           if (task.id === item.targetId) {
-            return { ...task, ...item.previousTaskSnapshot, approvalStatus: 'Approved', pendingEdit: undefined };
+            return { ...task, approvalStatus: 'Approved', pendingEdit: undefined };
           }
           if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
           return {
             ...task,
             subtasks: task.subtasks.map((subtask) => subtask.id === item.targetId
-              ? { ...subtask, ...item.previousTaskSnapshot, approvalStatus: 'Approved', pendingEdit: undefined }
+              ? { ...subtask, approvalStatus: 'Approved', pendingEdit: undefined }
               : subtask)
           };
         }));
