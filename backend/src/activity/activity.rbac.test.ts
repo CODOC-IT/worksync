@@ -227,7 +227,7 @@ test('Team Member: can view their own activity', async () => {
   const descriptions = result.rows.map((r: any) => r.description);
 
   assert.ok(descriptions.includes('Own activity'), 'Team Member should see their own activity');
-  assert.ok(descriptions.includes('Other activity'), 'Team Member should see activity in accessible projects');
+  assert.ok(!descriptions.includes('Other activity'), 'Team Member must not see activity from an unrelated project');
 });
 
 test('Team Member: cannot view restricted modules', async () => {
@@ -246,7 +246,7 @@ test('Team Member: cannot view restricted modules', async () => {
   assert.ok(!modules.includes('Authentication'), 'Team Member must not see Authentication module activity');
 });
 
-test('Team Member: can view non-restricted modules', async () => {
+test('Team Member: cannot view unrelated non-restricted modules', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot) VALUES
     (1, 5, 'Checked In', 'Attendance', 'att-1', '00000000-0000-0000-0000-000000000020', 'Attendance', 'Another check-in visible', 'Team_Member'),
     (1, 5, 'Updated', 'Task', 'tsk-99', '00000000-0000-0000-0000-000000000021', 'Tasks', 'Task update visible', 'Team_Member')`);
@@ -257,8 +257,8 @@ test('Team Member: can view non-restricted modules', async () => {
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
 
-  assert.ok(descriptions.includes('Another check-in visible'), 'Team Member should see non-restricted modules');
-  assert.ok(descriptions.includes('Task update visible'), 'Team Member should see task activity');
+  assert.ok(!descriptions.includes('Another check-in visible'), 'Team Member must not see unrelated attendance activity');
+  assert.ok(!descriptions.includes('Task update visible'), 'Team Member must not see unrelated task activity');
 });
 
 test('Team Member: cannot retrieve restricted record by direct ID', async () => {
@@ -358,7 +358,7 @@ test('HR: cannot access unrelated project activity through HR permission', async
   assert.ok(!descriptions.includes('Project task not in HR scope'), 'HR must not see unrelated project activity through HR permission');
 });
 
-test('HR: loses active role after expiry, but Attendance stays visible as non-restricted module', async () => {
+test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
@@ -371,7 +371,7 @@ test('HR: loses active role after expiry, but Attendance stays visible as non-re
 
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
-  assert.ok(descriptions.includes('Check-in after HR expiry'), 'Attendance is non-restricted, visible to Team Members');
+  assert.ok(!descriptions.includes('Check-in after HR expiry'), 'Expired HR must lose unrelated attendance visibility');
 });
 
 test('Admin: can view all activity categories', async () => {

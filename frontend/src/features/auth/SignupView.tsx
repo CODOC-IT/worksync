@@ -154,7 +154,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   return (
     <div
       data-login-page
-      className="min-h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 p-4 md:p-8 relative overflow-hidden bg-cover bg-center bg-no-repeat"
+      className="h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 p-4 md:p-8 relative overflow-hidden bg-cover bg-center bg-no-repeat"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.88), rgba(9, 10, 15, 0.95)), url('/assets/images/auth-bg.png')`
       }}
@@ -170,8 +170,8 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
         className="absolute bottom-1/4 -left-20 w-96 h-96 bg-cyan-600/20 rounded-full blur-3xl pointer-events-none"
       />
 
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 lg:min-h-[600px]">
-        <div className="lg:col-span-5 relative p-6 md:p-8 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-white/10 bg-gradient-to-br from-purple-950/60 via-slate-950/80 to-slate-950/90">
+      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 rounded-3xl overflow-hidden bg-slate-900/70 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-purple-950/40 relative z-10 lg:h-[min(90vh,760px)]">
+        <div className="lg:col-span-5 relative p-6 md:p-8 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-white/10 bg-gradient-to-br from-purple-950/60 via-slate-950/80 to-slate-950/90 lg:overflow-hidden">
           <div className="flex items-center gap-3 relative z-10">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-purple-600 p-0.5 shadow-lg shadow-cyan-500/20">
               <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
@@ -200,8 +200,14 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
           </div>
         </div>
 
-        <div className="lg:col-span-7 flex flex-col min-h-0">
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-10 pt-4 sm:pt-6 md:pt-8 min-h-0">
+        <div className="lg:col-span-7 flex flex-col min-h-0 lg:h-full">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 md:px-10 pt-4 sm:pt-6 md:pt-8 pb-4 min-h-0
+            [scrollbar-width:thin] [scrollbar-color:rgba(139,92,246,0.3)_transparent]
+            [&::-webkit-scrollbar]:w-1.5
+            [&::-webkit-scrollbar-track]:bg-transparent
+            [&::-webkit-scrollbar-thumb]:bg-purple-500/30
+            [&::-webkit-scrollbar-thumb]:rounded-full
+            [&::-webkit-scrollbar-thumb:hover]:bg-purple-500/50">
             <div className="flex items-center justify-between pb-2 border-b border-white/5">
               <div className="flex items-center gap-2">
                 <Shield size={18} className="text-purple-400" />
