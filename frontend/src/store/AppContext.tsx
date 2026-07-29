@@ -500,6 +500,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser.id, taskReloadVersion]);
 
+  // Derive systemApprovals from loaded backend data (projects + tasks)
+  const approvalsHydratedRef = useRef(false);
+  useEffect(() => {
+    if (approvalsHydratedRef.current) return;
+    if (projects.length === 0 && tasks.length === 0) return;
+    approvalsHydratedRef.current = true;
+
+    const derived: SystemApproval[] = [];
+
+    for (const p of projects) {
+      if (p.approvalStatus === 'Pending Approval') {
+        derived.push({
+          id: `sys-approval-prj-${p.id}`,
+          type: 'Project_Creation',
+          targetId: p.id,
+          targetTitle: p.title,
+          requestedBy: p.teamLeadId || '',
+          requestedRole: 'Team_Lead',
+          createdAt: p.createdAt || new Date().toISOString(),
+          details: `Team Lead proposed new project "${p.title}". Pending Admin approval.`,
+          status: 'Pending',
+          projectId: p.id,
+        });
+      }
+    }
+
+    for (const t of tasks) {
+      if (t.pendingEdit && t.pendingEdit.status === 'Pending') {
+        derived.push({
+          id: `sys-approval-edit-${t.pendingEdit.id}`,
+          type: 'Controlled_Edit',
+          targetId: t.id,
+          targetTitle: t.title,
+          requestedBy: t.pendingEdit.requestedBy,
+          requestedRole: 'Team_Member',
+          createdAt: t.pendingEdit.createdAt,
+          details: `Requested ${t.pendingEdit.field} change on "${t.title}"`,
+          status: 'Pending',
+          projectId: t.projectId,
+          proposedDiff: {
+            field: t.pendingEdit.field,
+            oldValue: t.pendingEdit.oldValue,
+            newValue: t.pendingEdit.newValue,
+          },
+        });
+      }
+    }
+
+    if (derived.length > 0) {
+      setSystemApprovals((prev) => {
+        const existingIds = new Set(prev.map((a) => a.id));
+        const newItems = derived.filter((d) => !existingIds.has(d.id));
+        return newItems.length > 0 ? [...prev, ...newItems] : prev;
+      });
+    }
+  }, [projects, tasks]);
+
   // Break Timer Interval Effect
   useEffect(() => {
     let interval: any = null;

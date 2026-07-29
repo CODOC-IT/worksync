@@ -182,11 +182,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
       {/* ── Row 1 (top): Calendar + Attendance | Activity Log | Approvals ── */}
       <div className="flex flex-wrap gap-3">
-        {/* Calendar + Attendance */}
+        {/* Calendar */}
         <div className="flex-1 min-w-[300px] max-w-full">
-          <div className="space-y-2.5">
-            {/* Calendar */}
-            <div className="glass-panel p-3 border border-cyan-500/20 overflow-y-auto">
+          <div className="glass-panel p-3 border border-cyan-500/20 overflow-y-auto">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><Calendar size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Calendar</h3></div>
                 <button onClick={() => onNavigate('calendar')} className="text-[10px] text-cyan-400 hover:underline font-mono">Open</button>
@@ -209,50 +207,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </div>
               )}
             </div>
-
-            {/* Attendance */}
-            <div className="glass-panel p-3 border border-pink-500/20 overflow-y-auto">
-              <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-                <div className="flex items-center gap-2"><Clock size={14} className="text-pink-400" /><h3 className="font-bold text-xs text-white">Attendance</h3></div>
-                <span className="text-[10px] font-mono text-cyan-300">{todayStr}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-900/60 border border-white/10 text-center space-y-2">
-                <span className="text-[10px] text-slate-400 block font-mono">Status for Today</span>
-                <div className="text-lg font-bold text-white">
-                  {myTodayAttendance ? (<span className="text-emerald-400 flex items-center justify-center gap-1.5"><CheckCircle2 size={14} /> {myTodayAttendance.checkIn}</span>) : (<span className="text-amber-400">Not Clocked In</span>)}
-                </div>
-                {!myTodayAttendance ? (
-                  <button onClick={checkIn} className="w-full py-2 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-1.5"><Play size={12} /> Clock In Now</button>
-                ) : (
-                  <div className="space-y-2 pt-1">
-                    {!activeBreak?.isBreaking ? (
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button onClick={() => startBreak('Lunch')} className="py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold">Lunch</button>
-                        <button onClick={() => startBreak('Short Break')} className="py-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-[10px] font-semibold">Short Break</button>
-                      </div>
-                    ) : (
-                      <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-center space-y-1">
-                        <div className="text-[10px] font-mono text-amber-300 font-bold">{activeBreak.breakType}</div>
-                        <div className="text-lg font-mono text-white font-bold animate-pulse">{Math.floor(activeBreak.elapsedSeconds / 60)}m {activeBreak.elapsedSeconds % 60}s</div>
-                        <button onClick={endBreak} className="w-full py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-[10px] font-bold">End Break</button>
-                      </div>
-                    )}
-                    {!myTodayAttendance.checkOut && (<button onClick={checkOut} className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold border border-white/10">Clock Out</button>)}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Activity Log */}
         <div className="flex-1 min-w-[300px] max-w-full">
-          <div className="glass-panel p-3 border border-purple-500/20">
-            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
+          <div className="glass-panel p-3 border border-purple-500/20 h-90 overflow-y-auto flex flex-col">
+            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10 shrink-0">
               <div className="flex items-center gap-2"><Activity size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Activity Log</h3><span className="text-[10px] text-cyan-400 font-mono">({activityLogs.length})</span></div>
               <button onClick={() => onNavigate('activity')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-1">Full Log <ChevronRight size={10} /></button>
             </div>
-            <div className="overflow-y-auto pr-1 space-y-2 max-h-[210px]">
+            <div className="overflow-y-auto pr-1 space-y-2 flex-1 min-h-0">
               {sortedActivityLogs.length === 0 ? (
                 <p className="text-[11px] text-slate-500 text-center py-12">No activity recorded yet</p>
               ) : (
@@ -277,20 +241,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
 
         {/* Approvals + HR */}
-        <div className="flex-1 min-w-[300px] max-w-full flex flex-col gap-2.5">
+        <div className="flex-1 min-w-[300px] max-w-full space-y-2.5">
           {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (
-            <div className="glass-panel p-3 border border-amber-500/30 flex-1 flex flex-col">
+            <div className="glass-panel p-3 border border-amber-500/30 h-90 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-amber-400" /><h3 className="font-bold text-xs text-white">Approvals Inbox</h3><span className="text-[10px] text-amber-400 font-mono">({pendingApprovals.length})</span></div>
                 <button onClick={() => onNavigate('approvals')} className="text-[10px] text-amber-400 hover:underline font-mono flex items-center gap-1">All <ChevronRight size={10} /></button>
               </div>
               {pendingApprovals.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 text-center flex-1">
+                <div className="flex flex-col items-center justify-center py-10 text-center">
                   <CheckCircle2 size={28} className="text-slate-600 mb-2" />
                   <p className="text-[11px] text-slate-500">All caught up!</p>
                 </div>
               ) : (
-                <div className="space-y-2 overflow-y-auto pr-1 max-h-[210px]">
+                <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-0">
                   {pendingApprovals.map((app) => (
                     <div key={app.id} onClick={() => onNavigate('approvals', app.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
                       <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">{app.type.replace('_', ' ')}</span><span className="text-[10px] font-bold text-white truncate">{app.targetTitle}</span></div>
@@ -302,18 +266,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           )}
           {currentRole === 'HR' && (
-            <div className="glass-panel p-3 border border-emerald-500/30 flex-1 flex flex-col">
+            <div className="glass-panel p-3 border border-emerald-500/30 h-90 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><FileCheck2 size={14} className="text-emerald-400" /><h3 className="font-bold text-xs text-white">HR Queue</h3><span className="text-[10px] text-emerald-400 font-mono">({pendingHrRequests.length})</span></div>
                 <button onClick={() => onNavigate('attendance')} className="text-[10px] text-emerald-400 hover:underline font-mono flex items-center gap-1">Manage <ChevronRight size={10} /></button>
               </div>
               {pendingHrRequests.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 text-center flex-1">
+                <div className="flex flex-col items-center justify-center py-10 text-center">
                   <CheckCircle2 size={28} className="text-slate-600 mb-2" />
                   <p className="text-[11px] text-slate-500">No pending HR requests</p>
                 </div>
               ) : (
-                <div className="space-y-2 overflow-y-auto pr-1 max-h-[210px]">
+                <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-0">
                   {pendingHrRequests.map((req) => (
                     <div key={req.id} onClick={() => onNavigate('attendance')} className="p-2.5 rounded-xl bg-slate-900/50 border border-emerald-500/20 hover:border-emerald-500/40 cursor-pointer transition-all">
                       <div className="flex items-center gap-2 mb-1 flex-wrap"><StatusBadge status={req.type.replace('_', ' ')} size="sm" /><span className="text-[10px] font-bold text-slate-200">{users.find((u) => u.id === req.userId)?.name || 'Team Member'}</span><span className="text-[9px] text-slate-500 font-mono">{req.submittedAt}</span></div>
@@ -325,15 +289,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           )}
           {currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'HR' && (
-            <div className="glass-panel p-3 border border-white/10 flex-1 flex flex-col">
+            <div className="glass-panel p-3 border border-white/10 h-90 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-slate-500" /><h3 className="font-bold text-xs text-slate-400">Approvals</h3></div>
               </div>
-              <div className="flex flex-col items-center justify-center py-10 text-center flex-1">
+              <div className="flex flex-col items-center justify-center py-10 text-center">
                 <p className="text-[11px] text-slate-500">No pending approvals</p>
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ── Attendance ── */}
+      <div className="flex flex-wrap gap-3">
+        <div className="flex-1 min-w-[300px] max-w-full">
+          <div className="glass-panel p-3 border border-pink-500/20 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
+              <div className="flex items-center gap-2"><Clock size={14} className="text-pink-400" /><h3 className="font-bold text-xs text-white">Attendance</h3></div>
+              <span className="text-[10px] font-mono text-cyan-300">{todayStr}</span>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-900/60 border border-white/10 text-center space-y-2">
+              <span className="text-[10px] text-slate-400 block font-mono">Status for Today</span>
+              <div className="text-lg font-bold text-white">
+                {myTodayAttendance ? (<span className="text-emerald-400 flex items-center justify-center gap-1.5"><CheckCircle2 size={14} /> {myTodayAttendance.checkIn}</span>) : (<span className="text-amber-400">Not Clocked In</span>)}
+              </div>
+              {!myTodayAttendance ? (
+                <button onClick={checkIn} className="w-full py-2 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-1.5"><Play size={12} /> Clock In Now</button>
+              ) : (
+                <div className="space-y-2 pt-1">
+                  {!activeBreak?.isBreaking ? (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button onClick={() => startBreak('Lunch')} className="py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold">Lunch</button>
+                      <button onClick={() => startBreak('Short Break')} className="py-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-[10px] font-semibold">Short Break</button>
+                    </div>
+                  ) : (
+                    <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-center space-y-1">
+                      <div className="text-[10px] font-mono text-amber-300 font-bold">{activeBreak.breakType}</div>
+                      <div className="text-lg font-mono text-white font-bold animate-pulse">{Math.floor(activeBreak.elapsedSeconds / 60)}m {activeBreak.elapsedSeconds % 60}s</div>
+                      <button onClick={endBreak} className="w-full py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-[10px] font-bold">End Break</button>
+                    </div>
+                  )}
+                  {!myTodayAttendance.checkOut && (<button onClick={checkOut} className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold border border-white/10">Clock Out</button>)}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
