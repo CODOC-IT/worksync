@@ -12,10 +12,8 @@ import {
   Clock,
   Sparkles,
   MessageSquare,
-  FileSpreadsheet,
   CheckCircle,
   Bell,
-  Settings,
   User,
   ShieldCheck,
   ChevronLeft,
@@ -68,13 +66,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
     { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
     { id: 'members', label: 'Members', icon: Users },
-    { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
     { id: 'activity', label: 'Activity Log', icon: Activity },
     { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadNotifsCount > 0 ? unreadNotifsCount : undefined },
-    { id: 'profile', label: 'My Profile', icon: User },
-    { id: 'settings', label: 'Settings', icon: Settings }
+    { id: 'profile', label: 'My Profile', icon: User }
   ];
 
 const sidebarContent = (

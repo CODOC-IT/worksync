@@ -18,7 +18,7 @@ import {
   ActivityLogItem,
   CalendarEvent,
   SavedPrompt,
-  WeeklySummaryDraft,
+
   BreakType,
   WorkBreak,
   ControlledEditRequest,
@@ -125,7 +125,7 @@ interface AppState {
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
   savedPrompts: SavedPrompt[];
-  weeklySummaryDraft: WeeklySummaryDraft;
+
   activeBreak: {
     isBreaking: boolean;
     userId: string;
@@ -182,7 +182,6 @@ interface AppState {
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
-  updateWeeklySummaryDraft: (data: Partial<WeeklySummaryDraft>) => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   clearNotification: (id: string) => void;
@@ -232,18 +231,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
-  const [weeklySummaryDraft, setWeeklySummaryDraft] = useState<WeeklySummaryDraft>({
-    id: '',
-    projectId: '',
-    weekEnding: '',
-    progressSummary: '',
-    blockersText: '',
-    overdueTasksCount: 0,
-    completedTasksCount: 0,
-    keyHighlights: [],
-    recipientChannel: 'Project Chat',
-    generatedAt: ''
-  });
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
   const [activeBreak, setActiveBreak] = useState<{
@@ -1600,10 +1587,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAiLogs((prev) => [newLog, ...prev]);
     };
 
-    const updateWeeklySummaryDraft = (data: Partial<WeeklySummaryDraft>) => {
-      setWeeklySummaryDraft((prev) => ({ ...prev, ...data }));
-    };
-
     // Each of these applies the change to local state immediately (so the UI never waits on a
     // round-trip) and fires the real API call in the background — see dispatchNotifications'
     // comment above for why every notification action follows this same "local UX, backend as
@@ -1864,7 +1847,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activityLogs,
         calendarEvents,
         savedPrompts,
-        weeklySummaryDraft,
         activeBreak,
         settings,
         refreshUsers,
@@ -1895,7 +1877,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendChatMessage,
         togglePinMessage,
         addAIQueryLog,
-        updateWeeklySummaryDraft,
         markNotificationRead,
         markAllNotificationsRead,
         clearNotification,
