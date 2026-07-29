@@ -607,7 +607,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           </div>
         )}
 
-        {/* User/member filter */}
+        {/* User/member filter — only roles that can see other users' activity */}
         {isAdmin ? (
           <>
             <FilterSelect label="User/member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
@@ -615,9 +615,9 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           </>
         ) : isHRTab ? (
           <FilterSelect label="Employee" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
-        ) : (
-          <FilterSelect label="User/member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
-        )}
+        ) : showLeadTab ? (
+          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
+        ) : null}
 
         {/* Project filter — shown for project-scoped tabs, not HR-only tab */}
         {!isHRTab && (
