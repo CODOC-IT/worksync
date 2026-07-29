@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/pool.js';
-import { ProjectMemberRoleCode, ProjectMemberRow, ProjectRow } from './project.types.js';
+import { MilestoneRow, ProjectFileRow, ProjectMemberRoleCode, ProjectMemberRow, ProjectRow } from './project.types.js';
 
 // Repository = data access only (Repository Pattern, matching backend/src/notifications'
 // layering). No recipient resolution, no authorization decisions here — those belong to
@@ -63,6 +63,31 @@ export const findMembersForProject = async (projectId: number): Promise<ProjectM
      FROM work.projectmembers
      WHERE projectid = $1 AND leftatutc IS NULL
      ORDER BY projectmemberid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+export const findMilestonesForProject = async (projectId: number): Promise<MilestoneRow[]> => {
+  const result = await query<MilestoneRow>(
+    `SELECT milestoneid, projectid, milestonename, description,
+            duedate::text, completedatutc, createdbyuserid, createdatutc
+     FROM work.projectmilestones
+     WHERE projectid = $1
+     ORDER BY duedate, milestoneid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+export const findProjectFiles = async (projectId: number): Promise<ProjectFileRow[]> => {
+  const result = await query<ProjectFileRow>(
+    `SELECT sf.fileid, sf.originalfilename, sf.mimetype, sf.sizebytes,
+            sf.uploadedbyuserid, sf.uploadedatutc
+     FROM collab.projectfiles pf
+     JOIN collab.storedfiles sf ON sf.fileid = pf.fileid
+     WHERE pf.projectid = $1 AND sf.isdeleted = FALSE
+     ORDER BY pf.addedatutc`,
     [projectId]
   );
   return result.rows;

@@ -10,6 +10,9 @@ export interface User {
   title: string;
   status: 'active' | 'inactive' | 'away';
   lastActive?: string;
+  githubUsername?: string;
+  passwordHash?: string;
+  createdAt?: string;
 }
 
 // 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that
@@ -53,6 +56,7 @@ export interface Project {
   pinnedMessagesCount?: number;
   tags: string[];
   creationReason?: string;
+  createdAt?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
@@ -79,6 +83,12 @@ export interface TaskComment {
 export interface Subtask {
   id: string;
   title: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  startDate?: string;
+  dueDate?: string;
+  assigneeIds?: string[];
   completed: boolean;
 }
 
@@ -113,6 +123,7 @@ export interface Task {
   id: string;
   taskNumber: string;
   projectId: string;
+  parentTaskId?: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -121,6 +132,7 @@ export interface Task {
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
+  subtaskCount?: number;
   subtasks: Subtask[];
   dependencies: string[]; // array of Task IDs
   tags: string[];
@@ -170,6 +182,7 @@ export interface HRRequest {
   details: {
     requestedCheckIn?: string;
     requestedCheckOut?: string;
+    attendanceChangeReason?: string;
     leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
     leaveDays?: number;
     extraBreakMinutes?: number;

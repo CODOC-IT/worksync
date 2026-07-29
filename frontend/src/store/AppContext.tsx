@@ -79,6 +79,20 @@ import {
 import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
 
 const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
+const HR_REQUESTS_STORAGE_KEY = 'worksync-hr-requests';
+
+const loadHRRequests = (): HRRequest[] => {
+  try {
+    const savedRequests = localStorage.getItem(HR_REQUESTS_STORAGE_KEY);
+    if (!savedRequests) return [];
+
+    const parsedRequests = JSON.parse(savedRequests);
+    return Array.isArray(parsedRequests) ? parsedRequests : [];
+  } catch (error) {
+    console.error('Failed to load HR requests from localStorage.', error);
+    return [];
+  }
+};
 
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
@@ -126,10 +140,10 @@ interface AppState {
     maxChatPins: number;
   };
   // Actions
-  setRole: (role: UserRole) => void;
   refreshUsers: () => void;
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
+  logoutUser: () => void;
   toggleTheme: () => void;
   createProject: (data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   approveProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
@@ -178,23 +192,28 @@ interface AppState {
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
+  addTeamMember: (data: Omit<User, 'id'>) => void;
+  updateTeamMember: (userId: string, data: Partial<User>) => void;
+  deleteTeamMember: (userId: string, targetReassignUserId?: string) => { success: boolean; message: string };
+  reassignMemberTasks: (sourceUserId: string, targetUserId: string) => { success: boolean; count: number };
+  getMemberAssignedTasksCount: (userId: string) => number;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>([]);
-  const [currentRole, setCurrentRole] = useState<UserRole>('Admin');
   const [currentUser, setCurrentUser] = useState<User>({
     id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
   });
+  const currentRole: UserRole = currentUser.role;
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>(loadHRRequests);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
@@ -208,7 +227,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mentions: true,
     comments: true,
     assignments: true,
-    email: false
+    email: true
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
@@ -247,19 +266,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [attendanceRecords]);
 
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        HR_REQUESTS_STORAGE_KEY,
+        JSON.stringify(hrRequests)
+      );
+    } catch (error) {
+      console.error('Failed to save HR requests.', error);
+    }
+  }, [hrRequests]);
+
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
     breakLimitMinutes: 60,
     maskedAiKey: 'sk-proj-••••••••••••••••38FA',
     maxChatPins: 10
   });
-
-  // Role Switcher Handler
-  const setRole = (role: UserRole) => {
-    setCurrentRole(role);
-    const matchedUser = users.find((u) => u.role === role) || users[0];
-    if (matchedUser) setCurrentUser(matchedUser);
-  };
 
   // Theme Toggle Handler
   const toggleTheme = () => {
@@ -276,7 +300,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshUsers = () => {
-    fetch('/api/auth/users')
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) return;
+
+    fetch('/api/auth/users', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.users) && data.users.length > 0) {
@@ -284,7 +313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       })
       .catch(() => {
-        // Silently keep default users if offline
+        // Silently keep the authenticated user if the directory is unavailable.
       });
   };
 
@@ -295,9 +324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...prev, newUser];
     });
     setCurrentUser(newUser);
-    setCurrentRole(newUser.role);
     setTaskReloadVersion((version) => version + 1);
-    refreshUsers();
   };
 
   const loginUser = (user: User) => {
@@ -307,15 +334,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [...prev, user];
     });
     setCurrentUser(user);
-    setCurrentRole(user.role);
     setTaskReloadVersion((version) => version + 1);
-    refreshUsers();
+    if (user.role === 'Admin') refreshUsers();
   };
 
-  // Fetch persisted database users on mount
-  useEffect(() => {
-    refreshUsers();
-  }, []);
+  const logoutUser = () => {
+    localStorage.removeItem('worksync_auth_token');
+    setCurrentUser({ id: '', name: '', email: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive' });
+    setUsers([]);
+  };
 
   useEffect(() => {
     const root = document.documentElement;
@@ -383,6 +410,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeBreak?.isBreaking]);
 
   // Log Activity Helper
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('worksync_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  };
+
   const pushActivity = (
     action: string,
     targetType: ActivityLogItem['targetType'],
@@ -403,6 +437,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       diff
     };
     setActivityLogs((prev) => [newAct, ...prev]);
+
+    fetch('/api/activity-log', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
+    }).catch(() => {});
   };
 
   // --- Notification Module -----------------------------------------------------------
@@ -497,9 +537,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const dispatchNotifications = (input: SendNotificationInput) => {
     // Real persistence is the primary path; the pure local sendNotification() below is only a
     // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
-    // the acting demo-role-switcher identity has no matching backend session — see
-    // notificationApiClient.ts). Every one of this function's ~20 call sites is unaffected by
-    // which path actually wrote the notification: they only ever describe *what happened*.
+    // or because a login transition left the token and current user briefly out of sync,
+    // or the authenticated session cannot persist the event — see notificationApiClient.ts).
+    // Every call site is unaffected by which path actually wrote the notification.
     publishNotificationEvent(input)
       .then(applyCreatedNotifications)
       .catch((error) => {
@@ -1684,6 +1724,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushActivity('Exported system data backup', 'Settings', 'backup', 'JSON Vault Backup');
   };
 
+  const getMemberAssignedTasksCount = (userId: string) => {
+    return tasks.filter((t) => t.assigneeId === userId && t.status !== 'Done').length;
+  };
+
+  const reassignMemberTasks = (sourceUserId: string, targetUserId: string) => {
+    const assignedTasks = tasks.filter((t) => t.assigneeId === sourceUserId);
+    if (assignedTasks.length === 0) return { success: true, count: 0 };
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const sourceUser = users.find((u) => u.id === sourceUserId);
+
+    setTasks((prev) =>
+      prev.map((t) => (t.assigneeId === sourceUserId ? { ...t, assigneeId: targetUserId } : t))
+    );
+
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Reassigned ${assignedTasks.length} task(s) from ${sourceUser?.name || sourceUserId} to ${targetUser?.name || targetUserId}`,
+        targetType: 'Task',
+        targetId: sourceUserId,
+        targetTitle: 'Task Bulk Reassignment',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+
+    return { success: true, count: assignedTasks.length };
+  };
+
+  const addTeamMember = (data: Omit<User, 'id'>) => {
+    const newUserId = `usr-${Date.now()}`;
+    const newUser: User = {
+      id: newUserId,
+      name: data.name,
+      email: data.email,
+      role: data.role || 'Team_Member',
+      department: data.department || 'Engineering',
+      avatar: data.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name)}`,
+      title: data.title || 'Team Specialist',
+      status: data.status || 'active',
+      lastActive: 'Just now',
+      githubUsername: data.githubUsername
+    };
+
+    setUsers((prev) => [newUser, ...prev]);
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Added new team member ${newUser.name} (${newUser.role})`,
+        targetType: 'Settings',
+        targetId: newUserId,
+        targetTitle: newUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const updateTeamMember = (userId: string, data: Partial<User>) => {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, ...data } : u))
+    );
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Updated profile details for member ${data.name || userId}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: data.name || 'Member',
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+  };
+
+  const deleteTeamMember = (userId: string, targetReassignUserId?: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return { success: false, message: 'Member not found.' };
+
+    const assignedCount = getMemberAssignedTasksCount(userId);
+    if (assignedCount > 0 && !targetReassignUserId) {
+      return {
+        success: false,
+        message: `Safety Warning: Member ${targetUser.name} currently has ${assignedCount} active assigned tasks. Please select a team member to reassign their tasks before deletion.`
+      };
+    }
+
+    if (assignedCount > 0 && targetReassignUserId) {
+      reassignMemberTasks(userId, targetReassignUserId);
+    }
+
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setActivityLogs((prev) => [
+      {
+        id: `act-${Date.now()}`,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        action: `Deleted team member ${targetUser.name}`,
+        targetType: 'Settings',
+        targetId: userId,
+        targetTitle: targetUser.name,
+        timestamp: new Date().toISOString()
+      },
+      ...prev
+    ]);
+    return { success: true, message: `Member ${targetUser.name} successfully deleted.` };
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1708,10 +1867,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         weeklySummaryDraft,
         activeBreak,
         settings,
-        setRole,
         refreshUsers,
         onUserRegistered,
         loginUser,
+        logoutUser,
         toggleTheme,
         createProject,
         approveProject,
@@ -1745,7 +1904,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dismissToast,
         deactivateUser,
         exportBackup,
-        updateCurrentUser
+        updateCurrentUser,
+        addTeamMember,
+        updateTeamMember,
+        deleteTeamMember,
+        reassignMemberTasks,
+        getMemberAssignedTasksCount
       }}
     >
       {children}

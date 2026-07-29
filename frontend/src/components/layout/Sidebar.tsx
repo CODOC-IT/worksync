@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../store/AppContext';
 import {
+  Users,
   LayoutDashboard,
   FolderKanban,
   CheckSquare,
@@ -39,7 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   mobileOpen,
   onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, notifications } = useApp();
+  const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
   const pendingHrCount = hrRequests.filter((r) => r.status === 'Pending').length;
@@ -66,6 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
     { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
+    { id: 'members', label: 'Members', icon: Users },
     { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
@@ -197,7 +199,7 @@ const sidebarContent = (
       <div className="p-3 border-t border-white/10 shrink-0">
         <button
           data-sidebar-logout
-          onClick={() => onTabChange('login')}
+          onClick={() => { logoutUser(); onTabChange('login'); }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 border border-transparent transition-colors"
           title={collapsed ? 'Switch / Logout' : undefined}
         >

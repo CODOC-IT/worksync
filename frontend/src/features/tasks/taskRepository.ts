@@ -43,6 +43,15 @@ export const loadTasksFromApi = async (): Promise<Task[] | null> => {
   return payload.data as Task[];
 };
 
+export const loadTaskDetailFromApi = async (taskId: string): Promise<Task> => {
+  const token = getAuthToken();
+  if (!token) throw new Error('Sign in before viewing task details.');
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { headers: { Authorization: `Bearer ${token}` } });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || Array.isArray(payload.data) || !payload.data) throw new Error(payload.message || 'Unable to load task details.');
+  return { ...(payload.data as Task), subtasks: Array.isArray(payload.data.subtasks) ? payload.data.subtasks : [] };
+};
+
 export const createTaskViaApi = async (
   data: TaskMutationData
 ): Promise<TaskMutationResult> => {

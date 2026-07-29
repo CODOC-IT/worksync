@@ -2,7 +2,6 @@ import { fromProjectPk, fromTaskPk, fromUserPk } from '../utils/idMapping.js';
 import {
   ApiTaskPriority,
   DB_TO_API_TASK_STATUS,
-  SubtaskDTO,
   TaskAssigneeRow,
   TaskDTO,
   TaskRow,
@@ -25,7 +24,7 @@ const formatProjectTaskNumber = (projectCode: string, taskNumber: number): strin
   return `${prefix}-${String(taskNumber).padStart(2, '0')}`;
 };
 
-export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[], subtasks: SubtaskDTO[] = []): TaskDTO => {
+export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[]): TaskDTO => {
   const assigneeIds = assignees.filter((a) => a.taskid === row.taskid).map((a) => fromUserPk(a.userid));
   const status = DB_TO_API_TASK_STATUS[row.statuscode];
 
@@ -33,6 +32,7 @@ export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[], subtask
     id: fromTaskPk(row.taskid),
     taskNumber: formatProjectTaskNumber(row.projectcode, row.tasknumber),
     projectId: fromProjectPk(row.projectid),
+    ...(row.parenttaskid ? { parentTaskId: fromTaskPk(row.parenttaskid) } : {}),
     title: row.title,
     description: row.description,
     status,
@@ -43,7 +43,8 @@ export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[], subtask
     startDate: formatDate(row.startdate),
     dueDate: formatDate(row.duedate),
     estimatedHours: 8,
-    subtasks,
+    subtaskCount: Number(row.subtaskcount || 0),
+    subtasks: [],
     dependencies: [],
     tags: [],
     attachments: [],

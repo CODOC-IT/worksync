@@ -71,14 +71,6 @@ export const prepareTaskCreation = (
     };
   }
 
-  const subtasks = Array.isArray(data.subtasks)
-    ? data.subtasks.map((s, i) => ({
-        id: `stk-${now}-${i}`,
-        title: s.title,
-        completed: false
-      }))
-    : [];
-
   const localId = Math.floor(Math.random() * 900000) + 100000;
   const task: Task & { startDate: string; assigneeIds: string[] } = {
     id: `tsk-${localId}`,
@@ -96,7 +88,7 @@ export const prepareTaskCreation = (
     assigneeIds: input.assigneeIds,
     creatorId: context.currentUserId,
     estimatedHours: data.estimatedHours || 8,
-    subtasks,
+    subtasks: [],
     dependencies: data.dependencies || [],
     tags: data.tags || ['Task'],
     attachments: [],
@@ -151,7 +143,7 @@ export const prepareTaskUpdate = (
     : data.assigneeId
       ? [data.assigneeId]
       : getTaskAssigneeIds(task);
-  const { priority, subtasks: _, ...otherChanges } = data;
+  const { priority, subtasks: _subtasks, ...otherChanges } = data;
   const updatedTask: Task & Partial<{ startDate: string; assigneeIds: string[] }> = {
     ...task,
     ...otherChanges,

@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 
 const router = Router();
 
@@ -18,19 +19,30 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       return;
     }
 
-    const user = userStore.findByEmail(email);
-    if (!user) {
+    const user = await userStore.findByEmailAsync(email);
+    if (!user || !user.passwordHash) {
+      recordActivitySafe({ action: 'Login', module: 'Authentication', entityType: 'User', entityId: String(email),
+        entityName: String(email), actorEmail: String(email), description: `Failed login attempt for ${email}.`,
+        result: 'Failed', source: 'Web', important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
 
     if (user.status !== 'active') {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Blocked login attempt for deactivated account ${user.email}.`, result: 'Blocked',
+        source: 'Web', important: true, ipAddress: ip });
       res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
       return;
     }
 
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     if (!isValidPassword) {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Failed login attempt for ${user.email}.`, result: 'Failed', source: 'Web',
+        important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
@@ -42,6 +54,9 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       getJwtSecret(),
       { expiresIn: JWT_EXPIRES_IN as any }
     );
+    recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+      action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+      description: `${user.name} signed in.`, result: 'Successful', source: 'Web', ipAddress: ip });
 
     res.status(200).json({
       success: true,
@@ -49,106 +64,19 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       token,
       user: userStore.sanitizeUser(user)
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Internal server error.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'Login failed. Please try again.' });
   }
 });
 
 // GET /api/auth/role-status
-router.get('/role-status', (_req, res: Response): void => {
+router.get('/role-status', async (_req, res: Response): Promise<void> => {
+  await userStore.syncUsersToDb();
   res.status(200).json({
     success: true,
     hasAdmin: userStore.hasRole('Admin'),
     hasHR: userStore.hasRole('HR')
   });
-});
-
-// POST /api/auth/register
-router.post('/register', async (req, res: Response): Promise<void> => {
-  try {
-    const { name, email, password, role, department, title } = req.body;
-
-    if (!name || !email || !password || !role || !department) {
-      res.status(400).json({
-        success: false,
-        message: 'Name, email, password, role, and department are required.'
-      });
-      return;
-    }
-
-    const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
-
-    if (sanitizedName.length < 4) {
-      res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
-      return;
-    }
-
-    const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
-    if (nameParts.length < 2) {
-      res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
-      return;
-    }
-
-    if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
-      res.status(400).json({ success: false, message: 'First name and last name cannot be the same.' });
-      return;
-    }
-
-    if (userStore.findByName(sanitizedName)) {
-      res.status(409).json({
-        success: false,
-        message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
-      });
-      return;
-    }
-
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email)) {
-      res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
-      return;
-    }
-
-    if (role === 'Admin' && userStore.hasRole('Admin')) {
-      res.status(409).json({
-        success: false,
-        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-      });
-      return;
-    }
-
-    if (role === 'HR' && userStore.hasRole('HR')) {
-      res.status(409).json({
-        success: false,
-        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
-      });
-      return;
-    }
-
-    if (password.length < 6) {
-      res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long.'
-      });
-      return;
-    }
-
-    const newUser = await userStore.createUser({ name: sanitizedName, email, password, role, department, title });
-
-    const token = jwt.sign(
-      { id: newUser.id, email: newUser.email, role: newUser.role },
-      getJwtSecret(),
-      { expiresIn: JWT_EXPIRES_IN as any }
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Registration successful.',
-      token,
-      user: userStore.sanitizeUser(newUser)
-    });
-  } catch (error: any) {
-    res.status(400).json({ success: false, message: error.message || 'Registration failed.' });
-  }
 });
 
 // POST /api/auth/forgot-password
@@ -169,29 +97,28 @@ router.post('/forgot-password', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const user = userStore.findByEmail(email.trim().toLowerCase());
+    const { otpStore } = await import('../store/otpStore.js');
+    const { sendOTPEmail, isEmailConfigured } = await import('../services/emailService.js');
+
+    if (!isEmailConfigured()) {
+      res.status(503).json({ success: false, message: 'Email service is not configured.' });
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await userStore.findByEmailAsync(normalizedEmail);
 
     if (user && user.status === 'active') {
-      const { otpStore } = await import('../store/otpStore.js');
-      const { sendOTPEmail, isEmailConfigured } = await import('../services/emailService.js');
-
-      if (!isEmailConfigured()) {
-        res.status(503).json({ success: false, message: 'Email service is not configured.' });
-        return;
+      const { allowed } = otpStore.canResend(normalizedEmail);
+      if (allowed) {
+        try {
+          const otp = otpStore.generate(normalizedEmail);
+          await sendOTPEmail(normalizedEmail, user.name, otp);
+        } catch (error: any) {
+          // Keep the public response indistinguishable for known and unknown addresses.
+          console.error('[Forgot Password Email Error]', error.message);
+        }
       }
-
-      const { allowed, secondsLeft } = otpStore.canResend(email);
-      if (!allowed) {
-        res.status(429).json({
-          success: false,
-          message: `Please wait ${secondsLeft} seconds before requesting a new OTP.`,
-          secondsLeft
-        });
-        return;
-      }
-
-      const otp = otpStore.generate(email);
-      await sendOTPEmail(email, user.name, otp);
     }
 
     // Always return 200 to prevent email enumeration
@@ -217,7 +144,7 @@ router.put('/password', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    if (newPassword.length < 6) {
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
       res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
       return;
     }
@@ -235,7 +162,7 @@ router.put('/password', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const user = userStore.findByEmail(payload.email);
+    const user = await userStore.findByEmailAsync(payload.email);
     if (!user) {
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
@@ -251,49 +178,54 @@ router.put('/password', async (req, res: Response): Promise<void> => {
     await userStore.updatePassword(payload.email, newHash);
 
     res.status(200).json({ success: true, message: 'Password updated successfully. Please sign in with your new password.' });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to update password.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to update password.' });
   }
 });
 
 // GET /api/auth/me
-router.get('/me', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user) {
-    res.status(401).json({ success: false, message: 'Not authenticated.' });
-    return;
-  }
+router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
 
-  const user = userStore.findById(req.user.id);
-  if (!user) {
-    res.status(404).json({ success: false, message: 'User profile not found.' });
-    return;
-  }
+    // Serverless instances may receive this request before any login has hydrated the cache.
+    await userStore.syncUsersToDb();
+    const user = userStore.findById(req.user.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User profile not found.' });
+      return;
+    }
 
-  res.status(200).json({
-    success: true,
-    user: userStore.sanitizeUser(user)
-  });
+    res.status(200).json({
+      success: true,
+      user: userStore.sanitizeUser(user)
+    });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to restore authenticated session.' });
+  }
 });
 
 // GET /api/auth/users
-router.get('/users', (_req, res: Response): void => {
+router.get('/users', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  if (!req.user || req.user.role !== 'Admin') {
+    res.status(403).json({ success: false, message: 'Admin access required.' });
+    return;
+  }
+
   const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
   res.status(200).json({ success: true, users });
 });
 
-// GET /api/auth/check-email?email=...
-router.get('/check-email', (req, res: Response): void => {
-  const email = req.query.email as string;
-  if (!email) {
-    res.status(400).json({ success: false, message: 'Email query parameter required.' });
-    return;
-  }
-  const user = userStore.findByEmail(email.trim().toLowerCase());
-  res.status(200).json({ success: true, exists: !!user });
-});
-
 // POST /api/auth/logout
-router.post('/logout', authenticateJWT, (_req, res: Response): void => {
+router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  const user = req.user ? userStore.findById(req.user.id) : undefined;
+  if (req.user) recordActivitySafe({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+    actorRole: req.user.role, action: 'Logout', module: 'Authentication', entityType: 'User',
+    entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed out.`,
+    source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
   res.status(200).json({ success: true, message: 'Logout successful.' });
 });
 
@@ -327,8 +259,8 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
       message: 'Display name updated successfully.',
       user: updatedUser
     });
-  } catch (error: any) {
-    return void res.status(500).json({ success: false, message: error.message || 'Failed to update display name.' });
+  } catch {
+    return void res.status(500).json({ success: false, message: 'Failed to update display name.' });
   }
 });
 
@@ -362,8 +294,54 @@ router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest,
       message: 'Profile picture updated successfully.',
       user: updatedUser
     });
-  } catch (error: any) {
-    return void res.status(500).json({ success: false, message: error.message || 'Failed to update profile picture.' });
+  } catch {
+    return void res.status(500).json({ success: false, message: 'Failed to update profile picture.' });
+  }
+});
+
+// PUT /api/auth/profile/password
+router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      res.status(400).json({ success: false, message: 'All password fields are required.' });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      res.status(400).json({ success: false, message: 'New password and confirmation do not match.' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+      return;
+    }
+
+    const user = userStore.findById(req.user.id);
+    if (!user || !user.passwordHash) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      res.status(403).json({ success: false, message: 'Current password is incorrect.' });
+      return;
+    }
+
+    const newHash = bcrypt.hashSync(newPassword, 10);
+    await userStore.updatePassword(user.email, newHash);
+
+    res.status(200).json({ success: true, message: 'Password changed successfully.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to change password.' });
   }
 });
 

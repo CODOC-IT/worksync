@@ -8,7 +8,8 @@ const TASK_COLUMNS = `
   t.taskid, t.projectid, t.parenttaskid, t.tasknumber, t.title, t.description,
   ts.statuscode, pr.prioritycode, t.startdate::text, t.duedate::text,
   t.createdbyuserid, t.completedatutc, t.completionsummary, t.archivedatutc,
-  t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode
+  t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode,
+  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount
 `;
 
 const TASK_JOINS = `
@@ -41,14 +42,14 @@ export const getTaskStatusMeta = async (
 
 export const findAllTasks = async (): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.archivedatutc IS NULL AND t.parenttaskid IS NULL ORDER BY t.taskid`
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL ORDER BY t.taskid`
   );
   return result.rows;
 };
 
 export const findTasksForProject = async (projectId: number): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.projectid = $1 AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL ORDER BY t.taskid`,
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.projectid = $1 AND t.parenttaskid IS NULL AND t.archivedatutc IS NULL ORDER BY t.taskid`,
     [projectId]
   );
   return result.rows;
@@ -57,6 +58,24 @@ export const findTasksForProject = async (projectId: number): Promise<TaskRow[]>
 export const findTaskById = async (taskId: number): Promise<TaskRow | null> => {
   const result = await query<TaskRow>(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.taskid = $1`, [taskId]);
   return result.rows[0] || null;
+};
+
+export const findChildTasks = async (parentTaskId: number): Promise<TaskRow[]> => {
+  const result = await query<TaskRow>(
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid = $1 AND t.archivedatutc IS NULL ORDER BY t.taskid`,
+    [parentTaskId]
+  );
+  return result.rows;
+};
+
+export const findSubtaskCounts = async (parentTaskIds: number[]): Promise<Array<{ parenttaskid: number; subtaskcount: number }>> => {
+  if (parentTaskIds.length === 0) return [];
+  const result = await query<{ parenttaskid: number; subtaskcount: number }>(
+    `SELECT parenttaskid, COUNT(*)::int AS subtaskcount FROM work.tasks
+     WHERE parenttaskid = ANY($1::bigint[]) AND archivedatutc IS NULL GROUP BY parenttaskid`,
+    [parentTaskIds]
+  );
+  return result.rows;
 };
 
 export const findAssigneesForTask = async (taskId: number): Promise<TaskAssigneeRow[]> => {
@@ -76,29 +95,6 @@ export const findAssigneesForTasks = async (taskIds: number[]): Promise<TaskAssi
   return result.rows;
 };
 
-export const findSubtasksForTask = async (taskId: number): Promise<TaskRow[]> => {
-  const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid = $1 AND t.archivedatutc IS NULL ORDER BY t.taskid`,
-    [taskId]
-  );
-  return result.rows;
-};
-
-export const findSubtasksForTasks = async (taskIds: number[]): Promise<TaskRow[]> => {
-  if (taskIds.length === 0) return [];
-  const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid = ANY($1::bigint[]) AND t.archivedatutc IS NULL ORDER BY t.taskid`,
-    [taskIds]
-  );
-  return result.rows;
-};
-
-export const subtaskRowToDTO = (row: TaskRow): { id: string; title: string; completed: boolean } => ({
-  id: `tsk-${row.taskid}`,
-  title: row.title,
-  completed: row.statuscode === 'Done'
-});
-
 const getNextTaskNumber = async (runQuery: typeof query, projectId: number): Promise<number> => {
   const result = await runQuery<{ next: string }>(
     'SELECT COALESCE(MAX(tasknumber), 0) + 1 AS next FROM work.tasks WHERE projectid = $1',
@@ -109,6 +105,7 @@ const getNextTaskNumber = async (runQuery: typeof query, projectId: number): Pro
 
 export interface InsertTaskRow {
   projectId: number;
+  parentTaskId?: number;
   title: string;
   description: string;
   statusId: number;
@@ -117,21 +114,20 @@ export interface InsertTaskRow {
   dueDate: string;
   createdByUserId: number;
   assigneeUserIds: number[];
-  parentTaskId?: number;
 }
 
-export const insertTask = async (input: InsertTaskRow): Promise<number> =>
-  withTransaction(async (runQuery) => {
+const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow): Promise<number> => {
     const taskNumber = await getNextTaskNumber(runQuery, input.projectId);
 
     const inserted = await runQuery<{ taskid: number }>(
       `INSERT INTO work.tasks
-         (projectid, tasknumber, title, description, taskstatusid, priorityid, startdate,
-          duedate, createdbyuserid${input.parentTaskId ? ', parenttaskid' : ''})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${input.parentTaskId ? ', $10' : ''})
+         (projectid, parenttaskid, tasknumber, title, description, taskstatusid, priorityid, startdate,
+          duedate, createdbyuserid)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING taskid`,
       [
         input.projectId,
+        input.parentTaskId || null,
         taskNumber,
         input.title,
         input.description,
@@ -139,8 +135,7 @@ export const insertTask = async (input: InsertTaskRow): Promise<number> =>
         input.priorityId,
         input.startDate,
         input.dueDate,
-        input.createdByUserId,
-        ...(input.parentTaskId ? [input.parentTaskId] : [])
+        input.createdByUserId
       ]
     );
     const taskId = inserted.rows[0].taskid;
@@ -163,7 +158,30 @@ export const insertTask = async (input: InsertTaskRow): Promise<number> =>
       [taskId, input.statusId, input.createdByUserId]
     );
 
-    return taskId;
+  return taskId;
+};
+
+export const insertTask = async (input: InsertTaskRow): Promise<number> =>
+  withTransaction((runQuery) => insertTaskWithQuery(runQuery, input));
+
+// Parent and children are persisted in one transaction, so a failed child validation/write
+// cannot leave an orphaned parent task behind.
+export const insertTaskBundle = async (
+  parent: InsertTaskRow,
+  children: Omit<InsertTaskRow, 'projectId' | 'parentTaskId' | 'createdByUserId'>[]
+): Promise<{ parentTaskId: number; childTaskIds: number[] }> =>
+  withTransaction(async (runQuery) => {
+    const parentTaskId = await insertTaskWithQuery(runQuery, parent);
+    const childTaskIds: number[] = [];
+    for (const child of children) {
+      childTaskIds.push(await insertTaskWithQuery(runQuery, {
+        ...child,
+        projectId: parent.projectId,
+        parentTaskId,
+        createdByUserId: parent.createdByUserId
+      }));
+    }
+    return { parentTaskId, childTaskIds };
   });
 
 export interface UpdateTaskRow {
@@ -223,7 +241,7 @@ export const archiveTask = async (taskId: number): Promise<boolean> => {
   const result = await query(
     `UPDATE work.tasks SET archivedatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP,
        rowversion = rowversion + 1
-     WHERE taskid = $1 AND archivedatutc IS NULL`,
+     WHERE (taskid = $1 OR parenttaskid = $1) AND archivedatutc IS NULL`,
     [taskId]
   );
   return (result.rowCount ?? 0) > 0;

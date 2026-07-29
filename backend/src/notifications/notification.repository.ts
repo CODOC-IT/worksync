@@ -314,14 +314,17 @@ export interface EmailCandidateRow {
 }
 
 // Finds not-yet-processed, non-suppressed, non-cleared notifications at the given priorities,
-// alongside whether that recipient currently has the single global "Email" preference toggle on
+// alongside whether that recipient currently has the single global "Email" preference toggle on.
+// Defaults to TRUE (opt-out) when the recipient has no preference row yet -- Critical/High
+// events (task review requests, approvals, etc.) must actually reach a real inbox out of the
+// box, not silently depend on every user first discovering and enabling a settings toggle.
 // (see notification.service.ts's REPRESENTATIVE_TYPE_CODES.email — keyed off the 'system' type,
 // since the frontend has no per-category email control).
 export const findEmailCandidates = async (priorities: DbPriority[]): Promise<EmailCandidateRow[]> => {
   const result = await query<EmailCandidateRow>(
     `SELECT un.notificationid, un.recipientuserid, n.title, n.safepreviewtext, nt.typecode,
             n.prioritycode, n.createdatutc, u.email AS recipientemail, u.displayname AS recipientname,
-            COALESCE(pref.emailenabled, FALSE) AS emailenabled
+            COALESCE(pref.emailenabled, TRUE) AS emailenabled
      FROM notify.usernotifications un
      JOIN notify.notifications n ON n.notificationid = un.notificationid
      JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
@@ -417,11 +420,12 @@ export const getPreferencesForTypes = async (
   );
   return result.rows.map((row) => ({
     typeCode: row.typecode,
-    // NULL means "no explicit row yet" — default to enabled in-app, disabled email, matching
-    // the frontend's original in-memory defaults (see AppContext's notificationPreferences
-    // initial state prior to this branch).
+    // NULL means "no explicit row yet" — default both to enabled (opt-out, not opt-in): a
+    // Critical/High-priority event (task review requests, approvals, etc.) must reach a real
+    // inbox out of the box, not silently depend on every user first discovering and enabling an
+    // email settings toggle. See the matching default in findEmailCandidates below.
     inAppEnabled: row.inappenabled ?? true,
-    emailEnabled: row.emailenabled ?? false
+    emailEnabled: row.emailenabled ?? true
   }));
 };
 
