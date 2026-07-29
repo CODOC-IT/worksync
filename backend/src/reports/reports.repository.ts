@@ -102,10 +102,10 @@ export const getOverviewStats = async (
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL
        AND (ps.statuscode = 'Active'
-            OR p.startdate >= $2::date AND p.startdate <= $3::date
-            OR p.enddate >= $2::date AND p.enddate <= $3::date)`,
-    [projectIds, from, to]
-  );
+             OR p.startdate >= $2::date AND p.startdate <= $3::date
+             OR p.enddate >= $2::date AND p.enddate <= $3::date)`,
+     [projectIds, from, to]
+   );
 
   // Task counts across all visible projects
   const taskResult = await query<{ total: number; completed: number; active: number; overdue: number }>(
@@ -117,10 +117,10 @@ export const getOverviewStats = async (
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)`,
-    [projectIds, from, to]
-  );
+        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+             OR NOT ts.iscompletedstate)`,
+     [projectIds, from, to]
+   );
 
   return {
     totalProjects: projResult.rows[0]?.count || 0,
@@ -171,8 +171,8 @@ export const getProjectStats = async (projectIds: number[], from: string, to: st
         GROUP BY t.projectid
      ) task_stats ON task_stats.projectid = p.projectid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL`,
-    [projectIds, from, to]
-  );
+     [projectIds]
+   );
   return result.rows;
 };
 
@@ -280,7 +280,7 @@ export const getTaskStatusDistribution = async (
       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
       GROUP BY ts.statuscode
       ORDER BY MIN(ts.sortorder)`,
-     [projectIds, from, to, projectIds, from, to]
+     [projectIds, from, to]
    );
 
    // Map DB codes to display names
@@ -373,8 +373,8 @@ export const getCompletionTrend = async (
       ) completed ON completed.d = dates.date
       GROUP BY dates.date
       ORDER BY dates.date`,
-    [projectIds, from, to]
-  );
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
@@ -408,9 +408,9 @@ export const getWorkload = async (projectIds: number[], from: string, to: string
        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
             OR NOT ts.iscompletedstate)
      GROUP BY ta.userid
-     ORDER BY active DESC`,
-    [projectIds, from, to]
-  );
+      ORDER BY active DESC`,
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
@@ -528,9 +528,9 @@ export const getTeamStats = async (projectIds: number[], from: string, to: strin
             OR NOT ts.iscompletedstate
             OR ts.iscompletedstate IS NULL)
      GROUP BY d.departmentname
-     ORDER BY tasks DESC`,
-    [projectIds, from, to]
-  );
+      ORDER BY tasks DESC`,
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
