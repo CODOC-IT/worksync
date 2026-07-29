@@ -57,7 +57,7 @@ import {
   ClipboardList
 } from 'lucide-react';
 
-type ReportTab = 'overview' | 'projects' | 'teams' | 'tasks' | 'workload' | 'deadlines' | 'attendance' | 'export';
+type ReportTab = 'overview' | 'projects' | 'teams' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
 
 interface DateRange {
   from: string;
@@ -166,6 +166,7 @@ export const ReportsView: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectSearchTerm, setProjectSearchTerm] = useState('');
+  const [projectFilterStatus, setProjectFilterStatus] = useState('');
   const [detailProject, setDetailProject] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -186,6 +187,7 @@ export const ReportsView: React.FC = () => {
   const [deadlineFilterAssignee, setDeadlineFilterAssignee] = useState('');
   const [deadlineFilterDateRange, setDeadlineFilterDateRange] = useState('all');
   const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
+  const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -603,6 +605,10 @@ export const ReportsView: React.FC = () => {
 
   const deadlineBaseTasks = useMemo(() => {
     let tasks = (apiAvailable ? roleFiltered.tasks : roleFilteredLocal.tasks) as any[];
+    if (deadlineSearchQuery) {
+      const q = deadlineSearchQuery.toLowerCase();
+      tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
+    }
     if (deadlineFilterProject) {
       tasks = tasks.filter((t: any) => t.projectId === deadlineFilterProject);
     }
@@ -613,7 +619,7 @@ export const ReportsView: React.FC = () => {
       tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
     }
     return tasks;
-  }, [apiAvailable, roleFiltered.tasks, roleFilteredLocal.tasks, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+  }, [apiAvailable, roleFiltered.tasks, roleFilteredLocal.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineData = useMemo(() => {
     const today = todayStr();
@@ -807,11 +813,11 @@ export const ReportsView: React.FC = () => {
   const visibleTabs = useMemo<ReportTab[]>(() => {
     switch (currentRole) {
       case 'Admin':
-        return ['overview', 'projects', 'tasks', 'teams', 'workload', 'deadlines', 'attendance', 'export'];
+        return ['overview', 'projects', 'tasks', 'teams', 'workload', 'deadlines', 'attendance'];
       case 'HR':
-        return ['overview', 'attendance', 'export'];
+        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'Team_Lead':
-        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'export'];
+        return ['overview', 'projects', 'tasks', 'workload', 'deadlines'];
       case 'Team_Member':
         return ['overview', 'projects', 'tasks', 'workload', 'deadlines'];
       default:
@@ -827,7 +833,6 @@ export const ReportsView: React.FC = () => {
     workload: 'Workload',
     deadlines: 'Deadlines',
     attendance: 'Attendance',
-    export: 'Export'
   };
 
   const handleDateChange = (field: 'from' | 'to', value: string) => {
@@ -838,53 +843,6 @@ export const ReportsView: React.FC = () => {
   };
 
   const hasError = validationError !== null;
-
-  const handleCsvExport = () => {
-    const tab = activeTab;
-    let headers: string[] = [];
-    let rows: string[][] = [];
-
-    if (tab === 'projects') {
-      headers = ['Project', 'Code', 'Status', 'Progress %', 'Start Date', 'Target Date', 'Members', 'Team Lead'];
-      rows = roleFiltered.projects.map((p: any) => [
-        p.title, p.code, p.status, String(p.progress), p.startDate, p.targetDate,
-        String(p.memberIds?.length || 0), users.find((u) => u.id === p.teamLeadId)?.name || p.teamLeadId
-      ]);
-    } else if (tab === 'workload') {
-      headers = ['Member', 'Role', 'Active', 'Completed', 'Overdue', 'Projects', 'Workload'];
-      rows = workloadData.map((w: any) => {
-        const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
-        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
-        return [w.name, w.role || w.department || '', String(w.active), String(w.completed), String(w.overdue), String(w.projectCount || 0), wl];
-      });
-    } else if (tab === 'deadlines') {
-      headers = ['Task', 'Status', 'Priority', 'Due Date', 'Assignee'];
-      rows = [...deadlineData.overdue, ...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].map((t: any) => [
-        t.title, t.status, t.priority, t.dueDate, users.find((u) => u.id === t.assigneeId)?.name || t.assigneeId
-      ]);
-    } else if (tab === 'attendance') {
-      headers = ['User', 'Date', 'Status', 'Check In', 'Check Out', 'Total Hours'];
-      rows = roleFiltered.attendance.map((a: any) => [
-        users.find((u) => u.id === a.userId)?.name || a.userId, a.date, a.status, a.checkIn, a.checkOut || '\u2014', String(a.totalHours)
-      ]);
-    } else if (tab === 'teams') {
-      headers = ['Department', 'Members', 'Projects', 'Tasks', 'Completed', 'Completion Rate'];
-      rows = teamStats.map((t: any) => [t.department, String(t.members), String(t.projects), String(t.tasks), String(t.completed), `${t.rate}%`]);
-    } else {
-      headers = ['Metric', 'Value'];
-      rows = [
-        ['Total Projects', String(kpiStats.totalProjects)],
-        ['Active Tasks', String(kpiStats.activeTasks)],
-        ['Completed Tasks', String(kpiStats.completedTasks)],
-        ['Overdue Tasks', String(kpiStats.overdueTasks)],
-        ['Completion Rate', `${kpiStats.completionRate}%`],
-        ['Contributors', String(kpiStats.activeMembers)]
-      ];
-    }
-
-    const csv = prepareCsv(headers, rows);
-    downloadBlob(csv, `report_${tab}_${dateRange.from}_${dateRange.to}.csv`, 'text/csv');
-  };
 
   const handlePdfExport = () => {
     const tab = activeTab;
@@ -900,7 +858,6 @@ export const ReportsView: React.FC = () => {
       workload: 'Member Workload Report',
       deadlines: 'Deadlines Report',
       attendance: 'Attendance Report',
-      export: 'Export Summary',
     };
 
     const title = pdfTitles[tab];
@@ -933,7 +890,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<thead><tr>${th('Project')}${th('Code')}${th('Status')}${th('Progress')}${th('Tasks')}${th('Health')}</tr></thead><tbody>`;
       projArr.forEach((p: any) => {
         const health = (p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : 'Needs Attention';
-        bodyHtml += `<tr>${td(p.title, '#0f172a')}${td(p.code)}${td(p.status)}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
+        bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.code || '\u2014')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'teams') {
@@ -948,7 +905,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Department')}${th('Members')}${th('Projects')}${th('Tasks')}${th('Completed')}${th('Rate')}</tr></thead><tbody>`;
       teamStats.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.department, '#0f172a')}${td(t.members)}${td(t.projects)}${td(t.tasks)}${td(t.completed)}${td(`${t.rate}%`)}</tr>`;
+        bodyHtml += `<tr>${td(t.department || '\u2014', '#0f172a')}${td(t.members ?? 0)}${td(t.projects ?? 0)}${td(t.tasks ?? 0)}${td(t.completed ?? 0)}${td((t.rate ?? 0) + '%')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'workload') {
@@ -965,7 +922,7 @@ export const ReportsView: React.FC = () => {
       wlMembers.forEach((w: any) => {
         const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
         const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
-        bodyHtml += `<tr>${td(w.name, '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active)}${td(w.completed)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
+        bodyHtml += `<tr>${td(w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'deadlines') {
@@ -980,7 +937,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
         deadlineData.overdue.forEach((t: any) => {
-          bodyHtml += `<tr>${td(t.title, '#991b1b')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
+          bodyHtml += `<tr>${td(t.title || '\u2014', '#991b1b')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(t.dueDate || '\u2014')}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
       }
@@ -989,7 +946,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
         deadlineData.dueToday.forEach((t: any) => {
-          bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
+          bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(t.dueDate || '\u2014')}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
       }
@@ -998,7 +955,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
         deadlineData.dueTomorrow.forEach((t: any) => {
-          bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
+          bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(t.dueDate || '\u2014')}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
       }
@@ -1007,7 +964,7 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Due Date')}</tr></thead><tbody>`;
         deadlineData.upcoming.forEach((t: any) => {
-          bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(t.dueDate)}</tr>`;
+          bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(t.dueDate || '\u2014')}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
       }
@@ -1030,7 +987,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
       (roleFiltered.attendance || []).forEach((a: any) => {
         const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
-        bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date)}${td(a.status)}${td(a.checkIn)}${td(a.checkOut || '\u2014')}${td(a.totalHours || 0)}</tr>`;
+        bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else {
@@ -1131,7 +1088,7 @@ ${bodyHtml}
       bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Assignee')}${th('Due Date')}</tr></thead><tbody>`;
       sectionData.forEach((t: any) => {
         const assigneeNames = getTaskAssigneeIds(t).map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
-        bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(assigneeNames)}${td(t.dueDate || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(assigneeNames)}${td(t.dueDate || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
 
@@ -1186,10 +1143,10 @@ ${bodyHtml}
     let bodyHtml = '';
 
     bodyHtml += `<div style="margin-bottom:16px;"><span style="font-size:10px;color:#64748b;">${t.taskNumber || t.id.slice(0, 8)}</span>`;
-    bodyHtml += `<h2 style="margin:4px 0;font-size:18px;font-weight:700;color:#0f172a;">${t.title}</h2>`;
+    bodyHtml += `<h2 style="margin:4px 0;font-size:18px;font-weight:700;color:#0f172a;">${t.title || '\u2014'}</h2>`;
     bodyHtml += `<div style="display:flex;gap:6px;margin-top:4px;">`;
-    bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#dbeafe;color:#1e40af;">${t.status}</span>`;
-    bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#fce7f3;color:#9d174d;">${t.priority}</span>`;
+    bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#dbeafe;color:#1e40af;">${t.status || '\u2014'}</span>`;
+    bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#fce7f3;color:#9d174d;">${t.priority || '\u2014'}</span>`;
     bodyHtml += `</div></div>`;
 
     bodyHtml += section('Details');
@@ -1213,7 +1170,7 @@ ${bodyHtml}
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Title')}${th('Status')}${th('Priority')}</tr></thead><tbody>`;
       t.subtasks.forEach((st: any) => {
-        bodyHtml += `<tr>${td(st.title, '#0f172a')}${td(st.status)}${td(st.priority)}</tr>`;
+        bodyHtml += `<tr>${td(st.title || '\u2014', '#0f172a')}${td(st.status || '\u2014')}${td(st.priority || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1300,7 +1257,7 @@ ${bodyHtml}
     const section = (title: string) => `<h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;color:#1e293b;border-left:3px solid #3b82f6;padding-left:8px;">${title}</h3>`;
 
     let bodyHtml = '';
-    bodyHtml += `<h2 style="margin:0;font-size:18px;font-weight:700;color:#0f172a;">${m.name}</h2>`;
+    bodyHtml += `<h2 style="margin:0;font-size:18px;font-weight:700;color:#0f172a;">${m.name || '\u2014'}</h2>`;
     bodyHtml += `<p style="margin:2px 0 16px;font-size:11px;color:#64748b;">${m.title || m.role || ''}${m.department ? ` &middot; ${m.department}` : ''}</p>`;
 
     bodyHtml += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">`;
@@ -1317,7 +1274,7 @@ ${bodyHtml}
       bodyHtml += `<thead><tr>${th('Task')}${th('Project')}${th('Priority')}${th('Status')}${th('Due Date')}</tr></thead><tbody>`;
       activeTasks.forEach((t: any) => {
         const projName = roleFiltered.projects.find((p: any) => p.id === t.projectId)?.title || '';
-        bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(projName)}${td(t.priority)}${td(t.status)}${td(t.dueDate?.slice(0, 10) || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(projName)}${td(t.priority || '\u2014')}${td(t.status || '\u2014')}${td(t.dueDate?.slice(0, 10) || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1328,7 +1285,7 @@ ${bodyHtml}
       bodyHtml += `<thead><tr>${th('Project')}${th('Role')}${th('Status')}</tr></thead><tbody>`;
       memberProjects.forEach((p: any) => {
         const isLead = p.teamLeadId === m.userId;
-        bodyHtml += `<tr>${td(p.title, '#0f172a')}${td(isLead ? 'Lead' : 'Member')}${td(p.status)}</tr>`;
+        bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(isLead ? 'Lead' : 'Member')}${td(p.status || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1338,7 +1295,7 @@ ${bodyHtml}
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Task')}${th('Priority')}${th('Completed')}</tr></thead><tbody>`;
       completedTasks.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.priority)}${td(t.createdAt?.slice(0, 10) || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.priority || '\u2014')}${td(t.createdAt?.slice(0, 10) || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1347,7 +1304,7 @@ ${bodyHtml}
       bodyHtml += section(`Upcoming Deadlines (${upcomingDeadlines.length})`);
       upcomingDeadlines.forEach((t: any) => {
         bodyHtml += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:10px;border-bottom:1px solid #f1f5f9;">
-          <span style="color:#0f172a;">${t.title}</span>
+          <span style="color:#0f172a;">${t.title || '\u2014'}</span>
           <span style="color:#64748b;">${t.dueDate?.slice(0, 10) || ''}</span>
         </div>`;
       });
@@ -1436,8 +1393,8 @@ ${bodyHtml}
     let bodyHtml = '';
 
     bodyHtml += `<div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px;">
-      <div><div style="font-size:14px;font-weight:700;color:#0f172a;">${project.code}</div>
-      <div style="font-size:11px;color:#64748b;">${project.title}</div></div>
+      <div><div style="font-size:14px;font-weight:700;color:#0f172a;">${project.code || '\u2014'}</div>
+      <div style="font-size:11px;color:#64748b;">${project.title || '\u2014'}</div></div>
       <div style="font-size:10px;color:#64748b;">${healthLabel} | ${project.progress || 0}% progress</div>
     </div>`;
 
@@ -1484,9 +1441,8 @@ ${bodyHtml}
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
       bodyHtml += `<thead><tr>${th('Task')}${th('Status')}${th('Priority')}${th('Assignee')}${th('Due Date')}</tr></thead><tbody>`;
       projectTasks.forEach((t: any) => {
-        const assignee = users.find((u: any) => u.id === t.assigneeId);
-        const assigneeName = assignee?.name || t.assigneeId || '\u2014';
-        bodyHtml += `<tr>${td(t.title, '#0f172a')}${td(t.status)}${td(t.priority)}${td(assigneeName)}${td(formatDate(t.dueDate))}</tr>`;
+        const assigneeNames = getTaskAssigneeIds(t).map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(assigneeNames)}${td(formatDate(t.dueDate))}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1854,21 +1810,51 @@ ${bodyHtml}
         </div>
       </GlassCard>
 
-      <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            {renderSectionHeader(<BarChart3 size={16} className="text-violet-400" />, 'Project Details')}
-            <div className="relative shrink-0">
-              <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+      <GlassCard>
+        <div className="p-4 space-y-3">
+          {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filters')}
+          <div className="flex flex-wrap gap-2">
+            <div className="relative flex-1 min-w-[160px]">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Search projects..."
                 value={projectSearchTerm}
                 onChange={(e) => setProjectSearchTerm(e.target.value)}
-                className="pl-7 pr-2 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 outline-none focus:border-cyan-500/50 w-40"
+                placeholder="Search projects..."
+                className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
               />
+              {projectSearchTerm && (
+                <button onClick={() => setProjectSearchTerm('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                  <X size={12} />
+                </button>
+              )}
             </div>
+            <select
+              value={projectFilterStatus}
+              onChange={(e) => setProjectFilterStatus(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[100px]"
+            >
+              <option value="">All Statuses</option>
+              <option value="Active">Active</option>
+              <option value="Completed">Completed</option>
+              <option value="On Hold">On Hold</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+            {(projectSearchTerm || projectFilterStatus) && (
+              <button
+                onClick={() => { setProjectSearchTerm(''); setProjectFilterStatus(''); }}
+                className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
+              >
+                <X size={11} /> Clear
+              </button>
+            )}
           </div>
+        </div>
+      </GlassCard>
+
+      <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+        <div className="glass-panel p-4 rounded-lg">
+          {renderSectionHeader(<BarChart3 size={16} className="text-violet-400" />, 'Project Details')}
           <div className="overflow-x-auto overflow-y-auto max-h-[400px] mt-3">
             <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
               <colgroup>
@@ -1894,10 +1880,11 @@ ${bodyHtml}
               <tbody>
                 {(() => {
                   const filtered = (roleFiltered.projects || []).filter((p: any) =>
-                    !projectSearchTerm || p.title?.toLowerCase().includes(projectSearchTerm.toLowerCase())
+                    (!projectSearchTerm || p.title?.toLowerCase().includes(projectSearchTerm.toLowerCase())) &&
+                    (!projectFilterStatus || p.status === projectFilterStatus)
                   );
                   if (filtered.length === 0) return (
-                    <tr><td colSpan={7} className="text-center text-slate-500 py-6">{projectSearchTerm ? 'No matching projects' : 'No projects in range'}</td></tr>
+                    <tr><td colSpan={7} className="text-center text-slate-500 py-6">{(projectSearchTerm || projectFilterStatus) ? 'No matching projects' : 'No projects in range'}</td></tr>
                   );
                   return filtered.map((p: any) => {
                     const pTasksCount = p.taskCount || 0;
@@ -2127,13 +2114,14 @@ ${bodyHtml}
                   </thead>
                   <tbody>
                     {projectTasks.map((t: any) => {
-                      const assignee = users.find((u: any) => u.id === t.assigneeId);
+                      const taskAssigneeIds = getTaskAssigneeIds(t);
+                      const assigneeName = taskAssigneeIds.map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
                       return (
                         <tr key={t.id}>
                           <td className="text-slate-200 font-medium truncate" title={t.title}>{t.title}</td>
                           <td><StatusBadge status={t.status} size="sm" /></td>
                           <td><StatusBadge status={t.priority} size="sm" /></td>
-                          <td className="text-xs text-slate-400 truncate">{assignee?.name || t.assigneeId || '\u2014'}</td>
+                          <td className="text-xs text-slate-400 truncate">{assigneeName}</td>
                           <td className="text-xs font-mono text-slate-400">{t.dueDate ? formatHumanDate(t.dueDate) : '\u2014'}</td>
                           <td className="text-xs font-mono text-slate-400">{t.createdAt ? formatHumanDate(t.createdAt) : '\u2014'}</td>
                         </tr>
@@ -2617,6 +2605,21 @@ ${bodyHtml}
           <div className="p-4 space-y-3">
             {renderSectionHeader(<Filter size={16} className="text-cyan-400" />, 'Filters')}
             <div className="flex flex-wrap gap-2">
+              <div className="relative flex-1 min-w-[160px]">
+                <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={deadlineSearchQuery}
+                  onChange={(e) => setDeadlineSearchQuery(e.target.value)}
+                  placeholder="Search tasks..."
+                  className="w-full pl-7 pr-7 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500/50 transition-colors"
+                />
+                {deadlineSearchQuery && (
+                  <button onClick={() => setDeadlineSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
               <select
                 value={deadlineFilterProject}
                 onChange={(e) => setDeadlineFilterProject(e.target.value)}
@@ -2659,9 +2662,9 @@ ${bodyHtml}
                 <option value="Review">Review</option>
                 <option value="Blocked">Blocked</option>
               </select>
-              {(deadlineFilterProject || deadlineFilterAssignee || deadlineFilterDateRange !== 'all' || deadlineFilterStatus) && (
+              {(deadlineSearchQuery || deadlineFilterProject || deadlineFilterAssignee || deadlineFilterDateRange !== 'all' || deadlineFilterStatus) && (
                 <button
-                  onClick={() => { setDeadlineFilterProject(''); setDeadlineFilterAssignee(''); setDeadlineFilterDateRange('all'); setDeadlineFilterStatus(''); }}
+                  onClick={() => { setDeadlineSearchQuery(''); setDeadlineFilterProject(''); setDeadlineFilterAssignee(''); setDeadlineFilterDateRange('all'); setDeadlineFilterStatus(''); }}
                   className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
                 >
                   <X size={11} /> Clear
@@ -3518,59 +3521,6 @@ ${bodyHtml}
     </div>
   );
 
-  const renderExportTab = () => (
-    <div className="space-y-5">
-      <div className="p-6 text-center space-y-4 bg-slate-900/30 border border-white/10 rounded-xl">
-        <FileSpreadsheet size={40} className="mx-auto text-cyan-400" />
-        <div>
-          <h3 className="text-sm font-bold text-white">CSV Export</h3>
-          <p className="text-xs text-slate-400 mt-1">Export the current report as a CSV spreadsheet</p>
-        </div>
-        <div className="text-[10px] text-slate-500 font-mono">
-          {tabLabels[activeTab]} Report | {dateRange.from} \u2013 {dateRange.to}
-        </div>
-        <button
-          onClick={handleCsvExport}
-          disabled={hasError}
-          className="w-full py-2.5 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2 shadow"
-        >
-          <Download size={14} />
-          <span>Download CSV</span>
-        </button>
-      </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<FileSpreadsheet size={16} className="text-cyan-400" />, 'Export Summary')}
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Current View</span>
-              <span className="text-white font-bold">{tabLabels[activeTab]}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Date Range</span>
-              <span className="text-white font-bold font-mono text-[10px]">{dateRange.from} \u2013 {dateRange.to}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Role</span>
-              <span className="text-white font-bold">{currentRole.replace('_', ' ')}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Data Records</span>
-              <span className="text-white font-bold">
-                {activeTab === 'projects' ? roleFiltered.projects.length :
-                 activeTab === 'workload' ? workloadData.length :
-                 activeTab === 'deadlines' ? deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length + deadlineData.overdue.length :
-                 activeTab === 'attendance' ? roleFiltered.attendance.length :
-                 activeTab === 'teams' ? teamStats.length : (kpiStats.completedTasks + kpiStats.activeTasks)}
-              </span>
-            </div>
-          </div>
-        </div>
-      </GlassCard>
-    </div>
-  );
-
   const renderTabContent = () => {
     const tabContent = (() => {
       switch (activeTab) {
@@ -3588,8 +3538,6 @@ ${bodyHtml}
           return renderDeadlinesTab();
         case 'attendance':
           return renderAttendanceTab();
-        case 'export':
-          return renderExportTab();
         default:
           return renderOverviewTab();
       }
@@ -3597,17 +3545,6 @@ ${bodyHtml}
 
     return (
       <>
-        {activeTab !== 'export' && (
-          <div className="flex justify-end">
-            <button
-              onClick={handlePdfExport}
-              className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
-            >
-              <FileText size={11} />
-              Export PDF
-            </button>
-          </div>
-        )}
         {reportLoading && (
           <div className="text-xs text-slate-400 text-center py-2">Loading report data...</div>
         )}
