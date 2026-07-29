@@ -26,13 +26,18 @@ const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
   Deactivated: 'inactive'
 };
 
+const DEFAULT_TEMPORARY_ROLE_ASSIGNMENT_DAYS = 30;
+const TEMPORARY_ROLES: UserRole[] = ['Team_Lead', 'HR'];
+
 const USER_QUERY = `
   SELECT u.userid, u.email, u.displayname, u.designation,
          u.accountstatus, u.createdatutc,
          r.rolecode, d.departmentname,
          uc.passwordhash, uc.passwordalgorithm
   FROM iam.users u
-  LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
+  LEFT JOIN iam.userroles ur ON ur.userid = u.userid
+    AND ur.revokedatutc IS NULL
+    AND (ur.endsatutc IS NULL OR ur.endsatutc > CURRENT_TIMESTAMP)
   LEFT JOIN iam.roles r ON r.roleid = ur.roleid
   LEFT JOIN org.departments d ON d.departmentid = u.departmentid
   LEFT JOIN iam.usercredentials uc ON uc.userid = u.userid
@@ -253,10 +258,15 @@ class UserStore {
         if (!roleResult.rows[0]) {
           throw new Error(`Database role ${roleCode} is not configured.`);
         }
+        const isTemporaryRole = TEMPORARY_ROLES.includes(userData.role);
+        const temporaryRoleExpiresAt = isTemporaryRole
+          ? new Date(Date.now() + DEFAULT_TEMPORARY_ROLE_ASSIGNMENT_DAYS * 24 * 60 * 60 * 1000)
+          : null;
+
         await query(
-          `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid)
-           VALUES ($1, $2, 1)`,
-          [userId, roleResult.rows[0].roleid]
+          `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+           VALUES ($1, $2, 1, $3)`,
+          [userId, roleResult.rows[0].roleid, temporaryRoleExpiresAt]
         );
 
         const newUser: UserRecord = {

@@ -5,7 +5,6 @@ import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { getPasswordPolicyError } from '../utils/passwordPolicy.js';
 
 const router = Router();
 
@@ -68,6 +67,16 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
   } catch {
     res.status(500).json({ success: false, message: 'Login failed. Please try again.' });
   }
+});
+
+// GET /api/auth/role-status
+router.get('/role-status', async (_req, res: Response): Promise<void> => {
+  await userStore.syncUsersToDb();
+  res.status(200).json({
+    success: true,
+    hasAdmin: userStore.hasRole('Admin'),
+    hasHR: userStore.hasRole('HR')
+  });
 });
 
 // POST /api/auth/forgot-password
@@ -135,9 +144,8 @@ router.put('/password', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const passwordPolicyError = getPasswordPolicyError(newPassword);
-    if (passwordPolicyError) {
-      res.status(400).json({ success: false, message: passwordPolicyError });
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
       return;
     }
 

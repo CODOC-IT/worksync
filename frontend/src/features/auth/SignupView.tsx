@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertCircle, ArrowRight, Building2, Eye, EyeOff, Lock, Mail, Shield, Sparkles, User as UserIcon } from 'lucide-react';
+import { AlertCircle, ArrowRight, Briefcase, Building2, Check, Eye, EyeOff, Lock, Mail, Shield, Sparkles, User as UserIcon, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
+import { UserRole } from '../../types';
 import { OTPVerificationView } from './OTPVerificationView';
 
 interface SignupViewProps {
@@ -22,12 +23,48 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showOTP, setShowOTP] = useState(false);
+  const [role, setRole] = useState<UserRole>('Team_Member');
+  const [roleStatus, setRoleStatus] = useState({ hasAdmin: false, hasHR: false });
 
-  const passwordPolicy = useMemo(() => {
-    const groups = [/[A-Z]/.test(password), /[a-z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)]
-      .filter(Boolean).length;
-    return { valid: password.length >= 8 && groups >= 3, groups };
-  }, [password]);
+  useEffect(() => {
+    fetch('/api/auth/role-status')
+      .then((response) => response.json())
+      .then((data) => {
+        if (!data.success) return;
+        const nextStatus = { hasAdmin: Boolean(data.hasAdmin), hasHR: Boolean(data.hasHR) };
+        setRoleStatus(nextStatus);
+        setRole((currentRole) =>
+          (currentRole === 'Admin' && nextStatus.hasAdmin) || (currentRole === 'HR' && nextStatus.hasHR)
+            ? 'Team_Member'
+            : currentRole
+        );
+      })
+      .catch(() => {
+        // Keep all roles selectable when occupancy status is unavailable.
+      });
+  }, []);
+
+  const isLeadOrMember = role === 'Team_Lead' || role === 'Team_Member';
+
+  const passwordCriteria = useMemo(() => ({
+    hasMinLength: password.length >= 8,
+    hasUpper: /[A-Z]/.test(password),
+    hasLower: /[a-z]/.test(password),
+    hasNumber: /[0-9]/.test(password),
+    hasSpecial: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]/.test(password)
+  }), [password]);
+
+  const strengthScore = useMemo(
+    () => Object.values(passwordCriteria).filter(Boolean).length,
+    [passwordCriteria]
+  );
+
+  const strengthConfig = useMemo(() => {
+    if (!password) return { label: 'Empty', color: 'bg-slate-700', text: 'text-slate-500', percent: 0 };
+    if (strengthScore <= 2) return { label: 'Weak', color: 'bg-rose-500', text: 'text-rose-400', percent: 33 };
+    if (strengthScore <= 4) return { label: 'Medium', color: 'bg-amber-500', text: 'text-amber-400', percent: 66 };
+    return { label: 'Strong', color: 'bg-emerald-500', text: 'text-emerald-400', percent: 100 };
+  }, [password, strengthScore]);
 
   const handleSignupSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -46,12 +83,20 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       setErrorMsg('Please enter a valid email address.');
       return;
     }
-    if (!passwordPolicy.valid) {
-      setErrorMsg('Password must be at least 8 characters and include three of: uppercase, lowercase, number, and special character.');
+    if (strengthScore < 3) {
+      setErrorMsg('Password is too weak. Please meet at least 3 of the strength criteria.');
       return;
     }
     if (password !== confirmPassword) {
       setErrorMsg('Passwords do not match.');
+      return;
+    }
+    if (role === 'Admin' && roleStatus.hasAdmin) {
+      setErrorMsg('An Administrator account already exists in this organization. Only one Admin is permitted.');
+      return;
+    }
+    if (role === 'HR' && roleStatus.hasHR) {
+      setErrorMsg('An HR Specialist account already exists in this organization. Only one HR is permitted.');
       return;
     }
 
@@ -60,7 +105,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
       const response = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), name: sanitizedName })
+        body: JSON.stringify({ email: email.trim(), name: sanitizedName, role })
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.message || 'Failed to send verification code.');
@@ -79,14 +124,26 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   };
 
   if (showOTP) {
+    const finalDepartment = isLeadOrMember
+      ? department
+      : role === 'HR'
+        ? 'Human Resources & People Ops'
+        : 'Executive Operations';
+    const finalTitle = isLeadOrMember
+      ? title.trim() || `${role.replace('_', ' ')} Specialist`
+      : role === 'HR'
+        ? 'HR Specialist'
+        : 'Administrator';
+
     return (
       <OTPVerificationView
         email={email.trim()}
         name={name.trim()}
         registrationData={{
           password,
-          department,
-          title: title.trim() || 'Team Member'
+          role,
+          department: finalDepartment,
+          title: finalTitle
         }}
         onVerifySuccess={handleOTPSuccess}
         onBack={() => setShowOTP(false)}
@@ -133,14 +190,13 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
             </span>
             <h2 className="text-2xl md:text-3xl font-extrabold text-white leading-tight">Join the Next-Gen Workspace Platform</h2>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Create your Team Member account to collaborate on projects, tasks, attendance, and team workflows.
+              Create your account to unlock team communication, task boards, attendance logs, and AI assistance.
             </p>
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-950/80 backdrop-blur-md border border-white/10 space-y-1 relative z-10">
-            <span className="text-[10px] text-cyan-400 font-mono font-bold block">ACCOUNT ROLE</span>
-            <p className="text-sm font-semibold text-white">Team Member</p>
-            <p className="text-[11px] text-slate-400">Public registration creates Team Member accounts only.</p>
+            <span className="text-[10px] text-cyan-400 font-mono font-bold block">INSTANT ONBOARDING</span>
+            <p className="text-[11px] text-slate-400">Your selected role and department permissions are configured during registration.</p>
           </div>
         </div>
 
@@ -149,7 +205,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
             <div className="flex items-center justify-between pb-2 border-b border-white/5">
               <div className="flex items-center gap-2">
                 <Shield size={18} className="text-purple-400" />
-                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">Team Member Registration</span>
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">Registration</span>
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <span className="text-slate-400 hidden sm:inline">Already registered?</span>
@@ -166,7 +222,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
             <div className="space-y-4 py-5">
               <div>
                 <h2 className="text-2xl md:text-3xl font-extrabold text-white">Create Account</h2>
-                <p className="text-xs text-slate-400 mt-1">Fill in your Team Member profile details</p>
+                <p className="text-xs text-slate-400 mt-1">Fill in your profile details to join WorkSync</p>
               </div>
 
               {errorMsg && (
@@ -211,36 +267,59 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-300 block">Department</label>
-                    <div className="relative">
-                      <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <select
-                        value={department}
-                        onChange={(event) => setDepartment(event.target.value)}
-                        className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 appearance-none"
-                      >
-                        <option value="Engineering" className="bg-slate-900">Engineering</option>
-                        <option value="IT" className="bg-slate-900">IT</option>
-                        <option value="Human Resources & People Ops" className="bg-slate-900">Human Resources</option>
-                        <option value="Executive Operations" className="bg-slate-900">Executive Operations</option>
-                        <option value="AI Research" className="bg-slate-900">AI Research</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-300 block">Job Title / Designation</label>
-                    <input
-                      type="text"
-                      value={title}
-                      onChange={(event) => setTitle(event.target.value)}
-                      placeholder="Software Engineer"
-                      className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all"
-                    />
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-300 block">Role</label>
+                  <div className="relative">
+                    <Briefcase size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <select
+                      value={role}
+                      onChange={(event) => setRole(event.target.value as UserRole)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 appearance-none"
+                    >
+                      <option value="Team_Member" className="bg-slate-900">Team Member</option>
+                      <option value="Team_Lead" className="bg-slate-900">Team Lead</option>
+                      <option value="HR" disabled={roleStatus.hasHR} className="bg-slate-900">
+                        {roleStatus.hasHR ? 'HR Specialist (Occupied - 1 Max)' : 'HR Specialist'}
+                      </option>
+                      <option value="Admin" disabled={roleStatus.hasAdmin} className="bg-slate-900">
+                        {roleStatus.hasAdmin ? 'Administrator (Occupied - 1 Max)' : 'Administrator'}
+                      </option>
+                    </select>
                   </div>
                 </div>
+
+                {isLeadOrMember && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-slate-300 block">Department</label>
+                      <div className="relative">
+                        <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <select
+                          value={department}
+                          onChange={(event) => setDepartment(event.target.value)}
+                          className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 appearance-none"
+                        >
+                          <option value="Engineering" className="bg-slate-900">Engineering</option>
+                          <option value="IT" className="bg-slate-900">IT</option>
+                          <option value="Human Resources & People Ops" className="bg-slate-900">Human Resources</option>
+                          <option value="Executive Operations" className="bg-slate-900">Executive Operations</option>
+                          <option value="AI Research" className="bg-slate-900">AI Research</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-slate-300 block">Job Title / Designation</label>
+                      <input
+                        type="text"
+                        value={title}
+                        onChange={(event) => setTitle(event.target.value)}
+                        placeholder="Software Engineer"
+                        className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/60 transition-all"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
@@ -293,14 +372,38 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                 </div>
 
                 {password.length > 0 && (
-                  <div className="p-3 rounded-xl bg-black/30 border border-white/5 text-[11px] text-slate-400">
-                    <div className="flex items-center justify-between gap-3">
-                      <span>At least 8 characters and 3 of uppercase, lowercase, number, special</span>
-                      <span className={passwordPolicy.valid ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-semibold'}>
-                        {password.length >= 8 ? `${passwordPolicy.groups}/4 groups` : `${password.length}/8 chars`}
-                      </span>
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="space-y-2 p-3 rounded-xl bg-black/30 border border-white/5 overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-medium">Password Strength:</span>
+                      <span className={`font-bold ${strengthConfig.text}`}>{strengthConfig.label}</span>
                     </div>
-                  </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${strengthConfig.percent}%` }}
+                        transition={{ duration: 0.3 }}
+                        className={`h-full ${strengthConfig.color} rounded-full`}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 pt-1 text-[11px]">
+                      {[
+                        ['8+ characters', passwordCriteria.hasMinLength],
+                        ['Uppercase (A-Z)', passwordCriteria.hasUpper],
+                        ['Lowercase (a-z)', passwordCriteria.hasLower],
+                        ['Number (0-9)', passwordCriteria.hasNumber],
+                        ['Special (!@#$)', passwordCriteria.hasSpecial]
+                      ].map(([label, met]) => (
+                        <div key={String(label)} className={`flex items-center gap-1.5 ${met ? 'text-emerald-400' : 'text-slate-500'}`}>
+                          {met ? <Check size={12} /> : <X size={12} />}
+                          <span>{label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
                 )}
               </form>
             </div>
@@ -318,7 +421,7 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
               {loading ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
-                <><span>Verify Team Member Account</span><ArrowRight size={14} /></>
+                <><span>Verify & Continue</span><ArrowRight size={14} /></>
               )}
             </motion.button>
             <p className="text-[11px] text-slate-500 text-center mt-2 flex items-center justify-between">

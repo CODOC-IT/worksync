@@ -4,32 +4,39 @@ import { otpStore } from '../store/otpStore.js';
 import { sendOTPEmail, isEmailConfigured } from '../services/emailService.js';
 import { userStore } from '../store/userStore.js';
 import { getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
-import { getPasswordPolicyError } from '../utils/passwordPolicy.js';
+import { UserRole } from '../types.js';
 
 const router = Router();
+const USER_ROLES: UserRole[] = ['Team_Member', 'Team_Lead', 'HR', 'Admin'];
+
+const isUserRole = (role: unknown): role is UserRole =>
+  typeof role === 'string' && USER_ROLES.includes(role as UserRole);
 
 // POST /api/otp/send
-// Body: { email, name }
+// Body: { email, name, role }
 router.post('/send', async (req, res: Response): Promise<void> => {
   try {
-    const { email, name } = req.body;
+    const { email, name, role } = req.body;
 
     if (!isEmailConfigured()) {
       res.status(503).json({ success: false, message: 'Email service is not configured.' });
       return;
     }
 
-    if (!email || !name) {
-      res.status(400).json({ success: false, message: 'Email and name are required.' });
+    if (!email || !name || !isUserRole(role)) {
+      res.status(400).json({ success: false, message: 'Email, name, and a valid role are required.' });
       return;
     }
 
-    if (name.trim().length < 4) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const sanitizedName = name.trim();
+
+    if (sanitizedName.length < 4) {
       res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
       return;
     }
 
-    const nameParts = name.trim().split(/\s+/).filter(Boolean);
+    const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
     if (nameParts.length < 2) {
       res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
       return;
@@ -40,38 +47,62 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Email format check
+    await userStore.syncUsersToDb();
+
+    if (userStore.findByName(sanitizedName)) {
+      res.status(409).json({
+        success: false,
+        message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
+      });
+      return;
+    }
+
+    if (role === 'Admin' && userStore.hasRole('Admin')) {
+      res.status(409).json({
+        success: false,
+        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
+      });
+      return;
+    }
+
+    if (role === 'HR' && userStore.hasRole('HR')) {
+      res.status(409).json({
+        success: false,
+        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
+      });
+      return;
+    }
+
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email.trim())) {
+    if (!emailRegex.test(normalizedEmail)) {
       res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
       return;
     }
 
-    // Return the same response for existing and eligible addresses to prevent account enumeration.
-    const existingUser = await userStore.findByEmailAsync(email.trim().toLowerCase());
-    if (existingUser) {
-      res.status(200).json({
-        success: true,
-        message: 'If this address is eligible, a verification code has been sent.'
+    if (await userStore.findByEmailAsync(normalizedEmail)) {
+      res.status(409).json({
+        success: false,
+        message: `An account with the email "${normalizedEmail}" already exists. Please sign in instead.`
       });
       return;
     }
 
-    const { allowed } = otpStore.canResend(email);
+    const { allowed, secondsLeft } = otpStore.canResend(normalizedEmail);
     if (!allowed) {
-      res.status(200).json({
-        success: true,
-        message: 'If this address is eligible, a verification code has been sent.'
+      res.status(429).json({
+        success: false,
+        message: `Please wait ${secondsLeft} seconds before requesting a new OTP.`,
+        secondsLeft
       });
       return;
     }
 
-    const otp = otpStore.generate(email);
-    await sendOTPEmail(email, name, otp);
+    const otp = otpStore.generate(normalizedEmail);
+    await sendOTPEmail(normalizedEmail, sanitizedName, otp);
 
     res.status(200).json({
       success: true,
-      message: 'If this address is eligible, a verification code has been sent.'
+      message: `Verification code sent to ${normalizedEmail}. Valid for 1 minute.`
     });
   } catch (error: any) {
     console.error('[OTP Send Error]', error.message);
@@ -80,11 +111,11 @@ router.post('/send', async (req, res: Response): Promise<void> => {
 });
 
 // POST /api/otp/verify
-// Body: { email, otp, name, password, department, title, purpose }
+// Body: { email, otp, name, password, role, department, title, purpose }
 // When purpose='password_reset', returns a resetToken instead of creating user
 router.post('/verify', async (req, res: Response): Promise<void> => {
   try {
-    const { email, otp, name, password, department, title, purpose } = req.body;
+    const { email, otp, name, password, role, department, title, purpose } = req.body;
 
     if (!email || !otp) {
       res.status(400).json({ success: false, message: 'Email and OTP are required.' });
@@ -112,8 +143,17 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    const registrationRequested = Boolean(name || password || role || department || title);
+    if (registrationRequested && (!name || !password || !department || !isUserRole(role))) {
+      res.status(400).json({
+        success: false,
+        message: 'Name, password, role, and department are required for registration.'
+      });
+      return;
+    }
+
     // If registration data provided, create the user account now
-    if (name && password && department) {
+    if (registrationRequested && isUserRole(role)) {
       try {
         const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
 
@@ -155,9 +195,24 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           return;
         }
 
-        const passwordPolicyError = getPasswordPolicyError(password);
-        if (passwordPolicyError) {
-          res.status(400).json({ success: false, message: passwordPolicyError });
+        if (role === 'Admin' && userStore.hasRole('Admin')) {
+          res.status(409).json({
+            success: false,
+            message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
+          });
+          return;
+        }
+
+        if (role === 'HR' && userStore.hasRole('HR')) {
+          res.status(409).json({
+            success: false,
+            message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
+          });
+          return;
+        }
+
+        if (typeof password !== 'string' || password.length < 6) {
+          res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
           return;
         }
 
@@ -165,7 +220,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           name: sanitizedName,
           email,
           password,
-          role: 'Team_Member',
+          role,
           department,
           title
         });
