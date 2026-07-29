@@ -1,4 +1,4 @@
-import { ActivityFilters, ActivityItem } from './activityTypes';
+import { ActivityFilters, ActivityItem, ViewerScope } from './activityTypes';
 
 const token = () => localStorage.getItem('worksync_auth_token');
 const authHeaders = (): HeadersInit => ({ Authorization: `Bearer ${token() || ''}` });
@@ -88,6 +88,16 @@ export const fetchActivity = async (id: string, signal?: AbortSignal): Promise<A
   const data = await response.json();
   if (!data.item) throw new Error('Activity details were not returned by the server.');
   return data.item as ActivityItem;
+};
+
+export const fetchViewerScope = async (signal?: AbortSignal): Promise<ViewerScope> => {
+  const response = await fetch('/api/activity/scope', {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!response.ok) throw await responseError(response, 'Could not determine activity scope.');
+  const data = await response.json();
+  return data.scope as ViewerScope;
 };
 
 const downloadBlob = async (url: string, filename: string): Promise<void> => {

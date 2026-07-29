@@ -59,6 +59,15 @@ export interface ActivityFilters {
   sort: 'newest' | 'oldest';
 }
 
+export interface ViewerScope {
+  permanentRole: string;
+  isActiveTeamLead: boolean;
+  isActiveHR: boolean;
+  isHRandTeamLead: boolean;
+  leadProjectPks: number[];
+  canExport: boolean;
+}
+
 export const DEFAULT_ACTIVITY_FILTERS: ActivityFilters = {
   datePreset: 'Last 30 Days', customFrom: '', customTo: '', userId: '', userRole: '',
   projectId: '', taskId: '', module: '', action: '', entityType: '', status: '',

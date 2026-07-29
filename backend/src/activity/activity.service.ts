@@ -112,6 +112,30 @@ export const recordActivitySafe = (input: ActivityRecordInput): void => {
   recordActivity(input).catch((error) => console.warn('[activity] Audit write failed.', error));
 };
 
+export interface ViewerScope {
+  permanentRole: string;
+  isActiveTeamLead: boolean;
+  isActiveHR: boolean;
+  isHRandTeamLead: boolean;
+  leadProjectPks: number[];
+  canExport: boolean;
+}
+
+export const getViewerScope = async (viewerId: string): Promise<ViewerScope> => {
+  const roles = await getEffectiveRoles(viewerId);
+  return {
+    permanentRole: roles.permanentRole,
+    isActiveTeamLead: roles.isActiveTeamLead,
+    isActiveHR: roles.isActiveHR,
+    isHRandTeamLead: roles.isHRandTeamLead,
+    leadProjectPks: roles.leadProjectPks,
+    canExport:
+      roles.permanentRole === 'Admin' ||
+      roles.permanentRole === 'HR' ||
+      roles.isActiveHR,
+  };
+};
+
 const getEffectiveRolesForViewer = async (viewerId: string): Promise<EffectiveRoles> => {
   // Database role assignments are authoritative. Never widen Activity Log access using a
   // potentially stale role embedded in an older JWT.
