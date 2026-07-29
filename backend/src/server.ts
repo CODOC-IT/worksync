@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import assistantRoutes from './routes/assistantRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
@@ -16,8 +16,6 @@ import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
 import { userStore } from './store/userStore.js';
 import { auditFailedRequests } from './middleware/auditFailureMiddleware.js';
-
-dotenv.config();
 
 // Fail-fast security checks on boot
 validateAuthConfig();

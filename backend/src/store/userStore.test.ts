@@ -40,7 +40,8 @@ before(async () => {
       userroleid serial PRIMARY KEY,
       userid integer NOT NULL,
       roleid integer NOT NULL,
-      revokedatutc timestamptz
+      revokedatutc timestamptz,
+      endsatutc timestamptz
     );
 
     CREATE TABLE iam.usercredentials (

@@ -1,5 +1,0 @@
-﻿Γùç injected env (16) from .env // tip: Γîü auth for agents [www.vestauth.com]
-secret length: 64
-secret first10: "1155a38d51"
-token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6InVzci0xIiwiZW1haWwiOiJhZG1pbkB3b3Jrc3luYy5jb20iLCJyb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODUyNDg2NjIsImV4cCI6MTc4NTI1MjI2Mn0.4ERCJKc8qgPXiGJ0Y0jxjXwJ90LgLWdLZHZPcpWUs7A
-verify OK: Admin
