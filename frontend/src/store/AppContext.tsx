@@ -54,6 +54,13 @@ import {
   removeProjectMemberApi
 } from '../features/projects/projectRepository';
 import {
+  fetchActivities,
+} from '../features/activity/activityApi';
+import {
+  ActivityItem,
+  DEFAULT_ACTIVITY_FILTERS,
+} from '../features/activity/activityTypes';
+import {
   SendNotificationInput,
   markAsRead,
   markAllAsRead as markAllAsReadInList,
@@ -199,7 +206,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -419,8 +426,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const hydrateAttendance = async () => {
+      try {
+        const token = localStorage.getItem('worksync_auth_token');
+        if (!token || !isActive) return;
+        const today = new Date().toISOString().split('T')[0];
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - 90);
+        const from = fromDate.toISOString().split('T')[0];
+        const response = await fetch(`/api/attendance?from=${from}&to=${today}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !Array.isArray(data.data)) {
+          throw new Error(data.message || 'Failed to load attendance.');
+        }
+        if (isActive) {
+          const mapped: AttendanceRecord[] = data.data.map((r: any) => ({
+            id: `att-${r.userId}-${r.date}`,
+            userId: r.userId,
+            date: r.date,
+            checkIn: r.checkIn
+              ? new Date(r.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '',
+            checkOut: r.checkOut
+              ? new Date(r.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : undefined,
+            totalHours: r.totalHours || 0,
+            status: (r.status || 'Present') as AttendanceRecord['status'],
+            breaks: [],
+          }));
+          setAttendanceRecords(mapped);
+        }
+      } catch (error) {
+        console.warn('Attendance API request failed; falling back to local data.', error);
+        if (isActive) {
+          const local = loadAttendanceRecords();
+          if (local.length > 0) setAttendanceRecords(local);
+        }
+      }
+    };
+
+    const hydrateActivityLogs = async () => {
+      try {
+        const result = await fetchActivities(DEFAULT_ACTIVITY_FILTERS, 1, 50);
+        if (isActive && Array.isArray(result.items)) {
+          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
+            id: item.id,
+            userId: item.actor.id || '',
+            userName: item.actor.name,
+            userAvatar: item.actor.avatar || '',
+            action: `${item.action} ${item.entityType}`,
+            targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+            targetId: item.entityId,
+            targetTitle: item.entityName || item.description,
+            timestamp: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+          }));
+          setActivityLogs(mapped);
+        }
+      } catch (error) {
+        console.warn('Activity API request failed.', error);
+      }
+    };
+
     void hydrateTasks();
     void hydrateProjects();
+    void hydrateAttendance();
+    void hydrateActivityLogs();
 
     return () => {
       isActive = false;
