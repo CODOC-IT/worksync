@@ -1119,10 +1119,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           projectId: input.projectId,
           title: input.title,
           description: input.description,
-         priority:
-  input.priority === 'Critical'
-    ? 'Urgent'
-    : input.priority || 'Medium',
+          priority: input.priority || 'Medium',
           startDate: input.startDate,
           dueDate: input.dueDate,
           assigneeIds: input.assigneeIds,
@@ -1204,7 +1201,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const proposedTaskUpdate = {
         title: data.title?.trim() || existingTask.title,
         description: data.description?.trim() || existingTask.description,
-        priority: data.priority || (existingTask.priority === 'Urgent' ? 'Critical' : existingTask.priority),
+        priority: data.priority || existingTask.priority,
         startDate: data.startDate || validationResult.task?.startDate || existingTask.createdAt.slice(0, 10),
         dueDate: data.dueDate || existingTask.dueDate
       };
@@ -1233,12 +1230,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'Pending',
         projectId: existingTask.projectId,
         proposedDiff: { field: 'Task details', oldValue: 'Current task details', newValue: 'Proposed task details' },
-        proposedTaskUpdate
+        proposedTaskUpdate,
+        previousTaskSnapshot: {
+          title: existingTask.title,
+          description: existingTask.description,
+          priority: existingTask.priority,
+          startDate: validationResult.task?.startDate || existingTask.createdAt.slice(0, 10),
+          dueDate: existingTask.dueDate
+        }
       };
 
-      setTasks((prev) => prev.map((task) => task.id === taskId
-        ? { ...task, approvalStatus: 'Pending Approval', pendingEdit }
-        : task));
+      const pendingTask = {
+        ...existingTask,
+        ...proposedTaskUpdate,
+        approvalStatus: 'Pending Approval' as const,
+        pendingEdit
+      };
+      setTasks((prev) => prev.map((task) => {
+        if (task.id === taskId) return pendingTask;
+        if (!task.subtasks.some((subtask) => subtask.id === taskId)) return task;
+        return {
+          ...task,
+          subtasks: task.subtasks.map((subtask) => subtask.id === taskId
+            ? { ...subtask, ...proposedTaskUpdate, approvalStatus: 'Pending Approval', pendingEdit }
+            : subtask)
+        };
+      }));
       setSystemApprovals((prev) => [approval, ...prev]);
       dispatchNotifications({
         recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
@@ -1253,7 +1270,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       pushActivity('Requested task update approval', 'Approval', approval.id, existingTask.title);
       confirmActionSuccess('Task Update Requested', `Your changes to "${existingTask.title}" were sent to the Team Lead for approval.`);
-      return { success: true, message: 'Task update requested for Team Lead approval.', task: { ...existingTask, approvalStatus: 'Pending Approval', pendingEdit } };
+      return { success: true, message: 'Task update requested for Team Lead approval.', task: pendingTask };
     }
 
     try {
@@ -1516,7 +1533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           parentTaskId: proposed.parentTaskId,
           title: proposed.title,
           description: proposed.description,
-          priority: proposed.priority === 'Urgent' ? 'Critical' : proposed.priority,
+          priority: proposed.priority,
           startDate: proposed.startDate,
           dueDate: proposed.dueDate,
           assigneeIds: proposed.assigneeIds,
@@ -1554,22 +1571,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         confirmActionSuccess('Task Request Approved', result.message);
       } else if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
-        const relatedTask = tasks.find((task) => task.id === item.targetId);
-        const relatedProject = relatedTask && projects.find((project) => project.id === relatedTask.projectId);
+        const relatedProject = item.projectId && projects.find((project) => project.id === item.projectId);
         if (currentRole !== 'Team_Lead' || !relatedProject || relatedProject.teamLeadId !== currentUser.id) {
           return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
         }
         try {
-          const approvedUpdate: TaskMutationData = {
-            ...item.proposedTaskUpdate,
-            priority: item.proposedTaskUpdate.priority === 'Urgent'
-              ? 'Critical'
-              : item.proposedTaskUpdate.priority
-          };
+          const approvedUpdate: TaskMutationData = item.proposedTaskUpdate;
           const updated = await updateTaskViaApi(item.targetId, approvedUpdate);
-          setTasks((prev) => prev.map((task) => task.id === item.targetId
-            ? { ...updated, approvalStatus: 'Approved', pendingEdit: undefined }
-            : task));
+          setTasks((prev) => prev.map((task) => {
+            if (task.id === item.targetId) return { ...updated, approvalStatus: 'Approved', pendingEdit: undefined };
+            if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
+            return {
+              ...task,
+              subtasks: task.subtasks.map((subtask) => subtask.id === item.targetId
+                ? { ...updated, approvalStatus: 'Approved', pendingEdit: undefined, completed: updated.status === 'Done' }
+                : subtask)
+            };
+          }));
           setSystemApprovals((prev) => prev.map((approval) => approval.id === approvalId
             ? { ...approval, status: 'Approved' }
             : approval));
@@ -1663,9 +1681,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
       if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
-        setTasks((prev) => prev.map((task) => task.id === item.targetId
-          ? { ...task, approvalStatus: 'Approved', pendingEdit: undefined }
-          : task));
+        setTasks((prev) => prev.map((task) => {
+          if (task.id === item.targetId) {
+            return { ...task, ...item.previousTaskSnapshot, approvalStatus: 'Approved', pendingEdit: undefined };
+          }
+          if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
+          return {
+            ...task,
+            subtasks: task.subtasks.map((subtask) => subtask.id === item.targetId
+              ? { ...subtask, ...item.previousTaskSnapshot, approvalStatus: 'Approved', pendingEdit: undefined }
+              : subtask)
+          };
+        }));
       }
 
       const targetsProject = item.type === 'Project_Deletion';
