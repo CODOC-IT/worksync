@@ -105,6 +105,9 @@ export const TasksView: React.FC = () => {
   const [subtaskErrors, setSubtaskErrors] = useState<Record<string, string>>({});
   const [isCreatingSubtasks, setIsCreatingSubtasks] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [expandedTaskDetails, setExpandedTaskDetails] = useState<Record<string, Task>>({});
+  const [expandingTaskId, setExpandingTaskId] = useState<string | null>(null);
+  const [expandedTaskError, setExpandedTaskError] = useState<{ taskId: string; message: string } | null>(null);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
@@ -162,6 +165,14 @@ export const TasksView: React.FC = () => {
       statusFilter,
       tasks
     ]
+  );
+  const parentTasks = useMemo(
+    () => tasks.filter((task) => !task.parentTaskId),
+    [tasks]
+  );
+  const visibleTasks = useMemo(
+    () => filteredTasks.filter((task) => !task.parentTaskId),
+    [filteredTasks]
   );
 
   const resetForm = () => {
@@ -434,6 +445,31 @@ export const TasksView: React.FC = () => {
     setAssigneeFilter('');
     setMyTasksOnly(false);
     setDueDateDirection('asc');
+  };
+
+  const toggleTaskExpansion = async (task: Task) => {
+    if (expandedTaskId === task.id) {
+      setExpandedTaskId(null);
+      setExpandedTaskError(null);
+      return;
+    }
+
+    setExpandedTaskId(task.id);
+    setExpandedTaskError(null);
+    if (expandedTaskDetails[task.id]) return;
+
+    setExpandingTaskId(task.id);
+    try {
+      const detail = await loadTaskDetailFromApi(task.id);
+      setExpandedTaskDetails((current) => ({ ...current, [task.id]: detail }));
+    } catch {
+      setExpandedTaskError({
+        taskId: task.id,
+        message: 'Subtask details could not be loaded. Please try again.'
+      });
+    } finally {
+      setExpandingTaskId((current) => current === task.id ? null : current);
+    }
   };
 
   const memberStatusOnly = editingTaskId !== null && currentRole === 'Team_Member';
@@ -901,7 +937,7 @@ export const TasksView: React.FC = () => {
                 <CheckSquare size={17} className="text-cyan-400" />
                 Task list
                 <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
-                  {filteredTasks.length}
+                  {visibleTasks.length}
                 </span>
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
@@ -989,13 +1025,13 @@ export const TasksView: React.FC = () => {
             title="Loading tasks"
             description="Preparing the current task workspace."
           />
-        ) : tasks.length === 0 ? (
+        ) : parentTasks.length === 0 ? (
           <StateMessage
             icon={<ClipboardList className="text-slate-500" size={26} />}
             title="No tasks yet"
             description="Create the first task for an active project."
           />
-        ) : filteredTasks.length === 0 ? (
+        ) : visibleTasks.length === 0 ? (
           <StateMessage
             icon={<Filter className="text-slate-500" size={24} />}
             title="No matching tasks"
@@ -1003,8 +1039,8 @@ export const TasksView: React.FC = () => {
           />
         ) : (
           <div className="max-h-[calc(100vh-290px)] min-h-[420px] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/25 p-4">
-            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredTasks.map((task) => {
+            <div className="grid items-start gap-5 sm:grid-cols-2 xl:grid-cols-3">
+            {visibleTasks.map((task) => {
               const project = projects.find((item) => item.id === task.projectId);
               if (!project) return null;
               const assignees = getTaskAssigneeIds(task)
@@ -1014,9 +1050,14 @@ export const TasksView: React.FC = () => {
               const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
               const mayDelete = canDeleteTask(currentRole, currentUser.id, project);
 
-              const subtaskCount = task.subtasks?.length || 0;
-              const completedSubtasks = task.subtasks?.filter((s) => s.completed).length || 0;
+              const loadedTask = expandedTaskDetails[task.id];
+              const subtasks = loadedTask?.subtasks || task.subtasks || [];
+              const subtaskCount = Math.max(task.subtaskCount || 0, subtasks.length);
+              const completedSubtasks = subtasks.filter((subtask) =>
+                subtask.completed || subtask.status === 'Done'
+              ).length;
               const isExpanded = expandedTaskId === task.id;
+              const isExpanding = expandingTaskId === task.id;
 
               return (
                 <article
@@ -1025,6 +1066,7 @@ export const TasksView: React.FC = () => {
                   tabIndex={0}
                   onClick={() => void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task))}
                   onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
                     if (event.key === 'Enter' || event.key === ' ') void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
                   }}
                   className="group relative flex min-h-[340px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-5 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
@@ -1089,7 +1131,11 @@ export const TasksView: React.FC = () => {
                   </h3>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <TaskBadge value={task.priority} kind="priority" />
-                    {(task.subtaskCount || 0) > 0 && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-semibold text-slate-300">{task.subtaskCount} Subtask{task.subtaskCount === 1 ? '' : 's'}</span>}
+                    {subtaskCount > 0 && (
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-semibold text-slate-300">
+                        {subtaskCount} Subtask{subtaskCount === 1 ? '' : 's'}
+                      </span>
+                    )}
                   </div>
                   <p className="mt-3 line-clamp-2 min-h-[40px] text-sm leading-5 text-slate-400">
                     {task.description}
@@ -1115,41 +1161,106 @@ export const TasksView: React.FC = () => {
                         {assignees.map((user) => user?.name).join(', ') || 'Unassigned'}
                       </span>
                     </div>
+                    {subtaskCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void toggleTaskExpansion(task);
+                        }}
+                        className="mt-4 flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-500/[0.06] hover:text-cyan-200"
+                        aria-expanded={isExpanded}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          {isExpanding
+                            ? <LoaderCircle size={14} className="animate-spin text-cyan-400" />
+                            : <Layers size={14} className="text-cyan-400" />}
+                          {isExpanded ? 'Hide subtasks' : 'View subtasks'}
+                        </span>
+                        <ChevronDown
+                          size={14}
+                          className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                    )}
                   </div>
 
                   {isExpanded && subtaskCount > 0 && (
                     <div
-                      className="mt-3 border-t border-white/10 pt-3"
+                      className="mt-4 border-t border-white/10 pt-4"
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                        Subtasks ({completedSubtasks}/{subtaskCount})
-                      </p>
-                      <div className="space-y-2">
-                        {task.subtasks!.map((sub) => (
-                          <div
-                            key={sub.id}
-                            className="flex items-start gap-2 rounded-lg border border-white/5 bg-slate-950/30 px-3 py-2"
-                          >
-                            <span
-                              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                sub.completed
-                                  ? 'border-emerald-500 bg-emerald-500/20 text-emerald-400'
-                                  : 'border-slate-600'
-                              }`}
-                            >
-                              {sub.completed && <Check size={10} />}
-                            </span>
-                            <span
-                              className={`text-xs ${
-                                sub.completed ? 'text-slate-500 line-through' : 'text-slate-300'
-                              }`}
-                            >
-                              {sub.title}
-                            </span>
-                          </div>
-                        ))}
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Subtasks ({completedSubtasks}/{subtaskCount} complete)
+                        </p>
                       </div>
+
+                      {isExpanding ? (
+                        <div className="flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-slate-950/30 px-3 py-6 text-xs text-slate-400">
+                          <LoaderCircle size={15} className="animate-spin text-cyan-400" />
+                          Loading subtask details...
+                        </div>
+                      ) : expandedTaskError?.taskId === task.id ? (
+                        <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.06] px-3 py-3 text-xs text-rose-300">
+                          {expandedTaskError.message}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {subtasks.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-5 text-center text-xs text-slate-500">
+                              No subtask details are available.
+                            </div>
+                          )}
+                          {subtasks.map((subtask, index) => {
+                            const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
+                            const subtaskPriority = subtask.priority || task.priority;
+                            const subtaskOverdue = Boolean(
+                              subtask.dueDate
+                              && subtaskStatus !== 'Done'
+                              && subtask.dueDate < today
+                            );
+                            const subtaskAssignees = (subtask.assigneeIds || [])
+                              .map((id) => users.find((user) => user.id === id)?.name)
+                              .filter((name): name is string => Boolean(name));
+
+                            return (
+                              <div key={subtask.id} className="rounded-xl border border-white/10 bg-slate-950/45 p-3.5">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="text-[9px] font-bold uppercase tracking-[0.13em] text-slate-500">
+                                      Subtask {index + 1}
+                                    </p>
+                                    <h4 className="mt-1 break-words text-sm font-bold leading-5 text-slate-100">
+                                      {subtask.title}
+                                    </h4>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    <TaskBadge value={subtaskPriority} kind="priority" />
+                                    <TaskBadge value={subtaskStatus} kind="status" />
+                                  </div>
+                                </div>
+
+                                <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-400">
+                                  {subtask.description || 'No description provided.'}
+                                </p>
+
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                  <DetailBox label="Assigned to" value={subtaskAssignees.join(', ') || 'Unassigned'} compact />
+                                  <DetailBox label="Start date" value={formatOptionalDate(subtask.startDate)} compact />
+                                  <DetailBox
+                                    label="Due date"
+                                    value={`${formatOptionalDate(subtask.dueDate)}${subtaskOverdue ? ' · Overdue' : ''}`}
+                                    overdue={subtaskOverdue}
+                                    compact
+                                  />
+                                  <DetailBox label="Status" value={getTaskStatusLabel(subtaskStatus)} compact />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </article>
