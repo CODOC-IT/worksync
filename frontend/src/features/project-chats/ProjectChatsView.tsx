@@ -7,6 +7,7 @@ import { filterDiscussions, getMentionTrigger, insertMention, MentionTrigger, pa
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
 
 const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', type: '', authorId: '', state: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
+const COMMENT_MAX_LENGTH = 50;
 const inputClass = 'w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10';
 const formatTime = (date: string) => new Date(date).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 const initials = (name = '?') => name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase();
@@ -117,6 +118,7 @@ export const ProjectChatsView: React.FC = () => {
     if (!selected || submitting) return;
     const body = replyText.trim();
     if (!body) { setReplyError('Write a reply before sending.'); return; }
+    if (body.length > COMMENT_MAX_LENGTH) { setReplyError(`Replies cannot exceed ${COMMENT_MAX_LENGTH} characters.`); return; }
     setSubmitting(true); setReplyError('');
     try {
       const comment = await addDiscussionComment(selected.id, { body, parentCommentId: replyTo, mentionIds: parseMentionIds(body, mentionUsers), attachments });
@@ -144,6 +146,7 @@ export const ProjectChatsView: React.FC = () => {
     if (editSubmitting) return;
     const body = editText.trim();
     if (!body) { setEditError('Message cannot be empty.'); return; }
+    if (body.length > COMMENT_MAX_LENGTH) { setEditError(`Messages cannot exceed ${COMMENT_MAX_LENGTH} characters.`); return; }
     setEditSubmitting(true); setEditError('');
     try {
       const updated = await editDiscussionComment(commentId, body);
@@ -258,7 +261,7 @@ export const ProjectChatsView: React.FC = () => {
                     }
                   }}
                   className={`${inputClass} min-h-16 max-h-32 resize-y pr-3`}
-                  maxLength={5000}
+                  maxLength={COMMENT_MAX_LENGTH}
                   placeholder="Write a reply… Type @ to mention a project member."
                 />
               </div>
@@ -277,7 +280,7 @@ export const ProjectChatsView: React.FC = () => {
                 </div>
                 <button disabled={submitting} className="glass-button-neon inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{submitting ? <LoaderCircle className="animate-spin" size={14} /> : <Send size={14} />}Reply</button>
               </div>
-              <p className="mt-1.5 text-[10px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
+              <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] text-slate-500"><span>Enter to send · Shift+Enter for a new line</span><span>{replyText.length}/{COMMENT_MAX_LENGTH}</span></div>
               {replyError && <p role="alert" className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{replyError}</p>}
             </form>
           )}
@@ -411,7 +414,7 @@ const DiscussionPanel: React.FC<any> = ({
                         onChange={(e) => onEditTextChange(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void onEditSubmit(comment.id); } if (e.key === 'Escape') onEditCancel(); }}
                         className="w-full rounded-lg border border-cyan-400/40 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-cyan-400/20 resize-y"
-                        maxLength={5000}
+                        maxLength={COMMENT_MAX_LENGTH}
                         rows={3}
                         autoFocus
                       />
@@ -421,7 +424,7 @@ const DiscussionPanel: React.FC<any> = ({
                           {editSubmitting ? <LoaderCircle className="animate-spin" size={12} /> : null}Save
                         </button>
                         <button type="button" onClick={onEditCancel} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5">Cancel</button>
-                        <span className="text-[10px] text-slate-600">Esc to cancel · Enter to save</span>
+                        <span className="text-[10px] text-slate-600">Esc to cancel · Enter to save · {editText.length}/{COMMENT_MAX_LENGTH}</span>
                       </div>
                     </div>
                   ) : (
@@ -485,6 +488,10 @@ const NewDiscussionDialog: React.FC<any> = ({
       setError('Write an initial message for the discussion.');
       return;
     }
+    if (body.length > COMMENT_MAX_LENGTH) {
+      setError(`Messages cannot exceed ${COMMENT_MAX_LENGTH} characters.`);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -534,7 +541,7 @@ const NewDiscussionDialog: React.FC<any> = ({
             <textarea
               ref={bodyRef}
               required
-              maxLength={5000}
+              maxLength={COMMENT_MAX_LENGTH}
               value={form.body}
               onChange={(event) => {
                 setForm({ ...form, body: event.target.value });
@@ -544,6 +551,7 @@ const NewDiscussionDialog: React.FC<any> = ({
               className={`${inputClass} mt-1 min-h-32`}
               placeholder="Describe the context, decision, blocker, or question. Type @ to mention a project member."
             />
+            <span className="mt-1 block text-right text-[10px] font-normal text-slate-500">{form.body.length}/{COMMENT_MAX_LENGTH}</span>
           </label>
           {error && <p role="alert" className="md:col-span-2 text-xs text-rose-300">{error}</p>}
         </div>
