@@ -148,7 +148,7 @@ export interface ProjectStatsRow {
   overdueTasks: number;
 }
 
-export const getProjectStats = async (projectIds: number[]): Promise<ProjectStatsRow[]> => {
+export const getProjectStats = async (projectIds: number[], from: string, to: string): Promise<ProjectStatsRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<ProjectStatsRow>(
@@ -168,10 +168,12 @@ export const getProjectStats = async (projectIds: number[]): Promise<ProjectStat
        FROM work.tasks t
        JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+         AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+              OR NOT ts.iscompletedstate)
        GROUP BY t.projectid
      ) task_stats ON task_stats.projectid = p.projectid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL`,
-    [projectIds]
+    [projectIds, from, to]
   );
   return result.rows;
 };
@@ -334,7 +336,7 @@ export interface WorkloadRow {
   overdue: number;
 }
 
-export const getWorkload = async (projectIds: number[]): Promise<WorkloadRow[]> => {
+export const getWorkload = async (projectIds: number[], from: string, to: string): Promise<WorkloadRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<WorkloadRow>(
@@ -349,9 +351,11 @@ export const getWorkload = async (projectIds: number[]): Promise<WorkloadRow[]> 
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE ta.unassignedatutc IS NULL
        AND t.projectid = ANY($1::int[])
+       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+            OR NOT ts.iscompletedstate)
      GROUP BY ta.userid
      ORDER BY active DESC`,
-    [projectIds]
+    [projectIds, from, to]
   );
   return result.rows;
 };
@@ -449,7 +453,7 @@ export interface TeamStatRow {
   completed: number;
 }
 
-export const getTeamStats = async (projectIds: number[]): Promise<TeamStatRow[]> => {
+export const getTeamStats = async (projectIds: number[], from: string, to: string): Promise<TeamStatRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<TeamStatRow>(
@@ -465,9 +469,13 @@ export const getTeamStats = async (projectIds: number[]): Promise<TeamStatRow[]>
      LEFT JOIN work.tasks t ON t.projectid = pm.projectid AND t.archivedatutc IS NULL
      LEFT JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE pm.projectid = ANY($1::int[])
+       AND (t.taskid IS NULL
+            OR (t.duedate >= $2::date AND t.duedate <= $3::date)
+            OR NOT ts.iscompletedstate
+            OR ts.iscompletedstate IS NULL)
      GROUP BY d.departmentname
      ORDER BY tasks DESC`,
-    [projectIds]
+    [projectIds, from, to]
   );
   return result.rows;
 };
