@@ -2295,22 +2295,24 @@ ${bodyHtml}
           <GlassCard>
             <div className="p-4">
               {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Tasks Per Member')}
-              <div className="h-60">
+              <div className="max-h-[500px] overflow-y-auto">
                 {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                  <div className="flex items-center justify-center h-60 text-slate-500 text-xs">No data</div>
                 ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Legend wrapperStyle={{ fontSize: '10px' }} />
-                      <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
-                      <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
-                      <Bar dataKey="overdue" fill={chartColors.rose} radius={[0, 0, 0, 0]} name="Overdue" stackId="a" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div style={{ height: Math.max(members.length * 35, 300) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
+                        <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
+                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                        <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
+                        <Legend wrapperStyle={{ fontSize: '10px' }} />
+                        <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
+                        <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
+                        <Bar dataKey="overdue" fill={chartColors.rose} radius={[0, 0, 0, 0]} name="Overdue" stackId="a" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 )}
               </div>
             </div>
@@ -2319,23 +2321,25 @@ ${bodyHtml}
           <GlassCard>
             <div className="p-4">
               {renderSectionHeader(<CheckCircle2 size={16} className="text-emerald-400" />, 'Completion By Member')}
-              <div className="h-60">
+              <div className="max-h-[500px] overflow-y-auto">
                 {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                  <div className="flex items-center justify-center h-60 text-slate-500 text-xs">No data</div>
                 ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members.map((m: any) => ({
-                      name: m.name,
-                      shortName: m.shortName,
-                      rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
-                    }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip formatter={(value: any) => `${value}%`} />
-                      <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div style={{ height: Math.max(members.length * 35, 300) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={members.map((m: any) => ({
+                        name: m.name,
+                        shortName: m.shortName,
+                        rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
+                      }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
+                        <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
+                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                        <Tooltip formatter={(value: any) => `${value}%`} />
+                        <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 )}
               </div>
             </div>
