@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
-import { isDatabaseConfigured, query } from '../db/pool.js';
+import { isDatabaseConfigured, query, withTransaction } from '../db/pool.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
 const ROLE_TO_DB: Record<UserRole, string> = {
@@ -26,8 +26,28 @@ const STATUS_MAP: Record<string, 'active' | 'inactive' | 'away'> = {
   Deactivated: 'inactive'
 };
 
-const DEFAULT_TEMPORARY_ROLE_ASSIGNMENT_DAYS = 30;
-const TEMPORARY_ROLES: UserRole[] = ['Team_Lead', 'HR'];
+// The GrantedByUserId for every self-service registration's initial role grant. Never a real
+// registrant's own id (it's a fixed, permanently-Locked row seeded once by
+// database/23_system_actor_bootstrap.sql, before any real user can occupy it) -- so unlike a
+// hardcoded numeric id, this can never coincide with the very user being granted the role and
+// trip iam.UserRoles' CK_UserRoles_NoSelfGrant check.
+const SYSTEM_ACTOR_EMAIL = 'system@worksync.internal';
+let systemActorUserIdCache: number | null = null;
+
+const getSystemActorUserId = async (): Promise<number> => {
+  if (systemActorUserIdCache !== null) return systemActorUserIdCache;
+  const result = await query<{ userid: number }>(
+    'SELECT userid FROM iam.users WHERE organizationid = 1 AND email = $1',
+    [SYSTEM_ACTOR_EMAIL]
+  );
+  if (!result.rows[0]) {
+    throw new Error(
+      'System actor user not found -- run database/23_system_actor_bootstrap.sql (included in setup.sql) before registering users.'
+    );
+  }
+  systemActorUserIdCache = result.rows[0].userid;
+  return systemActorUserIdCache;
+};
 
 const USER_QUERY = `
   SELECT u.userid, u.email, u.displayname, u.designation,
@@ -37,7 +57,7 @@ const USER_QUERY = `
   FROM iam.users u
   LEFT JOIN iam.userroles ur ON ur.userid = u.userid
     AND ur.revokedatutc IS NULL
-    AND (ur.endsatutc IS NULL OR ur.endsatutc > CURRENT_TIMESTAMP)
+    AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
   LEFT JOIN iam.roles r ON r.roleid = ur.roleid
   LEFT JOIN org.departments d ON d.departmentid = u.departmentid
   LEFT JOIN iam.usercredentials uc ON uc.userid = u.userid
@@ -101,6 +121,8 @@ class UserStore {
           USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
         );
         this.dbAvailable = true;
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
         this.fallbackUsers.clear();
         for (const row of result.rows) {
           const user = rowToUserRecord(row);
@@ -110,10 +132,34 @@ class UserStore {
           console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
         }
 
+        await this.alignDatabaseUserSequence();
+
         return;
       } catch (err: any) {
         console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
+    }
+  }
+
+  private async alignDatabaseUserSequence(): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return;
+
+    try {
+      // Imports and seed scripts can insert explicit IDs without advancing the
+      // serial sequence. Align it before accepting a registration so the next
+      // INSERT receives an unused primary key.
+      await query(`
+        SELECT setval(
+          'iam.users_userid_seq',
+          COALESCE(MAX(userid), 1),
+          MAX(userid) IS NOT NULL
+        )
+        FROM iam.users
+      `);
+    } catch (err: any) {
+      // Report an environment/schema mismatch without preventing the current
+      // user list from loading.
+      console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
     }
   }
 
@@ -236,38 +282,47 @@ class UserStore {
         const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
 
-        const insertUser = await query<{ userid: number }>(
-          `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-           VALUES ($1, $2, $3, $4, $5, $6, 'Active')
-           RETURNING userid`,
-          [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
-        );
-        const userId = insertUser.rows[0].userid;
-
-        await query(
-          `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
-           VALUES ($1, $2, 'bcryptjs')`,
-          [userId, Buffer.from(passwordHash, 'utf-8')]
-        );
-
         const roleCode = ROLE_TO_DB[userData.role];
-        const roleResult = await query<{ roleid: number }>(
-          'SELECT roleid FROM iam.roles WHERE rolecode = $1',
+        const roleResult = await query<{ roleid: number; istemporary: boolean }>(
+          'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
           [roleCode]
         );
-        if (!roleResult.rows[0]) {
+        const role = roleResult.rows[0];
+        if (!role) {
           throw new Error(`Database role ${roleCode} is not configured.`);
         }
-        const isTemporaryRole = TEMPORARY_ROLES.includes(userData.role);
-        const temporaryRoleExpiresAt = isTemporaryRole
-          ? new Date(Date.now() + DEFAULT_TEMPORARY_ROLE_ASSIGNMENT_DAYS * 24 * 60 * 60 * 1000)
-          : null;
+        const systemActorUserId = await getSystemActorUserId();
 
-        await query(
-          `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
-           VALUES ($1, $2, 1, $3)`,
-          [userId, roleResult.rows[0].roleid, temporaryRoleExpiresAt]
-        );
+        // Users + credentials + role grant are inserted atomically so a failure cannot leave
+        // an orphaned user row that permanently occupies the email without a usable account.
+        const userId = await withTransaction(async (runQuery) => {
+          const insertUser = await runQuery<{ userid: number }>(
+            `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+             RETURNING userid`,
+            [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
+          );
+          const newUserId = insertUser.rows[0].userid;
+
+          await runQuery(
+            `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm)
+             VALUES ($1, $2, 'bcryptjs')`,
+            [newUserId, Buffer.from(passwordHash, 'utf-8')]
+          );
+
+          // TeamLead/HRRepresentative are marked temporary in the schema, whose trigger
+          // requires EndsAtUtc. A far-future expiry preserves the existing signup behavior.
+          const endsAtUtc = role.istemporary
+            ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+            : null;
+          await runQuery(
+            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+             VALUES ($1, $2, $3, $4)`,
+            [newUserId, role.roleid, systemActorUserId, endsAtUtc]
+          );
+
+          return newUserId;
+        });
 
         const newUser: UserRecord = {
           id: fromUserPk(userId),
@@ -286,9 +341,13 @@ class UserStore {
         console.log(`[UserStore] Created user in Supabase: ${newUser.name} (id=${userId}) ✓`);
         return newUser;
       } catch (err: any) {
-        console.warn(`[UserStore] DB createUser failed: ${err.message}.`);
+        console.error(`[UserStore] DB createUser failed: ${err.message}`);
         throw new Error('Database user creation failed.');
       }
+    }
+
+    if (isDatabaseConfigured()) {
+      throw new Error('The configured database is currently unavailable. Please try again.');
     }
 
     if (!this.isLegacyFileAuthEnabled()) {

@@ -10,5 +10,7 @@ coverage/
 
 # Local runtime data and credential artifacts
 /database/*.json
+/backend/database/*.json
+/backend/storage/
 /token.txt
 /test_jwt.txt

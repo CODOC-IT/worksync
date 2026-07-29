@@ -7,9 +7,10 @@ import otpRoutes from './routes/otpRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
-import projectChatRoutes from './routes/projectChatRoutes.js';
+import discussionRoutes from './collab/discussion.routes.js';
 import notificationRoutes from './notifications/notification.routes.js';
-import activityRoutes from './activity/activity.routes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
+import activityLogRoutes from './activityLog/activityLog.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
@@ -33,9 +34,10 @@ app.use('/api/otp', otpRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/projects', projectRoutes);
-app.use('/api/project-chats', projectChatRoutes);
+app.use('/api/project-chats', discussionRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/activity', activityRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/activity-log', activityLogRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -59,7 +61,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // mode) means there's nothing in notify.* to scan yet, so the interval would just no-op anyway.
 // Also skipped on Vercel, same as app.listen below — a serverless function has no persistent
 // process for setInterval to run in, so this would never actually fire there.
-const NOTIFICATION_DIGEST_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const NOTIFICATION_DIGEST_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 if (process.env.NODE_ENV !== 'test' && process.env.VERCEL !== '1' && isDatabaseConfigured()) {
   setInterval(() => {
     processEmailCandidates(['High']).catch((error) => {

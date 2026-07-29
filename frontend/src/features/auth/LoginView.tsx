@@ -146,6 +146,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 <p className="text-xs text-slate-400 mt-1">Sign in with your enterprise credentials</p>
               </div>
 
+              {/* Error Alert */}
               {errorMsg && (
                 <motion.div
                   initial={{ opacity: 0, y: -6 }}

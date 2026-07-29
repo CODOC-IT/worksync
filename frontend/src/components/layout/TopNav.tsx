@@ -41,8 +41,9 @@ export const TopNav: React.FC<TopNavProps> = ({
         </button>
       </div>
 
+      {/* Right: Controls & User */}
       <div className="flex items-center gap-1 sm:gap-3">
-
+        {/* Theme Toggle Button */}
         <button
           onClick={toggleTheme}
           className="p-1.5 sm:p-2 rounded-xl bg-slate-900/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40 transition-all"

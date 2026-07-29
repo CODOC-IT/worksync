@@ -79,6 +79,20 @@ import {
 import { supabase, isSupabaseConfigured, subscribeToChannel } from '../../utils/supabase';
 
 const ATTENDANCE_STORAGE_KEY = 'worksync-attendance-records';
+const HR_REQUESTS_STORAGE_KEY = 'worksync-hr-requests';
+
+const loadHRRequests = (): HRRequest[] => {
+  try {
+    const savedRequests = localStorage.getItem(HR_REQUESTS_STORAGE_KEY);
+    if (!savedRequests) return [];
+
+    const parsedRequests = JSON.parse(savedRequests);
+    return Array.isArray(parsedRequests) ? parsedRequests : [];
+  } catch (error) {
+    console.error('Failed to load HR requests from localStorage.', error);
+    return [];
+  }
+};
 
 const loadAttendanceRecords = (): AttendanceRecord[] => {
   try {
@@ -199,7 +213,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
-  const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [hrRequests, setHrRequests] = useState<HRRequest[]>(loadHRRequests);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
@@ -213,7 +227,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mentions: true,
     comments: true,
     assignments: true,
-    email: false
+    email: true
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
@@ -251,6 +265,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.error('Failed to save attendance records.', error);
     }
   }, [attendanceRecords]);
+
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        HR_REQUESTS_STORAGE_KEY,
+        JSON.stringify(hrRequests)
+      );
+    } catch (error) {
+      console.error('Failed to save HR requests.', error);
+    }
+  }, [hrRequests]);
 
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
@@ -384,6 +410,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeBreak?.isBreaking]);
 
   // Log Activity Helper
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('worksync_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  };
+
   const pushActivity = (
     action: string,
     targetType: ActivityLogItem['targetType'],
@@ -404,6 +437,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       diff
     };
     setActivityLogs((prev) => [newAct, ...prev]);
+
+    fetch('/api/activity-log', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
+    }).catch(() => {});
   };
 
   // --- Notification Module -----------------------------------------------------------
@@ -498,8 +537,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const dispatchNotifications = (input: SendNotificationInput) => {
     // Real persistence is the primary path; the pure local sendNotification() below is only a
     // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
-    // or the authenticated session cannot persist the event — see notificationApiClient.ts). Every one of this function's ~20 call sites is unaffected by
-    // which path actually wrote the notification: they only ever describe *what happened*.
+    // or because a login transition left the token and current user briefly out of sync,
+    // or the authenticated session cannot persist the event — see notificationApiClient.ts).
+    // Every call site is unaffected by which path actually wrote the notification.
     publishNotificationEvent(input)
       .then(applyCreatedNotifications)
       .catch((error) => {
