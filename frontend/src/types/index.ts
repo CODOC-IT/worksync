@@ -104,6 +104,14 @@ export interface ControlledEditRequest {
   createdAt: string;
 }
 
+export interface ProposedTaskUpdate {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  startDate: string;
+  dueDate: string;
+}
+
 // Project Board (Kanban) status-change audit trail. Mirrors work.TaskStatusHistory
 // in the PostgreSQL schema (see database/04_work_tables.sql) so a future write-path
 // can persist these entries without reshaping them.
@@ -230,20 +238,8 @@ export interface SystemApproval {
     oldValue: string;
     newValue: string;
   };
-  proposedTaskUpdate?: {
-    title: string;
-    description: string;
-    priority: TaskPriority;
-    startDate: string;
-    dueDate: string;
-  };
-  previousTaskSnapshot?: {
-    title: string;
-    description: string;
-    priority: TaskPriority;
-    startDate: string;
-    dueDate: string;
-  };
+  proposedTaskUpdate?: ProposedTaskUpdate;
+  previousTaskSnapshot?: ProposedTaskUpdate;
 }
 
 export interface ChatMessage {

@@ -59,7 +59,14 @@ const getApprovalProject = (
     return projects.find((project) => project.id === approval.projectId);
   }
 
-  const task = tasks.find((item) => item.id === approval.targetId);
+  if (approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate && approval.projectId) {
+    return projects.find((project) => project.id === approval.projectId);
+  }
+
+  const task = tasks.find((item) =>
+    item.id === approval.targetId ||
+    item.subtasks.some((subtask) => subtask.id === approval.targetId)
+  );
 
   return task
     ? projects.find((project) => project.id === task.projectId)
@@ -92,6 +99,13 @@ const canDecide = (
   }
 
   if (approval.type === 'Controlled_Edit') {
+    if (approval.proposedTaskUpdate) {
+      return Boolean(
+        role === 'Team_Lead' &&
+        project &&
+        project.teamLeadId === userId
+      );
+    }
     return Boolean(
       role === 'Admin' ||
       (role === 'Team_Lead' &&
@@ -154,6 +168,7 @@ export const ApprovalsInboxView: React.FC = () => {
       );
 
       const isOwnRequest =
+        !approval.proposedTaskUpdate &&
         approval.requestedBy === currentUser.id;
 
       return isDecidable || isOwnRequest;
@@ -727,7 +742,44 @@ export const ApprovalsInboxView: React.FC = () => {
                   {approval.details}
                 </p>
 
-                {approval.proposedDiff && (
+                {approval.proposedTaskUpdate && approval.previousTaskSnapshot && (
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/40 text-xs">
+                    {([
+                      ['Title', 'title'],
+                      ['Description', 'description'],
+                      ['Priority', 'priority'],
+                      ['Start date', 'startDate'],
+                      ['Due date', 'dueDate']
+                    ] as const).map(([label, field]) => {
+                      const currentValue = approval.previousTaskSnapshot![field];
+                      const proposedValue = approval.proposedTaskUpdate![field];
+                      const changed = currentValue !== proposedValue;
+                      const displayValue = (value: string) => value === '' ? '(empty)' : value;
+                      return (
+                        <div key={field} className="grid gap-2 border-b border-white/5 p-3 last:border-b-0 sm:grid-cols-[7rem_1fr_1fr]">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                            {label}
+                          </span>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Current</span>
+                            <span className={changed ? 'text-slate-300' : 'text-slate-400'}>
+                              {displayValue(currentValue)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Proposed</span>
+                            <span className={changed ? 'text-emerald-300' : 'text-slate-400'}>
+                              {displayValue(proposedValue)}
+                              {!changed && <span className="ml-2 text-[10px] text-slate-600">(unchanged)</span>}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!approval.proposedTaskUpdate && approval.proposedDiff && (
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
                     <span className="block text-[10px] uppercase tracking-wider text-slate-500">
                       Proposed change —{' '}

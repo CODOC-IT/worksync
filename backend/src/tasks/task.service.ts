@@ -14,6 +14,7 @@ import {
   CreateTaskInput,
   DB_TO_API_TASK_STATUS,
   TaskDTO,
+  TaskEditApprovalInput,
   TaskRow,
   TaskStatusCode,
   TaskStatusHistoryDTO,
@@ -402,6 +403,183 @@ export const updateTask = async (
   });
 
   return dto;
+};
+
+const taskEditSnapshot = (row: TaskRow): TaskEditApprovalInput => ({
+  title: row.title,
+  description: row.description,
+  priority: row.prioritycode === 'Critical' ? 'Urgent' : row.prioritycode,
+  startDate: row.startdate,
+  dueDate: row.duedate
+});
+
+const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
+  if (!input.title?.trim()) throw new TaskValidationError('Task title cannot be empty.');
+  if (!input.description?.trim()) throw new TaskValidationError('Task description cannot be empty.');
+  if (!['Low', 'Medium', 'High', 'Urgent'].includes(input.priority)) {
+    throw new TaskValidationError('Task priority is invalid.');
+  }
+  if (!input.startDate || !input.dueDate || input.dueDate < input.startDate) {
+    throw new TaskValidationError('Due date cannot be before the start date.');
+  }
+};
+
+export interface TaskEditApprovalDTO {
+  id: string;
+  type: 'Controlled_Edit';
+  targetId: string;
+  targetTitle: string;
+  requestedBy: string;
+  requestedRole: 'Team_Member';
+  createdAt: string;
+  details: string;
+  status: 'Pending';
+  projectId: string;
+  proposedTaskUpdate: TaskEditApprovalInput;
+  previousTaskSnapshot: TaskEditApprovalInput;
+}
+
+export const createTaskEditApproval = async (
+  taskId: string,
+  input: TaskEditApprovalInput,
+  actorId: string,
+  actorRole: string
+): Promise<TaskEditApprovalDTO> => {
+  if (actorRole !== 'Team_Member') {
+    throw new TaskAuthorizationError('Only Team Members can submit task edit requests.');
+  }
+  const row = await repo.findTaskById(toTaskPk(taskId));
+  if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
+  const assignees = await repo.findAssigneesForTask(row.taskid);
+  if (!assignees.some((assignee) => fromUserPk(assignee.userid) === actorId)) {
+    throw new TaskAuthorizationError('You can only request edits to tasks assigned to you.');
+  }
+  if (!row.parenttaskid && Number(row.subtaskcount || 0) > 0) {
+    throw new TaskAuthorizationError('Tasks with subtasks cannot be edited by Team Members.');
+  }
+  validateTaskEditApprovalInput(input);
+  const project = await projectRepo.findProjectById(row.projectid);
+  if (!project) throw new TaskNotFoundError('Project not found.');
+  if (input.startDate < project.startdate || input.dueDate > project.enddate) {
+    throw new TaskValidationError('Task dates must be within the project dates.');
+  }
+
+  const members = await projectRepo.findMembersForProject(row.projectid);
+  const reviewerId = resolveTeamLeadUserId(project, members);
+  if (!reviewerId || reviewerId === actorId) {
+    throw new TaskAuthorizationError('This project does not have an eligible Team Lead.');
+  }
+  const previous = taskEditSnapshot(row);
+  const proposed: TaskEditApprovalInput = {
+    ...input,
+    title: input.title.trim(),
+    description: input.description.trim()
+  };
+  if (JSON.stringify(previous) === JSON.stringify(proposed)) {
+    throw new TaskValidationError('No task changes were supplied.');
+  }
+  let requestPk: number;
+  try {
+    requestPk = await repo.insertTaskEditApproval(
+      row,
+      toUserPk(actorId),
+      toUserPk(reviewerId),
+      previous,
+      proposed
+    );
+  } catch (error) {
+    if ((error as Error)?.message === 'This task already has a pending edit request.') {
+      throw new TaskValidationError((error as Error).message);
+    }
+    throw error;
+  }
+  const createdAt = new Date().toISOString();
+  return {
+    id: `task-edit-${requestPk}`,
+    type: 'Controlled_Edit',
+    targetId: taskId,
+    targetTitle: row.title,
+    requestedBy: actorId,
+    requestedRole: 'Team_Member',
+    createdAt,
+    details: `${userStore.findById(actorId)?.name || 'A Team Member'} requested an update to "${row.title}". Pending Team Lead approval.`,
+    status: 'Pending',
+    projectId: fromProjectPk(row.projectid),
+    proposedTaskUpdate: proposed,
+    previousTaskSnapshot: previous
+  };
+};
+
+export const listTaskEditApprovals = async (
+  actorId: string,
+  actorRole: string
+): Promise<TaskEditApprovalDTO[]> => {
+  if (actorRole !== 'Team_Lead') return [];
+  const rows = await repo.findPendingTaskEditApprovalsForReviewer(toUserPk(actorId));
+  const grouped = new Map<number, typeof rows>();
+  for (const row of rows) grouped.set(row.changerequestid, [...(grouped.get(row.changerequestid) || []), row]);
+
+  const result: TaskEditApprovalDTO[] = [];
+  for (const requestRows of grouped.values()) {
+    const row = requestRows[0];
+    if (!(await isProjectLead(fromProjectPk(row.projectid), actorId, actorRole))) continue;
+    const item = requestRows.find((candidate) => candidate.fieldcode === 'taskUpdate');
+    if (!item?.oldvaluejson || !item.proposedvaluejson) continue;
+    try {
+      const previous = JSON.parse(item.oldvaluejson) as TaskEditApprovalInput;
+      const proposed = JSON.parse(item.proposedvaluejson) as TaskEditApprovalInput;
+      result.push({
+        id: `task-edit-${row.changerequestid}`,
+        type: 'Controlled_Edit',
+        targetId: fromTaskPk(row.taskid),
+        targetTitle: row.tasktitle,
+        requestedBy: fromUserPk(row.requestedbyuserid),
+        requestedRole: 'Team_Member',
+        createdAt: new Date(row.submittedatutc).toISOString(),
+        details: `Task update requested for "${row.tasktitle}". Pending Team Lead approval.`,
+        status: 'Pending',
+        projectId: fromProjectPk(row.projectid),
+        proposedTaskUpdate: proposed,
+        previousTaskSnapshot: previous
+      });
+    } catch {
+      // Ignore malformed legacy rows instead of creating an unusable inbox item.
+    }
+  }
+  return result;
+};
+
+export const decideTaskEditApproval = async (
+  approvalId: string,
+  decision: 'Approved' | 'Rejected',
+  actorId: string,
+  actorRole: string
+): Promise<TaskDTO | null> => {
+  if (actorRole !== 'Team_Lead') {
+    throw new TaskAuthorizationError('Only this project\'s Team Lead can decide the task update.');
+  }
+  const requestPk = Number(approvalId.replace(/^task-edit-/, ''));
+  if (!Number.isInteger(requestPk) || requestPk <= 0) {
+    throw new TaskValidationError('Invalid task edit approval id.');
+  }
+  const approvals = await listTaskEditApprovals(actorId, actorRole);
+  const approval = approvals.find((candidate) => candidate.id === approvalId);
+  if (!approval) throw new TaskAuthorizationError('This task edit request is not assigned to you.');
+  const row = await repo.findTaskById(toTaskPk(approval.targetId));
+  if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
+  if (!(await isProjectLead(fromProjectPk(row.projectid), actorId, actorRole))) {
+    throw new TaskAuthorizationError('Only this project\'s Team Lead can decide the task update.');
+  }
+  const taskPk = await repo.decideTaskEditApproval(
+    requestPk,
+    toUserPk(actorId),
+    decision,
+    approval.proposedTaskUpdate
+  );
+  if (!taskPk) throw new TaskValidationError('This task edit request is no longer pending.');
+  if (decision === 'Rejected') return null;
+  const updated = await repo.findTaskById(taskPk);
+  return updated ? buildDTO(updated) : null;
 };
 
 export const deleteTask = async (taskId: string, actorId: string, actorRole: string): Promise<void> => {

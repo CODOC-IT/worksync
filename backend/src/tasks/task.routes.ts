@@ -6,6 +6,9 @@ const router = Router();
 
 router.use(authenticateJWT);
 
+router.get('/edit-approvals', controller.listTaskEditApprovals);
+router.patch('/edit-approvals/:approvalId', controller.decideTaskEditApproval);
+
 // GET /api/tasks?projectId=prj-1
 router.get('/', controller.listTasks);
 
@@ -17,6 +20,7 @@ router.post('/', controller.createTask);
 
 // PUT /api/tasks/:id
 router.put('/:id', controller.updateTask);
+router.post('/:id/edit-approvals', controller.createTaskEditApproval);
 
 // DELETE /api/tasks/:id — archives (soft-delete), never a hard DELETE
 router.delete('/:id', controller.deleteTask);
