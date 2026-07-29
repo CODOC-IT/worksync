@@ -386,7 +386,7 @@ export const ReportsView: React.FC = () => {
 
   const taskStatusDist = useMemo(() => {
     if (apiAvailable) {
-      return reportData.tasks.statusDistribution;
+      return (reportData.tasks || {}).statusDistribution || [];
     }
     const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
     roleFilteredLocal.tasks.forEach((t) => { counts[t.status] = (counts[t.status] || 0) + 1; });
@@ -395,7 +395,7 @@ export const ReportsView: React.FC = () => {
 
   const taskPriorityDist = useMemo(() => {
     if (apiAvailable) {
-      return reportData.tasks.priorityDistribution;
+      return (reportData.tasks || {}).priorityDistribution || [];
     }
     const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
     roleFilteredLocal.tasks.forEach((t) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
@@ -451,16 +451,22 @@ export const ReportsView: React.FC = () => {
   }, [roleFiltered.tasks]);
 
   const taskStatusDistData = useMemo(() => {
+    if (apiAvailable) {
+      return (reportData.tasks || {}).statusDistribution || [];
+    }
     const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
     roleFiltered.tasks.forEach((t: any) => { counts[t.status] = (counts[t.status] || 0) + 1; });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [roleFiltered.tasks]);
+  }, [apiAvailable, reportData, roleFiltered.tasks]);
 
   const taskPriorityDistData = useMemo(() => {
+    if (apiAvailable) {
+      return (reportData.tasks || {}).priorityDistribution || [];
+    }
     const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
     roleFiltered.tasks.forEach((t: any) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [roleFiltered.tasks]);
+  }, [apiAvailable, reportData, roleFiltered.tasks]);
 
   const taskProjectOptions = useMemo(() => {
     const projectIds = new Set((roleFiltered.tasks as any[]).map((t: any) => t.projectId));
@@ -679,15 +685,15 @@ export const ReportsView: React.FC = () => {
   }, [deadlineBaseTasks, users]);
 
   const attendanceStats = useMemo(() => {
-    if (apiAvailable && reportData.attendance) {
+    if (apiAvailable && reportData?.attendance) {
       const a = reportData.attendance;
       return {
-        present: a.present, late: a.late, absent: a.absent,
-        onLeave: a.onLeave, halfDay: a.halfDay,
-        avgHours: a.avgHours,
-        total: a.total,
-        pendingCorrections: a.pendingCorrections,
-        pendingLeaves: a.pendingLeaves,
+        present: a.present ?? 0, late: a.late ?? 0, absent: a.absent ?? 0,
+        onLeave: a.onLeave ?? 0, halfDay: a.halfDay ?? 0,
+        avgHours: a.avgHours ?? '0',
+        total: a.total ?? 0,
+        pendingCorrections: a.pendingCorrections ?? 0,
+        pendingLeaves: a.pendingLeaves ?? 0,
       };
     }
     const { attendance: att } = roleFilteredLocal;
@@ -1003,15 +1009,15 @@ export const ReportsView: React.FC = () => {
         bodyHtml += section('Task Status Distribution');
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Status')}${th('Count')}</tr></thead><tbody>`;
-        taskStatusDist.forEach((s: any) => {
-          bodyHtml += `<tr>${td(s.name)}${td(s.value)}</tr>`;
+        (taskStatusDist || []).forEach((s: any) => {
+          bodyHtml += `<tr>${td(s.name || '\u2014')}${td(s.value ?? 0)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
         bodyHtml += section('Priority Distribution');
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
         bodyHtml += `<thead><tr>${th('Priority')}${th('Count')}</tr></thead><tbody>`;
-        taskPriorityDist.forEach((p: any) => {
-          bodyHtml += `<tr>${td(p.name)}${td(p.value)}</tr>`;
+        (taskPriorityDist || []).forEach((p: any) => {
+          bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
       } else {
@@ -2239,9 +2245,17 @@ ${bodyHtml}
         </div>
       </GlassCard>
 
-      <div className="overflow-x-auto">
-        <table className="density-table">
-          <thead>
+      <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
+        <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '24%' }} />
+          </colgroup>
+          <thead className="sticky top-0 z-10">
             <tr>
               <th>Department</th>
               <th>Members</th>
@@ -2257,7 +2271,7 @@ ${bodyHtml}
             ) : (
               teamStats.map((t: any) => (
                 <tr key={t.department}>
-                  <td className="text-white font-medium">{t.department}</td>
+                  <td className="text-white font-medium truncate">{t.department}</td>
                   <td className="font-mono text-xs">{t.members}</td>
                   <td className="font-mono text-xs">{t.projects}</td>
                   <td className="font-mono text-xs">{t.tasks}</td>
@@ -3467,9 +3481,18 @@ ${bodyHtml}
         </div>
       </GlassCard>
 
-      <div className="overflow-x-auto">
-        <table className="density-table">
-          <thead>
+      <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
+        <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '13%' }} />
+          </colgroup>
+          <thead className="sticky top-0 z-10">
             <tr>
               <th>User</th>
               <th>Date</th>
@@ -3486,7 +3509,7 @@ ${bodyHtml}
             ) : (
               (roleFiltered.attendance as any[]).map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
-                  <td className="text-white font-medium text-xs">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
+                  <td className="text-white font-medium text-xs truncate">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
                   <td><StatusBadge status={a.status} size="sm" /></td>
                   <td className="font-mono text-xs">{a.checkIn || '\u2014'}</td>
