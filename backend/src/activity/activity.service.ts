@@ -261,10 +261,81 @@ export const exportCsv = async (
   return { content: lines.join('\r\n'), exportedCount, total: result.total };
 };
 
-const PDF_COLORS = {
-  header: '#0a1628', rowEven: '#0d1e33', rowOdd: '#0a1628',
-  border: '#1e3a5f', text: '#e2e8f0', muted: '#94a3b8', accent: '#22d3ee',
-  success: '#34d399', danger: '#f87171', warning: '#fbbf24',
+// ─── PDF colour palette (clean professional white theme) ─────────────────────
+const PDF = {
+  // Page
+  pageBg:        '#FFFFFF',
+  // Cover / header band
+  brandDark:     '#0F172A',   // slate-900
+  brandAccent:   '#0EA5E9',   // sky-500
+  brandLight:    '#F0F9FF',   // sky-50
+  // Table
+  tableHeaderBg: '#1E293B',   // slate-800
+  tableHeaderFg: '#F8FAFC',   // slate-50
+  rowEven:       '#F8FAFC',   // slate-50
+  rowOdd:        '#FFFFFF',
+  rowBorder:     '#E2E8F0',   // slate-200
+  // Text
+  textPrimary:   '#0F172A',   // slate-900
+  textSecondary: '#475569',   // slate-600
+  textMuted:     '#94A3B8',   // slate-400
+  // Result badges
+  success:       '#15803D',   // green-700
+  successBg:     '#DCFCE7',   // green-100
+  danger:        '#B91C1C',   // red-700
+  dangerBg:      '#FEE2E2',   // red-100
+  warning:       '#B45309',   // amber-700
+  warningBg:     '#FEF3C7',   // amber-100
+  // Module badge
+  moduleBg:      '#EFF6FF',   // blue-50
+  moduleFg:      '#1D4ED8',   // blue-700
+};
+
+// Readable human date
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+  }) + ' UTC';
+
+// Strip underscores and title-case
+const fmtRole = (role: string) =>
+  role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+// Truncate text with ellipsis
+const trunc = (text: string, maxLen: number) =>
+  text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
+
+// Draw a rounded badge-like result label
+const drawResultBadge = (
+  doc: PDFKit.PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  w: number,
+) => {
+  const bg  = text === 'Successful' ? PDF.successBg : text === 'Failed' ? PDF.dangerBg : PDF.warningBg;
+  const fg  = text === 'Successful' ? PDF.success   : text === 'Failed' ? PDF.danger   : PDF.warning;
+  doc.save();
+  doc.roundedRect(x, y + 1, w, 11, 3).fill(bg);
+  doc.fillColor(fg).fontSize(6.5).font('Helvetica-Bold')
+    .text(text, x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
+  doc.restore();
+};
+
+// Draw a pill module label
+const drawModuleBadge = (
+  doc: PDFKit.PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  w: number,
+) => {
+  doc.save();
+  doc.roundedRect(x, y + 1, w, 11, 3).fill(PDF.moduleBg);
+  doc.fillColor(PDF.moduleFg).fontSize(6.5).font('Helvetica-Bold')
+    .text(trunc(text, 14), x + 2, y + 3, { width: w - 4, align: 'center', lineBreak: false });
+  doc.restore();
 };
 
 export const exportPdf = async (
@@ -279,88 +350,208 @@ export const exportPdf = async (
     effectiveRoles.permanentRole
   );
   const filterSummary = activeFilterSummary(filters);
+  const exportedAt = new Date();
 
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30 });
+  // ── Document setup ──────────────────────────────────────────────────────
+  const doc = new PDFDocument({
+    size: 'A4',
+    layout: 'landscape',
+    margin: 0,
+    info: {
+      Title: 'WorkSync Activity Log Export',
+      Author: userStore.findById(viewerId)?.name || 'WorkSync',
+      Subject: 'Audit Trail',
+      Creator: 'WorkSync',
+    },
+  });
   const buffers: Buffer[] = [];
   doc.on('data', (chunk: Buffer) => buffers.push(chunk));
 
-  const docHeight = doc.page.height;
-  const docWidth = doc.page.width;
-  const usableWidth = docWidth - 60;
-  const tableTop = 70;
-  const rowHeight = 18;
-  const bottomMargin = 40;
+  const PW = doc.page.width;   // 841.89
+  const PH = doc.page.height;  // 595.28
+  const MARGIN   = 32;
+  const CONTENT  = PW - MARGIN * 2;
 
-  const headers = ['Event ID', 'Timestamp', 'Actor', 'Role', 'Action', 'Module', 'Entity', 'Project / Task', 'Result', 'Description'];
-  const colWidths = [70, 130, 100, 55, 80, 75, 90, 110, 55, 0];
-  colWidths[9] = usableWidth - colWidths.slice(0, 9).reduce((a, b) => a + b, 0);
+  // ── Column definitions ──────────────────────────────────────────────────
+  // Order: Timestamp | Actor | Role | Action | Module | Project / Task | Result | Description
+  const COLS = [
+    { header: 'Timestamp',       key: 'ts',     w: 105 },
+    { header: 'Actor',           key: 'actor',  w: 100 },
+    { header: 'Role',            key: 'role',   w: 72  },
+    { header: 'Action',          key: 'action', w: 90  },
+    { header: 'Module',          key: 'module', w: 72  },
+    { header: 'Project / Task',  key: 'proj',   w: 110 },
+    { header: 'Result',          key: 'result', w: 58  },
+    { header: 'Description',     key: 'desc',   w: 0   }, // fills remainder
+  ] as const;
+
+  // Calculate description column width
+  const fixedW = COLS.slice(0, -1).reduce((s, c) => s + c.w, 0);
+  const descW  = CONTENT - fixedW;
+
+  const colWidths = [...COLS.slice(0, -1).map((c) => c.w), descW];
+
+  const ROW_H       = 20;
+  const HEADER_H    = 18;
+  const BAND_H      = 54;   // top brand band
+  const COVER_H     = 110;  // full cover section on page 1
+  const TABLE_TOP_P1 = COVER_H + 4;
+  const TABLE_TOP_PN = BAND_H + 4;
+  const FOOTER_H    = 24;
 
   let pageNum = 0;
-  let y = 0;
+  let y       = 0;
 
-  const drawHeader = () => {
-    pageNum++;
-    doc.rect(0, 0, docWidth, 60).fill(PDF_COLORS.header);
-    doc.fillColor(PDF_COLORS.accent).fontSize(18).font('Helvetica-Bold')
-      .text('WorkSync — Activity Log Export', 30, 18);
-    doc.fillColor(PDF_COLORS.muted).fontSize(8).font('Helvetica')
-      .text(`Exported at: ${new Date().toISOString()}`, docWidth - 250, 22, { width: 220, align: 'right' });
+  // ── Page-level helpers ──────────────────────────────────────────────────
+  const drawBrandBand = (height: number) => {
+    // Gradient-like effect: two rectangles
+    doc.rect(0, 0, PW, height).fill(PDF.brandDark);
+    doc.rect(0, height - 3, PW, 3).fill(PDF.brandAccent);
+    // Logo area
+    doc.fillColor(PDF.brandAccent).fontSize(16).font('Helvetica-Bold')
+      .text('WorkSync', MARGIN, 14, { lineBreak: false });
+    doc.fillColor(PDF.pageBg).fontSize(8).font('Helvetica')
+      .text('Activity Log Export', MARGIN + 90, 18, { lineBreak: false });
+    // Right: page number
+    doc.fillColor(PDF.textMuted).fontSize(8).font('Helvetica')
+      .text(`Page ${pageNum}`, PW - MARGIN - 40, 18, { width: 40, align: 'right', lineBreak: false });
+  };
+
+  const drawCoverMeta = () => {
+    // White meta block
+    const metaY = BAND_H + 8;
+    const metaH = COVER_H - BAND_H - 12;
+    doc.rect(MARGIN, metaY, CONTENT, metaH).fill(PDF.brandLight);
+    doc.rect(MARGIN, metaY, 4, metaH).fill(PDF.brandAccent);
+
+    const col1 = MARGIN + 14;
+    const col2 = MARGIN + CONTENT / 2;
+    const lineH = 14;
+    let metaLine = metaY + 8;
+
+    const drawMeta = (label: string, value: string, x: number) => {
+      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+        .text(label.toUpperCase(), x, metaLine, { lineBreak: false });
+      doc.fillColor(PDF.textPrimary).fontSize(8).font('Helvetica-Bold')
+        .text(value, x, metaLine + 8, { lineBreak: false });
+    };
+
+    drawMeta('Exported at',      fmtDate(exportedAt.toISOString()),    col1);
+    drawMeta('Exported by',      userStore.findById(viewerId)?.name || 'System', col2);
+    metaLine += lineH + 8;
+    drawMeta('Records exported', `${result.items.length} of ${result.total} matching`, col1);
+    drawMeta('Export limit',     `${EXPORT_LIMIT.toLocaleString()} rows`, col2);
+
     if (filterSummary !== '{}') {
-      doc.fillColor(PDF_COLORS.muted).fontSize(7)
-        .text(`Filters: ${filterSummary}`, 30, 44, { width: docWidth - 60 });
+      metaLine += lineH + 4;
+      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+        .text('ACTIVE FILTERS', col1, metaLine, { lineBreak: false });
+      doc.fillColor(PDF.textSecondary).fontSize(7).font('Helvetica')
+        .text(filterSummary, col1, metaLine + 9, {
+          width: CONTENT - 18, lineBreak: false,
+        });
     }
+  };
 
-    let x = 30;
-    doc.rect(30, tableTop, usableWidth, rowHeight).fill('#1a2744');
-    doc.fillColor(PDF_COLORS.accent).fontSize(7).font('Helvetica-Bold');
-    headers.forEach((h, i) => {
-      doc.text(h, x + 4, tableTop + 5, { width: colWidths[i] - 8, lineBreak: false });
+  const drawTableHeader = (topY: number) => {
+    doc.rect(MARGIN, topY, CONTENT, HEADER_H).fill(PDF.tableHeaderBg);
+    let x = MARGIN;
+    COLS.slice(0, -1).forEach((col, i) => {
+      doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+        .text(col.header, x + 4, topY + 5, { width: colWidths[i] - 8, lineBreak: false });
       x += colWidths[i];
     });
-    y = tableTop + rowHeight;
+    // Description header
+    doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+      .text('Description', x + 4, topY + 5, { width: descW - 8, lineBreak: false });
   };
 
-  const drawFooter = () => {
-    doc.fontSize(7).fillColor(PDF_COLORS.muted).font('Helvetica');
-    doc.text(
-      `Page ${pageNum} | WorkSync Audit Export | ${result.items.length} of ${result.total} matching events`,
-      30, docHeight - 30,
-      { width: docWidth - 60, align: 'center' }
-    );
+  const drawFooterBar = () => {
+    doc.rect(0, PH - FOOTER_H, PW, FOOTER_H).fill(PDF.brandLight);
+    doc.rect(0, PH - FOOTER_H, PW, 1).fill(PDF.rowBorder);
+    doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
+      .text(
+        `WorkSync Audit Export  ·  ${fmtDate(exportedAt.toISOString())}  ·  Page ${pageNum}`,
+        MARGIN, PH - FOOTER_H + 8,
+        { width: CONTENT, align: 'center', lineBreak: false },
+      );
   };
 
-  drawHeader();
+  // ── First page ───────────────────────────────────────────────────────────
+  const newPage = (isFirst = false) => {
+    pageNum++;
+    doc.rect(0, 0, PW, PH).fill(PDF.pageBg);
+    const bandH = isFirst ? COVER_H : BAND_H;
+    drawBrandBand(isFirst ? BAND_H : BAND_H);
+    if (isFirst) drawCoverMeta();
+    y = (isFirst ? TABLE_TOP_P1 : TABLE_TOP_PN);
+    drawTableHeader(y);
+    y += HEADER_H;
+    drawFooterBar();
+  };
 
+  newPage(true);
+
+  // ── Data rows ────────────────────────────────────────────────────────────
   let rowNum = 0;
   for (const item of result.items) {
-    if (y + rowHeight > docHeight - bottomMargin) {
-      drawFooter();
-      doc.addPage();
-      drawHeader();
+    const availH = PH - FOOTER_H - y;
+    if (availH < ROW_H) {
+      doc.addPage({ size: 'A4', layout: 'landscape' });
+      newPage(false);
     }
 
-    const bg = rowNum % 2 === 0 ? PDF_COLORS.rowEven : PDF_COLORS.rowOdd;
-    doc.rect(30, y, usableWidth, rowHeight).fill(bg);
+    const bg = rowNum % 2 === 0 ? PDF.rowEven : PDF.rowOdd;
+    doc.rect(MARGIN, y, CONTENT, ROW_H).fill(bg);
 
-    let x = 34;
-    const row = [
-      item.id.slice(0, 8), new Date(item.timestamp).toLocaleString(),
-      item.actor.name, item.actor.role.replace('_', ' '), item.action,
-      item.module, `${item.entityType}: ${item.entityName}`,
-      [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—',
-      item.result, item.description.slice(0, 80),
+    // Bottom border
+    doc.rect(MARGIN, y + ROW_H - 0.5, CONTENT, 0.5).fill(PDF.rowBorder);
+
+    const projectTask = [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—';
+    const cellData = [
+      fmtDate(item.timestamp),
+      trunc(item.actor.name, 18),
+      fmtRole(item.actor.role),
+      trunc(item.action, 20),
+      item.module,
+      trunc(projectTask, 22),
+      item.result,
+      trunc(item.description, 120),
     ];
-    doc.fillColor(PDF_COLORS.text).fontSize(6.5).font('Helvetica');
-    row.forEach((cell, i) => {
-      doc.text(cell, x, y + 5, { width: colWidths[i] - 4, lineBreak: false });
+
+    let x = MARGIN;
+    cellData.forEach((cell, i) => {
+      const cx = x + 4;
+      const cy = y + (ROW_H - 9) / 2;   // vertically centered
+      const cw = colWidths[i] - 8;
+
+      if (i === 6) {
+        // Result — badge
+        drawResultBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
+      } else if (i === 4) {
+        // Module — badge
+        drawModuleBadge(doc, cell, x + 2, y + (ROW_H - 13) / 2, colWidths[i] - 4);
+      } else {
+        doc.fillColor(i === 0 ? PDF.textSecondary : PDF.textPrimary)
+          .fontSize(i === 7 ? 7 : 7.5)
+          .font('Helvetica')
+          .text(cell, cx, cy, { width: cw, lineBreak: false });
+      }
       x += colWidths[i];
     });
 
-    y += rowHeight;
+    y += ROW_H;
     rowNum++;
   }
 
-  drawFooter();
+  // ── Trailing summary ─────────────────────────────────────────────────────
+  if (result.items.length === 0) {
+    doc.fillColor(PDF.textMuted).fontSize(10).font('Helvetica')
+      .text('No events matched the applied filters.', MARGIN, y + 20, {
+        width: CONTENT, align: 'center',
+      });
+  }
+
   doc.end();
 
   const content = await new Promise<Buffer>((resolve, reject) => {
