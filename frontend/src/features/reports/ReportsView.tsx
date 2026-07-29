@@ -382,7 +382,7 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return (reportData.projects || []).map((p: any) => ({
         name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
-        progress: p.progress,
+        progress: p.progress ?? 0,
       }));
     }
     return [];
@@ -1774,13 +1774,14 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Archived Projects', reportData?.overview?.archivedCount ?? 0, <History size={14} className="text-slate-400" />, 'slate')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Pending Approvals', roleFiltered.projects.filter((p: any) => p.status === 'Pending Approval').length, <Clock size={14} className="text-amber-400" />, 'amber')}</div>
       </div>
 
       <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
         <div className="glass-panel p-4 rounded-lg">
           {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Project Progress')}
           <div className="mt-3 overflow-x-auto">
-            <div style={{ minWidth: Math.max(projectHealthData.length * 80, 400), height: 300 }}>
+            <div style={{ width: Math.max(projectHealthData.length * 80, 400), height: 300 }}>
               {projectHealthData.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-8">No project data available</p>
               ) : (
