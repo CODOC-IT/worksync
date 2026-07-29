@@ -172,18 +172,42 @@ test('rejects an assignee outside the project membership', () => {
   assert.ok(errors.assigneeIds);
 });
 
-test('shows active selected-project members as task assignees', () => {
+test('shows only active non-HR, non-Admin selected-project members as task assignees', () => {
   const inactiveMember = { ...users[1], id: 'inactive-member', status: 'inactive' as const };
+  const hrMember: User = {
+    ...users[1],
+    id: 'hr-member',
+    name: 'HR Member',
+    role: 'HR',
+    title: 'HR Specialist'
+  };
   const projectWithInactiveMember = {
     ...project,
-    memberIds: ['lead', 'member', inactiveMember.id]
+    memberIds: ['lead', 'member', 'admin', hrMember.id, inactiveMember.id]
   };
   const options = getAssignableProjectUsers(
     projectWithInactiveMember,
-    [...users, inactiveMember]
+    [...users, hrMember, inactiveMember]
   );
 
   assert.deepEqual(options.map((user) => user.id), ['lead', 'member']);
+});
+
+test('rejects HR and Admin users as task assignees even when they are project members', () => {
+  const hrMember: User = {
+    ...users[1],
+    id: 'hr-member',
+    name: 'HR Member',
+    role: 'HR',
+    title: 'HR Specialist'
+  };
+  const projectWithAdministrativeMembers = {
+    ...project,
+    memberIds: ['lead', 'member', 'admin', hrMember.id]
+  };
+
+  assert.ok(validateTaskInput({ ...validInput, assigneeIds: ['admin'] }, projectWithAdministrativeMembers, [...users, hrMember]).assigneeIds);
+  assert.ok(validateTaskInput({ ...validInput, assigneeIds: [hrMember.id] }, projectWithAdministrativeMembers, [...users, hrMember]).assigneeIds);
 });
 
 test('rejects duplicate assignees', () => {
