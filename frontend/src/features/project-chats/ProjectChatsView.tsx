@@ -1,7 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, AtSign, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { fetchProjectMemberDirectory, ProjectMemberSummary } from '../projects/projectRepository';
+import { ProjectMemberSummary } from '../projects/projectRepository';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads } from './projectChatRepository';
 import { filterDiscussions, getMentionTrigger, insertMention, MentionTrigger, parseMentionIds } from './projectChatRules';
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
@@ -26,7 +26,6 @@ export const ProjectChatsView: React.FC = () => {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [mentionTrigger, setMentionTrigger] = useState<MentionTrigger | null>(null);
-  const [projectMemberDirectories, setProjectMemberDirectories] = useState<Record<string, ProjectMemberSummary[]>>({});
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [editError, setEditError] = useState('');
@@ -52,23 +51,6 @@ export const ProjectChatsView: React.FC = () => {
     if (projectId || taskId) setFilters((current) => ({ ...current, projectId, taskId }));
   }, []);
   useEffect(() => {
-    let active = true;
-    const loadMemberDirectories = async () => {
-      const entries = await Promise.all(projects.map(async (project) => {
-        try {
-          const directory = await fetchProjectMemberDirectory(project.id);
-          return [project.id, directory.members] as const;
-        } catch {
-          return [project.id, []] as const;
-        }
-      }));
-      if (active) setProjectMemberDirectories(Object.fromEntries(entries));
-    };
-    void loadMemberDirectories();
-    return () => { active = false; };
-  }, [projects]);
-
-  useEffect(() => {
     const selectedThread = threads.find((thread) => thread.id === selectedId);
     const project = projects.find((item) => item.id === selectedThread?.projectId);
     if (project?.status === 'Completed') {
@@ -85,18 +67,10 @@ export const ProjectChatsView: React.FC = () => {
   const taskNames = useMemo(() => Object.fromEntries(tasks.map((task) => [task.id, task.title])), [tasks]);
   const visibleThreads = useMemo(() => filterDiscussions(threads.filter((thread) => projects.find((project) => project.id === thread.projectId)?.status !== 'Completed'), filters, currentUser.id, projectNames, taskNames), [threads, projects, filters, currentUser.id, projectNames, taskNames]);
   const selected = selectedId ? visibleThreads.find((thread) => thread.id === selectedId) : undefined;
-  const selectedProject = projects.find((project) => project.id === selected?.projectId);
-  const chatUsers = useMemo(() => {
-    const byId = new Map<string, ProjectMemberSummary>();
-    users.forEach((user) => byId.set(user.id, user));
-    Object.values(projectMemberDirectories).flat().forEach((user) => byId.set(user.id, user));
-    return Array.from(byId.values());
-  }, [projectMemberDirectories, users]);
+  const chatUsers = useMemo(() => users.filter((user) => user.status === 'active') as ProjectMemberSummary[], [users]);
   const mentionUsers = useMemo(
-    () => chatUsers.filter((user) =>
-      user.status !== 'inactive' && Boolean(selectedProject?.memberIds.includes(user.id))
-    ),
-    [chatUsers, selectedProject]
+    () => chatUsers,
+    [chatUsers]
   );
   const matchingMentionUsers = useMemo(() => {
     const query = mentionTrigger?.query.trim().toLocaleLowerCase() || '';
@@ -302,7 +276,7 @@ export const ProjectChatsView: React.FC = () => {
           )}
         </main>
       </div>
-      {composerOpen && <NewDiscussionDialog projects={availableProjects} tasks={tasks} projectMemberDirectories={projectMemberDirectories} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
+      {composerOpen && <NewDiscussionDialog projects={availableProjects} tasks={tasks} users={chatUsers} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
       {deleteConfirmId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelDelete(); }}>
           <div className="project-chat-dialog w-full max-w-md overflow-hidden rounded-2xl">
@@ -520,11 +494,11 @@ const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: Proj
         <UserAvatar user={user} size="sm" />
         <span className="min-w-0"><span className="project-chat-heading block truncate font-semibold">@{user.name}</span><span className="project-chat-secondary block truncate text-[10px]">{user.title || user.department || user.role}</span></span>
       </button>
-    )) : <p className="project-chat-secondary px-3 py-2 text-xs">No matching project member.</p>}
+    )) : <p className="project-chat-secondary px-3 py-2 text-xs">No matching active organization member.</p>}
   </div>
 );
 const NewDiscussionDialog: React.FC<any> = ({
-  projects, tasks, projectMemberDirectories, onClose, onCreated,
+  projects, tasks, users, onClose, onCreated,
 }) => {
   const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' });
   const [error, setError] = useState('');
@@ -532,7 +506,7 @@ const NewDiscussionDialog: React.FC<any> = ({
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
-  const projectUsers: ProjectMemberSummary[] = projectMemberDirectories[form.projectId] || [];
+  const projectUsers: ProjectMemberSummary[] = users;
   const matchingUsers = trigger?.query
     ? projectUsers.filter((user) => user.status !== 'inactive' && user.name.toLocaleLowerCase().includes(trigger.query.toLocaleLowerCase()))
     : projectUsers.filter((user) => user.status !== 'inactive');
@@ -618,7 +592,7 @@ const NewDiscussionDialog: React.FC<any> = ({
               }}
               onClick={(event) => setTrigger(getMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart, projectUsers))}
               className={`${inputClass} mt-1 min-h-32`}
-              placeholder="Describe the context, decision, blocker, or question. Type @ to mention a project member."
+              placeholder="Describe the context, decision, blocker, or question. Type @ to mention an organization member."
             />
             <span className="project-chat-secondary mt-1 block text-right text-[10px] font-normal">{form.body.length}/{COMMENT_MAX_LENGTH}</span>
           </label>
