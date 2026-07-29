@@ -1,4 +1,4 @@
-import { Project } from '../../types';
+import { Project, User } from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // projectApiClient — thin fetch wrapper over /api/projects (backend/src/projects/project.routes.ts).
@@ -49,6 +49,24 @@ export const fetchProjects = async (): Promise<Project[]> => {
 
 export const fetchProject = async (id: string): Promise<Project> => {
   const { data } = await apiFetch<{ data: Project }>(`/${encodeURIComponent(id)}`);
+  return data;
+};
+
+export type ProjectMemberSummary = Pick<
+  User,
+  'id' | 'name' | 'role' | 'department' | 'avatar' | 'title' | 'status'
+>;
+
+export interface ProjectMemberDirectory {
+  teamLeadId: string;
+  memberIds: string[];
+  members: ProjectMemberSummary[];
+}
+
+export const fetchProjectMemberDirectory = async (id: string): Promise<ProjectMemberDirectory> => {
+  const { data } = await apiFetch<{ data: ProjectMemberDirectory }>(
+    `/${encodeURIComponent(id)}/members`
+  );
   return data;
 };
 

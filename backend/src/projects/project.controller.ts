@@ -104,8 +104,8 @@ export const listMembers = async (req: AuthenticatedRequest, res: Response): Pro
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const project = await service.getProjectForUser(req.params.id, user.id, user.role);
-    res.json({ success: true, data: { teamLeadId: project.teamLeadId, memberIds: project.memberIds } });
+    const directory = await service.getProjectMemberDirectoryForUser(req.params.id, user.id, user.role);
+    res.json({ success: true, data: directory });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load project members.');
   }

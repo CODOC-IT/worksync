@@ -1,8 +1,9 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AtSign, CheckCircle2, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Search, Send, Trash2, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
+import { fetchProjectMemberDirectory, ProjectMemberSummary } from '../projects/projectRepository';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads, setDiscussionResolved } from './projectChatRepository';
-import { filterDiscussions, parseMentionIds } from './projectChatRules';
+import { filterDiscussions, getMentionTrigger, insertMention, MentionTrigger, parseMentionIds } from './projectChatRules';
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
 
 const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', type: '', authorId: '', state: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
@@ -23,7 +24,8 @@ export const ProjectChatsView: React.FC = () => {
   const [replyError, setReplyError] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionTrigger, setMentionTrigger] = useState<MentionTrigger | null>(null);
+  const [projectMemberDirectories, setProjectMemberDirectories] = useState<Record<string, ProjectMemberSummary[]>>({});
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [editError, setEditError] = useState('');
@@ -32,6 +34,7 @@ export const ProjectChatsView: React.FC = () => {
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
 
   const load = async () => {
     setLoading(true); setError('');
@@ -46,12 +49,46 @@ export const ProjectChatsView: React.FC = () => {
     const taskId = query.get('taskId') || '';
     if (projectId || taskId) setFilters((current) => ({ ...current, projectId, taskId }));
   }, []);
+  useEffect(() => {
+    let active = true;
+    const loadMemberDirectories = async () => {
+      const entries = await Promise.all(projects.map(async (project) => {
+        try {
+          const directory = await fetchProjectMemberDirectory(project.id);
+          return [project.id, directory.members] as const;
+        } catch {
+          return [project.id, []] as const;
+        }
+      }));
+      if (active) setProjectMemberDirectories(Object.fromEntries(entries));
+    };
+    void loadMemberDirectories();
+    return () => { active = false; };
+  }, [projects]);
 
   const projectNames = useMemo(() => Object.fromEntries(projects.map((project) => [project.id, project.title])), [projects]);
   const taskNames = useMemo(() => Object.fromEntries(tasks.map((task) => [task.id, task.title])), [tasks]);
   const visibleThreads = useMemo(() => filterDiscussions(threads, filters, currentUser.id, projectNames, taskNames), [threads, filters, currentUser.id, projectNames, taskNames]);
   const selected = threads.find((thread) => thread.id === selectedId) || visibleThreads[0];
   const selectedProject = projects.find((project) => project.id === selected?.projectId);
+  const chatUsers = useMemo(() => {
+    const byId = new Map<string, ProjectMemberSummary>();
+    users.forEach((user) => byId.set(user.id, user));
+    Object.values(projectMemberDirectories).flat().forEach((user) => byId.set(user.id, user));
+    return Array.from(byId.values());
+  }, [projectMemberDirectories, users]);
+  const mentionUsers = useMemo(
+    () => chatUsers.filter((user) =>
+      user.status !== 'inactive' && Boolean(selectedProject?.memberIds.includes(user.id))
+    ),
+    [chatUsers, selectedProject]
+  );
+  const matchingMentionUsers = useMemo(() => {
+    const query = mentionTrigger?.query.trim().toLocaleLowerCase() || '';
+    return query
+      ? mentionUsers.filter((user) => user.name.toLocaleLowerCase().includes(query))
+      : mentionUsers;
+  }, [mentionTrigger, mentionUsers]);
   const canResolve = Boolean(selected && (currentRole === 'Admin' || (currentRole === 'Team_Lead' && selectedProject?.memberIds.includes(currentUser.id) && selectedProject.status === 'Active')));
   const projectTasks = tasks.filter((task) => task.projectId === filters.projectId);
 
@@ -82,9 +119,9 @@ export const ProjectChatsView: React.FC = () => {
     if (!body) { setReplyError('Write a reply before sending.'); return; }
     setSubmitting(true); setReplyError('');
     try {
-      const comment = await addDiscussionComment(selected.id, { body, parentCommentId: replyTo, mentionIds: parseMentionIds(body, users), attachments });
+      const comment = await addDiscussionComment(selected.id, { body, parentCommentId: replyTo, mentionIds: parseMentionIds(body, mentionUsers), attachments });
       setThreads((current) => current.map((thread) => thread.id === selected.id ? { ...thread, comments: [...thread.comments, comment], updatedAt: comment.createdAt } : thread));
-      setReplyText(''); setReplyTo(undefined); setAttachments([]); setMentionOpen(false);
+      setReplyText(''); setReplyTo(undefined); setAttachments([]); setMentionTrigger(null);
     } catch (reason) { setReplyError(reason instanceof Error ? reason.message : 'Reply could not be sent.'); }
     finally { setSubmitting(false); }
   };
@@ -144,14 +181,31 @@ export const ProjectChatsView: React.FC = () => {
     } finally { setDeleteSubmitting(false); }
   };
 
+  const updateReplyMention = (value: string, cursor: number | null) => {
+    setReplyText(value);
+    setReplyError('');
+    setMentionTrigger(getMentionTrigger(value, cursor ?? value.length, mentionUsers));
+  };
+
+  const selectReplyMention = (user: ProjectMemberSummary) => {
+    if (!mentionTrigger) return;
+    const next = insertMention(replyText, mentionTrigger, user.name);
+    setReplyText(next.body);
+    setMentionTrigger(null);
+    window.requestAnimationFrame(() => {
+      replyRef.current?.focus();
+      replyRef.current?.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
+
   return (
-    <section data-project-chats className="mx-auto max-w-[1550px] space-y-4">
-      <header className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+    <section data-project-chats className="mx-auto flex h-full min-h-0 max-w-[1550px] flex-col gap-4 overflow-hidden">
+      <header className="flex shrink-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div><h1 className="flex items-center gap-2 text-2xl font-bold text-white"><MessageSquare size={23} className="text-cyan-400" />Project Chats</h1><p className="mt-1 text-sm text-slate-400">Asynchronous project and task discussions, decisions, and follow-ups.</p></div>
         <div className="flex w-full gap-2 xl:w-auto"><label className="relative min-w-0 flex-1 xl:w-72"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input aria-label="Search discussions" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className={`${inputClass} pl-9`} placeholder="Search discussions" /></label><button type="button" onClick={() => setComposerOpen(true)} className="glass-button-neon inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold"><Plus size={16} />Start Discussion</button></div>
       </header>
 
-      <div className="glass-panel grid gap-2 p-3 lg:grid-cols-4 xl:grid-cols-7">
+      <div className="glass-panel grid shrink-0 gap-2 p-3 lg:grid-cols-4 xl:grid-cols-7">
         <Select value={filters.projectId} onChange={(projectId) => setFilters({ ...filters, projectId, taskId: '' })} label="All projects">{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</Select>
         <Select value={filters.taskId} onChange={(taskId) => setFilters({ ...filters, taskId })} label="All tasks" disabled={!filters.projectId}>{projectTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</Select>
         <Select value={filters.type} onChange={(type) => setFilters({ ...filters, type })} label="All types">{DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}</Select>
@@ -162,17 +216,74 @@ export const ProjectChatsView: React.FC = () => {
         <button type="button" onClick={() => setFilters(emptyFilters)} className="text-xs font-semibold text-slate-400 hover:text-cyan-300">Clear Filters</button>
       </div>
 
-      {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><span>{error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/15">Try again</button></div>}
-      <div className="grid min-h-[650px] overflow-hidden rounded-xl border border-white/10 bg-slate-950/35 lg:grid-cols-[360px_minmax(0,1fr)]">
-        <aside aria-label="Discussion list" className="border-b border-white/10 lg:border-b-0 lg:border-r">
-          <div className="border-b border-white/10 px-4 py-3 text-sm font-bold text-white">Discussions <span className="ml-1 rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-400">{visibleThreads.length}</span></div>
-          {loading ? <ListState label="Loading discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'No discussions match these filters.' : 'No discussions yet. Start the first one.'} /> : <div className="max-h-[640px] overflow-y-auto">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={users} currentUserId={currentUser.id} onClick={() => setSelectedId(thread.id)} />)}</div>}
+      {error && <div role="alert" className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><span>{error}</span><button type="button" onClick={() => void load()} className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/15">Try again</button></div>}
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(160px,32%)_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/10 bg-slate-950/35 lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-1">
+        <aside aria-label="Discussion list" className="flex min-h-0 flex-col overflow-hidden border-b border-white/10 lg:border-b-0 lg:border-r">
+          <div className="shrink-0 border-b border-white/10 px-4 py-3 text-sm font-bold text-white">Discussions <span className="ml-1 rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-400">{visibleThreads.length}</span></div>
+          {loading ? <ListState label="Loading discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'No discussions match these filters.' : 'No discussions yet. Start the first one.'} /> : <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => setSelectedId(thread.id)} />)}</div>}
         </aside>
-        <main className="min-w-0">{loading ? <ListState label="Loading selected discussion…" /> : selected ? <DiscussionPanel thread={selected} users={users} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} canResolve={canResolve} onResolve={() => void changeResolution()} onReply={(commentId) => { setReplyTo(commentId); document.getElementById('discussion-reply')?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Select a discussion to read it." />}
-          {selected && <form onSubmit={submitReply} className="border-t border-white/10 bg-black/10 p-4"><div className="mb-2 flex items-center justify-between text-xs text-slate-400"><span>{replyTo ? 'Replying to a comment' : 'Add a reply'}</span>{replyTo && <button type="button" onClick={() => setReplyTo(undefined)} className="text-cyan-300">Cancel reply</button>}</div><textarea id="discussion-reply" value={replyText} onChange={(event) => { setReplyText(event.target.value); setMentionOpen(event.target.value.endsWith('@')); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitReply(event as unknown as FormEvent); } }} className={`${inputClass} min-h-24 resize-y`} maxLength={5000} placeholder="Reply… Use @ to mention a project member. Shift+Enter for a new line." />{mentionOpen && <MentionList users={users.filter((user) => selectedProject?.memberIds.includes(user.id) && user.status !== 'inactive')} onPick={(user) => { setReplyText((text) => `${text.slice(0, -1)}@${user.name} `); setMentionOpen(false); }} />}<div className="mt-2 flex items-center justify-between gap-3"><div><input ref={fileRef} className="hidden" type="file" multiple onChange={(event) => { void addFiles(event.target.files); }} /><button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-300"><Paperclip size={14} />Attach</button>{attachments.map((file) => { const isImage = file.mimeType.startsWith('image/') && file.url; return isImage ? (<span key={file.id} className="ml-2 inline-flex items-center gap-1 rounded bg-white/5 px-1 py-1 text-[10px] text-slate-300"><img src={file.url} alt={file.name} className="h-8 w-8 rounded object-cover" /><span className="truncate max-w-24">{file.name}</span><button type="button" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>) : (<span key={file.id} className="ml-2 inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-slate-300">{file.name}<button type="button" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>); })}</div><button disabled={submitting} className="glass-button-neon inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{submitting ? <LoaderCircle className="animate-spin" size={14} /> : <Send size={14} />}Reply</button></div>{replyError && <p role="alert" className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{replyError}</p>}</form>}
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+          {loading ? <ListState label="Loading selected discussion…" /> : selected ? <DiscussionPanel thread={selected} users={chatUsers} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} canResolve={canResolve} onResolve={() => void changeResolution()} onReply={(commentId) => { setReplyTo(commentId); replyRef.current?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Select a discussion to read it." />}
+          {selected && (
+            <form onSubmit={submitReply} className="relative z-10 shrink-0 border-t border-white/10 bg-slate-950/80 p-3 backdrop-blur-md">
+              <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                <span>{replyTo ? 'Replying to a comment' : 'Add a reply'}</span>
+                {replyTo && <button type="button" onClick={() => setReplyTo(undefined)} className="font-semibold text-cyan-300 hover:text-cyan-200">Cancel reply</button>}
+              </div>
+              <div className="relative">
+                {mentionTrigger && (
+                  <MentionList users={matchingMentionUsers} onPick={selectReplyMention} />
+                )}
+                <textarea
+                  ref={replyRef}
+                  id="discussion-reply"
+                  value={replyText}
+                  onChange={(event) => updateReplyMention(event.target.value, event.target.selectionStart)}
+                  onClick={(event) => updateReplyMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                  onKeyUp={(event) => {
+                    if (!['Enter', 'Escape'].includes(event.key)) {
+                      setMentionTrigger(getMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart, mentionUsers));
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && mentionTrigger) {
+                      event.preventDefault();
+                      setMentionTrigger(null);
+                    } else if (event.key === 'Enter' && mentionTrigger && !event.shiftKey) {
+                      event.preventDefault();
+                      if (matchingMentionUsers[0]) selectReplyMention(matchingMentionUsers[0]);
+                    } else if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      void submitReply(event as unknown as FormEvent);
+                    }
+                  }}
+                  className={`${inputClass} min-h-16 max-h-32 resize-y pr-3`}
+                  maxLength={5000}
+                  placeholder="Write a reply… Type @ to mention a project member."
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <input ref={fileRef} className="hidden" type="file" multiple onChange={(event) => { void addFiles(event.target.files); }} />
+                  <button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-300"><Paperclip size={14} />Attach</button>
+                  {attachments.map((file) => {
+                    const isImage = file.mimeType.startsWith('image/') && file.url;
+                    return isImage ? (
+                      <span key={file.id} className="ml-2 inline-flex max-w-40 items-center gap-1 rounded bg-white/5 px-1 py-1 text-[10px] text-slate-300"><img src={file.url} alt={file.name} className="h-8 w-8 rounded object-cover" /><span className="truncate">{file.name}</span><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>
+                    ) : (
+                      <span key={file.id} className="ml-2 inline-flex max-w-40 items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-slate-300"><span className="truncate">{file.name}</span><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>
+                    );
+                  })}
+                </div>
+                <button disabled={submitting} className="glass-button-neon inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{submitting ? <LoaderCircle className="animate-spin" size={14} /> : <Send size={14} />}Reply</button>
+              </div>
+              <p className="mt-1.5 text-[10px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
+              {replyError && <p role="alert" className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{replyError}</p>}
+            </form>
+          )}
         </main>
       </div>
-      {composerOpen && <NewDiscussionDialog projects={projects} tasks={tasks} users={users} currentUser={currentUser} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setComposerOpen(false); }} />}
+      {composerOpen && <NewDiscussionDialog projects={projects} tasks={tasks} projectMemberDirectories={projectMemberDirectories} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setComposerOpen(false); }} />}
       {deleteConfirmId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelDelete(); }}>
           <div className="glass-panel w-full max-w-md overflow-hidden">
@@ -221,15 +332,20 @@ const DiscussionPanel: React.FC<any> = ({
 }) => {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handler = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpenId(null); };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+  useEffect(() => {
+    const history = historyRef.current;
+    if (history) history.scrollTop = history.scrollHeight;
+  }, [thread.id, thread.comments.length]);
 
   return (
-    <div className="p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
         <div>
           <div className="flex items-center gap-2 text-xs text-cyan-300"><span>{projectName}</span>{taskName && <><span>·</span><span>{taskName}</span></>}</div>
           <h2 className="mt-2 text-xl font-bold text-white">{thread.title}</h2>
@@ -237,7 +353,8 @@ const DiscussionPanel: React.FC<any> = ({
         </div>
         {canResolve && <button type="button" onClick={onResolve} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/5">{thread.resolved ? 'Reopen discussion' : 'Resolve discussion'}</button>}
       </div>
-      <div className="divide-y divide-white/10">
+      <div ref={historyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5">
+        <div className="divide-y divide-white/10">
         {thread.comments.map((comment: DiscussionComment) => {
           const author = users.find((user: any) => user.id === comment.authorId);
           const isMine = comment.authorId === currentUserId;
@@ -320,10 +437,121 @@ const DiscussionPanel: React.FC<any> = ({
               </div>
             </article>
           );
-        })}
+          })}
+        </div>
       </div>
     </div>
   );
 };
-const MentionList: React.FC<any> = ({ users, onPick }) => <div role="listbox" className="mt-1 max-h-36 overflow-y-auto rounded-lg border border-cyan-400/20 bg-slate-900 p-1">{users.map((user: any) => <button key={user.id} type="button" role="option" onClick={() => onPick(user)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-200 hover:bg-white/10">@{user.name} <span className="text-slate-500">{user.title}</span></button>)}</div>;
-const NewDiscussionDialog: React.FC<any> = ({ projects, tasks, users, currentUser, onClose, onCreated }) => { const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId); const submit = async (event: FormEvent) => { event.preventDefault(); const body = form.body.trim(); if (!body) { setError('Write an initial message for the discussion.'); return; } setBusy(true); try { onCreated(await createDiscussion({ ...form, body, mentionIds: parseMentionIds(body, users), attachments: [] })); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not start discussion.'); } finally { setBusy(false); } }; return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden"><div className="flex items-center justify-between border-b border-white/10 px-5 py-4"><div><h2 className="font-bold text-white">Start discussion</h2><p className="mt-1 text-xs text-slate-400">Create a focused project or task conversation.</p></div><button type="button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="grid gap-4 p-5 md:grid-cols-2"><label className="text-xs font-semibold text-slate-300">Project *<select required value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value, taskId: '' })} className={`${inputClass} mt-1`}><option value="">Select project</option>{projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label><label className="text-xs font-semibold text-slate-300">Related task <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}><option value="">No related task</option>{eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label><label className="text-xs font-semibold text-slate-300">Subject *<input required maxLength={200} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} className={`${inputClass} mt-1`} /></label><label className="text-xs font-semibold text-slate-300">Discussion type *<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as DiscussionType })} className={`${inputClass} mt-1`}>{DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label><label className="md:col-span-2 text-xs font-semibold text-slate-300">Initial message *<textarea required maxLength={5000} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} className={`${inputClass} mt-1 min-h-32`} placeholder="Describe the context, decision, blocker, or question. Use @ to mention project members." /></label>{error && <p role="alert" className="md:col-span-2 text-xs text-rose-300">{error}</p>}</div><div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Cancel</button><button disabled={busy} className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{busy ? 'Starting…' : 'Start Discussion'}</button></div></form></div>; };
+const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: ProjectMemberSummary) => void }> = ({ users, onPick }) => (
+  <div role="listbox" aria-label="Project members" className="absolute bottom-full left-0 z-30 mb-2 max-h-52 w-full overflow-y-auto rounded-xl border border-cyan-400/20 bg-slate-900 p-1.5 shadow-2xl">
+    {users.length ? users.map((user) => (
+      <button key={user.id} type="button" role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => onPick(user)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-200 hover:bg-white/10">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-700 text-[9px] font-bold text-cyan-200">{initials(user.name)}</span>
+        <span className="min-w-0"><span className="block truncate font-semibold">@{user.name}</span><span className="block truncate text-[10px] text-slate-500">{user.title || user.department || user.role}</span></span>
+      </button>
+    )) : <p className="px-3 py-2 text-xs text-slate-500">No matching project member.</p>}
+  </div>
+);
+const NewDiscussionDialog: React.FC<any> = ({
+  projects, tasks, projectMemberDirectories, onClose, onCreated,
+}) => {
+  const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
+  const projectUsers: ProjectMemberSummary[] = projectMemberDirectories[form.projectId] || [];
+  const matchingUsers = trigger?.query
+    ? projectUsers.filter((user) => user.status !== 'inactive' && user.name.toLocaleLowerCase().includes(trigger.query.toLocaleLowerCase()))
+    : projectUsers.filter((user) => user.status !== 'inactive');
+
+  const selectMention = (user: ProjectMemberSummary) => {
+    if (!trigger) return;
+    const next = insertMention(form.body, trigger, user.name);
+    setForm((current) => ({ ...current, body: next.body }));
+    setTrigger(null);
+    window.requestAnimationFrame(() => {
+      bodyRef.current?.focus();
+      bodyRef.current?.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const body = form.body.trim();
+    if (!body) {
+      setError('Write an initial message for the discussion.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      onCreated(await createDiscussion({
+        ...form,
+        body,
+        mentionIds: parseMentionIds(body, projectUsers),
+        attachments: [],
+      }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not start discussion.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+          <div><h2 className="font-bold text-white">Start discussion</h2><p className="mt-1 text-xs text-slate-400">Create a focused project or task conversation.</p></div>
+          <button type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="text-xs font-semibold text-slate-300">Project *
+            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className={`${inputClass} mt-1`}>
+              <option value="">Select project</option>
+              {projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-300">Related task
+            <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}>
+              <option value="">No related task</option>
+              {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-300">Subject *
+            <input required maxLength={200} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} className={`${inputClass} mt-1`} />
+          </label>
+          <label className="text-xs font-semibold text-slate-300">Discussion type *
+            <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as DiscussionType })} className={`${inputClass} mt-1`}>
+              {DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}
+            </select>
+          </label>
+          <label className="relative md:col-span-2 text-xs font-semibold text-slate-300">Initial message *
+            {trigger && <MentionList users={matchingUsers} onPick={selectMention} />}
+            <textarea
+              ref={bodyRef}
+              required
+              maxLength={5000}
+              value={form.body}
+              onChange={(event) => {
+                setForm({ ...form, body: event.target.value });
+                setTrigger(getMentionTrigger(event.target.value, event.target.selectionStart, projectUsers));
+              }}
+              onClick={(event) => setTrigger(getMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart, projectUsers))}
+              className={`${inputClass} mt-1 min-h-32`}
+              placeholder="Describe the context, decision, blocker, or question. Type @ to mention a project member."
+            />
+          </label>
+          {error && <p role="alert" className="md:col-span-2 text-xs text-rose-300">{error}</p>}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4">
+          <button type="button" onClick={onClose} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Cancel</button>
+          <button disabled={busy} className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{busy ? 'Starting…' : 'Start Discussion'}</button>
+        </div>
+      </form>
+    </div>
+  );
+};

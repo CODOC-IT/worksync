@@ -238,7 +238,7 @@ const AppContent: React.FC = () => {
         )}
 
         {/* Main Scrollable View Area */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
+        <main className={`min-h-0 flex-1 p-4 md:p-6 min-w-0 ${currentTab === 'project-chats' ? 'overflow-hidden' : 'space-y-6 overflow-y-auto'}`}>
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
           {currentTab === 'projects' && <ProjectsView />}
           {currentTab === 'tasks' && <TasksView />}
