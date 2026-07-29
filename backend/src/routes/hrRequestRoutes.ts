@@ -99,12 +99,19 @@ const normalizeRole = (role: unknown): string =>
     .replace(/[\s_-]/g, '')
     .toLowerCase();
 
+const normalizeRole = (role: unknown): string =>
+  String(role || '')
+    .replace(/[\s_-]/g, '')
+    .toLowerCase();
+
 const canReviewRequests = (req: AuthenticatedRequest): boolean => {
   const role = normalizeRole(req.user?.role);
 
   return [
     'hr',
+    'hrspecialist',
     'hrrepresentative',
+    'humanresources',
     'admin',
     'administrator'
   ].includes(role);
