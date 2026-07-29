@@ -11,6 +11,7 @@ import discussionRoutes from './collab/discussion.routes.js';
 import notificationRoutes from './notifications/notification.routes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import activityLogRoutes from './activityLog/activityLog.routes.js';
+import activityRoutes from './activity/activity.routes.js';
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
 import { validateAuthConfig } from './middleware/authMiddleware.js';
@@ -38,6 +39,7 @@ app.use('/api/project-chats', discussionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/activity-log', activityLogRoutes);
+app.use('/api/activity', activityRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
