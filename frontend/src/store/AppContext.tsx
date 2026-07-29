@@ -971,7 +971,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           projectId: input.projectId,
           title: input.title,
           description: input.description,
-          priority: input.priority === 'Critical' ? 'Urgent' : input.priority,
+         priority:
+  input.priority === 'Critical'
+    ? 'Urgent'
+    : input.priority || 'Medium',
           startDate: input.startDate,
           dueDate: input.dueDate,
           assigneeIds: input.assigneeIds,
