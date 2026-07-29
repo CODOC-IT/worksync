@@ -129,6 +129,7 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string;
+  assigneeIds?: string[];
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
