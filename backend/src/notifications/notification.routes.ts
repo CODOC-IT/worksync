@@ -23,6 +23,13 @@ router.get('/preferences', controller.getPreferences);
 // order; a literal segment must win over a param segment it could otherwise be captured by).
 router.get('/analytics', controller.getAnalytics);
 
+// GET /api/notifications/analytics/users?search=&page=&pageSize=&sortBy=
+// GET /api/notifications/analytics/users/:userId — Admin-only per-user analytics + drill-down.
+// Registered before the generic /:id-shaped routes below for the same route-ordering reason as
+// /analytics itself.
+router.get('/analytics/users', controller.getUserAnalytics);
+router.get('/analytics/users/:userId', controller.getUserAnalyticsDetail);
+
 // PUT /api/notifications/preferences
 router.put('/preferences', controller.updatePreferences);
 

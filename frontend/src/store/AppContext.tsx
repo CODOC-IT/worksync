@@ -55,7 +55,6 @@ import {
 } from '../features/projects/projectRepository';
 import {
   SendNotificationInput,
-  sendNotification,
   markAsRead,
   markAllAsRead as markAllAsReadInList,
   clearNotification as removeNotificationFromList,
@@ -324,6 +323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(newUser);
     setTaskReloadVersion((version) => version + 1);
+    refreshUsers();
   };
 
   const loginUser = (user: User) => {
@@ -340,7 +340,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(user);
     setTaskReloadVersion((version) => version + 1);
-    if (user.role === 'Admin' || user.role === 'HR') refreshUsers();
+    // Every role needs the full roster, not just Admin -- HR-recipient resolution
+    // (resolveHRRecipients), @mention detection, and the Team Members view all read this same
+    // `users` state regardless of who's logged in. Restricting this to Admin left `users` at []
+    // for every other role, so e.g. attendance/break notifications never found an HR recipient.
+    refreshUsers();
   };
 
   const logoutUser = () => {
@@ -549,16 +553,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const dispatchNotifications = (input: SendNotificationInput) => {
-    // Real persistence is the primary path; the pure local sendNotification() below is only a
-    // fallback for when the API call fails (no backend reachable, no DATABASE_URL configured,
-    // or because a login transition left the token and current user briefly out of sync,
-    // or the authenticated session cannot persist the event — see notificationApiClient.ts).
-    // Every call site is unaffected by which path actually wrote the notification.
+    // Every notification must be persisted in Postgres via the real API (notificationApiClient's
+    // publishNotificationEvent) — that's the only path the recipient's own session (a different
+    // browser/tab) can ever actually see. A local-only fallback here would silently fabricate a
+    // notification that only flashes in the *acting* user's own in-memory state and is never
+    // delivered to the real recipients nor stored anywhere — worse than surfacing the failure.
+    // So on failure we log loudly and tell the acting user it didn't go through, instead of
+    // pretending it succeeded.
     publishNotificationEvent(input)
       .then(applyCreatedNotifications)
       .catch((error) => {
-        console.warn('Notification publish API failed; recording locally instead.', error);
-        applyCreatedNotifications(sendNotification(input));
+        console.error('Notification publish failed — event was NOT persisted or delivered.', input.type, error);
+        pushToast(
+          'error',
+          'Notification Failed',
+          `"${input.title}" could not be delivered. It was not saved — please check your connection and try again.`
+        );
       });
   };
 

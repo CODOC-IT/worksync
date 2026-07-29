@@ -209,13 +209,18 @@ router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Respon
 });
 
 // GET /api/auth/users
-router.get('/users', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user || req.user.role !== 'Admin') {
-    res.status(403).json({ success: false, message: 'Admin access required.' });
+// Every authenticated role needs this roster -- not just Admin: Team Leads/HR/Team Members all
+// need it to resolve task assignees, @mentions, and notification recipients (e.g. HR-role
+// lookup for attendance/break events) client-side. sanitizeUser() already strips the password
+// hash, so exposing the rest to any logged-in teammate matches how the rest of this internal
+// tool already treats team-roster data (see TeamMembersView, open to every role).
+router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: 'Authentication required.' });
     return;
   }
 
-  const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
+  const users = (await userStore.getAllUsers()).map((u) => userStore.sanitizeUser(u));
   res.status(200).json({ success: true, users });
 });
 
