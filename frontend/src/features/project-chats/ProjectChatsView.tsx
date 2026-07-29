@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { AtSign, CheckCircle2, ChevronDown, FileText, LoaderCircle, MessageSquare, Paperclip, Plus, Search, Send, Trash2, X } from 'lucide-react';
+import { AtSign, CheckCircle2, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Search, Send, Trash2, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads, setDiscussionResolved } from './projectChatRepository';
 import { filterDiscussions, parseMentionIds } from './projectChatRules';
@@ -24,6 +24,13 @@ export const ProjectChatsView: React.FC = () => {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [editError, setEditError] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -88,6 +95,55 @@ export const ProjectChatsView: React.FC = () => {
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not update discussion state.'); }
   };
 
+  const startEdit = (comment: DiscussionComment) => {
+    setEditingCommentId(comment.id);
+    setEditText(comment.body);
+    setEditError('');
+  };
+
+  const cancelEdit = () => { setEditingCommentId(null); setEditText(''); setEditError(''); };
+
+  const submitEdit = async (commentId: string) => {
+    if (editSubmitting) return;
+    const body = editText.trim();
+    if (!body) { setEditError('Message cannot be empty.'); return; }
+    setEditSubmitting(true); setEditError('');
+    try {
+      const updated = await editDiscussionComment(commentId, body);
+      setThreads((current) => current.map((thread) =>
+        thread.id === selected?.id
+          ? { ...thread, comments: thread.comments.map((c) => c.id === updated.id ? updated : c) }
+          : thread
+      ));
+      cancelEdit();
+    } catch (reason) {
+      setEditError(reason instanceof Error ? reason.message : 'Could not save edit.');
+    } finally { setEditSubmitting(false); }
+  };
+
+  const startDelete = (commentId: string) => {
+    setDeleteConfirmId(commentId);
+    setDeleteError('');
+  };
+
+  const cancelDelete = () => { setDeleteConfirmId(null); setDeleteError(''); };
+
+  const confirmDelete = async (commentId: string) => {
+    if (deleteSubmitting) return;
+    setDeleteSubmitting(true); setDeleteError('');
+    try {
+      const updated = await deleteDiscussionComment(commentId);
+      setThreads((items) => items.map((thread) =>
+        thread.id === selected?.id
+          ? { ...thread, comments: thread.comments.map((item) => item.id === updated.id ? updated : item) }
+          : thread
+      ));
+      cancelDelete();
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : 'Could not delete message.');
+    } finally { setDeleteSubmitting(false); }
+  };
+
   return (
     <section data-project-chats className="mx-auto max-w-[1550px] space-y-4">
       <header className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
@@ -112,11 +168,28 @@ export const ProjectChatsView: React.FC = () => {
           <div className="border-b border-white/10 px-4 py-3 text-sm font-bold text-white">Discussions <span className="ml-1 rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-400">{visibleThreads.length}</span></div>
           {loading ? <ListState label="Loading discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'No discussions match these filters.' : 'No discussions yet. Start the first one.'} /> : <div className="max-h-[640px] overflow-y-auto">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={users} currentUserId={currentUser.id} onClick={() => setSelectedId(thread.id)} />)}</div>}
         </aside>
-        <main className="min-w-0">{loading ? <ListState label="Loading selected discussion…" /> : selected ? <DiscussionPanel thread={selected} users={users} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} canResolve={canResolve} onResolve={() => void changeResolution()} onReply={(commentId) => { setReplyTo(commentId); document.getElementById('discussion-reply')?.focus(); }} onDelete={async (comment) => { try { const updated = await deleteDiscussionComment(comment.id); setThreads((items) => items.map((thread) => thread.id === selected.id ? { ...thread, comments: thread.comments.map((item) => item.id === updated.id ? updated : item) } : thread)); } catch (reason) { setReplyError(reason instanceof Error ? reason.message : 'Could not delete comment.'); } }} /> : <ListState label="Select a discussion to read it." />}
+        <main className="min-w-0">{loading ? <ListState label="Loading selected discussion…" /> : selected ? <DiscussionPanel thread={selected} users={users} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} canResolve={canResolve} onResolve={() => void changeResolution()} onReply={(commentId) => { setReplyTo(commentId); document.getElementById('discussion-reply')?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Select a discussion to read it." />}
           {selected && <form onSubmit={submitReply} className="border-t border-white/10 bg-black/10 p-4"><div className="mb-2 flex items-center justify-between text-xs text-slate-400"><span>{replyTo ? 'Replying to a comment' : 'Add a reply'}</span>{replyTo && <button type="button" onClick={() => setReplyTo(undefined)} className="text-cyan-300">Cancel reply</button>}</div><textarea id="discussion-reply" value={replyText} onChange={(event) => { setReplyText(event.target.value); setMentionOpen(event.target.value.endsWith('@')); }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitReply(event as unknown as FormEvent); } }} className={`${inputClass} min-h-24 resize-y`} maxLength={5000} placeholder="Reply… Use @ to mention a project member. Shift+Enter for a new line." />{mentionOpen && <MentionList users={users.filter((user) => selectedProject?.memberIds.includes(user.id) && user.status !== 'inactive')} onPick={(user) => { setReplyText((text) => `${text.slice(0, -1)}@${user.name} `); setMentionOpen(false); }} />}<div className="mt-2 flex items-center justify-between gap-3"><div><input ref={fileRef} className="hidden" type="file" multiple onChange={(event) => { void addFiles(event.target.files); }} /><button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-300"><Paperclip size={14} />Attach</button>{attachments.map((file) => { const isImage = file.mimeType.startsWith('image/') && file.url; return isImage ? (<span key={file.id} className="ml-2 inline-flex items-center gap-1 rounded bg-white/5 px-1 py-1 text-[10px] text-slate-300"><img src={file.url} alt={file.name} className="h-8 w-8 rounded object-cover" /><span className="truncate max-w-24">{file.name}</span><button type="button" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>) : (<span key={file.id} className="ml-2 inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-slate-300">{file.name}<button type="button" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}><X size={11} /></button></span>); })}</div><button disabled={submitting} className="glass-button-neon inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{submitting ? <LoaderCircle className="animate-spin" size={14} /> : <Send size={14} />}Reply</button></div>{replyError && <p role="alert" className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{replyError}</p>}</form>}
         </main>
       </div>
       {composerOpen && <NewDiscussionDialog projects={projects} tasks={tasks} users={users} currentUser={currentUser} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setComposerOpen(false); }} />}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelDelete(); }}>
+          <div className="glass-panel w-full max-w-md overflow-hidden">
+            <div className="border-b border-white/10 px-5 py-4">
+              <h2 className="font-bold text-white">Delete message?</h2>
+              <p className="mt-1 text-xs text-slate-400">The message content will no longer be visible to anyone. This cannot be undone.</p>
+            </div>
+            {deleteError && <p role="alert" className="mx-5 mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{deleteError}</p>}
+            <div className="flex justify-end gap-2 px-5 py-4">
+              <button type="button" onClick={cancelDelete} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">Cancel</button>
+              <button type="button" disabled={deleteSubmitting} onClick={() => void confirmDelete(deleteConfirmId)} className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white hover:bg-rose-500 disabled:opacity-50">
+                {deleteSubmitting ? <LoaderCircle className="animate-spin" size={14} /> : <Trash2 size={14} />}Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
@@ -141,6 +214,116 @@ const renderAttachment = (file: ChatAttachment) => {
   );
 };
 
-const DiscussionPanel: React.FC<any> = ({ thread, users, projectName, taskName, currentUserId, canResolve, onResolve, onReply, onDelete }) => <div className="p-5"><div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4"><div><div className="flex items-center gap-2 text-xs text-cyan-300"><span>{projectName}</span>{taskName && <><span>·</span><span>{taskName}</span></>}</div><h2 className="mt-2 text-xl font-bold text-white">{thread.title}</h2><span className={`mt-2 inline-block rounded-full border px-2 py-1 text-[10px] font-bold ${thread.resolved ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-400/30 bg-amber-500/10 text-amber-200'}`}>{thread.resolved ? 'Resolved' : 'Unresolved'} · {thread.type}</span></div>{canResolve && <button type="button" onClick={onResolve} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/5">{thread.resolved ? 'Reopen discussion' : 'Resolve discussion'}</button>}</div><div className="divide-y divide-white/10">{thread.comments.map((comment: DiscussionComment) => { const author = users.find((user: any) => user.id === comment.authorId); return <article key={comment.id} className={`py-5 ${comment.parentCommentId ? 'ml-5 border-l border-cyan-400/20 pl-4' : ''}`}><div className="flex gap-3"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-700 text-[10px] font-bold text-cyan-200">{initials(author?.name)}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-2 text-xs"><strong className="text-slate-100">{author?.name || 'Unknown user'}</strong><span className="text-slate-500">{formatTime(comment.createdAt)}</span>{comment.editedAt && <span className="text-slate-500">edited</span>}</div>{comment.deletedAt ? <p className="mt-2 italic text-sm text-slate-500">This comment was deleted.</p> : <><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{comment.body}</p>{comment.attachments.map((file) => renderAttachment(file))}<div className="mt-2 flex gap-3">{!comment.parentCommentId && <button type="button" onClick={() => onReply(comment.id)} className="text-xs font-semibold text-cyan-300">Reply</button>}{comment.authorId === currentUserId && <button type="button" onClick={() => onDelete(comment)} className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-rose-300"><Trash2 size={12} />Delete</button>}</div></>}</div></div></article>; })}</div></div>;
+const DiscussionPanel: React.FC<any> = ({
+  thread, users, projectName, taskName, currentUserId, currentRole, canResolve, onResolve,
+  onReply, onEdit, onDeleteRequest, editingCommentId, editText, editError, editSubmitting,
+  onEditTextChange, onEditSubmit, onEditCancel,
+}) => {
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpenId(null); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div className="p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
+        <div>
+          <div className="flex items-center gap-2 text-xs text-cyan-300"><span>{projectName}</span>{taskName && <><span>·</span><span>{taskName}</span></>}</div>
+          <h2 className="mt-2 text-xl font-bold text-white">{thread.title}</h2>
+          <span className={`mt-2 inline-block rounded-full border px-2 py-1 text-[10px] font-bold ${thread.resolved ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-400/30 bg-amber-500/10 text-amber-200'}`}>{thread.resolved ? 'Resolved' : 'Unresolved'} · {thread.type}</span>
+        </div>
+        {canResolve && <button type="button" onClick={onResolve} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/5">{thread.resolved ? 'Reopen discussion' : 'Resolve discussion'}</button>}
+      </div>
+      <div className="divide-y divide-white/10">
+        {thread.comments.map((comment: DiscussionComment) => {
+          const author = users.find((user: any) => user.id === comment.authorId);
+          const isMine = comment.authorId === currentUserId;
+          const isAdmin = currentRole === 'Admin';
+          const canEdit = isMine && !comment.deletedAt;
+          const canDelete = (isMine || isAdmin) && !comment.deletedAt;
+          const showMenu = canEdit || canDelete;
+          const isEditing = editingCommentId === comment.id;
+
+          return (
+            <article key={comment.id} className={`group py-5 ${comment.parentCommentId ? 'ml-5 border-l border-cyan-400/20 pl-4' : ''}`}>
+              <div className="flex gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-700 text-[10px] font-bold text-cyan-200">{initials(author?.name)}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-x-2">
+                      <strong className="text-slate-100">{author?.name || 'Unknown user'}</strong>
+                      <span className="text-slate-500">{formatTime(comment.createdAt)}</span>
+                      {comment.editedAt && !comment.deletedAt && <span className="text-slate-500 italic">(edited)</span>}
+                    </div>
+                    {showMenu && !isEditing && (
+                      <div className="relative opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" ref={menuOpenId === comment.id ? menuRef : undefined}>
+                        <button
+                          type="button"
+                          aria-label="Message actions"
+                          onClick={() => setMenuOpenId(menuOpenId === comment.id ? null : comment.id)}
+                          className="rounded-md border border-white/10 p-1 text-slate-500 hover:border-white/20 hover:text-slate-200 transition-colors"
+                        >
+                          <MoreHorizontal size={14} />
+                        </button>
+                        {menuOpenId === comment.id && (
+                          <div className="absolute right-0 top-7 z-20 min-w-[130px] rounded-xl border border-white/10 bg-slate-900 py-1 shadow-xl" ref={menuRef}>
+                            {canEdit && (
+                              <button type="button" onClick={() => { setMenuOpenId(null); onEdit(comment); }} className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/5">
+                                <Pencil size={13} className="text-cyan-400" />Edit message
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button type="button" onClick={() => { setMenuOpenId(null); onDeleteRequest(comment.id); }} className="flex w-full items-center gap-2 px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10">
+                                <Trash2 size={13} />Delete{!isMine && ' (moderation)'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {comment.deletedAt ? (
+                    <p className="mt-2 italic text-sm text-slate-500">This message was deleted.</p>
+                  ) : isEditing ? (
+                    <div className="mt-2 space-y-2">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => onEditTextChange(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void onEditSubmit(comment.id); } if (e.key === 'Escape') onEditCancel(); }}
+                        className="w-full rounded-lg border border-cyan-400/40 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-cyan-400/20 resize-y"
+                        maxLength={5000}
+                        rows={3}
+                        autoFocus
+                      />
+                      {editError && <p role="alert" className="text-xs text-rose-300">{editError}</p>}
+                      <div className="flex items-center gap-2">
+                        <button type="button" disabled={editSubmitting} onClick={() => void onEditSubmit(comment.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-50">
+                          {editSubmitting ? <LoaderCircle className="animate-spin" size={12} /> : null}Save
+                        </button>
+                        <button type="button" onClick={onEditCancel} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5">Cancel</button>
+                        <span className="text-[10px] text-slate-600">Esc to cancel · Enter to save</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">{comment.body}</p>
+                      {comment.attachments.map((file) => renderAttachment(file))}
+                      <div className="mt-2 flex gap-3">
+                        {!comment.parentCommentId && <button type="button" onClick={() => onReply(comment.id)} className="text-xs font-semibold text-cyan-300">Reply</button>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 const MentionList: React.FC<any> = ({ users, onPick }) => <div role="listbox" className="mt-1 max-h-36 overflow-y-auto rounded-lg border border-cyan-400/20 bg-slate-900 p-1">{users.map((user: any) => <button key={user.id} type="button" role="option" onClick={() => onPick(user)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-200 hover:bg-white/10">@{user.name} <span className="text-slate-500">{user.title}</span></button>)}</div>;
 const NewDiscussionDialog: React.FC<any> = ({ projects, tasks, users, currentUser, onClose, onCreated }) => { const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId); const submit = async (event: FormEvent) => { event.preventDefault(); const body = form.body.trim(); if (!body) { setError('Write an initial message for the discussion.'); return; } setBusy(true); try { onCreated(await createDiscussion({ ...form, body, mentionIds: parseMentionIds(body, users), attachments: [] })); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not start discussion.'); } finally { setBusy(false); } }; return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden"><div className="flex items-center justify-between border-b border-white/10 px-5 py-4"><div><h2 className="font-bold text-white">Start discussion</h2><p className="mt-1 text-xs text-slate-400">Create a focused project or task conversation.</p></div><button type="button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="grid gap-4 p-5 md:grid-cols-2"><label className="text-xs font-semibold text-slate-300">Project *<select required value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value, taskId: '' })} className={`${inputClass} mt-1`}><option value="">Select project</option>{projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label><label className="text-xs font-semibold text-slate-300">Related task <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}><option value="">No related task</option>{eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label><label className="text-xs font-semibold text-slate-300">Subject *<input required maxLength={200} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} className={`${inputClass} mt-1`} /></label><label className="text-xs font-semibold text-slate-300">Discussion type *<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as DiscussionType })} className={`${inputClass} mt-1`}>{DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}</select></label><label className="md:col-span-2 text-xs font-semibold text-slate-300">Initial message *<textarea required maxLength={5000} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} className={`${inputClass} mt-1 min-h-32`} placeholder="Describe the context, decision, blocker, or question. Use @ to mention project members." /></label>{error && <p role="alert" className="md:col-span-2 text-xs text-rose-300">{error}</p>}</div><div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300">Cancel</button><button disabled={busy} className="glass-button-neon rounded-lg px-4 py-2 text-sm font-bold disabled:opacity-50">{busy ? 'Starting…' : 'Start Discussion'}</button></div></form></div>; };

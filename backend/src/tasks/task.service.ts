@@ -47,9 +47,18 @@ const buildDTOs = async (rows: TaskRow[]): Promise<TaskDTO[]> => {
 
 const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 
-// Editing is target-specific and derived from the trusted session: a leaf parent or child
-// task is editable only by its own assignees, while a parent with children is read-only.
-const assertCanEditTask = async (row: TaskRow, userId: string): Promise<void> => {
+// Mirrors the exact rule frontend/src/features/tasks/taskRules.ts's canEditTask already
+// established (Admin always; Team Lead only for their own project; Team Member only if
+// assigned) — re-derived server-side since the backend must never trust the client's own
+// permission check.
+const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
+  if (role === 'Admin') return;
+  if (role === 'HR') throw new TaskAuthorizationError('HR users cannot edit tasks.');
+  const projectId = projectFrontendId(row);
+  if (role === 'Team_Lead') {
+    if (await isProjectLead(projectId, userId, role)) return;
+    throw new TaskAuthorizationError('You can only edit tasks in projects you lead.');
+  }
   const assignees = await repo.findAssigneesForTask(row.taskid);
   const denialReason = getTaskEditDenialReason({
     actorId: userId,
@@ -169,6 +178,10 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
     }
+    const hrAssignee = taskInput.assigneeIds.find((assigneeId) => userStore.findById(assigneeId)?.role === 'HR');
+    if (hrAssignee) {
+      throw new TaskValidationError('HR users cannot be assigned tasks.');
+    }
   }
 
   const parentPk = input.parentTaskId ? toTaskPk(input.parentTaskId) : undefined;
@@ -250,6 +263,10 @@ export const updateTask = async (
     ? (await repo.findAssigneesForTask(row.taskid)).map((a) => fromUserPk(a.userid))
     : [];
   const assigneePks = input.assigneeIds?.map(toUserPk);
+  if (input.assigneeIds) {
+    const hrAssignee = input.assigneeIds.find((id) => userStore.findById(id)?.role === 'HR');
+    if (hrAssignee) throw new TaskValidationError('HR users cannot be assigned tasks.');
+  }
   await repo.updateTask(row.taskid, updates, assigneePks, toUserPk(actorId));
 
   const updatedRow = await repo.findTaskById(row.taskid);

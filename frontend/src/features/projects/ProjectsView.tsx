@@ -75,8 +75,11 @@ export const ProjectsView: React.FC = () => {
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
-  const teamLeads = users.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
-  const assignableMembers = users.filter((u) => u.role === 'Team_Member');
+  // Admins must never be selectable as a project's Team Lead or Member, even if upstream
+  // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
+  const nonAdminUsers = users.filter((u) => u.role !== 'Admin');
+  const teamLeads = nonAdminUsers.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
+  const assignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member');
   const todayStr = new Date().toISOString().split('T')[0];
 
   const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
