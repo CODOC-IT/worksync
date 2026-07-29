@@ -220,8 +220,15 @@ router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Res
     return;
   }
 
-  const users = (await userStore.getAllUsers()).map((u) => userStore.sanitizeUser(u));
-  res.status(200).json({ success: true, users });
+  try {
+    // Re-sync before responding so the roster reflects the current database state instead of
+    // any stale in-memory subset from an earlier request lifecycle.
+    await userStore.syncUsersToDb();
+    const users = (await userStore.getAllUsers()).map((u) => userStore.sanitizeUser(u));
+    res.status(200).json({ success: true, users });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to load users.' });
+  }
 });
 
 // POST /api/auth/logout

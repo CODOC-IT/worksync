@@ -260,7 +260,7 @@ export const updateTask = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId);
+  await assertCanEditTask(row, actorId, actorRole);
 
   if (input.assigneeIds !== undefined) {
     throw new TaskAuthorizationError('Task assignments cannot be changed from the assignee edit form.');
@@ -372,7 +372,7 @@ export const changeTaskStatus = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId);
+  await assertCanEditTask(row, actorId, actorRole);
 
   if (!input.note?.trim()) throw new TaskValidationError('A reason is required for every status change.');
   if (row.statuscode === 'Done' && input.status !== 'Done') {
