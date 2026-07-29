@@ -249,7 +249,7 @@ test('filters task lists and sorts by due date', () => {
 
 test('enforces edit and delete permission checks', () => {
   assert.equal(canEditTask('Admin', 'admin', project, task), false);
-  assert.equal(canEditTask('Team_Lead', 'lead', project, task), false);
+  assert.equal(canEditTask('Team_Lead', 'lead', project, task), true);
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
   assert.equal(canEditTask('Team_Member', 'outsider', project, task), false);
   assert.equal(canEditTask('Team_Member', 'member', project, { ...task, subtaskCount: 2 }), false);
@@ -258,9 +258,9 @@ test('enforces edit and delete permission checks', () => {
     parentTaskId: 'tsk-parent',
     subtaskCount: 0
   }), true);
-  assert.equal(canDeleteTask('Admin', 'admin', project), false);
-  assert.equal(canDeleteTask('Team_Lead', 'lead', project), true);
-  assert.equal(canDeleteTask('Team_Lead', 'lead', project, true), true);
+  assert.equal(canDeleteTask('Admin', 'admin', project, task), false);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project, task), true);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project, task, true), true);
 
   const deniedEdit = prepareTaskUpdate(task.id, { status: 'Done' }, {
     currentRole: 'Team_Member',
