@@ -141,6 +141,15 @@ const resolveProjectTeamLead = async (projectPk: number): Promise<string> => {
   return resolveTeamLeadUserId(projectRow, members);
 };
 
+// Appends the mandatory reason the actor typed to a notification's body. Every status change on
+// this board carries one (it is validated as required before anything is written, and stored on
+// work.TaskStatusHistory.ProgressNote), so a recipient should not have to open the task just to
+// learn *why* it moved. Defensive against a blank note so the line is never left dangling.
+const withNote = (message: string, note?: string | null): string => {
+  const trimmed = note?.trim();
+  return trimmed ? `${message} Note: ${trimmed}` : message;
+};
+
 // Publishes to an explicit recipient list (deduped, actor and blanks removed). Distinct from
 // notifyTaskRecipients, which derives its own recipients from a task's assignees + Team Lead;
 // the subtask cascade already knows exactly who should hear about each event, so it passes them
@@ -487,9 +496,12 @@ export const changeTaskStatus = async (
       ? 'task_review_requested'
       : TASK_STATUS_NOTIFICATION_TYPE[input.status]) as Parameters<typeof notificationService.publishEvent>[0]['type'],
     title: input.status === 'Review' ? 'Review Requested' : 'Task Status Changed',
-    message: `${actorName} moved "${dto.title}" from ${row.statuscode} to ${input.status}${
-      projectRow ? ` in ${projectRow.projectname}` : ''
-    }.`,
+    message: withNote(
+      `${actorName} moved "${dto.title}" from ${row.statuscode} to ${input.status}${
+        projectRow ? ` in ${projectRow.projectname}` : ''
+      }.`,
+      input.note
+    ),
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
@@ -509,7 +521,7 @@ export const changeTaskStatus = async (
   // status follow the subtask-completion rules. Awaited (not fire-and-forget) so the response
   // the board renders already reflects any parent transition this change triggered.
   if (row.parenttaskid) {
-    await notifySubtaskStatusChange(updatedRow!, row.statuscode, input.status, actorId, actorName);
+    await notifySubtaskStatusChange(updatedRow!, row.statuscode, input.status, actorId, actorName, input.note);
     await syncParentFromSubtasks(row.parenttaskid, actorId, actorRole);
   }
 
@@ -533,7 +545,8 @@ const notifySubtaskStatusChange = async (
   fromStatus: string,
   toStatus: ApiTaskStatus,
   actorId: string,
-  actorName: string
+  actorName: string,
+  note?: string
 ): Promise<void> => {
   const parentRow = await repo.findTaskById(subtaskRow.parenttaskid!);
   if (!parentRow) return;
@@ -552,9 +565,12 @@ const notifySubtaskStatusChange = async (
     {
       type: becameComplete ? 'subtask_completed' : 'subtask_reopened',
       title: becameComplete ? 'Subtask Completed' : 'Subtask Reopened',
-      message: becameComplete
-        ? `${actorName} completed subtask "${subtaskRow.title}" of "${parentRow.title}".`
-        : `${actorName} reopened subtask "${subtaskRow.title}" of "${parentRow.title}".`,
+      message: withNote(
+        becameComplete
+          ? `${actorName} completed subtask "${subtaskRow.title}" of "${parentRow.title}".`
+          : `${actorName} reopened subtask "${subtaskRow.title}" of "${parentRow.title}".`,
+        note
+      ),
       actorId,
       projectId: fromProjectPk(subtaskRow.projectid),
       taskId: fromTaskPk(subtaskRow.taskid)
@@ -777,10 +793,12 @@ const decideReview = async (
   notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: decision === 'Approve' ? 'task_review_approved' : 'task_review_rejected',
     title: decision === 'Approve' ? 'Review Approved' : 'Review Rejected',
-    message:
+    message: withNote(
       decision === 'Approve'
         ? `${actorName} approved "${dto.title}" and marked it Done.`
         : `${actorName} rejected "${dto.title}" and returned it to In Progress.`,
+      note
+    ),
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
