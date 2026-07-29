@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Eye,
+  History,
   ListTodo,
   Lock,
   RotateCcw,
@@ -1158,8 +1159,8 @@ const TaskDetailsModal: React.FC<{
   const subtasks = task?.subtasks ?? [];
   const completedCount = subtasks.filter((subtask) => subtask.completed).length;
   // A subtask's "completed by / completed at" is not a column on the subtask itself — it's the
-  // history entry that moved it into Done, so it's read from that shared audit trail. The
-  // history itself is not rendered; it is only used for this attribution.
+  // history entry that moved it into Done, so it's read from that shared audit trail — the same
+  // one rendered in full by the Status History section below.
   const completionOf = (subtaskId: string) =>
     history.find((entry) => entry.taskId === subtaskId && entry.toStatus === 'Done');
 
@@ -1369,6 +1370,53 @@ const TaskDetailsModal: React.FC<{
                 )}
               </div>
 
+              {history.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                    <History size={12} />
+                    Status History
+                  </h3>
+                  {/* Newest first — the reverse of the API's chronological order, since the most
+                      recent change is what a reader opening this task is looking for. Covers the
+                      parent and its subtasks (see findStatusHistoryForTask), so a subtask entry is
+                      labelled with its own title to keep the two apart. */}
+                  <ul className="space-y-1.5">
+                    {[...history].reverse().map((entry) => {
+                      const forSubtask =
+                        entry.taskId && entry.taskId !== task.id
+                          ? subtasks.find((item) => item.id === entry.taskId)
+                          : undefined;
+                      return (
+                        <li
+                          key={entry.id}
+                          className="rounded-lg border border-white/5 bg-slate-950/30 p-2.5 text-[11px]"
+                        >
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-slate-500">{entry.fromStatus || 'Created'}</span>
+                            <ArrowRight size={10} className="shrink-0 text-slate-600" />
+                            <span className="font-semibold text-cyan-300">
+                              {getTaskStatusLabel(entry.toStatus)}
+                            </span>
+                            {forSubtask && (
+                              <span className="rounded-full border border-white/10 bg-slate-900/60 px-1.5 py-0.5 text-[9px] text-slate-400">
+                                {forSubtask.title}
+                              </span>
+                            )}
+                          </div>
+                          {entry.note && (
+                            <p className="mt-1 min-w-0 whitespace-pre-wrap break-words text-[10px] leading-relaxed text-slate-300">
+                              {entry.note}
+                            </p>
+                          )}
+                          <div className="mt-1 text-[10px] text-slate-600">
+                            {entry.changedByName} · {new Date(entry.timestamp).toLocaleString()}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
             </>
           )}
         </div>
