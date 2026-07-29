@@ -224,6 +224,11 @@ test('rejects archived projects', () => {
   assert.ok(validateTaskInput(validInput, archived, users).projectId);
 });
 
+test('rejects pending project approval for task creation', () => {
+  const pending = { ...project, status: 'Pending Approval' as const, approvalStatus: 'Pending Approval' as const };
+  assert.equal(canCreateTaskForProject('Team_Lead', 'lead', pending), false);
+});
+
 test('enforces task creation roles and Team Lead project scope', () => {
   assert.equal(canCreateTaskForProject('Admin', 'admin', project), false);
   assert.equal(canCreateTaskForProject('Team_Lead', 'lead', project), true);
@@ -253,6 +258,7 @@ test('enforces edit and delete permission checks', () => {
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
   assert.equal(canEditTask('Team_Member', 'outsider', project, task), false);
   assert.equal(canEditTask('Team_Member', 'member', project, { ...task, subtaskCount: 2 }), false);
+  assert.equal(canEditTask('Team_Lead', 'lead', project, { ...task, subtaskCount: 2 }), true);
   assert.equal(canEditTask('Team_Member', 'member', project, {
     ...task,
     parentTaskId: 'tsk-parent',
