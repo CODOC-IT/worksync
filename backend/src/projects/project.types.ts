@@ -155,4 +155,6 @@ export interface UpdateProjectInput {
   startDate?: string;
   targetDate?: string;
   status?: ApiProjectStatus;
+  teamLeadId?: string;
+  creationReason?: string;
 }

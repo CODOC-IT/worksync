@@ -93,6 +93,8 @@ export interface UpdateProjectPayload {
   startDate?: string;
   targetDate?: string;
   status?: Project['status'];
+  teamLeadId?: string;
+  creationReason?: string;
 }
 
 export const updateProjectApi = async (id: string, payload: UpdateProjectPayload): Promise<Project> => {
