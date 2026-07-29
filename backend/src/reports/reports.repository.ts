@@ -308,13 +308,13 @@ export const getCompletionTrend = async (
        GROUP BY t.createdatutc::date
      ) created ON created.d = dates.date
      LEFT JOIN (
-       SELECT t.duedate AS d, COUNT(*)::int AS cnt
-       FROM work.tasks t
-       JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
-         AND ts.iscompletedstate AND t.duedate >= $2::date AND t.duedate <= $3::date
-       GROUP BY t.duedate
-     ) completed ON completed.d = dates.date
+        SELECT t.completedatutc::date AS d, COUNT(*)::int AS cnt
+        FROM work.tasks t
+        JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+          AND ts.iscompletedstate AND t.completedatutc::date >= $2::date AND t.completedatutc::date <= $3::date
+        GROUP BY t.completedatutc::date
+      ) completed ON completed.d = dates.date
       GROUP BY dates.date
       ORDER BY dates.date`,
     [projectIds, from, to]
@@ -531,7 +531,7 @@ export const getAttendanceStats = async (
     absent: row.absent,
     onLeave: row.onLeave,
     halfDay: row.halfDay,
-    totalHours: row.totalMinutes,
+    totalHours: Math.round((row.totalMinutes / 60) * 10) / 10,
     totalRecords: row.totalRecords,
   };
 };

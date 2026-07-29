@@ -35,6 +35,15 @@ const buildDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<P
   return rowToProjectDTO(row, members, progress);
 };
 
+const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<ProjectDTO> => {
+  const [progress, milestones, files] = await Promise.all([
+    repo.getProjectProgress(row.projectid),
+    repo.findMilestonesForProject(row.projectid),
+    repo.findProjectFiles(row.projectid)
+  ]);
+  return rowToProjectDTO(row, members, progress, milestones, files);
+};
+
 const assertCanCreate = (role: string) => {
   if (role !== 'Admin' && role !== 'Team_Lead') {
     throw new ProjectAuthorizationError('Only Admins and Team Leads can create projects.');
@@ -109,7 +118,7 @@ export const getProjectForUser = async (projectId: string, userId: string, role:
     throw new ProjectAuthorizationError('You do not have access to this project.');
   }
 
-  return buildDTO(row, members);
+  return buildDetailDTO(row, members);
 };
 
 export const createProject = async (
