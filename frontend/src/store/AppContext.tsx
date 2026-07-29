@@ -1189,19 +1189,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     if (!validationResult.success) return validationResult;
 
-    const existingTask = tasks.find((task) => task.id === taskId);
+    const existingTask = tasks.find((task) => task.id === taskId) || validationResult.task;
     const project = existingTask && projects.find((item) => item.id === existingTask.projectId);
-    const isStandaloneMemberTask = Boolean(
+    const isMemberOwnedTask = Boolean(
       existingTask
-      && !existingTask.parentTaskId
-      && Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0
+      && (Boolean(existingTask.parentTaskId)
+        || Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0)
       && currentRole === 'Team_Member'
     );
 
-    // Team Members may prepare changes to their own standalone tasks, but the stored task
-    // remains unchanged until the owning Team Lead approves the request. Subtasks keep their
-    // assignee-only direct-edit workflow, and Team Leads continue to save directly.
-    if (isStandaloneMemberTask && existingTask && project?.teamLeadId) {
+    // Team Members may prepare changes to their assigned standalone tasks and subtasks, but
+    // the stored task remains unchanged until the owning Team Lead approves the request.
+    if (isMemberOwnedTask && existingTask && project?.teamLeadId) {
       const proposedTaskUpdate = {
         title: data.title?.trim() || existingTask.title,
         description: data.description?.trim() || existingTask.description,

@@ -67,6 +67,9 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
       subtaskCount: Number(row.subtaskcount || 0)
     });
     if (denialReason) throw new TaskAuthorizationError(denialReason);
+    if (role === 'Team_Member') {
+      throw new TaskAuthorizationError('Submit this subtask edit for your Team Lead\'s approval.');
+    }
     return;
   }
 

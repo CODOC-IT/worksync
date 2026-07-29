@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ChevronDown,
   ClipboardList,
+  Clock3,
   Filter,
   Layers,
   LoaderCircle,
@@ -42,7 +43,7 @@ import {
   SubtaskFormInput,
   validateTaskInput
 } from './taskRules';
-import { loadTaskDetailFromApi, updateTaskViaApi } from './taskRepository';
+import { loadTaskDetailFromApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -302,24 +303,7 @@ export const TasksView: React.FC = () => {
         : undefined;
       const result: TaskMutationResult = await (
         editingTaskId
-          ? existingTask?.parentTaskId
-            ? updateTaskViaApi(editingTaskId, {
-                title: form.title,
-                description: form.description,
-                priority: form.priority as TaskModulePriority,
-                startDate: form.startDate,
-                dueDate: form.dueDate
-              })
-                .then((task) => ({
-                  success: true,
-                  message: 'Subtask updated successfully.',
-                  task
-                }))
-                .catch((error: Error) => ({
-                  success: false,
-                  message: error.message || 'Failed to update the subtask.'
-                }))
-            : updateTask(editingTaskId, {
+          ? updateTask(editingTaskId, {
                 title: form.title,
                 description: form.description,
                 priority: form.priority as TaskModulePriority,
@@ -1207,7 +1191,14 @@ export const TasksView: React.FC = () => {
                   </p>
 
                   <div className="mt-4">
-                    <TaskBadge value={task.status} kind="status" />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <TaskBadge value={task.status} kind="status" />
+                      {task.approvalStatus === 'Pending Approval' && (
+                        <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                          <Clock3 size={11} />Pending approval
+                        </span>
+                      )}
+                    </div>
 
                   </div>
 
@@ -1563,6 +1554,11 @@ const TaskDetailsModal: React.FC<{
               <div className="mt-3">
                 <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Priority</span>
                 <TaskBadge value={task.priority} kind="priority" />
+                {task.approvalStatus === 'Pending Approval' && (
+                  <span title="Pending Team Lead approval" className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                    <Clock3 size={11} />Pending approval
+                  </span>
+                )}
               </div>
 
               <div className="mt-5">
@@ -1634,6 +1630,11 @@ const TaskDetailsModal: React.FC<{
                           <div className="flex flex-wrap gap-2">
                             <TaskBadge value={subtaskStatus} kind="status" />
                             <TaskBadge value={subtaskPriority} kind="priority" />
+                            {(subtask as Subtask & Partial<Task>).approvalStatus === 'Pending Approval' && (
+                              <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                                <Clock3 size={11} />Pending approval
+                              </span>
+                            )}
                             {mayEditSubtask && (
                               <button
                                 type="button"
