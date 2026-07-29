@@ -335,7 +335,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCurrentUser(user);
     setTaskReloadVersion((version) => version + 1);
-    if (user.role === 'Admin') refreshUsers();
+    if (user.role === 'Admin' || user.role === 'Team_Lead') refreshUsers();
   };
 
   const logoutUser = () => {

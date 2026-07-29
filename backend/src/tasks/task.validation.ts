@@ -112,6 +112,9 @@ export const validateUpdateTaskBody = (body: unknown): ValidationResult => {
   ) {
     return { valid: false, message: 'assigneeIds must be an array of "usr-<n>" ids.' };
   }
+  if (input.assigneeIds !== undefined) {
+    return { valid: false, message: 'Task assignments cannot be changed from the assignee edit form.' };
+  }
   return { valid: true };
 };
 

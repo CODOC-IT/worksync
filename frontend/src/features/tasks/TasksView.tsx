@@ -10,6 +10,7 @@ import {
   Layers,
   LoaderCircle,
   MoreHorizontal,
+  Pencil,
   Plus,
   Search,
   UserRound,
@@ -17,14 +18,14 @@ import {
   X
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { Project, Task, TaskPriority, TaskStatus, User } from '../../types';
+import { Project, Subtask, Task, TaskPriority, TaskStatus, User, UserRole } from '../../types';
 import {
   canCreateTaskForProject,
   canDeleteTask,
   canEditTask,
   filterAndSortTasks,
   getProjectEndDate,
-  getProjectMemberIds,
+  getAssignableProjectUsers,
   getProjectName,
   getLatestDate,
   getTaskAssigneeIds,
@@ -36,11 +37,12 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   TaskFormInput,
+  TaskMutationResult,
   TaskModulePriority,
   SubtaskFormInput,
   validateTaskInput
 } from './taskRules';
-import { loadTaskDetailFromApi } from './taskRepository';
+import { loadTaskDetailFromApi, updateTaskViaApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -67,6 +69,27 @@ const formatDate = (value: string) =>
 
 const formatOptionalDate = (value?: string) => value ? formatDate(value) : 'Not set';
 
+const toEditableSubtask = (parent: Task, subtask: Subtask, index: number): Task => {
+  const detailedSubtask = subtask as Subtask & Partial<Task> & { assigneeIds?: string[] };
+  const assigneeIds = detailedSubtask.assigneeIds || [];
+  return {
+    ...parent,
+    ...detailedSubtask,
+    id: subtask.id,
+    taskNumber: detailedSubtask.taskNumber || `${parent.taskNumber}.${index + 1}`,
+    parentTaskId: parent.id,
+    title: subtask.title,
+    description: subtask.description || '',
+    status: subtask.status || (subtask.completed ? 'Done' : 'Todo'),
+    priority: subtask.priority || parent.priority,
+    assigneeId: assigneeIds[0] || '',
+    dueDate: subtask.dueDate || parent.dueDate,
+    subtasks: [],
+    subtaskCount: 0,
+    createdAt: detailedSubtask.createdAt || parent.createdAt
+  };
+};
+
 export const TasksView: React.FC = () => {
   const {
     currentRole,
@@ -83,6 +106,7 @@ export const TasksView: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingTaskSource, setEditingTaskSource] = useState<Task | null>(null);
   const [viewingTask, setViewingTask] = useState<Task | null>(null);
   const [taskPendingDeletion, setTaskPendingDeletion] = useState<Task | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -135,9 +159,7 @@ export const TasksView: React.FC = () => {
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const availableAssignees = useMemo(
     () => selectedProject
-      ? users.filter((user) =>
-          user.status !== 'inactive' && getProjectMemberIds(selectedProject).includes(user.id)
-        )
+      ? getAssignableProjectUsers(selectedProject, users)
       : [],
     [selectedProject, users]
   );
@@ -178,6 +200,7 @@ export const TasksView: React.FC = () => {
   const resetForm = () => {
     setForm(emptyForm());
     setEditingTaskId(null);
+    setEditingTaskSource(null);
     setFieldErrors({});
     setFormError(null);
     setIsFormOpen(false);
@@ -205,6 +228,7 @@ export const TasksView: React.FC = () => {
 
   const openEditForm = (task: Task) => {
     setEditingTaskId(task.id);
+    setEditingTaskSource(task);
     setForm({
       projectId: task.projectId,
       title: task.title,
@@ -219,6 +243,7 @@ export const TasksView: React.FC = () => {
     setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
+    setViewingTask(null);
   };
 
   const handleProjectChange = (projectId: string) => {
@@ -273,26 +298,34 @@ export const TasksView: React.FC = () => {
     setIsSubmitting(true);
     try {
       const existingTask = editingTaskId
-        ? tasks.find((task) => task.id === editingTaskId)
+        ? editingTaskSource || tasks.find((task) => task.id === editingTaskId)
         : undefined;
-      const isMemberStatusOnly = Boolean(existingTask && currentRole === 'Team_Member');
-      const result = await (
+      const result: TaskMutationResult = await (
         editingTaskId
-          ? updateTask(
-              editingTaskId,
-              isMemberStatusOnly
-                ? { status: form.status }
-                : {
-                    title: form.title,
-                    description: form.description,
-                    priority: form.priority as TaskModulePriority,
-                    startDate: form.startDate,
-                    dueDate: form.dueDate,
-                    assigneeId: form.assigneeIds[0],
-                    assigneeIds: form.assigneeIds,
-                    status: form.status
-                  }
-            )
+          ? existingTask?.parentTaskId
+            ? updateTaskViaApi(editingTaskId, {
+                title: form.title,
+                description: form.description,
+                priority: form.priority as TaskModulePriority,
+                startDate: form.startDate,
+                dueDate: form.dueDate
+              })
+                .then((task) => ({
+                  success: true,
+                  message: 'Subtask updated successfully.',
+                  task
+                }))
+                .catch((error: Error) => ({
+                  success: false,
+                  message: error.message || 'Failed to update the subtask.'
+                }))
+            : updateTask(editingTaskId, {
+                title: form.title,
+                description: form.description,
+                priority: form.priority as TaskModulePriority,
+                startDate: form.startDate,
+                dueDate: form.dueDate
+              })
           : createTask({
               projectId: form.projectId,
               title: form.title,
@@ -317,6 +350,29 @@ export const TasksView: React.FC = () => {
               : result.message
         );
         return;
+      }
+
+      if (existingTask?.parentTaskId && result.task) {
+        const parentTaskId = existingTask.parentTaskId;
+        setExpandedTaskDetails((current) => {
+          const parent = current[parentTaskId];
+          if (!parent) return current;
+          return {
+            ...current,
+            [parentTaskId]: {
+              ...parent,
+              subtasks: parent.subtasks.map((subtask) =>
+                subtask.id === result.task!.id
+                  ? {
+                      ...subtask,
+                      ...result.task!,
+                      completed: result.task!.status === 'Done'
+                    }
+                  : subtask
+              )
+            }
+          };
+        });
       }
 
       resetForm();
@@ -472,7 +528,6 @@ export const TasksView: React.FC = () => {
     }
   };
 
-  const memberStatusOnly = editingTaskId !== null && currentRole === 'Team_Member';
   const isCreatePage = isFormOpen && editingTaskId === null;
   const hasActiveFilters = Boolean(
     search || projectFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
@@ -538,8 +593,8 @@ export const TasksView: React.FC = () => {
                 {editingTaskId ? 'Edit task' : 'Create task'}
               </h1>
               <p className="mt-1 text-sm text-slate-400">
-                {memberStatusOnly
-                  ? 'Update progress for your assigned work.'
+                {editingTaskId
+                  ? 'Update the details and schedule for work assigned to you.'
                   : 'Add the work details, schedule, and assignees, then return to your task list.'}
               </p>
             </div>
@@ -574,7 +629,6 @@ export const TasksView: React.FC = () => {
                     priority: event.target.value as TaskModulePriority
                   }))
                 }
-                disabled={memberStatusOnly}
                 className={inputClass}
               >
                 {TASK_PRIORITIES.map((priority) => (
@@ -583,7 +637,11 @@ export const TasksView: React.FC = () => {
               </select>
             </Field>
 
-            <Field label="Status *" error={fieldErrors.status}>
+            <Field
+              label="Status *"
+              error={fieldErrors.status}
+              hint={editingTaskId ? 'Status changes remain in the audited task workflow.' : undefined}
+            >
               <select
                 value={form.status}
                 onChange={(event) =>
@@ -592,6 +650,7 @@ export const TasksView: React.FC = () => {
                     status: event.target.value as TaskStatus
                   }))
                 }
+                disabled={Boolean(editingTaskId)}
                 className={inputClass}
               >
                 {TASK_STATUSES.map((status) => (
@@ -607,7 +666,6 @@ export const TasksView: React.FC = () => {
                   setForm((current) => ({ ...current, title: event.target.value }));
                   setFieldErrors((current) => ({ ...current, title: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
                 placeholder="e.g. Build task creation endpoint"
               />
@@ -621,13 +679,12 @@ export const TasksView: React.FC = () => {
               <input
                 type="date"
                 value={form.startDate}
-                min={getLatestDate(today, selectedProject?.startDate)}
+                min={editingTaskId ? selectedProject?.startDate : getLatestDate(today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, startDate: event.target.value }));
                   setFieldErrors((current) => ({ ...current, startDate: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
               />
             </Field>
@@ -640,13 +697,14 @@ export const TasksView: React.FC = () => {
               <input
                 type="date"
                 value={form.dueDate}
-                min={getLatestDate(form.startDate, today, selectedProject?.startDate)}
+                min={editingTaskId
+                  ? getLatestDate(form.startDate, selectedProject?.startDate)
+                  : getLatestDate(form.startDate, today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, dueDate: event.target.value }));
                   setFieldErrors((current) => ({ ...current, dueDate: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
               />
             </Field>
@@ -662,14 +720,26 @@ export const TasksView: React.FC = () => {
                   setForm((current) => ({ ...current, description: event.target.value }));
                   setFieldErrors((current) => ({ ...current, description: '' }));
                 }}
-                disabled={memberStatusOnly}
                 rows={3}
                 className={inputClass}
                 placeholder="Describe the expected outcome and relevant context."
               />
             </Field>
 
-            {!memberStatusOnly && (
+            {editingTaskId ? (
+              <Field label={`Assigned to (${form.assigneeIds.length})`} className="md:col-span-2 xl:col-span-4">
+                <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3">
+                  {form.assigneeIds.map((userId) => {
+                    const user = users.find((candidate) => candidate.id === userId);
+                    return (
+                      <span key={userId} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300">
+                        {user?.name || userId}
+                      </span>
+                    );
+                  })}
+                </div>
+              </Field>
+            ) : (
               <Field
                 label={`Assignees * (${form.assigneeIds.length} selected)`}
                 error={fieldErrors.assigneeIds}
@@ -1215,6 +1285,13 @@ export const TasksView: React.FC = () => {
                           {subtasks.map((subtask, index) => {
                             const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
                             const subtaskPriority = subtask.priority || task.priority;
+                            const editableSubtask = toEditableSubtask(task, subtask, index);
+                            const mayEditSubtask = canEditTask(
+                              currentRole,
+                              currentUser.id,
+                              project,
+                              editableSubtask
+                            );
                             const subtaskOverdue = Boolean(
                               subtask.dueDate
                               && subtaskStatus !== 'Done'
@@ -1238,6 +1315,16 @@ export const TasksView: React.FC = () => {
                                   <div className="flex flex-wrap gap-1.5">
                                     <TaskBadge value={subtaskPriority} kind="priority" />
                                     <TaskBadge value={subtaskStatus} kind="status" />
+                                    {mayEditSubtask && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditForm(editableSubtask)}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                                      >
+                                        <Pencil size={11} />
+                                        Edit
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -1276,6 +1363,9 @@ export const TasksView: React.FC = () => {
           task={viewingTask}
           project={projects.find((item) => item.id === viewingTask.projectId)}
           users={users}
+          currentRole={currentRole}
+          currentUserId={currentUser.id}
+          onEditTask={openEditForm}
           onClose={() => setViewingTask(null)}
         />
       )}
@@ -1417,8 +1507,11 @@ const TaskDetailsModal: React.FC<{
   task: Task;
   project?: Project;
   users: User[];
+  currentRole: UserRole;
+  currentUserId: string;
+  onEditTask: (task: Task) => void;
   onClose: () => void;
-}> = ({ task, project, users, onClose }) => {
+}> = ({ task, project, users, currentRole, currentUserId, onEditTask, onClose }) => {
   const teamLead = project
     ? users.find((user) => user.id === project.teamLeadId)
     : undefined;
@@ -1426,6 +1519,9 @@ const TaskDetailsModal: React.FC<{
     .map((id) => users.find((user) => user.id === id)?.name)
     .filter((name): name is string => Boolean(name));
   const taskOverdue = isTaskOverdue(task, today);
+  const mayEditTask = Boolean(
+    project && canEditTask(currentRole, currentUserId, project, task)
+  );
 
   return (
     <div
@@ -1475,9 +1571,21 @@ const TaskDetailsModal: React.FC<{
 
             <section aria-labelledby="task-information-heading" className="border-t border-white/10 pt-6">
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task</p>
-              <h3 id="task-information-heading" className="mt-1.5 break-words text-xl font-bold leading-7 text-white sm:text-2xl">
-                {task.title}
-              </h3>
+              <div className="mt-1.5 flex items-start justify-between gap-4">
+                <h3 id="task-information-heading" className="break-words text-xl font-bold leading-7 text-white sm:text-2xl">
+                  {task.title}
+                </h3>
+                {mayEditTask && (
+                  <button
+                    type="button"
+                    onClick={() => onEditTask(task)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                  >
+                    <Pencil size={12} />
+                    Edit task
+                  </button>
+                )}
+              </div>
 
               <div className="mt-3">
                 <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Priority</span>
@@ -1525,6 +1633,15 @@ const TaskDetailsModal: React.FC<{
                   {task.subtasks.map((subtask, index) => {
                     const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
                     const subtaskPriority = subtask.priority || task.priority;
+                    const editableSubtask = toEditableSubtask(task, subtask, index);
+                    const mayEditSubtask = Boolean(
+                      project && canEditTask(
+                        currentRole,
+                        currentUserId,
+                        project,
+                        editableSubtask
+                      )
+                    );
                     const subtaskOverdue = Boolean(
                       subtask.dueDate
                       && subtaskStatus !== 'Done'
@@ -1544,6 +1661,16 @@ const TaskDetailsModal: React.FC<{
                           <div className="flex flex-wrap gap-2">
                             <TaskBadge value={subtaskStatus} kind="status" />
                             <TaskBadge value={subtaskPriority} kind="priority" />
+                            {mayEditSubtask && (
+                              <button
+                                type="button"
+                                onClick={() => onEditTask(editableSubtask)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                              >
+                                <Pencil size={12} />
+                                Edit
+                              </button>
+                            )}
                           </div>
                         </div>
 

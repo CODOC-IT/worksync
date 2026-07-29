@@ -17,6 +17,7 @@ import {
   TaskStatusHistoryDTO,
   UpdateTaskInput
 } from './task.types.js';
+import { getTaskEditDenialReason } from './task.authorization.js';
 
 // Service Layer — business logic, authorization, and notification publishing (matching
 // backend/src/notifications and backend/src/projects). No SQL here (task.repository.ts); no
@@ -46,22 +47,23 @@ const buildDTOs = async (rows: TaskRow[]): Promise<TaskDTO[]> => {
 
 const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 
-// Mirrors the exact rule frontend/src/features/tasks/taskRules.ts's canEditTask already
-// established (Admin always; Team Lead only for their own project; Team Member only if
-// assigned) — re-derived server-side since the backend must never trust the client's own
-// permission check.
-const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
-  if (role === 'Admin') return;
-  const projectId = projectFrontendId(row);
-  if (role === 'Team_Lead') {
-    if (await isProjectLead(projectId, userId, role)) return;
-    throw new TaskAuthorizationError('You can only edit tasks in projects you lead.');
-  }
+// Editing is target-specific and derived from the trusted session: a leaf parent or child
+// task is editable only by its own assignees, while a parent with children is read-only.
+const assertCanEditTask = async (row: TaskRow, userId: string): Promise<void> => {
   const assignees = await repo.findAssigneesForTask(row.taskid);
-  const isAssignee = assignees.some((a) => fromUserPk(a.userid) === userId);
-  if (!isAssignee) {
-    throw new TaskAuthorizationError('You can only edit tasks assigned to you.');
-  }
+  const denialReason = getTaskEditDenialReason({
+    actorId: userId,
+    assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
+    parentTaskId: row.parenttaskid,
+    subtaskCount: Number(row.subtaskcount || 0)
+  });
+  if (denialReason) throw new TaskAuthorizationError(denialReason);
+};
+
+const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
+  if (role === 'Admin') return;
+  if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+  throw new TaskAuthorizationError('Only the project Team Lead may delete this task.');
 };
 
 const notifyTaskRecipients = (
@@ -223,7 +225,11 @@ export const updateTask = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId, actorRole);
+  await assertCanEditTask(row, actorId);
+
+  if (input.assigneeIds !== undefined) {
+    throw new TaskAuthorizationError('Task assignments cannot be changed from the assignee edit form.');
+  }
 
   if (input.title !== undefined && !input.title.trim()) throw new TaskValidationError('Task title cannot be empty.');
   if (input.description !== undefined && !input.description.trim()) {
@@ -282,7 +288,7 @@ export const updateTask = async (
 export const deleteTask = async (taskId: string, actorId: string, actorRole: string): Promise<void> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId, actorRole);
+  await assertCanDeleteTask(row, actorId, actorRole);
 
   const dto = await buildDTO(row);
   const archived = await repo.archiveTask(row.taskid);
@@ -327,7 +333,7 @@ export const changeTaskStatus = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  await assertCanEditTask(row, actorId, actorRole);
+  await assertCanEditTask(row, actorId);
 
   if (!input.note?.trim()) throw new TaskValidationError('A reason is required for every status change.');
   if (row.statuscode === 'Done' && input.status !== 'Done') {

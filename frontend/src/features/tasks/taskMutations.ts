@@ -119,23 +119,11 @@ export const prepareTaskUpdate = (
     return { success: false, message: 'You do not have permission to edit this task.' };
   }
 
-  if (context.currentRole === 'Team_Member') {
-    const restrictedFields: Array<keyof TaskMutationData> = [
-      'projectId',
-      'title',
-      'description',
-      'priority',
-      'startDate',
-      'dueDate',
-      'assigneeId',
-      'assigneeIds'
-    ];
-    if (restrictedFields.some((field) => data[field] !== undefined)) {
-      return {
-        success: false,
-        message: 'You can only update the status for this task.'
-      };
-    }
+  if (data.assigneeId !== undefined || data.assigneeIds !== undefined) {
+    return {
+      success: false,
+      message: 'Task assignments cannot be changed from the assignee edit form.'
+    };
   }
 
   const assigneeIds = data.assigneeIds?.length

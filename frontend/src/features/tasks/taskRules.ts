@@ -97,6 +97,11 @@ export const getProjectEndDate = (project: Project): string =>
 export const getProjectMemberIds = (project: Project): string[] =>
   (project as CompatibleProject).members || project.memberIds;
 
+export const getAssignableProjectUsers = (project: Project, users: User[]): User[] => {
+  const memberIds = new Set(getProjectMemberIds(project));
+  return users.filter((user) => user.status !== 'inactive' && memberIds.has(user.id));
+};
+
 export const getTaskStatusLabel = (status: TaskStatus): string =>
   status === 'Todo' ? 'To Do' : status;
 
@@ -129,16 +134,15 @@ export const canCreateTaskForProject = (
   && project.teamLeadId === userId;
 
 export const canEditTask = (
-  role: UserRole,
+  _role: UserRole,
   userId: string,
-  project: Project,
+  _project: Project,
   task: Task
-): boolean => {
-  if (role === 'Team_Lead') {
-    return isActiveProject(project) && project.teamLeadId === userId;
-  }
-  return role === 'Team_Member' && getTaskAssigneeIds(task).includes(userId);
-};
+): boolean =>
+  Boolean(task.parentTaskId)
+    ? getTaskAssigneeIds(task).includes(userId)
+    : Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) === 0
+      && getTaskAssigneeIds(task).includes(userId);
 
 export const canDeleteTask = (
   role: UserRole,
@@ -195,11 +199,7 @@ export const validateTaskInput = (
     errors.assigneeIds = 'Duplicate assignees are not allowed.';
   } else if (project) {
     const validMemberIds = new Set(
-      users
-        .filter((user) =>
-          user.status !== 'inactive' && getProjectMemberIds(project).includes(user.id)
-        )
-        .map((user) => user.id)
+      getAssignableProjectUsers(project, users).map((user) => user.id)
     );
     if (input.assigneeIds.some((id) => !validMemberIds.has(id))) {
       errors.assigneeIds = 'Every assignee must be an active project member.';

@@ -210,8 +210,8 @@ router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Respon
 
 // GET /api/auth/users
 router.get('/users', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user || req.user.role !== 'Admin') {
-    res.status(403).json({ success: false, message: 'Admin access required.' });
+  if (!req.user || (req.user.role !== 'Admin' && req.user.role !== 'Team_Lead')) {
+    res.status(403).json({ success: false, message: 'Admin or Team Lead access required.' });
     return;
   }
 
