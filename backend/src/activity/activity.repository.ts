@@ -126,7 +126,12 @@ const visibilitySql = (
   }
 
   // ── Team Lead (permanent or temporary): own + project-member + led-project scope ──
-  // If also HR, combine both scopes.
+  // If also HR, combine both scopes. Plain Team Members who are not Lead/HR also
+  // flow through here — buildMemberClause applies the module restriction for them.
+  if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
+    return { clause: buildMemberClause(), extraParams: params.slice(1) };
+  }
+
   const scopeParts: string[] = [...ownParts, projectMemberPart, taskAssigneePart];
 
   // Permanent Team Lead: also include formal lead membership rows

@@ -168,23 +168,33 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     }
   }, [currentRole]);
 
+  // ── Derive display info from authoritative scope ─────────────────────────
+  // Declared early so activeFiltersForRole can reference them.
+  const showHRTab    = !!(scope?.isActiveHR);
+  const showLeadTab  = !!(scope?.isActiveTeamLead);
+  const canExport    = !!(scope?.canExport);
+  const scopeIsAdmin = scope?.permanentRole === 'Admin';
+  const scopeDescription = getScopeDescription(scope, activeTab);
+
   // ── Build request filters based on active tab ────────────────────────────
   const activeFiltersForRole = useMemo((): ActivityFilters => {
     const f = { ...filters };
-    const isHRScope  = (scope?.isActiveHR || isHR);
-    const isLeadScope = (scope?.isActiveTeamLead || isTeamLead);
 
-    if (isHRScope && activeTab === 'hr') {
+    // HR Activity tab: scope to Attendance/HR modules, exclude own-only flag
+    if (showHRTab && activeTab === 'hr') {
       return { ...f, module: '', myActivityOnly: false, hrActivityOnly: true };
     }
-    if (isLeadScope && activeTab === 'lead') {
+    // Led Project Activity tab: backend visibility covers it via RBAC, send no extra flags
+    if (showLeadTab && activeTab === 'lead') {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
-    if (!isAdmin) {
-      return { ...f, myActivityOnly: true, hrActivityOnly: false };
+    // Admin: no restrictions from the frontend side; backend handles everything
+    if (scope?.permanentRole === 'Admin') {
+      return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
-    return f;
-  }, [filters, scope, isHR, isTeamLead, isAdmin, activeTab]);
+    // My Work Activity (default): restrict to the viewer's own events
+    return { ...f, myActivityOnly: true, hrActivityOnly: false };
+  }, [filters, scope, showHRTab, showLeadTab, activeTab]);
 
   // ── Debounced search ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -308,12 +318,6 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     }
   };
 
-  // ── Derive display info from authoritative scope ─────────────────────────
-  const showHRTab    = !!(scope?.isActiveHR  || isHR);
-  const showLeadTab  = !!(scope?.isActiveTeamLead || isTeamLead);
-  const canExport    = !!(scope?.canExport || isAdmin || isHR);
-  const scopeDescription = getScopeDescription(scope, activeTab);
-
   // ── Loading: never show admin/HR/lead controls until scope is confirmed ──
   if (scopeLoading) {
     return (
@@ -345,14 +349,14 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   }
 
   // ── Compute available modules/actions for the current role + tab ─────────
-  const availableModules = isAdmin ? ADMIN_MODULES
+  const availableModules = scope?.permanentRole === 'Admin' ? ADMIN_MODULES
     : showHRTab && activeTab === 'hr' ? HR_MODULES
-    : isTeamLead || showLeadTab ? LEAD_MODULES
+    : (scope?.isActiveTeamLead) ? LEAD_MODULES
     : MEMBER_MODULES;
 
-  const availableActions = isAdmin ? ADMIN_ACTIONS
+  const availableActions = scope?.permanentRole === 'Admin' ? ADMIN_ACTIONS
     : showHRTab && activeTab === 'hr' ? HR_ACTIONS
-    : isTeamLead || showLeadTab ? LEAD_ACTIONS
+    : (scope?.isActiveTeamLead) ? LEAD_ACTIONS
     : MEMBER_ACTIONS;
 
   return (
@@ -404,7 +408,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       </header>
 
       {/* ── Role-based tabs (only shown when role has multiple scopes) ── */}
-      {(showHRTab || (showLeadTab && !isAdmin)) && (
+      {(showHRTab || (showLeadTab && !scopeIsAdmin)) && (
         <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1 shrink-0">
           <button
             onClick={() => changeTab('my-work')}
@@ -456,7 +460,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           availableModules={availableModules}
           availableActions={availableActions}
           activeTab={activeTab}
-          isAdmin={isAdmin}
+          isAdmin={scopeIsAdmin}
           showHRTab={showHRTab}
           showLeadTab={showLeadTab}
           onClose={() => setFiltersOpen(false)}
@@ -638,9 +642,8 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
             label="Task"
             value={filters.taskId}
             onChange={(v) => update('taskId', v)}
-            options={projects
-              .filter((t) => !filters.projectId || t.id === filters.projectId)
-              .flatMap(() => tasks.filter((t) => !filters.projectId || t.projectId === filters.projectId))
+            options={tasks
+              .filter((t) => !filters.projectId || t.projectId === filters.projectId)
               .map((t) => ({ value: t.id, label: t.title }))}
           />
         )}
