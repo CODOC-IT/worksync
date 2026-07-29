@@ -49,7 +49,11 @@ function validateDateRange(from: string, to: string): string | null {
 
 function isInDateRange(dateStr: string, from: string, to: string): boolean {
   if (!dateStr) return false;
-  return dateStr.slice(0, 10) >= from && dateStr.slice(0, 10) <= to;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return false;
+  const fromDate = new Date(from + 'T00:00:00');
+  const toDate = new Date(to + 'T23:59:59');
+  return d >= fromDate && d <= toDate;
 }
 
 type ProfileTab = 'overview' | 'my-projects' | 'my-tasks' | 'my-attendance' | 'upcoming-deadlines' | 'activity' | 'notifications' | 'account';
@@ -216,6 +220,11 @@ export const ProfileView: React.FC = () => {
   const myNotifications = notifications.filter((n) => n.userId === currentUser.id);
   const projectsLed = projects.filter((p) => p.teamLeadId === currentUser.id);
 
+  const getProjectName = (projectId: string): string => {
+    const p = projects.find((proj) => proj.id === projectId);
+    return p ? p.title : 'Unknown Project';
+  };
+
   const myUpcomingDeadlines = [
     ...myTasks
       .filter((t) => t.status !== 'Done' && t.dueDate)
@@ -260,16 +269,11 @@ export const ProfileView: React.FC = () => {
 
   const dateFilteredNotifications = hasDateError
     ? myNotifications
-    : myNotifications.filter((n) => isInDateRange(n.timestamp || n.createdAt || '', dateRange.from, dateRange.to));
+    : myNotifications.filter((n) => isInDateRange(n.createdAt || '', dateRange.from, dateRange.to));
 
   const dateFilteredDeadlines = hasDateError
     ? myUpcomingDeadlines
     : myUpcomingDeadlines.filter((d) => isInDateRange(d.date, dateRange.from, dateRange.to));
-
-  const getProjectName = (projectId: string): string => {
-    const p = projects.find((proj) => proj.id === projectId);
-    return p ? p.title : 'Unknown Project';
-  };
 
   const daysUntil = (dateStr: string): string => {
     const now = new Date();
