@@ -135,15 +135,30 @@ const buildWhere = (
   const viewerPk = toUserPkOrNull(viewerId);
   if (viewerPk === null) throw new Error('Invalid authenticated user identifier.');
 
-  const values: unknown[] = [viewerPk];
   const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1);
+
+  // For Admin the visibility clause is TRUE and no parameter is needed.
+  // For all other roles $1 is the viewerPk used inside the scoped predicates.
+  const isAdminPath = effectiveRoles.permanentRole === 'Admin';
+  const values: unknown[] = isAdminPath ? [] : [viewerPk];
   values.push(...extraParams);
 
   // Current WorkSync authentication is organization 1 scoped. Keep every read explicitly
   // bounded to the same organization as inserts, including administrator queries.
   const clauses: string[] = ['a.organizationid = 1', `(${visibilityClause})`];
 
+  // myActivityOnly uses $1 (viewerPk). For Admin that param slot doesn't exist yet, so we
+  // push viewerPk on demand and reference its position dynamically.
+  let myActivityOnlyParamIdx: number | null = null;
+
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace('?', `$${values.length}`)); };
+
+  if (filters.myActivityOnly) {
+    values.push(viewerPk);
+    myActivityOnlyParamIdx = values.length;
+    clauses.push(`a.actoruserid = $${myActivityOnlyParamIdx}`);
+  }
+
   if (filters.from) add('a.occurredatutc >= ?::timestamptz', filters.from);
   if (filters.to) add('a.occurredatutc <= ?::timestamptz', filters.to);
   if (filters.userId) add('a.actoruserid = ?', toUserPkOrNull(filters.userId));
@@ -155,7 +170,6 @@ const buildWhere = (
   if (filters.entityType) add('a.entitytypecode = ?', filters.entityType);
   if (filters.result) add('a.resultcode = ?', filters.result);
   if (filters.source) add('a.sourcecode = ?', filters.source);
-  if (filters.myActivityOnly) clauses.push('a.actoruserid = $1');
   if (filters.importantOnly) clauses.push('a.isimportant = TRUE');
   if (filters.deletedOnly) clauses.push("a.actioncode IN ('Deleted', 'Archived', 'Attachment Deleted', 'Deleted Attachment')");
   if (filters.failedOrBlockedOnly) clauses.push("a.resultcode IN ('Failed', 'Blocked')");
