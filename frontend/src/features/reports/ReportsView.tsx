@@ -481,13 +481,18 @@ export const ReportsView: React.FC = () => {
       });
     });
 
-    return (reportData.workload as any[]).map((w: any) => {
-      const u = users.find((u: any) => u.id === w.userId);
-      const name = u?.name || w.name || w.userId;
-      const projectIds = [...(userProjectMap[w.userId] || new Set())] as string[];
-      const totalTasks = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
+    const workloadById = new Map((reportData.workload as any[]).map((w: any) => [w.userId, w]));
+
+    const allUserIds = new Set([...workloadById.keys(), ...Object.keys(userProjectMap)]);
+
+    return [...allUserIds].map((uid: string) => {
+      const w = workloadById.get(uid);
+      const u = users.find((u: any) => u.id === uid);
+      const name = u?.name || w?.name || uid;
+      const projectIds = [...(userProjectMap[uid] || new Set())] as string[];
+      const totalTasks = (w?.active || 0) + (w?.completed || 0) + (w?.review || 0) + (w?.overdue || 0);
       return {
-        userId: w.userId,
+        userId: uid,
         name,
         shortName: getShortName(name),
         role: u?.role || '',
@@ -495,10 +500,10 @@ export const ReportsView: React.FC = () => {
         title: u?.title || '',
         avatar: u?.avatar || '',
         status: u?.status || 'active',
-        active: w.active || 0,
-        completed: w.completed || 0,
-        review: w.review || 0,
-        overdue: w.overdue || 0,
+        active: w?.active || 0,
+        completed: w?.completed || 0,
+        review: w?.review || 0,
+        overdue: w?.overdue || 0,
         projectIds,
         projectCount: projectIds.length,
         totalTasks,
@@ -2320,6 +2325,7 @@ ${bodyHtml}
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={members.map((m: any) => ({
                       name: m.name,
+                      shortName: m.shortName,
                       rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
                     }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
