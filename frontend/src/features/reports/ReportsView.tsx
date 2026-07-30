@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -57,7 +57,7 @@ import {
   ClipboardList
 } from 'lucide-react';
 
-type ReportTab = 'overview' | 'projects' | 'teams' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
+type ReportTab = 'overview' | 'projects' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
 
 interface DateRange {
   from: string;
@@ -80,6 +80,12 @@ function formatHumanDate(d: string | undefined): string {
   const parts = d.slice(0, 10).split('-');
   const date = new Date(+parts[0], +parts[1] - 1, +parts[2]);
   return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function getShortName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length <= 1) return parts[0] || fullName;
+  return `${parts[0]} ${parts[parts.length - 1][0]}.`;
 }
 
 function getTaskAssigneeIds(t: any): string[] {
@@ -188,45 +194,51 @@ export const ReportsView: React.FC = () => {
   const [deadlineFilterDateRange, setDeadlineFilterDateRange] = useState('all');
   const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [reportFirstLoadDone, setReportFirstLoadDone] = useState(false);
+
+  const fetchReportData = useCallback(async (_from: string, _to: string) => {
+    setReportLoading(true);
+    setReportError(null);
+
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) {
+      setReportError('Sign in required to load report data.');
+      setReportData(null);
+      setReportLoading(false);
+      setReportFirstLoadDone(true);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `/api/reports/data?from=${encodeURIComponent(_from)}&to=${encodeURIComponent(_to)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const json = await res.json();
+      if (json.success) {
+        setReportData(json.data);
+      } else {
+        setReportError(json.message || 'Failed to load report data.');
+        setReportData(null);
+      }
+    } catch {
+      setReportError('Unable to reach the report server. Please verify your connection and try again.');
+      setReportData(null);
+    }
+    setReportLoading(false);
+    setReportFirstLoadDone(true);
+  }, []);
 
   useEffect(() => {
-    const fetchReports = async () => {
-      setReportLoading(true);
-      setReportError(null);
-
-      const token = localStorage.getItem('worksync_auth_token');
-      if (!token) {
-        setReportError('Sign in required to load report data.');
-        setReportData(null);
-        setReportLoading(false);
-        return;
-      }
-
-      try {
-        const res = await fetch(
-          `/api/reports/data?from=${encodeURIComponent(dateRange.from)}&to=${encodeURIComponent(dateRange.to)}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        const json = await res.json();
-        if (json.success) {
-          setReportData(json.data);
-        } else {
-          setReportError(json.message || 'Failed to load report data.');
-          setReportData(null);
-        }
-      } catch {
-        setReportError('Report API unavailable — showing local fallback.');
-        setReportData(null);
-      }
-      setReportLoading(false);
-    };
-    fetchReports();
-  }, [dateRange.from, dateRange.to, currentRole]);
+    fetchReportData(dateRange.from, dateRange.to);
+  }, [dateRange.from, dateRange.to, currentRole, fetchReportData]);
 
   const apiAvailable = reportData !== null;
 
@@ -259,7 +271,7 @@ export const ReportsView: React.FC = () => {
       (p) => isInDateRange(p.startDate, from, to) || isInDateRange(p.targetDate, from, to) || p.status === 'Active'
     );
     const validTasks = tasks.filter(
-      (t) => isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done'
+      (t) => !t.parentTaskId && (isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done')
     );
     const validAttendance = attendanceRecords.filter(
       (a) => isInDateRange(a.date, from, to)
@@ -317,12 +329,17 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return {
         projects: reportData.projects || [],
-        tasks: roleFilteredLocal.tasks, // use consistently-scoped tasks
+        tasks: roleFilteredLocal.tasks,
         attendance: reportData.attendance?.records || [],
         hrRequests: roleFilteredLocal.hrRequests,
       };
     }
-    return roleFilteredLocal;
+    return {
+      projects: [],
+      tasks: roleFilteredLocal.tasks,
+      attendance: [],
+      hrRequests: [],
+    };
   }, [apiAvailable, reportData, roleFilteredLocal]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
@@ -352,7 +369,7 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       const o = reportData.overview || {};
       return {
-        totalProjects: o.totalProjects ?? 0,
+        totalProjects: (o.totalProjects ?? 0) + (o.archivedCount ?? 0),
         activeTasks: o.activeTasks ?? 0,
         completedTasks: o.completedTasks ?? 0,
         overdueTasks: o.overdueTasks ?? 0,
@@ -360,70 +377,39 @@ export const ReportsView: React.FC = () => {
         activeMembers: o.activeMembers ?? 0,
       };
     }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    const totalProjects = rp.length;
-    const activeTasks = rt.filter((t) => t.status !== 'Done').length;
-    const completedTasks = rt.filter((t) => t.status === 'Done').length;
-    const overdueTasks = rt.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
-    const completionRate = rt.length > 0 ? Math.round((completedTasks / rt.length) * 100) : 0;
-    const activeMembers = new Set(rp.flatMap((p) => p.memberIds).concat(rp.map((p) => p.teamLeadId))).size;
-    return { totalProjects, activeTasks, completedTasks, overdueTasks, completionRate, activeMembers };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return { totalProjects: 0, activeTasks: 0, completedTasks: 0, overdueTasks: 0, completionRate: 0, activeMembers: 0 };
+  }, [apiAvailable, reportData]);
 
   const projectHealthData = useMemo(() => {
     if (apiAvailable) {
       return (reportData.projects || []).map((p: any) => ({
         name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
-        progress: p.progress,
+        progress: p.progress ?? 0,
       }));
     }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    return rp.map((p) => ({
-      name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
-      progress: p.progress,
-    }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskStatusDist = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).statusDistribution || [];
     }
-    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
-    roleFilteredLocal.tasks.forEach((t) => { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskPriorityDist = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).priorityDistribution || [];
     }
-    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
-    roleFilteredLocal.tasks.forEach((t) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskCompletionTrend = useMemo(() => {
     if (apiAvailable) {
-      return reportData.tasks.completionTrend;
+      return (reportData.tasks || {}).completionTrend || [];
     }
-    const { from, to } = dateRange;
-    const days: Record<string, { completed: number; created: number }> = {};
-    let current = from;
-    while (current <= to) {
-      days[current] = { completed: 0, created: 0 };
-      current = addDays(current, 1);
-    }
-    roleFilteredLocal.tasks.forEach((t) => {
-      const cKey = t.createdAt?.slice(0, 10);
-      if (cKey && days[cKey]) days[cKey].created++;
-      if (t.status === 'Done' && t.dueDate && days[t.dueDate]) days[t.dueDate].completed++;
-    });
-    return Object.entries(days).map(([date, vals]) => ({
-      date: date.slice(5),
-      Completed: vals.completed,
-      Created: vals.created
-    }));
-  }, [apiAvailable, reportData, dateRange, roleFilteredLocal]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   // ── Tasks tab derived data ──────────────────────────────────────────
   const filteredTasks = useMemo(() => {
@@ -454,19 +440,15 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return (reportData.tasks || {}).statusDistribution || [];
     }
-    const counts: Record<string, number> = { Todo: 0, 'In Progress': 0, Review: 0, Done: 0, Blocked: 0 };
-    roleFiltered.tasks.forEach((t: any) => { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFiltered.tasks]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskPriorityDistData = useMemo(() => {
     if (apiAvailable) {
       return (reportData.tasks || {}).priorityDistribution || [];
     }
-    const counts: Record<string, number> = { Low: 0, Medium: 0, High: 0, Urgent: 0 };
-    roleFiltered.tasks.forEach((t: any) => { counts[t.priority] = (counts[t.priority] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [apiAvailable, reportData, roleFiltered.tasks]);
+    return [];
+  }, [apiAvailable, reportData]);
 
   const taskProjectOptions = useMemo(() => {
     const projectIds = new Set((roleFiltered.tasks as any[]).map((t: any) => t.projectId));
@@ -488,78 +470,50 @@ export const ReportsView: React.FC = () => {
   }, [roleFiltered.tasks, users]);
 
   const workloadData = useMemo(() => {
-    const baseTasks = roleFiltered.tasks as any[];
+    if (!apiAvailable || !reportData?.workload) return [];
+
     const baseProjects = roleFiltered.projects as any[];
 
-    // Build a member-centric workload map from tasks (always derived from roleFiltered tasks)
-    const memberMap: Record<string, {
-      userId: string; name: string; role: string; department: string; title: string;
-      avatar: string; status: string;
-      active: number; completed: number; review: number; overdue: number;
-      projectIds: Set<string>;
-    }> = {};
-
-    baseTasks.forEach((t: any) => {
-      const assigneeIds = getTaskAssigneeIds(t);
-      assigneeIds.forEach((uid: string) => {
-        if (!uid) return;
-        if (!memberMap[uid]) {
-          const u = users.find((u: any) => u.id === uid);
-          memberMap[uid] = {
-            userId: uid,
-            name: u?.name || uid,
-            role: u?.role || '',
-            department: u?.department || '',
-            title: u?.title || '',
-            avatar: u?.avatar || '',
-            status: u?.status || 'active',
-            active: 0, completed: 0, review: 0, overdue: 0,
-            projectIds: new Set(),
-          };
-        }
-        memberMap[uid].projectIds.add(t.projectId);
-        if (t.status === 'Done') memberMap[uid].completed++;
-        else if (t.status === 'Review') memberMap[uid].review++;
-        else {
-          memberMap[uid].active++;
-          if (t.dueDate && t.dueDate < todayStr()) memberMap[uid].overdue++;
-        }
-      });
-    });
-
-    // Add members from projects who might have no tasks assigned
+    const userProjectMap: Record<string, Set<string>> = {};
     baseProjects.forEach((p: any) => {
       const allMemberIds = [p.teamLeadId, ...(p.memberIds || [])].filter(Boolean);
       allMemberIds.forEach((uid: string) => {
-        if (!memberMap[uid]) {
-          const u = users.find((u: any) => u.id === uid);
-          memberMap[uid] = {
-            userId: uid,
-            name: u?.name || uid,
-            role: u?.role || '',
-            department: u?.department || '',
-            title: u?.title || '',
-            avatar: u?.avatar || '',
-            status: u?.status || 'active',
-            active: 0, completed: 0, review: 0, overdue: 0,
-            projectIds: new Set([p.id]),
-          };
-        } else {
-          memberMap[uid].projectIds.add(p.id);
-        }
+        if (!userProjectMap[uid]) userProjectMap[uid] = new Set();
+        userProjectMap[uid].add(p.id);
       });
     });
 
-    return Object.values(memberMap)
-      .map((m) => ({
-        ...m,
-        projectIds: [...m.projectIds] as string[],
-        projectCount: m.projectIds.size,
-        totalTasks: m.active + m.completed + m.review + m.overdue,
-        hasTasks: m.active + m.completed + m.review + m.overdue > 0,
-      }))
-      .sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
-  }, [roleFiltered.tasks, roleFiltered.projects, users]);
+    const workloadById = new Map((reportData.workload as any[]).map((w: any) => [w.userId, w]));
+
+    const allUserIds = new Set([...workloadById.keys(), ...Object.keys(userProjectMap)]);
+
+    return [...allUserIds].map((uid: string) => {
+      const w = workloadById.get(uid);
+      const u = users.find((u: any) => u.id === uid);
+      const name = u?.name || w?.name || uid;
+      const projectIds = [...(userProjectMap[uid] || new Set())] as string[];
+      const totalTasks = (w?.active || 0) + (w?.completed || 0) + (w?.review || 0) + (w?.overdue || 0);
+      return {
+        userId: uid,
+        name,
+        shortName: getShortName(name),
+        role: u?.role || '',
+        department: u?.department || '',
+        title: u?.title || '',
+        avatar: u?.avatar || '',
+        status: u?.status || 'active',
+        active: w?.active || 0,
+        completed: w?.completed || 0,
+        review: w?.review || 0,
+        overdue: w?.overdue || 0,
+        projectIds,
+        projectCount: projectIds.length,
+        totalTasks,
+        hasTasks: totalTasks > 0,
+        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : totalTasks > 0 ? 'Light' : 'No Tasks',
+      };
+    }).sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
+  }, [apiAvailable, reportData, roleFiltered.projects, users]);
 
   const workloadKpiStats = useMemo(() => {
     const members = workloadData as any[];
@@ -595,7 +549,7 @@ export const ReportsView: React.FC = () => {
     return [...roles].sort();
   }, [workloadData]);
 
-  const workloadWorkloadOptions = ['Light', 'Moderate', 'Heavy'];
+  const workloadWorkloadOptions = ['No Tasks', 'Light', 'Moderate', 'Heavy'];
 
   // ── Member detail fetch ─────────────────────────────────────────────
   useEffect(() => {
@@ -610,7 +564,7 @@ export const ReportsView: React.FC = () => {
   }, [selectedMemberId, workloadData]);
 
   const deadlineBaseTasks = useMemo(() => {
-    let tasks = (apiAvailable ? roleFiltered.tasks : roleFilteredLocal.tasks) as any[];
+    let tasks = roleFiltered.tasks as any[];
     if (deadlineSearchQuery) {
       const q = deadlineSearchQuery.toLowerCase();
       tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
@@ -625,14 +579,63 @@ export const ReportsView: React.FC = () => {
       tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
     }
     return tasks;
-  }, [apiAvailable, roleFiltered.tasks, roleFilteredLocal.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+  }, [roleFiltered.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineData = useMemo(() => {
     const today = todayStr();
     const tomorrow = addDays(today, 1);
+
+    if (apiAvailable && reportData?.deadlines) {
+      const apiDeadlines = reportData.deadlines;
+      const tasksMap = new Map((roleFiltered.tasks as any[]).map((t: any) => [t.id, t]));
+
+      const enrichAndFilter = (items: any[]) => {
+        return items.map((d: any) => {
+          const task = tasksMap.get(d.id);
+          return {
+            ...d,
+            projectId: task?.projectId || '',
+            taskNumber: task?.taskNumber || '',
+            assigneeIds: task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : []),
+          };
+        }).filter((t: any) => {
+          if (deadlineSearchQuery && t.title && !t.title.toLowerCase().includes(deadlineSearchQuery.toLowerCase())) return false;
+          if (deadlineFilterProject && t.projectId !== deadlineFilterProject) return false;
+          if (deadlineFilterAssignee && !getTaskAssigneeIds(t).includes(deadlineFilterAssignee)) return false;
+          if (deadlineFilterStatus && t.status !== deadlineFilterStatus) return false;
+          return true;
+        });
+      };
+
+      const enriched = {
+        dueToday: enrichAndFilter(apiDeadlines.dueToday || []),
+        dueTomorrow: enrichAndFilter(apiDeadlines.dueTomorrow || []),
+        upcoming: enrichAndFilter(apiDeadlines.upcoming || []),
+        overdue: enrichAndFilter(apiDeadlines.overdue || []),
+      };
+
+      if (deadlineFilterDateRange !== 'all') {
+        const allItems = [...enriched.dueToday, ...enriched.dueTomorrow, ...enriched.upcoming, ...enriched.overdue];
+        const filtered = allItems.filter((t: any) => {
+          if (deadlineFilterDateRange === 'today') return t.dueDate === today;
+          if (deadlineFilterDateRange === 'tomorrow') return t.dueDate === tomorrow;
+          if (deadlineFilterDateRange === 'next7') return t.dueDate >= today && t.dueDate <= addDays(today, 7);
+          if (deadlineFilterDateRange === 'next30') return t.dueDate >= today && t.dueDate <= addDays(today, 30);
+          return true;
+        });
+        return {
+          dueToday: filtered.filter((t: any) => t.dueDate === today),
+          dueTomorrow: filtered.filter((t: any) => t.dueDate === tomorrow),
+          upcoming: filtered.filter((t: any) => t.dueDate > tomorrow),
+          overdue: filtered.filter((t: any) => t.dueDate < today),
+        };
+      }
+
+      return enriched;
+    }
+
     const tasks = deadlineBaseTasks.filter((t: any) => t.dueDate && t.status !== 'Done');
 
-    // Apply date range filter
     let filtered = tasks;
     if (deadlineFilterDateRange === 'today') {
       filtered = tasks.filter((t: any) => t.dueDate === today);
@@ -645,7 +648,6 @@ export const ReportsView: React.FC = () => {
       const endDate = addDays(today, 30);
       filtered = tasks.filter((t: any) => t.dueDate >= today && t.dueDate <= endDate);
     }
-    // 'all' — no additional date filter
 
     const dueToday = filtered.filter((t: any) => t.dueDate === today)
       .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
@@ -654,9 +656,9 @@ export const ReportsView: React.FC = () => {
     const upcoming = filtered.filter((t: any) => t.dueDate > tomorrow)
       .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
     const overdue = filtered.filter((t: any) => t.dueDate < today)
-      .sort((a: any, b: any) => b.dueDate.localeCompare(a.dueDate)); // most overdue first
+      .sort((a: any, b: any) => b.dueDate.localeCompare(a.dueDate));
     return { dueToday, dueTomorrow, upcoming, overdue };
-  }, [deadlineBaseTasks, deadlineFilterDateRange]);
+  }, [apiAvailable, reportData, roleFiltered.tasks, deadlineBaseTasks, deadlineFilterDateRange, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineKpiTotals = useMemo(() => ({
     dueToday: deadlineData.dueToday.length,
@@ -696,18 +698,8 @@ export const ReportsView: React.FC = () => {
         pendingLeaves: a.pendingLeaves ?? 0,
       };
     }
-    const { attendance: att } = roleFilteredLocal;
-    const present = att.filter((a) => a.status === 'Present').length;
-    const late = att.filter((a) => a.status === 'Late').length;
-    const absent = att.filter((a) => a.status === 'Absent').length;
-    const onLeave = att.filter((a) => a.status === 'On Leave').length;
-    const halfDay = att.filter((a) => a.status === 'Half Day').length;
-    const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
-    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    const pendingCorrections = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    const pendingLeaves = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections, pendingLeaves };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return { present: 0, late: 0, absent: 0, onLeave: 0, halfDay: 0, avgHours: '0', total: 0, pendingCorrections: 0, pendingLeaves: 0 };
+  }, [apiAvailable, reportData]);
 
   const hrOverviewStats = useMemo(() => {
     if (apiAvailable && reportData.hrOverviewStats) {
@@ -722,55 +714,8 @@ export const ReportsView: React.FC = () => {
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    const today = todayStr();
-    const todayAtt = filteredData.validAttendance.filter((a) => a.date === today);
-    const presentToday = todayAtt.filter((a) => a.status === 'Present').length;
-    const absentToday = todayAtt.filter((a) => a.status === 'Absent').length;
-    const onLeaveToday = todayAtt.filter((a) => a.status === 'On Leave').length;
-    const lateToday = todayAtt.filter((a) => a.status === 'Late').length;
-    const avgHours = todayAtt.length > 0
-      ? (todayAtt.reduce((s, a) => s + (a.totalHours || 0), 0) / todayAtt.length).toFixed(1)
-      : '0';
-    const pendingLeaveReqs = filteredData.validHrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    const pendingCorrections = filteredData.validHrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    return { presentToday, absentToday, onLeaveToday, lateToday, avgHours, pendingLeaveReqs, pendingCorrections };
-  }, [apiAvailable, reportData, filteredData]);
-
-  const teamStats = useMemo(() => {
-    if (apiAvailable) {
-      return reportData.teams || [];
-    }
-    const { projects: rp, tasks: rt } = roleFilteredLocal;
-    const deptMap: Record<string, { members: Set<string>; projects: number; tasks: number; completed: number }> = {};
-    rp.forEach((p) => {
-      p.memberIds.forEach((mid) => {
-        const u = users.find((u) => u.id === mid);
-        const dept = u?.department || 'Unknown';
-        if (!deptMap[dept]) deptMap[dept] = { members: new Set(), projects: 0, tasks: 0, completed: 0 };
-        deptMap[dept].members.add(mid);
-        deptMap[dept].projects++;
-      });
-    });
-    rt.forEach((t) => {
-      const p = rp.find((p) => p.id === t.projectId);
-      if (p) {
-        const u = users.find((u) => u.id === t.assigneeId);
-        const dept = u?.department || 'Unknown';
-        if (deptMap[dept]) {
-          deptMap[dept].tasks++;
-          if (t.status === 'Done') deptMap[dept].completed++;
-        }
-      }
-    });
-    return Object.entries(deptMap).map(([dept, data]) => ({
-      department: dept,
-      members: data.members.size,
-      projects: data.projects,
-      tasks: data.tasks,
-      completed: data.completed,
-      rate: data.tasks > 0 ? Math.round((data.completed / data.tasks) * 100) : 0
-    }));
-  }, [apiAvailable, reportData, roleFilteredLocal, users]);
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+  }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────
 
@@ -819,7 +764,7 @@ export const ReportsView: React.FC = () => {
   const visibleTabs = useMemo<ReportTab[]>(() => {
     switch (currentRole) {
       case 'Admin':
-        return ['overview', 'projects', 'tasks', 'teams', 'workload', 'deadlines', 'attendance'];
+        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'HR':
         return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'Team_Lead':
@@ -835,7 +780,6 @@ export const ReportsView: React.FC = () => {
     overview: 'Overview',
     projects: 'Projects',
     tasks: 'Tasks',
-    teams: 'Teams',
     workload: 'Workload',
     deadlines: 'Deadlines',
     attendance: 'Attendance',
@@ -860,7 +804,6 @@ export const ReportsView: React.FC = () => {
       overview: 'Overall Summary Report',
       projects: 'Project Analytics Report',
       tasks: 'Tasks Report',
-      teams: 'Team Analytics Report',
       workload: 'Member Workload Report',
       deadlines: 'Deadlines Report',
       attendance: 'Attendance Report',
@@ -899,21 +842,6 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.code || '\u2014')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
-    } else if (tab === 'teams') {
-      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
-      bodyHtml += kpi('Departments', teamStats.length);
-      bodyHtml += kpi('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0));
-      bodyHtml += kpi('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0));
-      const avgRate = teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%';
-      bodyHtml += kpi('Avg Rate', avgRate);
-      bodyHtml += `</div>`;
-      bodyHtml += section('Department Performance');
-      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
-      bodyHtml += `<thead><tr>${th('Department')}${th('Members')}${th('Projects')}${th('Tasks')}${th('Completed')}${th('Rate')}</tr></thead><tbody>`;
-      teamStats.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.department || '\u2014', '#0f172a')}${td(t.members ?? 0)}${td(t.projects ?? 0)}${td(t.tasks ?? 0)}${td(t.completed ?? 0)}${td((t.rate ?? 0) + '%')}</tr>`;
-      });
-      bodyHtml += `</tbody></table>`;
     } else if (tab === 'workload') {
       const wlMembers = workloadData as any[];
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
@@ -927,8 +855,8 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<thead><tr>${th('Member')}${th('Role')}${th('Active')}${th('Completed')}${th('Overdue')}${th('Projects')}${th('Workload')}</tr></thead><tbody>`;
       wlMembers.forEach((w: any) => {
         const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
-        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
-        bodyHtml += `<tr>${td(w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
+        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
+        bodyHtml += `<tr>${td(w.shortName || w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     } else if (tab === 'deadlines') {
@@ -996,6 +924,39 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
+    } else if (tab === 'tasks') {
+      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+      bodyHtml += kpi('Total', taskKpiStats.total);
+      bodyHtml += kpi('Todo', taskKpiStats.todo);
+      bodyHtml += kpi('In Progress', taskKpiStats.inProgress);
+      bodyHtml += kpi('Review', taskKpiStats.review);
+      bodyHtml += kpi('Done', taskKpiStats.completed);
+      bodyHtml += kpi('Blocked', taskKpiStats.blocked);
+      bodyHtml += kpi('Overdue', taskKpiStats.overdue);
+      bodyHtml += `</div>`;
+      bodyHtml += section('Status Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Status')}${th('Count')}</tr></thead><tbody>`;
+      (taskStatusDistData || []).forEach((s: any) => {
+        bodyHtml += `<tr>${td(s.name || '\u2014')}${td(s.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section('Priority Distribution');
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Priority')}${th('Count')}</tr></thead><tbody>`;
+      (taskPriorityDistData || []).forEach((p: any) => {
+        bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+      bodyHtml += section(`Task Details (${filteredTasks.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('ID')}${th('Title')}${th('Status')}${th('Priority')}${th('Assignee')}${th('Project')}${th('Due Date')}${th('Completed')}</tr></thead><tbody>`;
+      filteredTasks.forEach((t: any) => {
+        const assigneeNames = getTaskAssigneeIds(t).map((id: string) => users.find((u: any) => u.id === id)?.name || id).join(', ') || '\u2014';
+        const projName = roleFiltered.projects.find((p: any) => p.id === t.projectId)?.title || '\u2014';
+        bodyHtml += `<tr>${td(t.taskNumber || (t.id || '').slice(0, 8), '#64748b')}${td(t.title || '\u2014', '#0f172a')}${td(t.status || '\u2014')}${td(t.priority || '\u2014')}${td(assigneeNames)}${td(projName)}${td(t.dueDate ? t.dueDate.slice(0, 10) : '\u2014')}${td(t.completedAt ? t.completedAt.slice(0, 10) : '\u2014')}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
     } else {
       if (currentRole !== 'HR') {
         bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
@@ -1020,6 +981,25 @@ export const ReportsView: React.FC = () => {
           bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
+        const projArr = (reportData?.projects || roleFiltered.projects || []) as any[];
+        if (projArr.length > 0) {
+          bodyHtml += section(`Project Breakdown (${projArr.length} total)`);
+          bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;">`;
+          bodyHtml += kpi('Total Projects', kpiStats.totalProjects ?? 0);
+          bodyHtml += kpi('Active', projArr.filter((p: any) => p.status === 'Active').length);
+          bodyHtml += kpi('Completed', projArr.filter((p: any) => p.status === 'Completed').length);
+          bodyHtml += kpi('Archived', reportData?.overview?.archivedCount ?? 0);
+          const avgProg = projArr.length > 0 ? Math.round(projArr.reduce((s: number, p: any) => s + (p.progress || 0), 0) / projArr.length) : 0;
+          bodyHtml += kpi('Avg Progress', `${avgProg}%`);
+          bodyHtml += `</div>`;
+          bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+          bodyHtml += `<thead><tr>${th('Project')}${th('Status')}${th('Progress')}${th('Tasks')}${th('Health')}</tr></thead><tbody>`;
+          projArr.forEach((p: any) => {
+            const health = (p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : p.status === 'Archived' ? 'Archived' : 'Needs Attention';
+            bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
+          });
+          bodyHtml += `</tbody></table>`;
+        }
       } else {
         bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
         bodyHtml += kpi('Present Today', hrOverviewStats.presentToday);
@@ -1126,6 +1106,49 @@ ${bodyHtml}
     handlePdfExport();
   };
 
+  const handleAttendancePdfExport = () => {
+    const now = new Date().toLocaleString();
+    const from = dateRange.from;
+    const to = dateRange.to;
+    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+    if (attendanceSearchQuery) {
+      filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+    }
+    if (filtered.length === 0) return;
+    const th = (text: string) => `<th style="background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;border-bottom:2px solid #e2e8f0;color:#334155;font-size:10px;">${text}</th>`;
+    const td = (text: string | number, cls?: string) => `<td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:${cls || '#475569'};font-size:10px;">${text}</td>`;
+    const kpi = (label: string, value: string | number) => `<div style="flex:1;min-width:100px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;text-align:center;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${label}</div><div style="font-size:20px;font-weight:700;color:#0f172a;margin-top:2px;">${value}</div></div>`;
+    let bodyHtml = '';
+    bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+    bodyHtml += kpi('Records', filtered.length);
+    const presentCount = filtered.filter((a: any) => a.status === 'Present').length;
+    const lateCount = filtered.filter((a: any) => a.status === 'Late').length;
+    const absentCount = filtered.filter((a: any) => a.status === 'Absent').length;
+    bodyHtml += kpi('Present', presentCount);
+    bodyHtml += kpi('Late', lateCount);
+    bodyHtml += kpi('Absent', absentCount);
+    bodyHtml += `</div>`;
+    bodyHtml += `<h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;color:#1e293b;border-left:3px solid #3b82f6;padding-left:8px;">Attendance Records</h3>`;
+    bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+    bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
+    filtered.forEach((a: any) => {
+      const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+      bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
+    });
+    bodyHtml += `</tbody></table>`;
+    const attTitle = `Attendance Report${attendanceStatusFilter ? ` (${attendanceStatusFilter})` : ''}`;
+    const fullHtml = `<!DOCTYPE html><html><head><title>${attTitle}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1e293b;margin:0;}.header{text-align:center;padding-bottom:16px;border-bottom:3px solid #3b82f6;margin-bottom:24px;}.header h1{margin:0;font-size:22px;font-weight:700;color:#0f172a;}.header .meta{font-size:11px;color:#64748b;margin-top:6px;}.footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}</style></head><body><div class="header"><h1>${attTitle}</h1><div class="meta">${from} \u2014 ${to} &nbsp;|&nbsp; ${filtered.length} records &nbsp;|&nbsp; Generated ${now}</div></div>${bodyHtml}<div class="footer">${attTitle} &middot; WorkSync Reports &middot; ${now}</div></body></html>`;
+    const printFrame = document.createElement('iframe');
+    printFrame.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;';
+    document.body.appendChild(printFrame);
+    const contentWindow = printFrame.contentWindow;
+    if (!contentWindow) { document.body.removeChild(printFrame); return; }
+    const doc = contentWindow.document;
+    doc.open(); doc.write(fullHtml); doc.close();
+    setTimeout(() => { contentWindow.print(); setTimeout(() => document.body.removeChild(printFrame), 1000); }, 300);
+  };
+
   const handleTaskPdfExport = () => {
     const t = detailTask;
     if (!t) return;
@@ -1148,7 +1171,7 @@ ${bodyHtml}
 
     let bodyHtml = '';
 
-    bodyHtml += `<div style="margin-bottom:16px;"><span style="font-size:10px;color:#64748b;">${t.taskNumber || t.id.slice(0, 8)}</span>`;
+    bodyHtml += `<div style="margin-bottom:16px;"><span style="font-size:10px;color:#64748b;">${t.taskNumber || (t.id || '').slice(0, 8)}</span>`;
     bodyHtml += `<h2 style="margin:4px 0;font-size:18px;font-weight:700;color:#0f172a;">${t.title || '\u2014'}</h2>`;
     bodyHtml += `<div style="display:flex;gap:6px;margin-top:4px;">`;
     bodyHtml += `<span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:600;border-radius:4px;background:#dbeafe;color:#1e40af;">${t.status || '\u2014'}</span>`;
@@ -1212,9 +1235,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;p
 .header .meta{font-size:11px;color:#64748b;margin-top:6px;}
 .footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}
 </style></head><body>
-<div class="header"><h1>Task Detail</h1><div class="meta">${t.taskNumber || t.id.slice(0, 8)} &middot; Generated ${now}</div></div>
+<div class="header"><h1>Task Detail</h1><div class="meta">${t.taskNumber || (t.id || '').slice(0, 8)} &middot; Generated ${now}</div></div>
 ${bodyHtml}
-<div class="footer">Task ${t.taskNumber || t.id.slice(0, 8)} &middot; WorkSync Reports &middot; ${now}</div>
+<div class="footer">Task ${t.taskNumber || (t.id || '').slice(0, 8)} &middot; WorkSync Reports &middot; ${now}</div>
 </body></html>`;
 
     const printFrame = document.createElement('iframe');
@@ -1301,7 +1324,7 @@ ${bodyHtml}
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('Task')}${th('Priority')}${th('Completed')}</tr></thead><tbody>`;
       completedTasks.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.priority || '\u2014')}${td(t.createdAt?.slice(0, 10) || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(t.priority || '\u2014')}${td(t.completedAt?.slice(0, 10) || '\u2014')}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -1534,14 +1557,15 @@ ${bodyHtml}
     emerald: 'p-1.5 rounded-lg bg-emerald-500/20',
     amber: 'p-1.5 rounded-lg bg-amber-500/20',
     magenta: 'p-1.5 rounded-lg bg-pink-500/20',
-    rose: 'p-1.5 rounded-lg bg-rose-500/20'
+    rose: 'p-1.5 rounded-lg bg-rose-500/20',
+    slate: 'p-1.5 rounded-lg bg-slate-500/20'
   };
 
   const renderKPICard = (
     label: string,
     value: string | number,
     icon: React.ReactNode,
-    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' = 'cyan',
+    glow: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'rose' | 'slate' = 'cyan',
     insight?: React.ReactNode
   ) => (
     <GlassCard glowColor={glow === 'rose' ? 'magenta' : glow} hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1579,44 +1603,33 @@ ${bodyHtml}
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Contributors', kpiStats.activeMembers, <Users size={14} className="text-cyan-400" />, 'cyan')}</div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health')}
-                <div className={`mt-3 ${projectHealthData.length > 10 ? 'overflow-y-auto' : ''}`} style={{ height: Math.min(projectHealthData.length * 32 + 40, 400) }}>
-                  <div style={{ height: Math.max(projectHealthData.length * 32 + 40, 260) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                        <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                        <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                        <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                        <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+          <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+            <div className="glass-panel p-4 rounded-lg">
+              {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health', `${projectHealthData.length} projects`)}
+              <div className="mt-3 max-h-[400px] overflow-y-auto space-y-1">
+                {projectHealthData.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-4">No project data available for this period</p>
+                ) : (
+                  projectHealthData.map((p: any, i: number) => {
+                    const proj = (reportData?.projects || [])[i] || p;
+                    return (
+                      <div key={p.name} className="flex items-center gap-3 py-2 px-2 rounded hover:bg-slate-800/30 transition-colors">
+                        <StatusBadge status={proj.status || 'Unknown'} size="sm" />
+                        <span className="text-xs text-slate-200 truncate flex-1 min-w-0">{p.name}</span>
+                        <div className="w-28 shrink-0 h-3 rounded bg-slate-700/50 overflow-hidden">
+                          <div
+                            className={`h-full rounded transition-all ${p.progress >= 70 ? 'bg-emerald-500' : p.progress >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                            style={{ width: `${Math.min(p.progress, 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-400 w-10 text-right shrink-0">{p.progress}%</span>
+                      </div>
+                    );
+                  })
+                )}
               </div>
-            </GlassCard>
-
-            <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<TrendingUp size={16} className="text-violet-400" />, 'Task Activity Trend')}
-                <div className="mt-3" style={{ height: 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={taskCompletionTrend} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis dataKey="date" tick={{ fill: chartTextColor, fontSize: 9 }} tickFormatter={formatDateLabel} />
-                      <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <Tooltip content={({ active, payload, label }) => <CustomTooltip active={active} payload={payload} label={formatDateLabel(label)} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Area type="monotone" dataKey="Created" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.2} />
-                      <Area type="monotone" dataKey="Completed" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.3} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </GlassCard>
-          </div>
+            </div>
+          </GlassCard>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <GlassCard glowColor="emerald" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1719,7 +1732,7 @@ ${bodyHtml}
                       <BarChart data={workloadData} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                         <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                        <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
+                        <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
                         <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                         <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
                         <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
@@ -1738,7 +1751,7 @@ ${bodyHtml}
           {!apiAvailable && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-300">
               <AlertTriangle size={14} />
-              <span>Attendance data may be incomplete — API unavailable, showing locally recorded data only.</span>
+              <span>Attendance data unavailable — API request failed.</span>
             </div>
           )}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
@@ -1789,32 +1802,9 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Total Projects', roleFiltered.projects.length, <FolderKanban size={14} className="text-cyan-400" />, 'cyan')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}</div>
-        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Avg Rate', roleFiltered.projects.length > 0 ? `${Math.round(roleFiltered.projects.reduce((s: number, p: any) => s + (p.progress || 0), 0) / roleFiltered.projects.length)}%` : '0%', <TrendingUp size={14} className="text-violet-400" />, 'violet')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Archived Projects', reportData?.overview?.archivedCount ?? 0, <History size={14} className="text-slate-400" />, 'slate')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Pending Approvals', roleFiltered.projects.filter((p: any) => p.status === 'Pending Approval').length, <Clock size={14} className="text-amber-400" />, 'amber')}</div>
       </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Project Progress')}
-          <div className="mt-3 overflow-x-auto">
-            <div style={{ minWidth: Math.max(projectHealthData.length * 80, 400), height: 300 }}>
-              {projectHealthData.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-8">No project data available</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                    <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                    <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px' }} />
-                    <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress %" />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
 
       <GlassCard>
         <div className="p-4 space-y-3">
@@ -1843,8 +1833,7 @@ ${bodyHtml}
               <option value="">All Statuses</option>
               <option value="Active">Active</option>
               <option value="Completed">Completed</option>
-              <option value="On Hold">On Hold</option>
-              <option value="Cancelled">Cancelled</option>
+              <option value="Archived">Archived</option>
             </select>
             {(projectSearchTerm || projectFilterStatus) && (
               <button
@@ -1915,6 +1904,7 @@ ${bodyHtml}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                             healthLabel === 'On Track' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
                             healthLabel === 'At Risk' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                            healthLabel === 'Archived' ? 'text-slate-400 bg-slate-500/10 border-slate-500/20' :
                             'text-rose-400 bg-rose-500/10 border-rose-500/20'
                           }`}>{healthLabel}</span>
                         </td>
@@ -2213,86 +2203,6 @@ ${bodyHtml}
     );
   };
 
-  const renderTeamsTab = () => (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {renderKPICard('Departments', teamStats.length, <Users size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0), <CheckSquare size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
-      </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Department Performance')}
-          <div className="mt-3" style={{ height: 300 }}>
-            {teamStats.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No department data available</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={teamStats} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="department" tick={{ fill: chartTextColor, fontSize: 9 }} angle={-20} textAnchor="end" height={60} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Legend wrapperStyle={{ fontSize: '10px' }} />
-                  <Bar dataKey="tasks" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Tasks" />
-                  <Bar dataKey="completed" fill={chartColors.emerald} radius={[4, 4, 0, 0]} name="Completed" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </GlassCard>
-
-      <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
-        <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
-          <colgroup>
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '15%' }} />
-            <col style={{ width: '24%' }} />
-          </colgroup>
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th>Department</th>
-              <th>Members</th>
-              <th>Projects</th>
-              <th>Tasks</th>
-              <th>Completed</th>
-              <th>Completion Rate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {teamStats.length === 0 ? (
-              <tr><td colSpan={6} className="text-center text-slate-500 py-6">No data available</td></tr>
-            ) : (
-              teamStats.map((t: any) => (
-                <tr key={t.department}>
-                  <td className="text-white font-medium truncate">{t.department}</td>
-                  <td className="font-mono text-xs">{t.members}</td>
-                  <td className="font-mono text-xs">{t.projects}</td>
-                  <td className="font-mono text-xs">{t.tasks}</td>
-                  <td className="font-mono text-xs text-emerald-400">{t.completed}</td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <div className="w-12 h-1.5 rounded-full bg-slate-700">
-                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${t.rate}%` }} />
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-300">{t.rate}%</span>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-
   const renderWorkloadTab = () => {
     const members = filteredWorkloadMembers;
     return (
@@ -2304,56 +2214,6 @@ ${bodyHtml}
           {renderKPICard('Members with Overdue', workloadKpiStats.membersWithOverdue, <AlertTriangle size={14} className="text-rose-400" />, 'rose',
             workloadKpiStats.membersWithOverdue > 0 ? renderInsightBadge(false, `${workloadKpiStats.membersWithOverdue} need attention`) : undefined
           )}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Tasks Per Member')}
-              <div className="h-60">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Legend wrapperStyle={{ fontSize: '10px' }} />
-                      <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
-                      <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
-                      <Bar dataKey="overdue" fill={chartColors.rose} radius={[0, 0, 0, 0]} name="Overdue" stackId="a" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </div>
-          </GlassCard>
-
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<CheckCircle2 size={16} className="text-emerald-400" />, 'Completion By Member')}
-              <div className="h-60">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members.map((m: any) => ({
-                      name: m.name,
-                      rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
-                    }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                      <YAxis dataKey="name" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip formatter={(value: any) => `${value}%`} />
-                      <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </div>
-          </GlassCard>
         </div>
 
         <GlassCard>
@@ -2432,7 +2292,7 @@ ${bodyHtml}
                   <tbody>
                     {members.map((m: any) => {
                       const total = m.totalTasks;
-                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                       return (
                         <tr
                           key={m.userId}
@@ -2456,7 +2316,8 @@ ${bodyHtml}
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                               wlLabel === 'Heavy' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
                               wlLabel === 'Moderate' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-                              'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                              wlLabel === 'Light' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
+                              'text-slate-400 bg-slate-500/10 border-slate-500/20'
                             }`}>{wlLabel}</span>
                           </td>
                         </tr>
@@ -2482,7 +2343,7 @@ ${bodyHtml}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {members.map((m: any) => {
                     const total = m.totalTasks;
-                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                     const barWidth = Math.min(total / 12, 1) * 100;
                     return (
                       <div
@@ -2513,11 +2374,11 @@ ${bodyHtml}
                           <div className="mt-2">
                             <div className="flex justify-between text-[9px] text-slate-500 mb-1">
                               <span>Current workload</span>
-                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : 'text-emerald-400'}>{wlLabel}</span>
+                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : wlLabel === 'Light' ? 'text-emerald-400' : 'text-slate-400'}>{wlLabel}</span>
                             </div>
                             <div className="h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
                               <div className={`h-full rounded-full transition-all duration-300 ${
-                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'
+                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'
                               }`} style={{ width: `${barWidth}%` }} />
                             </div>
                           </div>
@@ -2765,20 +2626,29 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Status Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskStatusDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={taskStatusDistData} cx="50%" cy="50%" outerRadius={70} dataKey="value" nameKey="name" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                        {taskStatusDistData.map((entry, idx) => (
-                          <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    </PieChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskStatusDistData.map((d: any) => d.value), 1);
+                  const statusColorMap: Record<string, string> = {
+                    'Todo': 'bg-cyan-500', 'In Progress': 'bg-amber-500', 'Review': 'bg-amber-500',
+                    'Done': 'bg-emerald-500', 'Blocked': 'bg-rose-500',
+                  };
+                  return taskStatusDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${statusColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -2787,23 +2657,28 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<BarChart3 size={16} className="text-violet-400" />, 'Priority Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskPriorityDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={taskPriorityDistData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {taskPriorityDistData.map((entry, idx) => (
-                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskPriorityDistData.map((d: any) => d.value), 1);
+                  const priorityColorMap: Record<string, string> = {
+                    'Urgent': 'bg-rose-500', 'High': 'bg-orange-500', 'Medium': 'bg-amber-500', 'Low': 'bg-emerald-500',
+                  };
+                  return taskPriorityDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${priorityColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -2916,7 +2791,7 @@ ${bodyHtml}
                         onClick={() => setSelectedTaskId(t.id)}
                         className="cursor-pointer border-b border-slate-700/20 hover:bg-slate-700/20 transition-colors group"
                       >
-                        <td className="py-2 pr-2 text-slate-400 font-mono">{t.taskNumber || t.id.slice(0, 8)}</td>
+                        <td className="py-2 pr-2 text-slate-400 font-mono">{t.taskNumber || (t.id || '').slice(0, 8)}</td>
                         <td className="py-2 pr-2 text-slate-200 group-hover:text-cyan-300 transition-colors max-w-[200px] truncate">{t.title}</td>
                         <td className="py-2 pr-2"><StatusBadge status={t.status} size="sm" /></td>
                         <td className="py-2 pr-2"><StatusBadge status={t.priority} size="sm" /></td>
@@ -2994,7 +2869,7 @@ ${bodyHtml}
           <div className="p-5 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-[10px] text-slate-500 font-mono mb-1">{t.taskNumber || t.id.slice(0, 8)}</div>
+                <div className="text-[10px] text-slate-500 font-mono mb-1">{t.taskNumber || (t.id || '').slice(0, 8)}</div>
                 <h2 className="text-lg font-bold text-slate-100">{t.title}</h2>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -3163,7 +3038,7 @@ ${bodyHtml}
       .sort((a: any, b: any) => (b.timestamp || b.changedAt || '').localeCompare(a.timestamp || a.changedAt || ''));
 
     const total = m.totalTasks;
-    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
     const barWidth = Math.min(total / 12, 1) * 100;
 
     return (
@@ -3221,10 +3096,10 @@ ${bodyHtml}
               <div className="pt-2 border-t border-slate-700/30">
                 <div className="flex justify-between text-[10px] text-slate-500 mb-1">
                   <span>Workload Level</span>
-                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>{wlLabel}</span>
+                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : wlLabel === 'Light' ? 'text-emerald-400 font-semibold' : 'text-slate-400 font-semibold'}>{wlLabel}</span>
                 </div>
                 <div className="h-2 rounded-full bg-slate-700/50 overflow-hidden">
-                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${barWidth}%` }} />
+                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'}`} style={{ width: `${barWidth}%` }} />
                 </div>
               </div>
             )}
@@ -3450,36 +3325,67 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
-          <div className="mt-3" style={{ height: 260 }}>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={[
-                  { name: 'Present', value: attendanceStats.present },
-                  { name: 'Late', value: attendanceStats.late },
-                  { name: 'Absent', value: attendanceStats.absent },
-                  { name: 'On Leave', value: attendanceStats.onLeave },
-                  { name: 'Half Day', value: attendanceStats.halfDay }
-                ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {[chartColors.emerald, chartColors.amber, chartColors.rose, chartColors.cyan, chartColors.violet].map((color, i) => (
-                      <Cell key={i} fill={color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+      <div className="flex justify-end">
+        <button
+          onClick={handleAttendancePdfExport}
+          className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+        >
+          <FileText size={11} />
+          Export Filtered PDF
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-slate-400">Filter by status:</span>
+        <div className="flex flex-wrap gap-1.5">
+          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+            const isActive = attendanceStatusFilter === s;
+            if (s === '') {
+              return (
+                <button key={s} onClick={() => setAttendanceStatusFilter('')}
+                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-all ${isActive
+                    ? 'bg-slate-600/60 text-slate-200 border border-white/10'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/60 hover:text-slate-200'}`}>
+                  All
+                </button>
+              );
+            }
+            const colorClass = s === 'Present' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              : s === 'Late' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+              : s === 'Absent' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              : s === 'On Leave' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+              : 'bg-violet-500/20 text-violet-400 border-violet-500/30';
+            return (
+              <button key={s} onClick={() => setAttendanceStatusFilter(s === attendanceStatusFilter ? '' : s)}
+                className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
+                {s}
+              </button>
+            );
+          })}
         </div>
-      </GlassCard>
+        <select
+          value={attendanceSearchQuery}
+          onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+        >
+          <option value="">All Users</option>
+          {(() => {
+            const seenIds = new Set<string>();
+            return (roleFiltered.attendance || []).filter((a: any) => {
+              if (seenIds.has(a.userId)) return false;
+              seenIds.add(a.userId);
+              return true;
+            }).sort((a: any, b: any) => {
+              const nameA = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              const nameB = users.find((u: any) => u.id === b.userId)?.name || b.userId;
+              return nameA.localeCompare(nameB);
+            }).map((a: any) => {
+              const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              return <option key={a.userId} value={a.userId}>{userName}</option>;
+            });
+          })()}
+        </select>
+      </div>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
         <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
@@ -3504,10 +3410,16 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
-            ) : (
-              (roleFiltered.attendance as any[]).map((a: any) => (
+              {(() => {
+                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                if (attendanceSearchQuery) {
+                  filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+                }
+                if (filtered.length === 0) {
+                  return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
+                }
+                return filtered.map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs truncate">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
@@ -3517,8 +3429,8 @@ ${bodyHtml}
                   <td className="font-mono text-xs">{a.totalHours || 0}h</td>
                   <td className="font-mono text-xs text-slate-400">{a.breaksCount || 0}</td>
                 </tr>
-              ))
-            )}
+                ));
+              })()}
           </tbody>
         </table>
       </div>
@@ -3553,8 +3465,6 @@ ${bodyHtml}
           return selectedProjectId ? renderProjectDetail() : renderProjectsTab();
         case 'tasks':
           return selectedTaskId ? renderTaskDetail() : renderTasksTab();
-        case 'teams':
-          return renderTeamsTab();
         case 'workload':
           return selectedMemberId ? renderMemberDetail() : renderWorkloadTab();
         case 'deadlines':
@@ -3568,24 +3478,40 @@ ${bodyHtml}
 
     return (
       <>
-        <div className="flex justify-end">
-          <button
-            onClick={handlePdfExport}
-            className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
-          >
-            <FileText size={11} />
-            Export PDF
-          </button>
-        </div>
-        {reportLoading && (
-          <div className="text-xs text-slate-400 text-center py-2">Loading report data...</div>
-        )}
-        {reportError && !reportLoading && !apiAvailable && (
-          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 text-center">
-            {reportError}
+        {reportLoading && !reportFirstLoadDone ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <div className="w-8 h-8 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+            <p className="text-xs text-slate-400">Loading report data...</p>
           </div>
+        ) : (
+          <>
+            <div className="flex justify-end">
+              <button
+                onClick={handlePdfExport}
+                className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+              >
+                <FileText size={11} />
+                Export PDF
+              </button>
+            </div>
+            {reportLoading && (
+              <div className="text-xs text-slate-400 text-center py-2">Refreshing report data...</div>
+            )}
+            {reportError && !reportLoading && !apiAvailable && (
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 text-center flex items-center justify-center gap-2">
+                <AlertTriangle size={14} />
+                <span>{reportError}</span>
+                <button
+                  onClick={() => fetchReportData(dateRange.from, dateRange.to)}
+                  className="ml-2 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[10px] font-semibold transition-all"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {tabContent}
+          </>
         )}
-        {tabContent}
       </>
     );
   };

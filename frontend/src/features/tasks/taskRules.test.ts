@@ -172,18 +172,42 @@ test('rejects an assignee outside the project membership', () => {
   assert.ok(errors.assigneeIds);
 });
 
-test('shows active selected-project members as task assignees', () => {
+test('shows only active non-HR, non-Admin selected-project members as task assignees', () => {
   const inactiveMember = { ...users[1], id: 'inactive-member', status: 'inactive' as const };
+  const hrMember: User = {
+    ...users[1],
+    id: 'hr-member',
+    name: 'HR Member',
+    role: 'HR',
+    title: 'HR Specialist'
+  };
   const projectWithInactiveMember = {
     ...project,
-    memberIds: ['lead', 'member', inactiveMember.id]
+    memberIds: ['lead', 'member', 'admin', hrMember.id, inactiveMember.id]
   };
   const options = getAssignableProjectUsers(
     projectWithInactiveMember,
-    [...users, inactiveMember]
+    [...users, hrMember, inactiveMember]
   );
 
   assert.deepEqual(options.map((user) => user.id), ['lead', 'member']);
+});
+
+test('rejects HR and Admin users as task assignees even when they are project members', () => {
+  const hrMember: User = {
+    ...users[1],
+    id: 'hr-member',
+    name: 'HR Member',
+    role: 'HR',
+    title: 'HR Specialist'
+  };
+  const projectWithAdministrativeMembers = {
+    ...project,
+    memberIds: ['lead', 'member', 'admin', hrMember.id]
+  };
+
+  assert.ok(validateTaskInput({ ...validInput, assigneeIds: ['admin'] }, projectWithAdministrativeMembers, [...users, hrMember]).assigneeIds);
+  assert.ok(validateTaskInput({ ...validInput, assigneeIds: [hrMember.id] }, projectWithAdministrativeMembers, [...users, hrMember]).assigneeIds);
 });
 
 test('rejects duplicate assignees', () => {
@@ -198,6 +222,11 @@ test('rejects duplicate assignees', () => {
 test('rejects archived projects', () => {
   const archived = { ...project, status: 'Archived' as const };
   assert.ok(validateTaskInput(validInput, archived, users).projectId);
+});
+
+test('rejects pending project approval for task creation', () => {
+  const pending = { ...project, status: 'Pending Approval' as const, approvalStatus: 'Pending Approval' as const };
+  assert.equal(canCreateTaskForProject('Team_Lead', 'lead', pending), false);
 });
 
 test('enforces task creation roles and Team Lead project scope', () => {
@@ -225,18 +254,19 @@ test('filters task lists and sorts by due date', () => {
 
 test('enforces edit and delete permission checks', () => {
   assert.equal(canEditTask('Admin', 'admin', project, task), false);
-  assert.equal(canEditTask('Team_Lead', 'lead', project, task), false);
+  assert.equal(canEditTask('Team_Lead', 'lead', project, task), true);
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
   assert.equal(canEditTask('Team_Member', 'outsider', project, task), false);
   assert.equal(canEditTask('Team_Member', 'member', project, { ...task, subtaskCount: 2 }), false);
+  assert.equal(canEditTask('Team_Lead', 'lead', project, { ...task, subtaskCount: 2 }), true);
   assert.equal(canEditTask('Team_Member', 'member', project, {
     ...task,
     parentTaskId: 'tsk-parent',
     subtaskCount: 0
   }), true);
-  assert.equal(canDeleteTask('Admin', 'admin', project), false);
-  assert.equal(canDeleteTask('Team_Lead', 'lead', project), true);
-  assert.equal(canDeleteTask('Team_Lead', 'lead', project, true), true);
+  assert.equal(canDeleteTask('Admin', 'admin', project, task), false);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project, task), true);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project, task, true), true);
 
   const deniedEdit = prepareTaskUpdate(task.id, { status: 'Done' }, {
     currentRole: 'Team_Member',

@@ -15,13 +15,13 @@ export const TASK_STATUSES: TaskStatus[] = [
   'Done'
 ];
 
-export type TaskModulePriority = Exclude<TaskPriority, 'Urgent'> | 'Critical';
+export type TaskModulePriority = TaskPriority;
 
 export const TASK_PRIORITIES: TaskModulePriority[] = [
   'Low',
   'Medium',
   'High',
-  'Critical'
+  'Urgent'
 ];
 
 export interface TaskFormInput {
@@ -82,11 +82,9 @@ export const getTaskAssigneeIds = (task: Task): string[] =>
 export const getTaskStartDate = (task: Task): string =>
   (task as TaskModuleTask).startDate || task.createdAt;
 
-export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority =>
-  priority === 'Urgent' ? 'Critical' : priority;
+export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority => priority;
 
-export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority =>
-  priority === 'Critical' ? 'Urgent' : priority;
+export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority => priority;
 
 export const getProjectName = (project: Project): string =>
   (project as CompatibleProject).name || project.title;
@@ -99,7 +97,15 @@ export const getProjectMemberIds = (project: Project): string[] =>
 
 export const getAssignableProjectUsers = (project: Project, users: User[]): User[] => {
   const memberIds = new Set(getProjectMemberIds(project));
-  return users.filter((user) => user.status !== 'inactive' && memberIds.has(user.id));
+  // Administrative and HR accounts may belong to a project for oversight, but are not
+  // work assignees. Keeping this in the shared selector also protects validation and
+  // every task/subtask creation control that consumes it.
+  return users.filter((user) =>
+    user.status !== 'inactive'
+    && memberIds.has(user.id)
+    && user.role !== 'Admin'
+    && user.role !== 'HR'
+  );
 };
 
 export const getTaskStatusLabel = (status: TaskStatus): string =>
@@ -128,32 +134,47 @@ export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  isActiveProject(project)
-  && role === 'Team_Lead'
-  && project.teamLeadId === userId;
+): boolean => {
+  if (!isActiveProject(project)) {
+    return false;
+  }
+
+  if (role === 'Team_Lead') {
+    return project.teamLeadId === userId;
+  }
+
+  if (role === 'Team_Member') {
+    return getProjectMemberIds(project).includes(userId);
+  }
+
+  return false;
+};
 
 export const canEditTask = (
-  _role: UserRole,
+  role: UserRole,
   userId: string,
-  _project: Project,
+  project: Project,
   task: Task
-): boolean =>
-  Boolean(task.parentTaskId)
-    ? getTaskAssigneeIds(task).includes(userId)
-    : Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) === 0
-      && getTaskAssigneeIds(task).includes(userId);
+): boolean => {
+  if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
+
+  const isProjectLead = role === 'Team_Lead' && project.teamLeadId === userId;
+  if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
+    return isProjectLead;
+  }
+  return getTaskAssigneeIds(task).includes(userId) || isProjectLead;
+};
 
 export const canDeleteTask = (
   role: UserRole,
   userId: string,
   project: Project,
+  task: Task,
   teamLeadCanDeleteTasks = true
 ): boolean => {
-  return role === 'Team_Lead'
-    && teamLeadCanDeleteTasks
-    && isActiveProject(project)
-    && project.teamLeadId === userId;
+  if (!teamLeadCanDeleteTasks || !isActiveProject(project)) return false;
+  return getTaskAssigneeIds(task).includes(userId)
+    || (role === 'Team_Lead' && project.teamLeadId === userId);
 };
 
 export const validateTaskInput = (

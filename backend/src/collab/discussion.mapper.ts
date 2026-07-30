@@ -79,9 +79,6 @@ export const buildThreadDTO = (
     title: row.subject || '',
     type: DB_TO_API_DISCUSSION_TYPE[openingCommentKind],
     creatorId: fromUserPk(row.createdbyuserid),
-    resolved: row.isresolved,
-    resolvedBy: row.resolvedbyuserid ? fromUserPk(row.resolvedbyuserid) : undefined,
-    resolvedAt: row.resolvedatutc ? row.resolvedatutc.toISOString() : undefined,
     createdAt: row.createdatutc.toISOString(),
     updatedAt: latestActivity,
     comments

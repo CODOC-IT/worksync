@@ -142,17 +142,3 @@ export const deleteComment = async (req: AuthenticatedRequest, res: Response): P
   }
 };
 
-export const setResolution = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  if (typeof req.body?.resolved !== 'boolean') {
-    res.status(400).json({ success: false, fieldErrors: { resolved: 'Choose a resolution state.' } });
-    return;
-  }
-  try {
-    const data = await service.setResolution(req.params.threadId, req.body.resolved, user.id, user.role);
-    res.json({ success: true, data });
-  } catch (error) {
-    handleServiceError(error, res, 'Failed to update discussion resolution.');
-  }
-};

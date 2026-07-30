@@ -7,7 +7,6 @@ import { ShortcutsModal } from "../frontend/src/components/common/ShortcutsModal
 
 // Features
 import { LoginView } from '../frontend/src/features/auth/LoginView';
-import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
@@ -176,16 +175,6 @@ const AppContent: React.FC = () => {
     return (
       <LoginView
         onLoginSuccess={() => setCurrentTab("dashboard")}
-        onSwitchToSignup={() => setCurrentTab("signup")}
-      />
-    );
-  }
-
-  if (currentTab === "signup") {
-    return (
-      <SignupView
-        onSignupSuccess={() => setCurrentTab("dashboard")}
-        onSwitchToLogin={() => setCurrentTab("login")}
       />
     );
   }
@@ -238,7 +227,7 @@ const AppContent: React.FC = () => {
         )}
 
         {/* Main Scrollable View Area */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 min-w-0">
+        <main className={`min-h-0 flex-1 min-w-0 overflow-y-auto p-4 md:p-6 ${currentTab === 'project-chats' ? '' : 'space-y-6'}`}>
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
           {currentTab === 'projects' && <ProjectsView />}
           {currentTab === 'tasks' && <TasksView />}

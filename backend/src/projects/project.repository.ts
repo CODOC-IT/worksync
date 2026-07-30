@@ -210,6 +210,7 @@ export interface UpdateProjectRow {
   statusId?: number;
   startDate?: string;
   targetDate?: string;
+  creationReason?: string;
 }
 
 export const updateProject = async (projectId: number, updates: UpdateProjectRow): Promise<boolean> => {
@@ -227,6 +228,7 @@ export const updateProject = async (projectId: number, updates: UpdateProjectRow
   if (updates.statusId !== undefined) addSet('projectstatusid', updates.statusId);
   if (updates.startDate !== undefined) addSet('startdate', updates.startDate);
   if (updates.targetDate !== undefined) addSet('enddate', updates.targetDate);
+  if (updates.creationReason !== undefined) addSet('creationreason', updates.creationReason);
 
   if (setClauses.length === 0) return true;
 
@@ -288,8 +290,8 @@ export const getProjectProgress = async (projectId: number): Promise<number> => 
        COUNT(*)::text AS total,
        SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END)::text AS completed
      FROM work.tasks t
-     JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = $1`,
+      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+      WHERE t.projectid = $1 AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL`,
     [projectId]
   );
   const total = Number(result.rows[0]?.total || 0);
@@ -310,4 +312,41 @@ export const removeProjectMember = async (
     [removedByUserId, removalReason, projectId, userId]
   );
   return (result.rowCount ?? 0) > 0;
+};
+
+// Reassigns a project's Team Lead. TeamLead is a ProjectMembers role, not a projects-table
+// column, so unlike the plain fields in updateProject() this needs its own statements: demote
+// whichever row (if any) currently holds 'TeamLead' -- a no-op when the current lead is only
+// implicit via ownership, per resolveTeamLeadUserId's owner-fallback -- then promote the new
+// lead's existing row, or insert one if they weren't already an active member. Skips the
+// promote step when the new lead is the project owner, matching insertProject's own rule that
+// the owner never gets a redundant 'TeamLead' row.
+export const reassignTeamLead = async (
+  projectId: number,
+  newTeamLeadUserId: number,
+  ownerUserId: number,
+  addedByUserId: number
+): Promise<void> => {
+  await query(
+    `UPDATE work.projectmembers
+     SET memberrolecode = 'Member'
+     WHERE projectid = $1 AND memberrolecode = 'TeamLead' AND leftatutc IS NULL AND userid != $2`,
+    [projectId, newTeamLeadUserId]
+  );
+
+  if (newTeamLeadUserId === ownerUserId) return;
+
+  const promoted = await query(
+    `UPDATE work.projectmembers
+     SET memberrolecode = 'TeamLead'
+     WHERE projectid = $1 AND userid = $2 AND leftatutc IS NULL`,
+    [projectId, newTeamLeadUserId]
+  );
+  if ((promoted.rowCount ?? 0) === 0) {
+    await query(
+      `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+       VALUES ($1, $2, 'TeamLead', $3)`,
+      [projectId, newTeamLeadUserId, addedByUserId]
+    );
+  }
 };

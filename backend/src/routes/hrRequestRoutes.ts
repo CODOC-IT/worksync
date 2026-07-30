@@ -1,38 +1,35 @@
 import { Router, Response } from 'express';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
-import { query } from '../db/pool.js';
+import { query, withTransaction } from '../db/pool.js';
+import { toUserPk } from '../utils/idMapping.js';
+
+type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
+type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
+type ApprovalStage = 'HR' | 'Admin';
 
 interface HRRequestDetails {
+  currentCheckIn?: string;
+  currentCheckOut?: string;
   requestedCheckIn?: string;
   requestedCheckOut?: string;
+  currentBreaks?: unknown[];
+  requestedBreaks?: unknown[];
   attendanceChangeReason?: string;
-  leaveType?: string;
+  leaveType?: 'Full Day Leave' | 'Half Day Leave';
   leaveDays?: number;
   extraBreakMinutes?: number;
-}
-
-interface HRRequest {
-  id: string;
-  userId: string;
-  userName?: string;
-  type: 'Correction' | 'Leave' | 'Break_Exception';
-  date: string;
-  reason: string;
-  status: 'Pending' | 'Approved' | 'Rejected';
-  details: HRRequestDetails;
-  submittedAt: string;
-  decidedBy?: string;
-  decisionReason?: string;
 }
 
 interface HRRequestRow {
   id: string;
   user_id: string;
   user_name: string | null;
-  request_type: HRRequest['type'];
+  requester_role: string | null;
+  request_type: RequestType;
   request_date: string | Date;
   reason: string;
-  status: HRRequest['status'];
+  status: RequestStatus;
+  approval_stage: ApprovalStage;
   details: HRRequestDetails | string | null;
   submitted_at: string | Date;
   decided_by: string | null;
@@ -40,7 +37,27 @@ interface HRRequestRow {
 }
 
 const router = Router();
-const allowedTypes: HRRequest['type'][] = ['Correction', 'Leave', 'Break_Exception'];
+const allowedTypes: RequestType[] = ['Correction', 'Leave', 'Break_Exception'];
+const normalizeRole = (role: unknown): string =>
+  String(role || '').replace(/[\s_-]/g, '').toLowerCase();
+const isAdmin = (role: unknown): boolean =>
+  ['admin', 'administrator'].includes(normalizeRole(role));
+const isHR = (role: unknown): boolean =>
+  ['hr', 'hrspecialist', 'hrrepresentative', 'humanresources'].includes(normalizeRole(role));
+
+export const getInitialApprovalStage = (
+  requestType: RequestType,
+  requesterRole: string
+): ApprovalStage =>
+  requestType === 'Leave' && !isHR(requesterRole) ? 'HR' : 'Admin';
+
+export const canReviewRequestStage = (
+  requestType: RequestType,
+  stage: ApprovalStage,
+  reviewerRole: string
+): boolean =>
+  (stage === 'HR' && requestType === 'Leave' && isHR(reviewerRole)) ||
+  (stage === 'Admin' && isAdmin(reviewerRole));
 
 const ensureTable = async (): Promise<void> => {
   await query(`
@@ -48,10 +65,12 @@ const ensureTable = async (): Promise<void> => {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       user_name TEXT,
+      requester_role TEXT,
       request_type TEXT NOT NULL CHECK (request_type IN ('Correction', 'Leave', 'Break_Exception')),
       request_date DATE NOT NULL,
       reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Approved', 'Rejected')),
+      approval_stage TEXT NOT NULL DEFAULT 'Admin' CHECK (approval_stage IN ('HR', 'Admin')),
       details JSONB NOT NULL DEFAULT '{}'::jsonb,
       submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       decided_by TEXT,
@@ -59,213 +78,346 @@ const ensureTable = async (): Promise<void> => {
       decided_at TIMESTAMPTZ
     )
   `);
-
+  await query(`ALTER TABLE public.worksync_hr_requests ADD COLUMN IF NOT EXISTS requester_role TEXT`);
   await query(`
-    CREATE INDEX IF NOT EXISTS idx_worksync_hr_requests_user_id
-    ON public.worksync_hr_requests (user_id)
+    ALTER TABLE public.worksync_hr_requests
+    ADD COLUMN IF NOT EXISTS approval_stage TEXT NOT NULL DEFAULT 'Admin'
   `);
-
   await query(`
-    CREATE INDEX IF NOT EXISTS idx_worksync_hr_requests_status
-    ON public.worksync_hr_requests (status)
+    CREATE INDEX IF NOT EXISTS idx_worksync_hr_requests_reviewer
+    ON public.worksync_hr_requests (approval_stage, status, submitted_at DESC)
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS public.worksync_attendance_breaks (
+      user_id TEXT NOT NULL,
+      work_date DATE NOT NULL,
+      breaks JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, work_date)
+    )
+  `);
+  // Existing databases predate Half Day; provision it idempotently without changing reports.
+  await query(`
+    INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
+    VALUES ('Half Day', 'Half Day', TRUE)
+    ON CONFLICT (statuscode) DO NOTHING
   `);
 };
 
 const formatDate = (value: string | Date): string =>
   new Date(value).toISOString().split('T')[0];
-
 const formatDateTime = (value: string | Date): string =>
   new Date(value).toISOString().replace('T', ' ').substring(0, 16);
-
-const mapRow = (row: HRRequestRow): HRRequest => ({
+const parseDetails = (details: HRRequestRow['details']): HRRequestDetails =>
+  typeof details === 'string' ? JSON.parse(details) : details || {};
+const mapRow = (row: HRRequestRow) => ({
   id: row.id,
   userId: row.user_id,
   userName: row.user_name || undefined,
+  requesterRole: row.requester_role || undefined,
   type: row.request_type,
   date: formatDate(row.request_date),
   reason: row.reason,
   status: row.status,
-  details:
-    typeof row.details === 'string'
-      ? JSON.parse(row.details)
-      : row.details || {},
+  approvalStage: row.approval_stage,
+  details: parseDetails(row.details),
   submittedAt: formatDateTime(row.submitted_at),
   decidedBy: row.decided_by || undefined,
   decisionReason: row.decision_reason || undefined
 });
 
-const normalizeRole = (role: unknown): string =>
-  String(role || '')
-    .replace(/[\s_-]/g, '')
-    .toLowerCase();
-
-
-
-const canReviewRequests = (req: AuthenticatedRequest): boolean => {
-  const role = normalizeRole(req.user?.role);
-
-  return [
-    'hr',
-    'hrspecialist',
-    'hrrepresentative',
-    'humanresources',
-    'admin',
-    'administrator'
-  ].includes(role);
+const loadAttendanceSnapshot = async (
+  userId: string,
+  date: string
+): Promise<{ checkIn: string; checkOut: string }> => {
+  const result = await query<{ checkin: string; checkout: string }>(
+    `SELECT COALESCE(to_char(actualcheckinatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkin,
+            COALESCE(to_char(actualcheckoutatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkout
+       FROM hr.attendancerecords
+      WHERE userid = $1 AND workdate = $2::date`,
+    [toUserPk(userId), date]
+  );
+  return {
+    checkIn: result.rows[0]?.checkin || '',
+    checkOut: result.rows[0]?.checkout || ''
+  };
 };
 
-// GET /api/hr-requests
-// HR/Admin receive every request. Other users receive only their own requests.
+// Reviewers receive only their stage. Requesters retain read access to their own history.
 router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
-
     await ensureTable();
-
-    const result = canReviewRequests(req)
-      ? await query<HRRequestRow>(`
-          SELECT *
-          FROM public.worksync_hr_requests
-          ORDER BY submitted_at DESC
-        `)
-      : await query<HRRequestRow>(`
-          SELECT *
-          FROM public.worksync_hr_requests
+    let result;
+    if (isAdmin(req.user.role)) {
+      result = await query<HRRequestRow>(
+        `SELECT * FROM public.worksync_hr_requests
+          WHERE approval_stage = 'Admin'
+          ORDER BY submitted_at DESC`
+      );
+    } else if (isHR(req.user.role)) {
+      result = await query<HRRequestRow>(
+        `SELECT * FROM public.worksync_hr_requests
           WHERE user_id = $1
-          ORDER BY submitted_at DESC
-        `, [req.user.id]);
-
-    res.json({
-      success: true,
-      requests: result.rows.map(mapRow)
-    });
+             OR (approval_stage = 'HR' AND request_type = 'Leave' AND user_id <> $1)
+          ORDER BY submitted_at DESC`,
+        [req.user.id]
+      );
+    } else {
+      result = await query<HRRequestRow>(
+        `SELECT * FROM public.worksync_hr_requests
+          WHERE user_id = $1
+          ORDER BY submitted_at DESC`,
+        [req.user.id]
+      );
+    }
+    res.json({ success: true, requests: result.rows.map(mapRow) });
   } catch (error: any) {
     console.error('[HR Requests Load Error]', error?.stack || error?.message || error);
-    res.status(500).json({ success: false, message: 'Failed to load HR requests.' });
+    res.status(500).json({ success: false, message: 'Failed to load approval requests.' });
   }
 });
 
-// POST /api/hr-requests
 router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
-
-    const { userName, type, date, reason, details } = req.body;
+    const { userName, type, date, reason, details } = req.body as {
+      userName?: string;
+      type?: RequestType;
+      date?: string;
+      reason?: string;
+      details?: HRRequestDetails;
+    };
     const cleanReason = typeof reason === 'string' ? reason.trim() : '';
-
-    if (!allowedTypes.includes(type) || !cleanReason) {
-      res.status(400).json({
-        success: false,
-        message: 'A valid request type and reason are required.'
-      });
+    if (!type || !allowedTypes.includes(type) || !cleanReason) {
+      res.status(400).json({ success: false, message: 'A valid request type and reason are required.' });
+      return;
+    }
+    if (isAdmin(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admins do not submit attendance approval requests.' });
+      return;
+    }
+    if (type === 'Leave' && !['Full Day Leave', 'Half Day Leave'].includes(details?.leaveType || '')) {
+      res.status(400).json({ success: false, message: 'A valid leave type is required.' });
+      return;
+    }
+    const requestDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+    if (!requestDate) {
+      res.status(400).json({ success: false, message: 'A valid request date is required.' });
+      return;
+    }
+    await ensureTable();
+    const pending = await query(
+      `SELECT 1 FROM public.worksync_hr_requests
+        WHERE user_id = $1 AND request_type = $2 AND request_date = $3::date AND status = 'Pending'`,
+      [req.user.id, type, requestDate]
+    );
+    if (pending.rowCount) {
+      res.status(409).json({ success: false, message: `A pending ${type.toLowerCase()} request already exists for this date.` });
       return;
     }
 
-    const requestDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
-      ? date
-      : new Date().toISOString().split('T')[0];
+    const cleanDetails: HRRequestDetails = { ...(details || {}) };
+    if (type === 'Correction') {
+      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+      if (!cleanDetails.requestedCheckIn || !timePattern.test(cleanDetails.requestedCheckIn) ||
+          (cleanDetails.requestedCheckOut && !timePattern.test(cleanDetails.requestedCheckOut))) {
+        res.status(400).json({ success: false, message: 'Requested attendance times must use HH:mm format.' });
+        return;
+      }
+      if (cleanDetails.requestedCheckOut &&
+          cleanDetails.requestedCheckOut <= cleanDetails.requestedCheckIn) {
+        res.status(400).json({ success: false, message: 'Check-out must be later than check-in.' });
+        return;
+      }
+      const current = await loadAttendanceSnapshot(req.user.id, requestDate);
+      cleanDetails.currentCheckIn = current.checkIn;
+      cleanDetails.currentCheckOut = current.checkOut;
+      const breaks = await query<{ breaks: unknown[] | string }>(
+        `SELECT breaks FROM public.worksync_attendance_breaks WHERE user_id = $1 AND work_date = $2::date`,
+        [req.user.id, requestDate]
+      );
+      const currentBreaks = breaks.rows[0]?.breaks;
+      cleanDetails.currentBreaks = typeof currentBreaks === 'string'
+        ? JSON.parse(currentBreaks)
+        : currentBreaks || [];
+      if (current.checkIn === cleanDetails.requestedCheckIn &&
+          current.checkOut === (cleanDetails.requestedCheckOut || '') &&
+          JSON.stringify(cleanDetails.currentBreaks) === JSON.stringify(cleanDetails.requestedBreaks || [])) {
+        res.status(400).json({ success: false, message: 'No attendance changes were supplied.' });
+        return;
+      }
+    }
+
+    const approvalStage = getInitialApprovalStage(type, req.user.role);
     const id = `hrq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-
-    await ensureTable();
-
-    const result = await query<HRRequestRow>(`
-      INSERT INTO public.worksync_hr_requests (
-        id, user_id, user_name, request_type, request_date,
-        reason, status, details, submitted_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'Pending', $7::jsonb, NOW())
-      RETURNING *
-    `, [
-      id,
-      req.user.id,
-      typeof userName === 'string' ? userName.trim() : null,
-      type,
-      requestDate,
-      cleanReason,
-      JSON.stringify(details || {})
-    ]);
-
+    const result = await query<HRRequestRow>(
+      `INSERT INTO public.worksync_hr_requests (
+         id, user_id, user_name, requester_role, request_type, request_date,
+         reason, status, approval_stage, details, submitted_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'Pending', $8, $9::jsonb, NOW())
+       RETURNING *`,
+      [
+        id,
+        req.user.id,
+        typeof userName === 'string' ? userName.trim() : null,
+        req.user.role,
+        type,
+        requestDate,
+        cleanReason,
+        approvalStage,
+        JSON.stringify(cleanDetails)
+      ]
+    );
     res.status(201).json({
       success: true,
-      message: 'HR request submitted successfully.',
+      message: `${type === 'Leave' ? 'Leave' : 'Attendance edit'} request submitted successfully.`,
       request: mapRow(result.rows[0])
     });
   } catch (error: any) {
     console.error('[HR Request Create Error]', error?.stack || error?.message || error);
-    res.status(500).json({ success: false, message: 'Failed to submit HR request.' });
+    res.status(500).json({ success: false, message: 'Failed to submit approval request.' });
   }
 });
+
+const applyCorrection = async (
+  runQuery: typeof query,
+  row: HRRequestRow
+): Promise<void> => {
+  const details = parseDetails(row.details);
+  const result = await runQuery<{ attendancerecordid: number }>(
+    `UPDATE hr.attendancerecords
+        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
+            actualcheckoutatutc = CASE WHEN NULLIF($4, '') IS NULL THEN NULL
+              ELSE ($2::date + $4::time) AT TIME ZONE 'UTC' END,
+            workingminutes = CASE WHEN NULLIF($4, '') IS NULL THEN 0
+              ELSE GREATEST(0, EXTRACT(EPOCH FROM (
+                (($2::date + $4::time) AT TIME ZONE 'UTC') -
+                (($2::date + $3::time) AT TIME ZONE 'UTC')
+              )) / 60)::int END,
+            sourcecode = 'HRCorrection',
+            updatedatutc = CURRENT_TIMESTAMP
+      WHERE userid = $1 AND workdate = $2::date
+      RETURNING attendancerecordid`,
+    [toUserPk(row.user_id), formatDate(row.request_date), details.requestedCheckIn, details.requestedCheckOut || '']
+  );
+  if (!result.rows[0]) throw new Error('Attendance record no longer exists.');
+  await runQuery(
+    `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
+     VALUES ($1, $2::date, $3::jsonb, NOW())
+     ON CONFLICT (user_id, work_date) DO UPDATE SET breaks = EXCLUDED.breaks, updated_at = NOW()`,
+    [row.user_id, formatDate(row.request_date), JSON.stringify(details.requestedBreaks || [])]
+  );
+};
+
+const applyLeave = async (
+  runQuery: typeof query,
+  row: HRRequestRow
+): Promise<void> => {
+  const details = parseDetails(row.details);
+  const statusCode = details.leaveType === 'Half Day Leave' ? 'Half Day' : 'Leave';
+  await runQuery(
+    `INSERT INTO hr.attendancerecords
+       (userid, workdate, attendancestatusid, workingminutes, sourcecode, updatedatutc)
+     VALUES ($1, $2::date,
+       (SELECT attendancestatusid FROM hr.attendancestatuses WHERE statuscode = $3),
+       0, 'HRCorrection', CURRENT_TIMESTAMP)
+     ON CONFLICT (userid, workdate) DO UPDATE SET
+       attendancestatusid = EXCLUDED.attendancestatusid,
+       workingminutes = CASE WHEN $3 = 'Leave' THEN 0 ELSE hr.attendancerecords.workingminutes END,
+       sourcecode = 'HRCorrection',
+       updatedatutc = CURRENT_TIMESTAMP`,
+    [toUserPk(row.user_id), formatDate(row.request_date), statusCode]
+  );
+};
 
 const decideRequest = async (
   req: AuthenticatedRequest,
   res: Response,
-  status: 'Approved' | 'Rejected'
+  decision: 'Approved' | 'Rejected'
 ): Promise<void> => {
   if (!req.user) {
     res.status(401).json({ success: false, message: 'Not authenticated.' });
     return;
   }
-
-  if (!canReviewRequests(req)) {
-    res.status(403).json({ success: false, message: 'Only HR or Admin can review HR requests.' });
-    return;
-  }
-
-  const decisionReason = typeof req.body.decisionReason === 'string'
-    ? req.body.decisionReason.trim()
-    : '';
-
-  if (status === 'Rejected' && !decisionReason) {
+  const decisionReason = typeof req.body.decisionReason === 'string' ? req.body.decisionReason.trim() : '';
+  if (decision === 'Rejected' && !decisionReason) {
     res.status(400).json({ success: false, message: 'A rejection reason is required.' });
     return;
   }
-
   await ensureTable();
 
-  const result = await query<HRRequestRow>(`
-    UPDATE public.worksync_hr_requests
-    SET status = $1,
-        decided_by = $2,
-        decision_reason = $3,
-        decided_at = NOW()
-    WHERE id = $4
-    RETURNING *
-  `, [status, req.user.id, decisionReason || null, req.params.id]);
+  try {
+    const updated = await withTransaction(async (runQuery) => {
+      const locked = await runQuery<HRRequestRow>(
+        `SELECT * FROM public.worksync_hr_requests WHERE id = $1 FOR UPDATE`,
+        [req.params.id]
+      );
+      const row = locked.rows[0];
+      if (!row) throw Object.assign(new Error('Approval request not found.'), { statusCode: 404 });
+      if (row.status !== 'Pending') {
+        throw Object.assign(new Error('This request is no longer pending.'), { statusCode: 409 });
+      }
+      if (row.user_id === req.user!.id) {
+        throw Object.assign(new Error('You cannot approve your own request.'), { statusCode: 403 });
+      }
+      const authorized = canReviewRequestStage(
+        row.request_type,
+        row.approval_stage,
+        req.user!.role
+      );
+      if (!authorized) {
+        throw Object.assign(new Error(`Only ${row.approval_stage} can decide this request.`), { statusCode: 403 });
+      }
 
-  if (result.rowCount === 0) {
-    res.status(404).json({ success: false, message: 'HR request not found.' });
-    return;
+      if (decision === 'Approved' && row.request_type === 'Leave' && row.approval_stage === 'HR') {
+        const forwarded = await runQuery<HRRequestRow>(
+          `UPDATE public.worksync_hr_requests
+              SET approval_stage = 'Admin',
+                  decided_by = $2,
+                  decision_reason = $3
+            WHERE id = $1
+            RETURNING *`,
+          [row.id, req.user!.id, decisionReason || 'Approved by HR and forwarded to Admin.']
+        );
+        return forwarded.rows[0];
+      }
+
+      if (decision === 'Approved') {
+        if (row.request_type === 'Correction') await applyCorrection(runQuery, row);
+        if (row.request_type === 'Leave') await applyLeave(runQuery, row);
+      }
+      const final = await runQuery<HRRequestRow>(
+        `UPDATE public.worksync_hr_requests
+            SET status = $2, decided_by = $3, decision_reason = $4, decided_at = NOW()
+          WHERE id = $1
+          RETURNING *`,
+        [row.id, decision, req.user!.id, decisionReason || null]
+      );
+      return final.rows[0];
+    });
+    res.json({
+      success: true,
+      forwarded: updated.status === 'Pending' && updated.approval_stage === 'Admin',
+      message: updated.status === 'Pending'
+        ? 'Leave request approved by HR and forwarded to Admin.'
+        : `Request ${decision.toLowerCase()} successfully.`,
+      request: mapRow(updated)
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode) || 500;
+    if (statusCode === 500) console.error('[HR Request Decision Error]', error);
+    res.status(statusCode).json({ success: false, message: error?.message || 'Failed to decide request.' });
   }
-
-  res.json({
-    success: true,
-    message: `HR request ${status.toLowerCase()} successfully.`,
-    request: mapRow(result.rows[0])
-  });
 };
 
-router.patch('/:id/approve', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    await decideRequest(req, res, 'Approved');
-  } catch (error: any) {
-    console.error('[HR Request Approve Error]', error?.stack || error?.message || error);
-    res.status(500).json({ success: false, message: 'Failed to approve HR request.' });
-  }
-});
-
-router.patch('/:id/reject', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    await decideRequest(req, res, 'Rejected');
-  } catch (error: any) {
-    console.error('[HR Request Reject Error]', error?.stack || error?.message || error);
-    res.status(500).json({ success: false, message: 'Failed to reject HR request.' });
-  }
-});
+router.patch('/:id/approve', authenticateJWT, (req, res) => void decideRequest(req, res, 'Approved'));
+router.patch('/:id/reject', authenticateJWT, (req, res) => void decideRequest(req, res, 'Rejected'));
 
 export default router;

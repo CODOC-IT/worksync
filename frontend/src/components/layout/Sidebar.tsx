@@ -41,7 +41,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
-  const pendingHrCount = hrRequests.filter((r) => r.status === 'Pending').length;
+  const pendingHrCount = hrRequests.filter((request) =>
+    request.status === 'Pending' &&
+    request.userId !== currentUser.id &&
+    ((currentRole === 'HR' && request.type === 'Leave' && request.approvalStage === 'HR') ||
+      (currentRole === 'Admin' && request.approvalStage === 'Admin'))
+  ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
 
   const navItems = [
@@ -56,10 +61,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   icon: CheckCircle,
   badge:
     currentRole === 'HR' && pendingHrCount > 0
-      ? pendingHrCount
+        ? pendingHrCount
       : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
-          pendingApprovalsCount > 0
-        ? pendingApprovalsCount
+          pendingApprovalsCount + (currentRole === 'Admin' ? pendingHrCount : 0) > 0
+        ? pendingApprovalsCount + (currentRole === 'Admin' ? pendingHrCount : 0)
         : undefined,
   hidden: currentRole === 'Team_Member'
 },

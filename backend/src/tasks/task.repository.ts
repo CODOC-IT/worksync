@@ -1,6 +1,12 @@
 import { query, withTransaction } from '../db/pool.js';
 import { getPriorityId } from '../projects/project.repository.js';
-import { TaskAssigneeRow, TaskRow, TaskStatusHistoryRow } from './task.types.js';
+import {
+  TaskAssigneeRow,
+  TaskEditApprovalInput,
+  TaskEditApprovalRow,
+  TaskRow,
+  TaskStatusHistoryRow
+} from './task.types.js';
 
 export { getPriorityId };
 
@@ -9,7 +15,14 @@ const TASK_COLUMNS = `
   ts.statuscode, pr.prioritycode, t.startdate::text, t.duedate::text,
   t.createdbyuserid, t.completedatutc, t.completionsummary, t.archivedatutc,
   t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode,
-  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount
+  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount,
+  -- Completed-subtask tally, derived from work.TaskStatuses.IsCompletedState rather than a
+  -- hardcoded 'Done' string, so it stays correct if another completed state is ever added.
+  -- Selected alongside subtaskcount so the board's progress bar comes from the database on
+  -- every read (list AND detail) instead of being recomputed from client state.
+  (SELECT COUNT(*)::int FROM work.tasks st
+     JOIN work.taskstatuses sts ON sts.taskstatusid = st.taskstatusid
+   WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount
 `;
 
 const TASK_JOINS = `
@@ -164,6 +177,130 @@ const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow)
 export const insertTask = async (input: InsertTaskRow): Promise<number> =>
   withTransaction((runQuery) => insertTaskWithQuery(runQuery, input));
 
+export const insertTaskEditApproval = async (
+  task: TaskRow,
+  requestedByUserId: number,
+  reviewerUserId: number,
+  previous: TaskEditApprovalInput,
+  proposed: TaskEditApprovalInput
+): Promise<number> => withTransaction(async (runQuery) => {
+  await runQuery('SELECT taskid FROM work.tasks WHERE taskid = $1 FOR UPDATE', [task.taskid]);
+  const type = await runQuery<{ changerequesttypeid: number }>(
+    `SELECT changerequesttypeid FROM work.changerequesttypes
+     WHERE typecode = 'Description' AND isenabled`
+  );
+  if (!type.rows[0]) throw new Error('Task change request type is not configured.');
+  const existing = await runQuery<{ changerequestid: number }>(
+    `SELECT cr.changerequestid
+       FROM work.taskchangerequests cr
+      WHERE cr.taskid = $1
+        AND cr.changerequesttypeid = $2
+        AND cr.requeststatus = 'Pending'
+        AND cr.cancelledatutc IS NULL`,
+    [task.taskid, type.rows[0].changerequesttypeid]
+  );
+  if (existing.rows[0]) throw new Error('This task already has a pending edit request.');
+
+  const inserted = await runQuery<{ changerequestid: number }>(
+    `INSERT INTO work.taskchangerequests
+       (taskid, changerequesttypeid, requestedbyuserid, requestreason, requeststatus,
+        assignedrevieweruserid, submittedatutc)
+     VALUES ($1, $2, $3, $4, 'Pending', $5, CURRENT_TIMESTAMP)
+     RETURNING changerequestid`,
+    [
+      task.taskid,
+      type.rows[0].changerequesttypeid,
+      requestedByUserId,
+      'Controlled task edit approval',
+      reviewerUserId
+    ]
+  );
+  const requestId = inserted.rows[0].changerequestid;
+
+  await runQuery(
+    `INSERT INTO work.taskchangerequestitems
+       (changerequestid, fieldcode, oldvaluejson, proposedvaluejson)
+     VALUES ($1, 'taskUpdate', $2, $3)`,
+    [requestId, JSON.stringify(previous), JSON.stringify(proposed)]
+  );
+  return requestId;
+});
+
+export const findPendingTaskEditApprovalsForReviewer = async (
+  reviewerUserId: number
+): Promise<TaskEditApprovalRow[]> => {
+  const result = await query<TaskEditApprovalRow>(
+    `SELECT cr.changerequestid, cr.taskid, t.projectid, t.title AS tasktitle,
+            cr.requestedbyuserid, cr.requeststatus, cr.submittedatutc,
+            i.fieldcode, i.oldvaluejson, i.proposedvaluejson
+       FROM work.taskchangerequests cr
+       JOIN work.tasks t ON t.taskid = cr.taskid
+       JOIN work.changerequesttypes ct ON ct.changerequesttypeid = cr.changerequesttypeid
+       LEFT JOIN work.taskchangerequestitems i ON i.changerequestid = cr.changerequestid
+      WHERE cr.assignedrevieweruserid = $1
+        AND cr.requeststatus = 'Pending'
+        AND cr.cancelledatutc IS NULL
+        AND t.archivedatutc IS NULL
+        AND ct.typecode = 'Description'
+        AND cr.requestreason = 'Controlled task edit approval'
+      ORDER BY cr.submittedatutc DESC, cr.changerequestid DESC`,
+    [reviewerUserId]
+  );
+  return result.rows;
+};
+
+export const decideTaskEditApproval = async (
+  requestId: number,
+  reviewerUserId: number,
+  decision: 'Approved' | 'Rejected',
+  proposed: TaskEditApprovalInput
+): Promise<number | null> => withTransaction(async (runQuery) => {
+  const locked = await runQuery<{ taskid: number }>(
+    `SELECT taskid FROM work.taskchangerequests
+      WHERE changerequestid = $1
+        AND assignedrevieweruserid = $2
+        AND requeststatus = 'Pending'
+      FOR UPDATE`,
+    [requestId, reviewerUserId]
+  );
+  if (!locked.rows[0]) return null;
+
+  if (decision === 'Approved') {
+    const priority = await runQuery<{ priorityid: number }>(
+      'SELECT priorityid FROM work.priorities WHERE prioritycode = $1',
+      [proposed.priority === 'Urgent' ? 'Critical' : proposed.priority]
+    );
+    if (!priority.rows[0]) throw new Error('Unknown task priority.');
+    await runQuery(
+      `UPDATE work.tasks
+          SET title = $1, description = $2, priorityid = $3, startdate = $4, duedate = $5
+        WHERE taskid = $6 AND archivedatutc IS NULL`,
+      [
+        proposed.title,
+        proposed.description,
+        priority.rows[0].priorityid,
+        proposed.startDate,
+        proposed.dueDate,
+        locked.rows[0].taskid
+      ]
+    );
+  }
+
+  await runQuery(
+    `UPDATE work.taskchangerequests
+        SET requeststatus = $1, decisionatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP
+      WHERE changerequestid = $2`,
+    [decision, requestId]
+  );
+  await runQuery(
+    `INSERT INTO work.changerequestreviews
+       (changerequestid, revieweruserid, reviewaction, reviewerrolecode)
+     VALUES ($1, $2, $3, 'TeamLead')`,
+    [requestId, reviewerUserId, decision]
+  );
+  return locked.rows[0].taskid;
+});
+
 // Parent and children are persisted in one transaction, so a failed child validation/write
 // cannot leave an orphaned parent task behind.
 export const insertTaskBundle = async (
@@ -292,6 +429,7 @@ export const findStatusHistoryForTask = async (taskId: number): Promise<TaskStat
      LEFT JOIN work.taskstatuses fs ON fs.taskstatusid = h.fromtaskstatusid
      LEFT JOIN iam.users u ON u.userid = h.changedbyuserid
      WHERE h.taskid = $1
+        OR h.taskid IN (SELECT taskid FROM work.tasks WHERE parenttaskid = $1 AND archivedatutc IS NULL)
      ORDER BY h.changedatutc ASC, h.taskstatushistoryid ASC`,
     [taskId]
   );

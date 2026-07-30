@@ -26,6 +26,32 @@ interface TaskMutationContext {
   users: User[];
 }
 
+const findTaskForMutation = (tasks: Task[], taskId: string): (Task & Partial<{ startDate: string }>) | undefined => {
+  const directTask = tasks.find((task) => task.id === taskId);
+  if (directTask) return directTask;
+
+  const parent = tasks.find((task) => task.subtasks.some((subtask) => subtask.id === taskId));
+  const subtask = parent?.subtasks.find((item) => item.id === taskId);
+  if (!parent || !subtask) return undefined;
+
+  return {
+    ...parent,
+    ...subtask,
+    id: subtask.id,
+    parentTaskId: parent.id,
+    title: subtask.title,
+    description: subtask.description || '',
+    status: subtask.status || (subtask.completed ? 'Done' : 'Todo'),
+    priority: subtask.priority || parent.priority,
+    assigneeId: subtask.assigneeIds?.[0] || '',
+    assigneeIds: subtask.assigneeIds || [],
+    startDate: subtask.startDate || getTaskStartDate(parent),
+    dueDate: subtask.dueDate || parent.dueDate,
+    subtasks: [],
+    subtaskCount: 0
+  };
+};
+
 export const toTaskFormInput = (data: TaskMutationData): TaskFormInput => {
   const assigneeIds = data.assigneeIds?.length
     ? data.assigneeIds
@@ -108,7 +134,7 @@ export const prepareTaskUpdate = (
   data: TaskMutationData,
   context: TaskMutationContext
 ): TaskMutationResult => {
-  const task = context.tasks.find((item) => item.id === taskId);
+  const task = findTaskForMutation(context.tasks, taskId);
   if (!task) return { success: false, message: 'Task not found.' };
 
   const project = context.projects.find((item) => item.id === task.projectId);
@@ -179,7 +205,7 @@ export const prepareTaskDeletion = (
 
   if (
     !project
-    || !canDeleteTask(context.currentRole, context.currentUserId, project)
+    || !canDeleteTask(context.currentRole, context.currentUserId, project, task)
   ) {
     return { success: false, message: 'You do not have permission to delete this task.' };
   }

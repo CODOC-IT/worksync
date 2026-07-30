@@ -104,11 +104,22 @@ export interface ControlledEditRequest {
   createdAt: string;
 }
 
+export interface ProposedTaskUpdate {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  startDate: string;
+  dueDate: string;
+}
+
 // Project Board (Kanban) status-change audit trail. Mirrors work.TaskStatusHistory
 // in the PostgreSQL schema (see database/04_work_tables.sql) so a future write-path
 // can persist these entries without reshaping them.
 export interface TaskStatusHistoryEntry {
   id: string;
+  /** The task this entry belongs to. A parent task's history also includes its subtasks'
+   *  entries, so the board's task detail can attribute "completed by / at" per subtask. */
+  taskId?: string;
   fromStatus: TaskStatus;
   toStatus: TaskStatus;
   note: string;
@@ -134,6 +145,13 @@ export interface Task {
   dueDate: string;
   estimatedHours: number;
   subtaskCount?: number;
+  /** Subtask progress, all server-computed (see backend/src/tasks/task.repository.ts) — the
+   *  board renders these directly and never recounts from local state, so a card's progress is
+   *  always what the database says it is. */
+  completedSubtaskCount?: number;
+  subtaskProgress?: number; // 0-100 whole-number percentage
+  /** When this task itself entered a completed state (ISO). */
+  completedAt?: string;
   subtasks: Subtask[];
   dependencies: string[]; // array of Task IDs
   tags: string[];
@@ -176,15 +194,22 @@ export type HRRequestType = 'Correction' | 'Leave' | 'Break_Exception';
 export interface HRRequest {
   id: string;
   userId: string;
+  userName?: string;
   type: HRRequestType;
   date: string;
   reason: string;
   status: 'Pending' | 'Approved' | 'Rejected';
+  approvalStage?: 'HR' | 'Admin';
+  requesterRole?: UserRole;
   details: {
+    currentCheckIn?: string;
+    currentCheckOut?: string;
     requestedCheckIn?: string;
     requestedCheckOut?: string;
+    currentBreaks?: WorkBreak[];
+    requestedBreaks?: WorkBreak[];
     attendanceChangeReason?: string;
-    leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
+    leaveType?: 'Full Day Leave' | 'Half Day Leave';
     leaveDays?: number;
     extraBreakMinutes?: number;
   };
@@ -203,11 +228,25 @@ export interface SystemApproval {
   createdAt: string;
   details: string;
   status: 'Pending' | 'Approved' | 'Rejected' | 'Clarification_Requested';
+  projectId?: string;
+  proposedTask?: {
+    projectId: string;
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    startDate?: string;
+    dueDate: string;
+    assigneeIds: string[];
+    status: TaskStatus;
+    parentTaskId?: string;
+  };
   proposedDiff?: {
     field: string;
     oldValue: string;
     newValue: string;
   };
+  proposedTaskUpdate?: ProposedTaskUpdate;
+  previousTaskSnapshot?: ProposedTaskUpdate;
 }
 
 export interface ChatMessage {
@@ -340,6 +379,12 @@ export type NotificationType =
   | 'task_due_tomorrow'
   | 'task_overdue'
   | 'checklist_completed'
+  | 'subtask_assigned'
+  | 'subtask_completed'
+  | 'subtask_reopened'
+  | 'subtask_due_today'
+  | 'subtask_overdue'
+  | 'task_reopened'
   | 'comment_added'
   | 'mention'
   | 'attachment_uploaded'

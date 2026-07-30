@@ -102,10 +102,10 @@ export const getOverviewStats = async (
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL
        AND (ps.statuscode = 'Active'
-            OR p.startdate >= $2::date AND p.startdate <= $3::date
-            OR p.enddate >= $2::date AND p.enddate <= $3::date)`,
-    [projectIds, from, to]
-  );
+             OR p.startdate >= $2::date AND p.startdate <= $3::date
+             OR p.enddate >= $2::date AND p.enddate <= $3::date)`,
+     [projectIds, from, to]
+   );
 
   // Task counts across all visible projects
   const taskResult = await query<{ total: number; completed: number; active: number; overdue: number }>(
@@ -116,11 +116,11 @@ export const getOverviewStats = async (
        COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS overdue
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)`,
-    [projectIds, from, to]
-  );
+     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+             OR NOT ts.iscompletedstate)`,
+     [projectIds, from, to]
+   );
 
   return {
     totalProjects: projResult.rows[0]?.count || 0,
@@ -148,7 +148,7 @@ export interface ProjectStatsRow {
   overdueTasks: number;
 }
 
-export const getProjectStats = async (projectIds: number[]): Promise<ProjectStatsRow[]> => {
+export const getProjectStats = async (projectIds: number[], from: string, to: string): Promise<ProjectStatsRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<ProjectStatsRow>(
@@ -167,11 +167,71 @@ export const getProjectStats = async (projectIds: number[]): Promise<ProjectStat
               SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END)::int AS overdue_tasks
        FROM work.tasks t
        JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
-       GROUP BY t.projectid
+        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+        GROUP BY t.projectid
      ) task_stats ON task_stats.projectid = p.projectid
      WHERE p.projectid = ANY($1::int[]) AND p.archivedatutc IS NULL`,
-    [projectIds]
+     [projectIds]
+   );
+  return result.rows;
+};
+
+export interface ArchivedProjectRow {
+  projectid: number;
+  projectcode: string;
+  projectname: string;
+  startdate: string;
+  enddate: string;
+  owneruserid: number;
+}
+
+export const getArchivedProjects = async (
+  userPk: number,
+  role: string,
+  from: string,
+  to: string
+): Promise<ArchivedProjectRow[]> => {
+  const base = `SELECT p.projectid, p.projectcode, p.projectname,
+                        p.startdate::text, p.enddate::text, p.owneruserid
+                 FROM work.projects p
+                 JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
+                 WHERE p.archivedatutc IS NOT NULL`;
+
+  if (role === 'Admin' || role === 'HR') {
+    const result = await query<ArchivedProjectRow>(
+      `${base}
+       AND (ps.statuscode = 'Active'
+            OR p.startdate >= $1::date AND p.startdate <= $2::date
+            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+      [from, to]
+    );
+    return result.rows;
+  }
+
+  if (role === 'Team_Lead') {
+    const result = await query<ArchivedProjectRow>(
+      `${base}
+       AND (p.owneruserid = $3
+            OR EXISTS (SELECT 1 FROM work.projectmembers pm
+                       WHERE pm.projectid = p.projectid AND pm.userid = $3
+                       AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL))
+       AND (ps.statuscode = 'Active'
+            OR p.startdate >= $1::date AND p.startdate <= $2::date
+            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+      [from, to, userPk]
+    );
+    return result.rows;
+  }
+
+  const result = await query<ArchivedProjectRow>(
+    `${base}
+     AND EXISTS (SELECT 1 FROM work.projectmembers pm
+                 WHERE pm.projectid = p.projectid AND pm.userid = $3
+                 AND pm.leftatutc IS NULL)
+     AND (ps.statuscode = 'Active'
+          OR p.startdate >= $1::date AND p.startdate <= $2::date
+          OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+    [from, to, userPk]
   );
   return result.rows;
 };
@@ -213,31 +273,29 @@ export const getTaskStatusDistribution = async (
 ): Promise<DistRow[]> => {
   if (projectIds.length === 0) return [];
 
-  const result = await query<{ statuscode: string; value: number }>(
+  const result = await query<{ name: string; value: number }>(
     `SELECT ts.statuscode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)
-     GROUP BY ts.statuscode
-     ORDER BY MIN(ts.sortorder)`,
-    [projectIds, from, to]
-  );
+      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+      GROUP BY ts.statuscode
+      ORDER BY MIN(ts.sortorder)`,
+     [projectIds]
+   );
 
-  // Map DB codes to display names
-  const statusNames: Record<string, string> = {
-    Todo: 'Todo',
-    InProgress: 'In Progress',
-    Review: 'Review',
-    Blocked: 'Blocked',
-    Done: 'Done',
-  };
+   // Map DB codes to display names
+   const statusNames: Record<string, string> = {
+     Todo: 'Todo',
+     InProgress: 'In Progress',
+     Review: 'Review',
+     Blocked: 'Blocked',
+     Done: 'Done',
+   };
 
-  return result.rows.map((r) => ({
-    name: statusNames[r.statuscode] || r.statuscode,
-    value: r.value,
-  }));
+   return result.rows.map((r) => ({
+     name: statusNames[r.name] || r.name,
+     value: r.value,
+   }));
 };
 
 // ────────────────────────────────────────────────────────────
@@ -251,17 +309,15 @@ export const getTaskPriorityDistribution = async (
 ): Promise<DistRow[]> => {
   if (projectIds.length === 0) return [];
 
-  const result = await query<{ prioritycode: string; value: number }>(
+  const result = await query<{ name: string; value: number }>(
     `SELECT pr.prioritycode AS name, COUNT(*)::int AS value
      FROM work.tasks t
      JOIN work.priorities pr ON pr.priorityid = t.priorityid
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)
-     GROUP BY pr.prioritycode
-     ORDER BY pr.prioritycode`,
-    [projectIds, from, to]
+      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+      GROUP BY pr.prioritycode
+      ORDER BY pr.prioritycode`,
+     [projectIds]
   );
 
   // Map DB codes to display names
@@ -273,7 +329,7 @@ export const getTaskPriorityDistribution = async (
   };
 
   return result.rows.map((r) => ({
-    name: priorityNames[r.prioritycode] || r.prioritycode,
+    name: priorityNames[r.name] || r.name,
     value: r.value,
   }));
 };
@@ -303,7 +359,7 @@ export const getCompletionTrend = async (
      LEFT JOIN (
        SELECT t.createdatutc::date AS d, COUNT(*)::int AS cnt
        FROM work.tasks t
-       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+       WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
          AND t.createdatutc::date >= $2::date AND t.createdatutc::date <= $3::date
        GROUP BY t.createdatutc::date
      ) created ON created.d = dates.date
@@ -311,14 +367,14 @@ export const getCompletionTrend = async (
         SELECT t.completedatutc::date AS d, COUNT(*)::int AS cnt
         FROM work.tasks t
         JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL
+        WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
           AND ts.iscompletedstate AND t.completedatutc::date >= $2::date AND t.completedatutc::date <= $3::date
         GROUP BY t.completedatutc::date
       ) completed ON completed.d = dates.date
       GROUP BY dates.date
       ORDER BY dates.date`,
-    [projectIds, from, to]
-  );
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
@@ -334,7 +390,7 @@ export interface WorkloadRow {
   overdue: number;
 }
 
-export const getWorkload = async (projectIds: number[]): Promise<WorkloadRow[]> => {
+export const getWorkload = async (projectIds: number[], from: string, to: string): Promise<WorkloadRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<WorkloadRow>(
@@ -345,14 +401,16 @@ export const getWorkload = async (projectIds: number[]): Promise<WorkloadRow[]> 
        COALESCE(SUM(CASE WHEN ts.statuscode = 'Review' THEN 1 ELSE 0 END), 0)::int AS review,
        COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS overdue
      FROM work.taskassignees ta
-     JOIN work.tasks t ON t.taskid = ta.taskid AND t.archivedatutc IS NULL
+     JOIN work.tasks t ON t.taskid = ta.taskid AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE ta.unassignedatutc IS NULL
        AND t.projectid = ANY($1::int[])
+       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+            OR NOT ts.iscompletedstate)
      GROUP BY ta.userid
-     ORDER BY active DESC`,
-    [projectIds]
-  );
+      ORDER BY active DESC`,
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
@@ -408,8 +466,8 @@ export const getDeadlineBucketTasks = async (
        LIMIT 1
      ) ta ON true
      WHERE t.projectid = ANY($1::int[])
-       AND t.archivedatutc IS NULL
-       AND NOT ts.iscompletedstate
+        AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+        AND NOT ts.iscompletedstate
        AND ${dateFilter}
      ORDER BY t.duedate, t.taskid`,
     [projectIds]
@@ -449,7 +507,7 @@ export interface TeamStatRow {
   completed: number;
 }
 
-export const getTeamStats = async (projectIds: number[]): Promise<TeamStatRow[]> => {
+export const getTeamStats = async (projectIds: number[], from: string, to: string): Promise<TeamStatRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<TeamStatRow>(
@@ -462,13 +520,17 @@ export const getTeamStats = async (projectIds: number[]): Promise<TeamStatRow[]>
      FROM iam.users u
      JOIN work.projectmembers pm ON pm.userid = u.userid AND pm.leftatutc IS NULL
      LEFT JOIN org.departments d ON d.departmentid = u.departmentid
-     LEFT JOIN work.tasks t ON t.projectid = pm.projectid AND t.archivedatutc IS NULL
+      LEFT JOIN work.tasks t ON t.projectid = pm.projectid AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
      LEFT JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE pm.projectid = ANY($1::int[])
+       AND (t.taskid IS NULL
+            OR (t.duedate >= $2::date AND t.duedate <= $3::date)
+            OR NOT ts.iscompletedstate
+            OR ts.iscompletedstate IS NULL)
      GROUP BY d.departmentname
-     ORDER BY tasks DESC`,
-    [projectIds]
-  );
+      ORDER BY tasks DESC`,
+     [projectIds, from, to]
+   );
   return result.rows;
 };
 
@@ -505,7 +567,7 @@ export const getAttendanceStats = async (
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS present,
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS late,
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS absent,
-       COALESCE(SUM(CASE WHEN astatus.statuscode = 'On Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeave",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeave",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Half Day' THEN 1 ELSE 0 END), 0)::int AS "halfDay",
        COALESCE(SUM(ar.workingminutes), 0)::int AS totalMinutes,
        COUNT(*)::int AS totalRecords
@@ -582,6 +644,7 @@ export const getAttendanceRecords = async (
   );
   return result.rows.map((r) => ({
     ...r,
+    status: r.status === 'Leave' ? 'On Leave' : r.status,
     totalHours: Math.round((r.totalHours / 60) * 10) / 10,
   }));
 };
@@ -647,7 +710,7 @@ export const getTodayAttendance = async (): Promise<TodayAttendanceResult> => {
     `SELECT
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS "presentToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS "absentToday",
-       COALESCE(SUM(CASE WHEN astatus.statuscode = 'On Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS "lateToday",
        COALESCE(SUM(ar.workingminutes), 0)::int AS "totalMinutesToday",
        COUNT(*)::int AS "totalRecordsToday"

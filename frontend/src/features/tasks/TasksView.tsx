@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ChevronDown,
   ClipboardList,
+  Clock3,
   Filter,
   Layers,
   LoaderCircle,
@@ -42,7 +43,7 @@ import {
   SubtaskFormInput,
   validateTaskInput
 } from './taskRules';
-import { loadTaskDetailFromApi, updateTaskViaApi } from './taskRepository';
+import { loadTaskDetailFromApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -302,24 +303,7 @@ export const TasksView: React.FC = () => {
         : undefined;
       const result: TaskMutationResult = await (
         editingTaskId
-          ? existingTask?.parentTaskId
-            ? updateTaskViaApi(editingTaskId, {
-                title: form.title,
-                description: form.description,
-                priority: form.priority as TaskModulePriority,
-                startDate: form.startDate,
-                dueDate: form.dueDate
-              })
-                .then((task) => ({
-                  success: true,
-                  message: 'Subtask updated successfully.',
-                  task
-                }))
-                .catch((error: Error) => ({
-                  success: false,
-                  message: error.message || 'Failed to update the subtask.'
-                }))
-            : updateTask(editingTaskId, {
+          ? updateTask(editingTaskId, {
                 title: form.title,
                 description: form.description,
                 priority: form.priority as TaskModulePriority,
@@ -519,10 +503,7 @@ export const TasksView: React.FC = () => {
       const detail = await loadTaskDetailFromApi(task.id);
       setExpandedTaskDetails((current) => ({ ...current, [task.id]: detail }));
     } catch {
-      setExpandedTaskError({
-        taskId: task.id,
-        message: 'Subtask details could not be loaded. Please try again.'
-      });
+      setExpandedTaskError({ taskId: task.id, message: 'Subtask details could not be loaded. Please try again.' });
     } finally {
       setExpandingTaskId((current) => current === task.id ? null : current);
     }
@@ -1118,14 +1099,12 @@ export const TasksView: React.FC = () => {
                 .filter(Boolean);
               const overdue = isTaskOverdue(task, today);
               const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
-              const mayDelete = canDeleteTask(currentRole, currentUser.id, project);
+              const mayDelete = canDeleteTask(currentRole, currentUser.id, project, task);
 
               const loadedTask = expandedTaskDetails[task.id];
               const subtasks = loadedTask?.subtasks || task.subtasks || [];
               const subtaskCount = Math.max(task.subtaskCount || 0, subtasks.length);
-              const completedSubtasks = subtasks.filter((subtask) =>
-                subtask.completed || subtask.status === 'Done'
-              ).length;
+              const completedSubtasks = subtasks.filter((subtask) => subtask.completed || subtask.status === 'Done').length;
               const isExpanded = expandedTaskId === task.id;
               const isExpanding = expandingTaskId === task.id;
 
@@ -1212,7 +1191,14 @@ export const TasksView: React.FC = () => {
                   </p>
 
                   <div className="mt-4">
-                    <TaskBadge value={task.status} kind="status" />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <TaskBadge value={task.status} kind="status" />
+                      {task.approvalStatus === 'Pending Approval' && (
+                        <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                          <Clock3 size={11} />Pending approval
+                        </span>
+                      )}
+                    </div>
 
                   </div>
 
@@ -1231,28 +1217,6 @@ export const TasksView: React.FC = () => {
                         {assignees.map((user) => user?.name).join(', ') || 'Unassigned'}
                       </span>
                     </div>
-                    {subtaskCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void toggleTaskExpansion(task);
-                        }}
-                        className="mt-4 flex w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-500/[0.06] hover:text-cyan-200"
-                        aria-expanded={isExpanded}
-                      >
-                        <span className="inline-flex items-center gap-2">
-                          {isExpanding
-                            ? <LoaderCircle size={14} className="animate-spin text-cyan-400" />
-                            : <Layers size={14} className="text-cyan-400" />}
-                          {isExpanded ? 'Hide subtasks' : 'View subtasks'}
-                        </span>
-                        <ChevronDown
-                          size={14}
-                          className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-                    )}
                   </div>
 
                   {isExpanded && subtaskCount > 0 && (
@@ -1528,12 +1492,12 @@ const TaskDetailsModal: React.FC<{
       role="dialog"
       aria-modal="true"
       aria-labelledby="task-details-title"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-x-hidden bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
+      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
         <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-slate-950/25 px-5 py-3.5 sm:px-6">
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task overview</p>
@@ -1554,12 +1518,12 @@ const TaskDetailsModal: React.FC<{
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
           <div className="space-y-7">
             <section aria-labelledby="project-context-heading">
               <SectionHeading id="project-context-heading" eyebrow="Project" title={project ? getProjectName(project) : 'Unknown project'} />
               {project?.description && (
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">{project.description}</p>
+                <p className="mt-2 max-w-2xl break-all text-sm leading-6 text-slate-400">{project.description}</p>
               )}
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <DetailBox label="Status" value={project?.status || 'Unknown'} />
@@ -1590,11 +1554,16 @@ const TaskDetailsModal: React.FC<{
               <div className="mt-3">
                 <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Priority</span>
                 <TaskBadge value={task.priority} kind="priority" />
+                {task.approvalStatus === 'Pending Approval' && (
+                  <span title="Pending Team Lead approval" className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                    <Clock3 size={11} />Pending approval
+                  </span>
+                )}
               </div>
 
               <div className="mt-5">
                 <h4 className="text-xs font-semibold text-slate-300">Description</h4>
-                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
+                <p className="mt-1.5 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -1661,6 +1630,11 @@ const TaskDetailsModal: React.FC<{
                           <div className="flex flex-wrap gap-2">
                             <TaskBadge value={subtaskStatus} kind="status" />
                             <TaskBadge value={subtaskPriority} kind="priority" />
+                            {(subtask as Subtask & Partial<Task>).approvalStatus === 'Pending Approval' && (
+                              <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                                <Clock3 size={11} />Pending approval
+                              </span>
+                            )}
                             {mayEditSubtask && (
                               <button
                                 type="button"
@@ -1674,7 +1648,7 @@ const TaskDetailsModal: React.FC<{
                           </div>
                         </div>
 
-                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                        <p className="mt-3 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">
                           {subtask.description?.trim() || 'No description provided.'}
                         </p>
 

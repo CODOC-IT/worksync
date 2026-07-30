@@ -53,14 +53,18 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to);
     const projectIds = visibleProjects.map((p) => p.projectid);
 
+    // ── Archived projects (visible to role) ─────────────────
+    const archivedProjects = await repo.getArchivedProjects(userPk, role, from, to);
+    const archivedCount = archivedProjects.length;
+
     // ── Overview stats ──────────────────────────────────────
     const overview = await repo.getOverviewStats(projectIds, from, to);
     const members = await repo.getProjectMembers(projectIds);
     const uniqueMemberIds = new Set(members.map((m) => m.userid));
 
     // ── Project details with progress ───────────────────────
-    const projectStats = await repo.getProjectStats(projectIds);
-    const projectDetails = projectStats.map((ps) => {
+    const projectStats = await repo.getProjectStats(projectIds, from, to);
+    const activeProjectDetails = projectStats.map((ps) => {
       const progress = ps.totalTasks > 0 ? Math.round((ps.completedTasks / ps.totalTasks) * 100) : 0;
       const projectMembers = members.filter((m) => m.projectid === ps.projectid);
       const teamLeadMember = projectMembers.find((m) => m.memberrolecode === 'TeamLead');
@@ -85,6 +89,24 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
       };
     });
 
+    const projectDetails = [
+      ...activeProjectDetails,
+      ...archivedProjects.map((ap) => ({
+        id: `prj-${ap.projectid}`,
+        title: ap.projectname,
+        code: ap.projectcode,
+        status: 'Archived',
+        progress: 0,
+        taskCount: 0,
+        overdueCount: 0,
+        startDate: ap.startdate,
+        targetDate: ap.enddate,
+        teamLeadId: fromUserPk(ap.owneruserid),
+        memberIds: [],
+        healthLabel: 'Archived',
+      })),
+    ];
+
     // ── Task distributions ──────────────────────────────────
     const statusDistribution = await repo.getTaskStatusDistribution(projectIds, from, to);
     const priorityDistribution = await repo.getTaskPriorityDistribution(projectIds, from, to);
@@ -98,7 +120,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     }));
 
     // ── Workload ────────────────────────────────────────────
-    const workloadRows = await repo.getWorkload(projectIds);
+    const workloadRows = await repo.getWorkload(projectIds, from, to);
     const assigneePks = workloadRows.map((w) => w.userid);
     const userNames = assigneePks.length > 0 ? await repo.getUserNames(assigneePks) : [];
     const userNameMap = new Map(userNames.map((u) => [u.userid, u.displayname]));
@@ -120,7 +142,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     ]);
 
     // ── Team stats ──────────────────────────────────────────
-    const teamStatsRaw = await repo.getTeamStats(projectIds);
+    const teamStatsRaw = await repo.getTeamStats(projectIds, from, to);
     const teamStats = teamStatsRaw.map((t) => ({
       department: t.department,
       members: t.members,
@@ -218,6 +240,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
           activeTasks: overview.activeTasks,
           completedTasks: overview.completedTasks,
           overdueTasks: overview.overdueTasks,
+          archivedCount,
           completionRate: overview.totalTasks > 0
             ? Math.round((overview.completedTasks / overview.totalTasks) * 100)
             : 0,
@@ -271,7 +294,7 @@ router.get('/export', authenticateJWT, async (req: AuthenticatedRequest, res: Re
     let csvContent = '';
 
     if (type === 'projects') {
-      const stats = await repo.getProjectStats(projectIds);
+      const stats = await repo.getProjectStats(projectIds, from, to);
       const members = await repo.getProjectMembers(projectIds);
       const header = ['Project', 'Code', 'Status', 'Progress %', 'Start Date', 'End Date'].map(escapeCsv).join(',');
       const rows = stats.map((ps) => {
