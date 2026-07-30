@@ -7,6 +7,7 @@ import { generatePrompt } from '../services/aiService.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectService from '../projects/project.service.js';
 import * as taskService from '../tasks/task.service.js';
+import type { TaskStatusHistoryDTO } from '../tasks/task.types.js';
 
 const router = Router();
 
@@ -109,6 +110,16 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
 
     const taskById = new Map(allTasks.map((t) => [t.id, t]));
 
+    const historyByTask = new Map<string, TaskStatusHistoryDTO[]>();
+    await Promise.all(allTasks.map(async (t) => {
+      try {
+        const history = await taskService.getTaskHistory(t.id, req.user.id, req.user.role);
+        historyByTask.set(t.id, history);
+      } catch {
+        historyByTask.set(t.id, []);
+      }
+    }));
+
     const projectTasksStr = allTasks
       .map((t) => {
         const depNames = t.dependencies
@@ -126,10 +137,18 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
             }).join('\n')
           : '';
 
+        const taskHistory = historyByTask.get(t.id) || [];
+        const historyStr = taskHistory.length
+          ? '\n  Status Timeline:\n' + taskHistory.map((h) => {
+              const from = h.fromStatus ? `[${h.fromStatus}] →` : '';
+              return `    - ${from} [${h.toStatus}] on ${new Date(h.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} by ${h.changedByName}: "${h.note}"`;
+            }).join('\n')
+          : '';
+
         return `- ${t.taskNumber} [${t.status}] ${t.title}
   Description: ${t.description}
   Priority: ${t.priority} | Assignee: ${userStore.findById(t.assigneeId)?.name || 'Unassigned'} | Due: ${t.dueDate || 'No due date'}
-  Dependencies: ${depNames || 'None'}${discussionsStr}`;
+  Dependencies: ${depNames || 'None'}${historyStr}${discussionsStr}`;
       })
       .join('\n\n---\n\n');
 
