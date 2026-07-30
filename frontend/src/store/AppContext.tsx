@@ -1175,9 +1175,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Archives an Active project (or, for an already-Archived one, is the first half of the
-  // two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead this now
-  // creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
+  // Soft-deletes an Active project by archiving it (or, for an already-Archived one, is the first
+  // half of the two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead
+  // this creates a Pending PROJECT_DELETE approval request instead of archiving immediately (see
   // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
   // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
   // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
@@ -1189,8 +1189,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const result = await archiveProjectApi(projectId, reason?.trim() || `Deleted by ${currentUser.name}.`);
       if (result.pendingApproval) {
-        pushActivity('Requested project archive', 'Project', projectId, project.title);
-        confirmActionSuccess('Archive Requested', result.message);
+        pushActivity('Requested project delete', 'Project', projectId, project.title);
+        confirmActionSuccess('Delete Requested', result.message);
         return { success: true, message: result.message };
       }
       // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an

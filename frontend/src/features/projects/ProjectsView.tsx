@@ -363,8 +363,8 @@ export const ProjectsView: React.FC = () => {
 
   const confirmDelete = async () => {
     if (!deleteTargetId || deleteSubmitting) return;
-    // A Team Lead's archive/permanent-delete doesn't apply immediately -- it becomes a
-    // PROJECT_ARCHIVE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
+    // A Team Lead's delete/permanent-delete doesn't apply immediately -- it becomes a
+    // PROJECT_DELETE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
     // non-empty reason to create one. Admin keeps the previous auto-generated reason.
     if (currentRole === 'Team_Lead' && !deleteReason.trim()) {
       setDeleteReasonError('A reason is required so the Admin can review your request.');
@@ -801,7 +801,7 @@ export const ProjectsView: React.FC = () => {
               )
             ) : (
               <p className="text-xs text-slate-400">
-                This project will not be deleted immediately. An archive request will be submitted for Admin
+                This project will not be deleted immediately. A delete request will be submitted for Admin
                 approval, and the project stays unchanged unless an Admin approves it.
               </p>
             )}
