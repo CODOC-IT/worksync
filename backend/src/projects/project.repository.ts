@@ -262,6 +262,48 @@ export const archiveProject = async (
   return (result.rowCount ?? 0) > 0;
 };
 
+// Hard delete for a project that's already archived. Cascades only rows this module owns
+// (ProjectMembers/Milestones/ReviewerDesignations/the ProjectFiles link row/TeamLeadProjectScopes
+// -- ProjectPolicies cascades via its own FK already) and detaches rows it doesn't own but that
+// reference it via a nullable FK (Notifications, AuditEvents) so that history survives without a
+// dangling link. Tasks/Calendar Events/Discussion Threads/AI PromptGenerations are NOT touched --
+// if any still reference this project the final DELETE hits their live FK and throws, which the
+// service layer maps to a "still has linked records" error rather than partially deleting.
+export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
+  withTransaction(async (runQuery) => {
+    await runQuery('DELETE FROM work.projectmembers WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM work.projectmilestones WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM work.projectreviewerdesignations WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM collab.projectfiles WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM iam.teamleadprojectscopes WHERE projectid = $1', [projectId]);
+    await runQuery('UPDATE notify.notifications SET projectid = NULL WHERE projectid = $1', [projectId]);
+    await runQuery('UPDATE audit.auditevents SET projectid = NULL WHERE projectid = $1', [projectId]);
+
+    const result = await runQuery(
+      'DELETE FROM work.projects WHERE projectid = $1 AND archivedatutc IS NOT NULL',
+      [projectId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+
+// Restores an Archived project back to Active. Symmetric counterpart to archiveProject just
+// above: same idempotency guard shape (WHERE ArchivedAtUtc IS NOT NULL here, vs IS NULL there),
+// and clears ArchivedAtUtc/ArchivedByUserId/ArchiveReason together to satisfy CK_Projects_Archive
+// -- the constraint only enforces those three fields' internal consistency, not their
+// relationship to ProjectStatusId, so leaving them set would make a later archiveProject() call
+// silently no-op on an Active project.
+export const restoreProject = async (projectId: number): Promise<boolean> => {
+  const statusId = await getProjectStatusId('Active');
+  const result = await query(
+    `UPDATE work.projects
+     SET projectstatusid = $1, archivedatutc = NULL, archivedbyuserid = NULL, archivereason = NULL,
+         updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
+     WHERE projectid = $2 AND archivedatutc IS NOT NULL`,
+    [statusId, projectId]
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
 export const addProjectMember = async (
   projectId: number,
   userId: number,

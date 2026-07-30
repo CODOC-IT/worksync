@@ -55,6 +55,8 @@ import {
   createProjectApi,
   updateProjectApi,
   archiveProjectApi,
+  permanentlyDeleteProjectApi,
+  restoreProjectApi,
   addProjectMemberApi,
   removeProjectMemberApi
 } from '../features/projects/projectRepository';
@@ -150,6 +152,8 @@ interface AppState {
   rejectProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   updateProject: (projectId: string, data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   deleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  permanentlyDeleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  restoreProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
   updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
@@ -1128,6 +1132,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to delete project.', error);
       return { success: false, message: error?.message || 'Failed to delete the project. Please try again.' };
+    }
+  };
+
+  // Step two of the two-step delete: only usable on a project that's already Archived (the
+  // permanent-delete confirmation in ProjectsView only ever calls this for such a project). Unlike
+  // deleteProject/archiveProjectApi above, this removes the project from local state entirely --
+  // there's no longer a row to reflect a status on.
+  const permanentlyDeleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      await permanentlyDeleteProjectApi(projectId);
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      pushActivity('Permanently deleted project', 'Project', projectId, project.title);
+
+      const message = `"${project.title}" was permanently deleted.`;
+      confirmActionSuccess('Project Permanently Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to permanently delete project.', error);
+      return { success: false, message: error?.message || 'Failed to permanently delete the project. Please try again.' };
+    }
+  };
+
+  // Restores an Archived project back to Active. Deliberately not routed through updateProject --
+  // the backend clears ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic
+  // update path never touches (see project.service.ts's restoreProject comment). Members,
+  // milestones, files, notes, team lead, and tasks are untouched server-side, so the local merge
+  // here only needs to flip status, exactly like deleteProject's archive branch does the reverse.
+  const restoreProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      await restoreProjectApi(projectId);
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
+      pushActivity('Restored project', 'Project', projectId, project.title);
+
+      const message = `"${project.title}" was restored to Active.`;
+      confirmActionSuccess('Project Restored', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to restore project.', error);
+      return { success: false, message: error?.message || 'Failed to restore the project. Please try again.' };
     }
   };
 
@@ -2666,6 +2715,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectProject,
         updateProject,
         deleteProject,
+        permanentlyDeleteProject,
+        restoreProject,
         createTask,
         updateTask,
         deleteTask,

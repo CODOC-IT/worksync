@@ -23,6 +23,13 @@ router.put('/:id', controller.updateProject);
 // DELETE /api/projects/:id — archives (soft-delete), never a hard DELETE; body: { reason }
 router.delete('/:id', controller.archiveProject);
 
+// DELETE /api/projects/:id/permanent — hard-deletes an already-Archived project. Second step of
+// the two-step delete; the archive endpoint above is untouched and still the first step.
+router.delete('/:id/permanent', controller.permanentlyDeleteProject);
+
+// POST /api/projects/:id/restore — restores an Archived project back to Active.
+router.post('/:id/restore', controller.restoreProject);
+
 // GET /api/projects/:id/members
 router.get('/:id/members', controller.listMembers);
 
