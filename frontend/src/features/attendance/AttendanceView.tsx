@@ -214,7 +214,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
       )}
     </div>
 
-    <div className="space-y-3">
+    <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
       {records.length === 0 ? (
         <div className="p-4 rounded-xl bg-slate-900/50 border border-white/5 text-center">
           <p className="text-xs text-slate-400">{emptyMessage}</p>
@@ -289,8 +289,10 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   };
 
   const handleSave = async () => {
-    if (requiresApproval && !reason.trim()) {
-      setMessage('A reason is required for an attendance edit request.');
+    if (!reason.trim()) {
+      setMessage(requiresApproval
+        ? 'A reason is required for an attendance edit request.'
+        : 'A reason is required for an administrator correction.');
       return;
     }
     const result = await onSave(record.id, { checkIn, checkOut, breaks }, reason);
@@ -410,7 +412,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         )}
       </div>
 
-      {requiresApproval && (
+      {
         <label className="mt-4 block text-xs text-slate-400">
           Reason for change
           <textarea
@@ -422,7 +424,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             placeholder="Explain why these attendance values should be changed..."
           />
         </label>
-      )}
+      }
 
       {message && <p className="text-xs text-rose-300 mt-3">{message}</p>}
 
@@ -642,6 +644,10 @@ export const AttendanceView: React.FC = () => {
     submitHRRequest
   } = useApp();
   const [selectedUserId, setSelectedUserId] = useState('all');
+  const [dateFilter, setDateFilter] = useState<'today' | '7days' | '30days' | 'custom'>('30days');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'HR' | 'Team_Member' | 'Team_Lead'>('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [leaveFormOpen, setLeaveFormOpen] = useState(false);
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
@@ -651,17 +657,27 @@ export const AttendanceView: React.FC = () => {
   const todayAttendance = attendanceRecords.find(
     (record) => record.userId === currentUser.id && record.date === todayStr
   );
-  const myAttendanceRecords = attendanceRecords.filter(
-    (record) => record.userId === currentUser.id
-  );
   const isAdmin = currentRole === 'Admin';
   const isHR = currentRole === 'HR';
   const canViewOthers = isHR || isAdmin;
   const isOwnRecord = (record: AttendanceRecord) =>
     record.userId === currentUser.id;
-  const isTeamMember = currentRole === 'Team_Member';
   const canEditRecord = (record: AttendanceRecord) =>
-    isAdmin || isOwnRecord(record);
+    !isAdmin && isOwnRecord(record);
+  const filterByDate = (record: AttendanceRecord) => {
+    if (dateFilter === 'today') return record.date === todayStr;
+    if (dateFilter === 'custom') {
+      return (!customFrom || record.date >= customFrom) && (!customTo || record.date <= customTo);
+    }
+    const start = new Date(`${todayStr}T00:00:00`);
+    start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
+    return record.date >= start.toISOString().split('T')[0] && record.date <= todayStr;
+  };
+  const filterByRole = (record: AttendanceRecord) =>
+    roleFilter === 'all' || users.find((user) => user.id === record.userId)?.role === roleFilter;
+  const myAttendanceRecords = attendanceRecords.filter(
+    (record) => record.userId === currentUser.id && filterByDate(record)
+  );
   const getCorrectionRequestStatus = (
     record: AttendanceRecord
   ): HRRequest['status'] | undefined => {
@@ -695,7 +711,9 @@ export const AttendanceView: React.FC = () => {
     isAdmin ? adminAttendanceRecords : hrTeamAttendance
   ).filter(
     (record) =>
-      selectedUserId === 'all' || record.userId === selectedUserId
+      (selectedUserId === 'all' || record.userId === selectedUserId) &&
+      filterByDate(record) &&
+      filterByRole(record)
   );
   const editingRecord = attendanceRecords.find(
     (record) => record.id === editingRecordId
@@ -762,10 +780,11 @@ export const AttendanceView: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <Clock size={18} className="text-cyan-400" />
-        <h2 className="text-base font-bold text-white">My Attendance</h2>
-      </div>
+      {!isAdmin && (<>
+        <div className="flex items-center gap-2">
+          <Clock size={18} className="text-cyan-400" />
+          <h2 className="text-base font-bold text-white">My Attendance</h2>
+        </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <GlassCard glowColor="cyan">
@@ -908,6 +927,26 @@ export const AttendanceView: React.FC = () => {
         </GlassCard>
       </div>
 
+      {!canViewOthers && (
+        <div className="glass-panel p-4 space-y-3">
+          <label className="block text-xs text-slate-400">
+            Date range
+            <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value as typeof dateFilter)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50">
+              <option value="today">Today</option>
+              <option value="7days">Last 7 Days</option>
+              <option value="30days">Last 30 Days</option>
+              <option value="custom">Custom Date Range</option>
+            </select>
+          </label>
+          {dateFilter === 'custom' && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+            </div>
+          )}
+        </div>
+      )}
+
       <AttendanceHistory
         title="My Attendance History"
         records={myAttendanceRecords}
@@ -919,6 +958,7 @@ export const AttendanceView: React.FC = () => {
         getRequestStatus={getCorrectionRequestStatus}
         emptyMessage="No personal attendance records found."
       />
+      </>)}
 
       {leaveFormOpen && (
         <LeaveApplicationForm
@@ -947,8 +987,9 @@ export const AttendanceView: React.FC = () => {
 
       {canViewOthers && (
         <div className="space-y-4">
-          <div className="glass-panel p-4 flex flex-col sm:flex-row sm:items-end gap-3">
-            <label className="text-xs text-slate-400 flex-1">
+          <div className="glass-panel p-4 flex flex-col gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="text-xs text-slate-400">
               Select employee records
               <select
                 value={selectedUserId}
@@ -966,9 +1007,34 @@ export const AttendanceView: React.FC = () => {
                 ))}
               </select>
             </label>
+            <label className="text-xs text-slate-400">
+              Date range
+              <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value as typeof dateFilter)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50">
+                <option value="today">Today</option>
+                <option value="7days">Last 7 Days</option>
+                <option value="30days">Last 30 Days</option>
+                <option value="custom">Custom Date Range</option>
+              </select>
+            </label>
+            <label className="text-xs text-slate-400">
+              User role
+              <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as typeof roleFilter)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50">
+                <option value="all">All roles</option>
+                <option value="HR">HR</option>
+                <option value="Team_Member">Team Member</option>
+                <option value="Team_Lead">Team Lead</option>
+              </select>
+            </label>
+            </div>
+            {dateFilter === 'custom' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+                <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              </div>
+            )}
             <p className="text-[11px] text-slate-500">
               {isAdmin
-                ? 'Admin may edit records belonging to other users.'
+                ? 'Administrators have view-only attendance access.'
                 : 'Other users’ attendance is read-only for HR.'}
             </p>
           </div>
@@ -979,8 +1045,7 @@ export const AttendanceView: React.FC = () => {
             users={users}
             todayStr={todayStr}
             showEmployee
-            readOnly={!isAdmin}
-            onEdit={isAdmin ? openEditor : undefined}
+            readOnly
             icon="team"
             emptyMessage="No attendance records found for the selected employee."
           />

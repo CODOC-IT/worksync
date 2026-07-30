@@ -705,7 +705,8 @@ export interface TodayAttendanceResult {
   totalRecordsToday: number;
 }
 
-export const getTodayAttendance = async (): Promise<TodayAttendanceResult> => {
+export const getTodayAttendance = async (userPks?: number[]): Promise<TodayAttendanceResult> => {
+  const userFilter = userPks && userPks.length > 0 ? ' AND ar.userid = ANY($1::int[])' : '';
   const result = await query<TodayAttendanceResult>(
     `SELECT
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS "presentToday",
@@ -716,7 +717,8 @@ export const getTodayAttendance = async (): Promise<TodayAttendanceResult> => {
        COUNT(*)::int AS "totalRecordsToday"
      FROM hr.attendancerecords ar
      JOIN hr.attendancestatuses astatus ON astatus.attendancestatusid = ar.attendancestatusid
-     WHERE ar.workdate = CURRENT_DATE`
+     WHERE ar.workdate = CURRENT_DATE${userFilter}`,
+    userPks && userPks.length > 0 ? [userPks] : []
   );
   const row = result.rows[0] || { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, totalMinutesToday: 0, totalRecordsToday: 0 };
   return row;

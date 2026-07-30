@@ -40,11 +40,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
-  const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
+  const pendingApprovalsCount = systemApprovals.filter((sa) =>
+    sa.status === 'Pending' &&
+    sa.type !== 'Task_Creation' &&
+    sa.type !== 'Controlled_Edit'
+  ).length;
   const pendingHrCount = hrRequests.filter((request) =>
     request.status === 'Pending' &&
     request.userId !== currentUser.id &&
-    ((currentRole === 'HR' && request.type === 'Leave' && request.approvalStage === 'HR') ||
+    ((currentRole === 'HR' && request.approvalStage === 'HR') ||
       (currentRole === 'Admin' && request.approvalStage === 'Admin'))
   ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;

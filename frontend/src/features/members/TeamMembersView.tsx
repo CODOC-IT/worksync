@@ -3,6 +3,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
 import { Project, Task, User, UserRole } from '../../types';
+import { AccountFieldErrors, AccountFormValues, getPasswordChecks, validateAccountForm } from './accountFormRules';
 import {
   Check,
   Briefcase,
@@ -21,11 +22,14 @@ import {
   Users,
   X,
   Plus,
+  Eye,
+  EyeOff,
+  RefreshCcw,
 } from 'lucide-react';
 
 type SortOption = 'name' | 'role' | 'recent';
 type ViewMode = 'grid' | 'list';
-type SearchField = 'name' | 'email' | 'department' | 'title';
+type SearchField = 'name' | 'email' | 'title';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -90,7 +94,7 @@ const formatDate = (value?: string) => {
 const formatRole = (role: UserRole) => ROLE_LABELS[role] || role.replace('_', ' ');
 
 export const TeamMembersView: React.FC = () => {
-  const { users, tasks, projects, currentRole } = useApp();
+  const { users, tasks, projects, currentRole, refreshUsers, showToast } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<SearchField>('name');
@@ -100,6 +104,7 @@ export const TeamMembersView: React.FC = () => {
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
+  const [resendingUserId, setResendingUserId] = useState<string | null>(null);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
 
@@ -113,9 +118,7 @@ export const TeamMembersView: React.FC = () => {
               ? member.name
               : searchField === 'email'
                 ? member.email
-                : searchField === 'department'
-                  ? member.department
-                  : member.title;
+                : member.title;
           const matchesQuery = !query || searchValue.toLowerCase().includes(query);
 
           const matchesRole = roleFilter === 'all' || member.role === roleFilter;
@@ -170,6 +173,26 @@ export const TeamMembersView: React.FC = () => {
       }, 1800);
     } catch {
       setCopiedEmail(null);
+    }
+  };
+
+  const handleResendInvitation = async (member: User) => {
+    if (resendingUserId) return;
+    setResendingUserId(member.id);
+    try {
+      const token = localStorage.getItem('worksync_auth_token');
+      const response = await fetch(`/api/accounts/${member.id}/invitation/resend`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Could not send the password reset email.');
+      showToast('success', 'Password Reset Sent', `A secure password reset link was sent to ${member.email}.`);
+      refreshUsers();
+    } catch (reason) {
+      showToast('error', 'Password Reset Not Sent', reason instanceof Error ? reason.message : 'Could not send the password reset email.');
+    } finally {
+      setResendingUserId(null);
     }
   };
 
@@ -255,7 +278,6 @@ export const TeamMembersView: React.FC = () => {
                 >
                   <option value="name">Name</option>
                   <option value="email">Email</option>
-                  <option value="department">Department</option>
                   <option value="title">Title</option>
                 </select>
 
@@ -530,14 +552,28 @@ export const TeamMembersView: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSelectedMemberId(null)}
-                className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
-                aria-label="Close member detail"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedMember.canResendInvitation === true
+                  && (currentRole === 'Admin' || selectedMember.role === 'Team_Member' || selectedMember.role === 'Team_Lead') && (
+                  <button
+                    type="button"
+                    disabled={Boolean(resendingUserId)}
+                    onClick={() => void handleResendInvitation(selectedMember)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
+                  >
+                    <RefreshCcw size={14} className={resendingUserId === selectedMember.id ? 'animate-spin' : ''} />
+                    {resendingUserId === selectedMember.id ? 'Sending...' : 'Send password reset'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedMemberId(null)}
+                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                  aria-label="Close member detail"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             </div>
 
@@ -738,40 +774,160 @@ export const TeamMembersView: React.FC = () => {
   );
 };
 
+interface DepartmentOption {
+  id: number;
+  name: string;
+}
+
+const emptyAccountForm: AccountFormValues = {
+  fullName: '',
+  username: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  designation: '',
+  baseRole: 'Team_Member',
+  departmentId: '',
+  projectId: '',
+  endsAtUtc: ''
+};
+
 const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onClose: () => void }> = ({ isAdmin, projects, onClose }) => {
-  const [form, setForm] = useState({ fullName: '', username: '', email: '', departmentId: '', designation: '', baseRole: 'Team_Member', projectId: '', endsAtUtc: '' });
-  const [error, setError] = useState('');
+  const { refreshUsers, showToast } = useApp();
+  const [form, setForm] = useState<AccountFormValues>(emptyAccountForm);
+  const [errors, setErrors] = useState<AccountFieldErrors>({});
+  const [serverError, setServerError] = useState('');
   const [busy, setBusy] = useState(false);
-  const update = (field: string, value: string) => setForm((current) => ({ ...current, [field]: value }));
+  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [departmentsBusy, setDepartmentsBusy] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const passwordChecks = getPasswordChecks(form.password);
+
+  useEffect(() => {
+    let active = true;
+    const token = localStorage.getItem('worksync_auth_token');
+    fetch('/api/accounts/departments', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) throw new Error(data.message || 'Could not load departments.');
+        return data.data?.departments as DepartmentOption[];
+      })
+      .then((items) => {
+        if (!active) return;
+        const available = Array.isArray(items) ? items : [];
+        setDepartments(available);
+        setForm((current) => ({ ...current, departmentId: current.departmentId || String(available[0]?.id || '') }));
+      })
+      .catch((reason) => {
+        if (active) setServerError(reason instanceof Error ? reason.message : 'Could not load departments.');
+      })
+      .finally(() => {
+        if (active) setDepartmentsBusy(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const update = (field: keyof AccountFormValues, value: string) => {
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === 'baseRole' && value !== 'Team_Member') {
+        next.projectId = '';
+        next.endsAtUtc = '';
+      }
+      return next;
+    });
+    setErrors((current) => ({ ...current, [field]: undefined }));
+    setServerError('');
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setBusy(true); setError('');
+    if (busy) return;
+    const validationErrors = validateAccountForm(form);
+    if (Object.keys(validationErrors).length) {
+      setErrors(validationErrors);
+      return;
+    }
+    setBusy(true);
+    setServerError('');
     try {
       const token = localStorage.getItem('worksync_auth_token');
-      const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fullName: form.fullName, username: form.username, email: form.email, departmentId: Number(form.departmentId), designation: form.designation || undefined, baseRole: form.baseRole, ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {}) }) });
+      const response = await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          fullName: form.fullName,
+          username: form.username,
+          email: form.email.trim().toLowerCase(),
+          password: form.password,
+          confirmPassword: form.confirmPassword,
+          designation: form.designation || undefined,
+          baseRole: form.baseRole,
+          departmentId: Number(form.departmentId),
+          ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {})
+        })
+      });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
-      window.location.reload();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not create account.'); }
+      refreshUsers();
+      if (data.data?.invitationStatus === 'email_failed') {
+        showToast('warning', 'Account Created - Email Failed', 'The active account was saved. Use the reset action to send a secure password reset link.');
+      } else {
+        showToast('success', 'Account Created', `Credentials were sent to ${form.email.trim().toLowerCase()}.`);
+      }
+      setForm(emptyAccountForm);
+      onClose();
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Could not create account.';
+      setServerError(message);
+      showToast('error', 'Account Not Created', message);
+    }
     finally { setBusy(false); }
   };
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden border border-white/10">
-      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">An email invitation lets the new member choose their own password.</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white"><X size={18} /></button></div>
-      <div className="grid gap-4 p-5 md:grid-cols-2">
-        <AccountField label="Full name *"><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Username *"><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Email *"><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Department ID *"><input required min="1" type="number" value={form.departmentId} onChange={(e) => update('departmentId', e.target.value)} className={accountInput} placeholder="e.g. 1" /></AccountField>
-        <AccountField label="Designation"><input value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Base role *"><select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>{isAdmin && <option value="HR">HR</option>}<option value="Team_Member">Team Member</option></select></AccountField>
-        {isAdmin && <><AccountField label="Team Lead project (optional)"><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry"> <input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
-        {error && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{error}</p>}
+      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">Create an active account and email its permanent sign-in credentials.</p></div><button type="button" disabled={busy} onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-50"><X size={18} /></button></div>
+      <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
+        <AccountField label="Full name" required error={errors.fullName}><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} autoComplete="name" /></AccountField>
+        <AccountField label="Username" required error={errors.username}><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} autoComplete="off" /></AccountField>
+        <AccountField label="Email" required error={errors.email}><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} autoComplete="email" /></AccountField>
+        <AccountField label="Designation" error={errors.designation}><input maxLength={120} value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} /></AccountField>
+        <AccountField label="Password" required error={errors.password}>
+          <div className="relative">
+            <input required type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => update('password', e.target.value)} className={`${accountInput} pr-10`} autoComplete="new-password" />
+            <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400 hover:text-white" aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </div>
+        </AccountField>
+        <AccountField label="Confirm password" required error={errors.confirmPassword}>
+          <div className="relative">
+            <input required type={showConfirmation ? 'text' : 'password'} value={form.confirmPassword} onChange={(e) => update('confirmPassword', e.target.value)} className={`${accountInput} pr-10`} autoComplete="new-password" />
+            <button type="button" onClick={() => setShowConfirmation((value) => !value)} className="absolute right-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400 hover:text-white" aria-label={showConfirmation ? 'Hide confirmation' : 'Show confirmation'}>{showConfirmation ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+          </div>
+        </AccountField>
+        <div className="md:col-span-2 grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] sm:grid-cols-5">
+          {Object.entries(passwordChecks).map(([key, passed]) => <span key={key} className={passed ? 'text-emerald-300' : 'text-slate-500'}>{passed ? '✓' : '○'} {key === 'length' ? '8-128 chars' : key}</span>)}
+        </div>
+        <AccountField label="Base role" required error={errors.baseRole}>
+          <select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>
+            {isAdmin && <option value="Admin">Admin</option>}
+            {isAdmin && <option value="HR">HR</option>}
+            <option value="Team_Member">Team Member</option>
+          </select>
+        </AccountField>
+        <AccountField label="Department" required error={errors.departmentId}>
+          <select required disabled={departmentsBusy} value={form.departmentId} onChange={(e) => update('departmentId', e.target.value)} className={accountInput}>
+            <option value="">{departmentsBusy ? 'Loading departments...' : 'Select a department'}</option>
+            {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+          </select>
+        </AccountField>
+        {isAdmin && form.baseRole === 'Team_Member' && <><AccountField label="Team Lead project (optional)" error={errors.projectId}><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry" required={Boolean(form.projectId)} error={errors.endsAtUtc}><input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
+        {serverError && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{serverError}</p>}
       </div>
-      <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5">Cancel</button><button disabled={busy} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Sending invitation…' : 'Send invitation'}</button></div>
+      <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" disabled={busy} onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50">Cancel</button><button disabled={busy || departmentsBusy || departments.length === 0} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Creating account...' : 'Create and send credentials'}</button></div>
     </form>
   </div>;
 };
 
 const accountInput = 'mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500/40';
-const AccountField: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => <label className="text-xs font-semibold text-slate-300">{label}{children}</label>;
+const AccountField: React.FC<{ label: string; required?: boolean; error?: string; children: React.ReactNode }> = ({ label, required, error, children }) => <label className="text-xs font-semibold text-slate-300">{label}{required && <span className="ml-1 text-rose-400">*</span>}{children}{error && <span className="mt-1 block font-normal text-rose-300">{error}</span>}</label>;

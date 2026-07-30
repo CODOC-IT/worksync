@@ -318,7 +318,7 @@ export const AIAssistantView: React.FC = () => {
   };
 
   return (
-    <div data-ai-assistant className="max-w-6xl mx-auto space-y-6">
+    <div data-ai-assistant className="max-w-6xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0">
       <div className="flex items-center gap-3">
         <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
           <Sparkles size={22} />
@@ -447,40 +447,40 @@ export const AIAssistantView: React.FC = () => {
 
           <div className="lg:col-span-3">
             <div className="glass-panel p-5 border border-purple-500/20 h-full flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2 shrink-0">
                   <FileText size={16} className="text-purple-400" /> Generated Prompt
                 </h3>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                   {generatedPrompt && (
                     <>
                       <button
                         onClick={handleGenerate}
                         disabled={generating}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-purple-500/40 transition-all flex items-center gap-1.5 disabled:opacity-50"
+                        className="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-purple-500/40 transition-all flex items-center gap-1 sm:gap-1.5 disabled:opacity-50"
                       >
-                        <RotateCcw size={12} /> Regenerate
+                        <RotateCcw size={11} className="sm:size-[12]" /> Regenerate
                       </button>
                       <button
                         onClick={() => handleCopy(editablePrompt)}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        className={`px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-all ${
                           justCopied
                             ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
                             : 'bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40'
                         }`}
                       >
-                        {justCopied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                        {justCopied ? <><Check size={11} className="sm:size-[12]" /> Copied</> : <><Copy size={11} className="sm:size-[12]" /> Copy</>}
                       </button>
                       <button
                         onClick={() => { setSaveTitle(''); setShowSaveModal(true); }}
                         disabled={justSaved}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                           justSaved
                             ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
                             : 'glass-button-neon'
                         }`}
                       >
-                        {justSaved ? <><Check size={12} /> Saved</> : <><Save size={12} /> Save</>}
+                        {justSaved ? <><Check size={11} className="sm:size-[12]" /> Saved</> : <><Save size={11} className="sm:size-[12]" /> Save</>}
                       </button>
                     </>
                   )}
@@ -623,10 +623,10 @@ export const AIAssistantView: React.FC = () => {
           <div className="lg:col-span-3">
             {selectedPrompt ? (
               <div className="glass-panel p-5 border border-cyan-500/20">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-white">{selectedPrompt.title}</h3>
-                    <div className="flex items-center gap-2 mt-1">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-white truncate">{selectedPrompt.title}</h3>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-mono">
                         {CATEGORIES.find((c) => c.code === selectedPrompt.category)?.name || selectedPrompt.category}
                       </span>
@@ -638,29 +638,29 @@ export const AIAssistantView: React.FC = () => {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
                     <button
                       onClick={() => handleCopy(selectedPrompt.versions[selectedPrompt.versions.length - 1]?.content || '')}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                      className={`px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-all ${
                         justCopied
                           ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
                           : 'bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/40'
                       }`}
                     >
-                      {justCopied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                      {justCopied ? <><Check size={11} className="sm:size-[12]" /> Copied</> : <><Copy size={11} className="sm:size-[12]" /> Copy</>}
                     </button>
                     <button
                       onClick={() => handleLoadVersions(selectedPrompt.id)}
-                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-purple-500/40 transition-all flex items-center gap-1.5"
+                      className="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold bg-slate-800/50 border border-white/10 text-slate-300 hover:text-white hover:border-purple-500/40 transition-all flex items-center gap-1 sm:gap-1.5"
                     >
-                      <History size={12} /> History
+                      <History size={11} className="sm:size-[12]" /> History
                     </button>
                     {!selectedPrompt.isArchived && (
                       <button
                         onClick={() => handleArchive(selectedPrompt.id)}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 transition-all flex items-center gap-1.5"
+                        className="px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 transition-all flex items-center gap-1 sm:gap-1.5"
                       >
-                        <Archive size={12} /> Archive
+                        <Archive size={11} className="sm:size-[12]" /> Archive
                       </button>
                     )}
                   </div>
@@ -695,11 +695,11 @@ export const AIAssistantView: React.FC = () => {
 
                 {showVersions && versions.length > 0 && (
                   <div className="mt-4 border-t border-white/10 pt-4">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between gap-2 mb-3">
                       <h4 className="text-sm font-bold text-white flex items-center gap-2">
                         <History size={16} className="text-purple-400" /> Version History
                       </h4>
-                      <button onClick={() => setShowVersions(false)} className="p-1 text-slate-400 hover:text-white">
+                      <button onClick={() => setShowVersions(false)} className="p-1 text-slate-400 hover:text-white shrink-0">
                         <X size={16} />
                       </button>
                     </div>
@@ -764,11 +764,11 @@ export const AIAssistantView: React.FC = () => {
       {previewVersion && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={() => setPreviewVersion(null)}>
           <div className="w-full max-w-3xl glass-panel-glow border border-purple-500/40 p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4 shrink-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 shrink-0">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <History size={16} className="text-purple-400" /> Version {previewVersion.versionNumber}
               </h3>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <span className="text-[10px] text-slate-500">{previewVersion.createdByName}</span>
                 {previewVersion.createdAtUtc && (
                   <span className="text-[10px] text-slate-500">{new Date(previewVersion.createdAtUtc).toLocaleDateString()}</span>
@@ -783,7 +783,7 @@ export const AIAssistantView: React.FC = () => {
                       setPreviewVersion(null);
                       setShowVersions(false);
                     }}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-all"
+                    className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-all"
                   >
                     Restore This Version
                   </button>

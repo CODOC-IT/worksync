@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -16,7 +18,19 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { Project, SystemApproval, Task } from '../../types';
+import { Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+
+// Project Management Approval Workflow (Team Lead -> Admin) -- rendered as its own section
+// below, separate from the legacy SystemApproval cards. See AppContext's projectApprovalRequests
+// / approveProjectApprovalRequest / rejectProjectApprovalRequest, backed by
+// backend/src/projects/projectApproval.*.
+const PROJECT_REQUEST_TYPE_META: Record<ProjectApprovalRequestType, { label: string; icon: React.ReactNode }> = {
+  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
+  PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
+  PROJECT_DELETE: { label: 'Project Delete', icon: <Trash2 size={13} /> },
+  PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
+  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
+};
 
 type StatusFilter = 'Pending' | 'Approved' | 'Rejected' | 'All';
 type TypeFilter = 'All' | SystemApproval['type'];
@@ -126,10 +140,13 @@ export const ApprovalsInboxView: React.FC = () => {
     users,
     systemApprovals,
     hrRequests,
+    projectApprovalRequests,
     approveApprovalItem,
     rejectApprovalItem,
     approveHRRequest,
-    rejectHRRequest
+    rejectHRRequest,
+    approveProjectApprovalRequest,
+    rejectProjectApprovalRequest
   } = useApp();
 
   const [statusFilter, setStatusFilter] =
@@ -154,6 +171,9 @@ export const ApprovalsInboxView: React.FC = () => {
     }
 
     return systemApprovals.filter((approval) => {
+      if (approval.type === 'Task_Creation' || approval.type === 'Controlled_Edit') {
+        return false;
+      }
       const project = getApprovalProject(
         approval,
         projects,
@@ -199,7 +219,7 @@ export const ApprovalsInboxView: React.FC = () => {
   const reviewableHRRequests = hrRequests.filter((request) => {
     if (request.userId === currentUser.id) return false;
     if (currentRole === 'HR') {
-      return request.type === 'Leave' && request.approvalStage === 'HR';
+      return request.approvalStage === 'HR';
     }
     if (currentRole === 'Admin') {
       return request.approvalStage === 'Admin';
@@ -218,6 +238,16 @@ export const ApprovalsInboxView: React.FC = () => {
   ).length;
 
   const pendingHRCount = reviewableHRRequests.filter(
+    (request) => request.status === 'Pending'
+  ).length;
+
+  // Admin sees every request here (fetched pre-scoped to Pending by AppContext); a Team Lead
+  // sees only their own submitted requests (any status), fetched the same way -- so no further
+  // client-side visibility filtering is needed here, unlike systemApprovals above.
+  const filteredProjectApprovalRequests = projectApprovalRequests.filter(
+    (request) => statusFilter === 'All' || request.status === statusFilter
+  );
+  const pendingProjectApprovalCount = projectApprovalRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
 
@@ -290,6 +320,22 @@ export const ApprovalsInboxView: React.FC = () => {
       type: result.success ? 'success' : 'error',
       message: result.message
     });
+  };
+
+  const handleProjectRequestApprove = async (request: ProjectApprovalRequest) => {
+    const approvalNote = window.prompt('Enter an optional approval note:');
+    const result = await approveProjectApprovalRequest(request.id, approvalNote?.trim() || undefined);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+  };
+
+  const handleProjectRequestReject = async (request: ProjectApprovalRequest) => {
+    const rejectionReason = window.prompt(`Reason for rejecting this ${PROJECT_REQUEST_TYPE_META[request.requestType].label} request:`);
+    if (!rejectionReason?.trim()) {
+      setNotice({ type: 'error', message: 'A rejection reason is required.' });
+      return;
+    }
+    const result = await rejectProjectApprovalRequest(request.id, rejectionReason.trim());
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
   };
 
   const renderNotice = () => {
@@ -611,11 +657,11 @@ export const ApprovalsInboxView: React.FC = () => {
           </p>
         </div>
 
-        {pendingSystemCount + pendingHRCount > 0 && (
+        {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount > 0 && (
           <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
             <Clock size={13} />
-            {pendingSystemCount + pendingHRCount} pending decision
-            {pendingSystemCount + pendingHRCount !== 1 ? 's' : ''}
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount} pending decision
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount !== 1 ? 's' : ''}
           </span>
         )}
       </header>
@@ -651,9 +697,7 @@ export const ApprovalsInboxView: React.FC = () => {
           [
             'All',
             'Project_Creation',
-            'Project_Deletion',
-            'Task_Creation',
-            'Controlled_Edit'
+            'Project_Deletion'
           ] as TypeFilter[]
         ).map((type) => (
           <button
@@ -672,6 +716,83 @@ export const ApprovalsInboxView: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {filteredProjectApprovalRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <FolderKanban size={16} className="text-cyan-400" />
+            Project Management Requests
+          </h2>
+          {filteredProjectApprovalRequests.map((request) => (
+            <div key={request.id} className="glass-panel space-y-3 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].icon}
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].label}
+                    </span>
+                    <StatusBadge status={request.status} size="sm" />
+                  </div>
+                  <h3 className="truncate font-semibold text-slate-100">{request.projectTitle}</h3>
+                  <p className="text-xs text-slate-400">
+                    Requested by {request.requestedByName} · {new Date(request.createdAt).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</span>
+                <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+              </div>
+
+              {request.requestType === 'PROJECT_EDIT' && request.requestedChanges && (
+                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested changes</span>
+                  <div className="mt-1 space-y-1">
+                    {Object.entries(request.requestedChanges)
+                      .filter(([, value]) => value !== undefined)
+                      .map(([field, value]) => (
+                        <div key={field} className="flex items-center gap-2">
+                          <span className="text-slate-500">{field}:</span>
+                          <span className="text-emerald-300">{String(value)}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {request.decisionReason && (
+                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Decision note</span>
+                  <p className="mt-1 text-xs text-slate-300">{request.decisionReason}</p>
+                </div>
+              )}
+
+              {currentRole === 'Admin' && request.status === 'Pending' && (
+                <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => handleProjectRequestReject(request)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                  >
+                    <XCircle size={14} />
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleProjectRequestApprove(request)}
+                    className="glass-button-neon inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold"
+                  >
+                    <CheckCircle2 size={14} />
+                    Approve
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {currentRole === 'Admin' && filteredHRRequests.length > 0 && (
         <div className="space-y-3">
@@ -743,6 +864,7 @@ export const ApprovalsInboxView: React.FC = () => {
       )}
 
       {filteredApprovals.length === 0 &&
+      filteredProjectApprovalRequests.length === 0 &&
       !(currentRole === 'Admin' && filteredHRRequests.length > 0) ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <CheckCircle2

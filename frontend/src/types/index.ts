@@ -4,11 +4,15 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string;
   role: UserRole;
   department: string;
   avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
+  accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
+  invitationSentAtUtc?: string | null;
+  canResendInvitation?: boolean;
   lastActive?: string;
   githubUsername?: string;
   passwordHash?: string;
@@ -216,6 +220,34 @@ export interface HRRequest {
   submittedAt: string;
   decidedBy?: string;
   decisionReason?: string;
+}
+
+// Project Management Approval Workflow (Team Lead -> Admin) -- deliberately separate from
+// SystemApproval below, which is frontend-only/ephemeral for Project_Creation & Project_Deletion
+// and never persisted for the latter. Backed by a real table (work.ProjectApprovalRequests,
+// database/25_project_approvals.sql) via backend/src/projects/projectApproval.*.
+export type ProjectApprovalRequestType =
+  | 'PROJECT_EDIT'
+  | 'PROJECT_ARCHIVE'
+  | 'PROJECT_DELETE'
+  | 'PROJECT_RESTORE'
+  | 'PROJECT_PERMANENT_DELETE';
+
+export interface ProjectApprovalRequest {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  requestType: ProjectApprovalRequestType;
+  requestedByUserId: string;
+  requestedByName: string;
+  requestedChanges: Record<string, unknown> | null;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  reviewedByUserId?: string;
+  reviewedByName?: string;
+  decisionReason?: string;
+  createdAt: string;
+  decidedAt?: string;
 }
 
 export interface SystemApproval {

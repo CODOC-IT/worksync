@@ -4,6 +4,7 @@ import { toUserPk } from '../utils/idMapping.js';
 import { query } from '../db/pool.js';
 import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
+import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
 
 const router = Router();
 
@@ -46,16 +47,41 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
     }
 
     const userPk = toUserPk(req.user.id);
-    const normalizedRole = String(req.user.role || '').replace(/[\s_-]/g, '').toLowerCase();
-    const canViewAll = ['admin', 'administrator', 'hr', 'hrrepresentative', 'humanresources'].includes(normalizedRole);
-    const records = await repo.getAttendanceRecords(from, to, canViewAll ? undefined : [userPk]);
+    const role = attendanceRole(await getEffectiveRoles(req.user.id));
+    let visibleUserPks: number[];
+    if (role === 'Member') {
+      visibleUserPks = [userPk];
+    } else {
+      const visible = await query<{ userid: number }>(
+        `SELECT u.userid
+           FROM iam.users u
+          WHERE u.accountstatus = 'Active'
+            AND u.userid <> $1
+            AND NOT EXISTS (
+              SELECT 1
+                FROM iam.userroles ur
+                JOIN iam.roles r ON r.roleid = ur.roleid
+               WHERE ur.userid = u.userid
+                 AND r.rolecode = 'Administrator'
+                 AND ur.revokedatutc IS NULL
+                 AND ur.startsatutc <= now()
+                 AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+            )`,
+        [userPk]
+      );
+      visibleUserPks = visible.rows.map((row) => row.userid);
+      if (role === 'HR') visibleUserPks.push(userPk);
+    }
+    const records = visibleUserPks.length
+      ? await repo.getAttendanceRecords(from, to, visibleUserPks)
+      : [];
     await ensureBreakStorage();
     const breakRows = await query<{ user_id: string; work_date: string | Date; breaks: unknown[] | string }>(
       `SELECT user_id, work_date, breaks
          FROM public.worksync_attendance_breaks
         WHERE work_date BETWEEN $1::date AND $2::date
-          ${canViewAll ? '' : 'AND user_id = $3'}`,
-      canViewAll ? [from, to] : [from, to, req.user.id]
+          AND user_id = ANY($3::text[])`,
+      [from, to, visibleUserPks.map((id) => `usr-${id}`)]
     );
     const breaksByDate = new Map(
       breakRows.rows.map((row) => [
@@ -77,23 +103,50 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
   }
 });
 
-// PUT /api/attendance/:userId/:date — preserves the existing Admin direct-edit capability.
+// Retained for API compatibility, but attendance records are now view-only for Admin.
 router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
-    const role = String(req.user.role || '').replace(/[\s_-]/g, '').toLowerCase();
-    if (!['admin', 'administrator'].includes(role)) {
+    res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
+    return;
+    /*
+    const effectiveRoles = await getEffectiveRoles(req.user.id);
+    if (!effectiveRoles.isAdmin) {
       res.status(403).json({ success: false, message: 'Only Admin can directly edit attendance.' });
       return;
     }
-    const { checkIn, checkOut, breaks } = req.body as {
+    const { checkIn, checkOut, breaks, reason } = req.body as {
       checkIn?: string;
       checkOut?: string;
       breaks?: unknown[];
+      reason?: string;
     };
+    const cleanReason = typeof reason === 'string' ? reason.trim() : '';
+    if (!cleanReason) {
+      res.status(400).json({ success: false, message: 'A correction reason is required.' });
+      return;
+    }
+    if (req.params.userId === req.user.id) {
+      res.status(403).json({ success: false, message: 'Admins do not have personal attendance records.' });
+      return;
+    }
+    const targetAdmin = await query(
+      `SELECT 1
+         FROM iam.userroles ur
+         JOIN iam.roles r ON r.roleid = ur.roleid
+        WHERE ur.userid = $1 AND r.rolecode = 'Administrator'
+          AND ur.revokedatutc IS NULL AND ur.startsatutc <= now()
+          AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+        LIMIT 1`,
+      [toUserPk(req.params.userId)]
+    );
+    if (targetAdmin.rowCount) {
+      res.status(403).json({ success: false, message: 'Administrators do not have attendance records.' });
+      return;
+    }
     const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!checkIn || !timePattern.test(checkIn) || (checkOut && !timePattern.test(checkOut))) {
       res.status(400).json({ success: false, message: 'Attendance times must use HH:mm format.' });
@@ -129,7 +182,27 @@ router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, 
        ON CONFLICT (user_id, work_date) DO UPDATE SET breaks = EXCLUDED.breaks, updated_at = NOW()`,
       [req.params.userId, req.params.date, JSON.stringify(Array.isArray(breaks) ? breaks : [])]
     );
-    res.json({ success: true, message: 'Attendance record updated.' });
+    await recordActivity({
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      actorRole: 'Admin',
+      affectedUserId: req.params.userId,
+      action: 'Corrected',
+      module: 'Attendance',
+      entityType: 'Attendance',
+      entityId: `${req.params.userId}:${req.params.date}`,
+      entityName: `Attendance ${req.params.date}`,
+      description: `Administrator corrected attendance for ${req.params.userId}.`,
+      reason: cleanReason,
+      source: 'API',
+      important: true,
+      linkRoute: 'attendance',
+      changes: [
+        { field: 'checkIn', previousValue: null, newValue: checkIn },
+        { field: 'checkOut', previousValue: null, newValue: checkOut || null },
+      ],
+    });
+    res.json({ success: true, message: 'Attendance record updated.' }); */
   } catch (err: any) {
     console.error('[Attendance Update Error]', err);
     res.status(500).json({ success: false, message: 'Failed to update attendance record.' });
@@ -141,6 +214,10 @@ router.post('/check-in', authenticateJWT, async (req: AuthenticatedRequest, res:
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+    if (!canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
+      res.status(403).json({ success: false, message: 'Admins do not have personal attendance.' });
       return;
     }
 
@@ -175,6 +252,10 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+    if (!canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
+      res.status(403).json({ success: false, message: 'Admins do not have personal attendance.' });
       return;
     }
 
