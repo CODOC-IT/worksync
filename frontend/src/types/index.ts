@@ -4,11 +4,14 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string;
   role: UserRole;
   department: string;
   avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
+  accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
+  invitationSentAtUtc?: string | null;
   lastActive?: string;
   githubUsername?: string;
   passwordHash?: string;

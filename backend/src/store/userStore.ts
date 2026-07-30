@@ -50,8 +50,8 @@ const getSystemActorUserId = async (): Promise<number> => {
 };
 
 const USER_QUERY = `
-  SELECT u.userid, u.email, u.displayname, u.designation,
-         u.accountstatus, u.createdatutc,
+  SELECT u.userid, u.email, u.username, u.displayname, u.designation,
+         u.accountstatus, u.invitationsentatutc, u.createdatutc,
          r.rolecode, d.departmentname,
          uc.passwordhash, uc.passwordalgorithm
   FROM iam.users u
@@ -66,9 +66,11 @@ const USER_QUERY = `
 interface DbUserRow {
   userid: number;
   email: string;
+  username: string | null;
   displayname: string;
   designation: string | null;
   accountstatus: string;
+  invitationsentatutc: string | null;
   createdatutc: string;
   rolecode: string | null;
   departmentname: string | null;
@@ -81,6 +83,7 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     id: fromUserPk(row.userid),
     name: row.displayname,
     email: row.email,
+    username: row.username || undefined,
     // Accounts without a credential must never receive an application fallback password.
     passwordHash: row.passwordhash?.toString('utf-8') || '',
     role: row.rolecode ? (DB_TO_ROLE[row.rolecode] || 'Team_Member') : 'Team_Member',
@@ -88,6 +91,8 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     title: row.designation || 'Team Member',
     status: STATUS_MAP[row.accountstatus] || 'active',
+    accountStatus: row.accountstatus as UserRecord['accountStatus'],
+    invitationSentAtUtc: row.invitationsentatutc ? new Date(row.invitationsentatutc).toISOString() : null,
     createdAt: row.createdatutc ? new Date(row.createdatutc).toISOString() : new Date().toISOString()
   };
 }

@@ -7,6 +7,102 @@ export const isEmailConfigured = (): boolean => {
   return Boolean(smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here');
 };
 
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  })[character] || character);
+
+const accountTransport = () => {
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  if (!smtpUser || !smtpPass || smtpPass === 'your_gmail_app_password_here') {
+    throw new Error('SMTP credentials are not configured.');
+  }
+  return {
+    smtpUser,
+    organization: process.env.ORGANIZATION_NAME?.trim() || 'WorkSync',
+    transporter: nodemailer.createTransport({ service: 'gmail', auth: { user: smtpUser, pass: smtpPass } })
+  };
+};
+
+export interface CredentialEmailInput {
+  toEmail: string;
+  recipientName: string;
+  temporaryPassword: string;
+  role: string;
+}
+
+export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+  const safe = {
+    organization: escapeHtml(organization),
+    name: escapeHtml(input.recipientName),
+    email: escapeHtml(input.toEmail),
+    password: escapeHtml(input.temporaryPassword),
+    role: escapeHtml(input.role),
+    loginUrl: escapeHtml(loginUrl)
+  };
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    subject: `Your ${organization} account credentials`,
+    text: [
+      `Hello ${input.recipientName},`,
+      '',
+      `Your ${organization} account is ready.`,
+      `Email: ${input.toEmail}`,
+      `Temporary password: ${input.temporaryPassword}`,
+      `Role: ${input.role}`,
+      loginUrl ? `Sign in: ${loginUrl}` : '',
+      '',
+      'You must replace this temporary password after signing in. Do not share it with anyone.'
+    ].filter(Boolean).join('\n'),
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+      <h1 style="font-size:22px">Welcome to ${safe.organization}</h1>
+      <p>Hello ${safe.name},</p>
+      <p>Your account has been created. Use these temporary credentials to sign in:</p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
+        <tr><td style="padding:6px"><strong>Temporary password</strong></td><td style="padding:6px">${safe.password}</td></tr>
+        <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
+      </table>
+      ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
+      <p>You must replace this temporary password after signing in. Do not share it with anyone.</p>
+    </div>`
+  });
+};
+
+export interface PasswordSetupEmailInput {
+  toEmail: string;
+  recipientName: string;
+  actionLink: string;
+}
+
+export const sendPasswordSetupEmail = async (input: PasswordSetupEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const safeOrganization = escapeHtml(organization);
+  const safeName = escapeHtml(input.recipientName);
+  const safeLink = escapeHtml(input.actionLink);
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    subject: `Set up your ${organization} password`,
+    text: `Hello ${input.recipientName},\n\nUse this secure link to set up or reset your ${organization} password:\n${input.actionLink}\n\nIf you did not expect this email, contact your administrator.`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+      <h1 style="font-size:22px">Set up your ${safeOrganization} password</h1>
+      <p>Hello ${safeName},</p>
+      <p>Your original temporary password cannot be retrieved. Use this secure link to choose a new password:</p>
+      <p><a href="${safeLink}">Set up or reset your password</a></p>
+      <p>If you did not expect this email, contact your administrator.</p>
+    </div>`
+  });
+};
+
 export const sendOTPEmail = async (toEmail: string, name: string, otp: string): Promise<void> => {
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
