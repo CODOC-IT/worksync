@@ -228,8 +228,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (<button onClick={() => onNavigate('projects')} className="px-3 py-2 rounded-xl glass-button-neon text-xs font-semibold flex items-center gap-1.5"><Plus size={12} /> Project</button>)}
-          <button onClick={() => onNavigate('tasks')} className="px-3 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"><Plus size={12} /> Task</button>
+          {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (<button onClick={() => onNavigate('projects')} className="px-3 py-2 rounded-xl glass-button-neon text-xs font-semibold flex items-center gap-1.5">Project</button>)}
+          <button onClick={() => onNavigate('tasks')} className="px-3 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"> Task</button>
           <button onClick={() => onNavigate('ai-assistant')} className="px-3 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"><Sparkles size={12} /> AI</button>
         </div>
       </div>
