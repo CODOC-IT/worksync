@@ -25,12 +25,15 @@ export interface DiscussionComment {
 export interface DiscussionThread {
   id: string;
   projectId: string;
+  projectName: string;
   taskId?: string;
+  taskName?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;
   createdAt: string;
   updatedAt: string;
+  mentionableUserIds: string[];
   comments: DiscussionComment[];
 }
 

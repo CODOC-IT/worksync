@@ -3,7 +3,14 @@ import { ArrowLeft, AtSign, ChevronDown, FileText, LoaderCircle, MessageSquare, 
 import { useApp } from '../../store/AppContext';
 import { ProjectMemberSummary } from '../projects/projectRepository';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads } from './projectChatRepository';
-import { filterDiscussions, getMentionTrigger, insertMention, MentionTrigger, parseMentionIds } from './projectChatRules';
+import {
+  filterDiscussions,
+  getMentionTrigger,
+  getProjectMentionCandidates,
+  insertMention,
+  MentionTrigger,
+  parseMentionIds
+} from './projectChatRules';
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
 
 const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', type: '', authorId: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
@@ -63,22 +70,66 @@ export const ProjectChatsView: React.FC = () => {
     }
   }, [projects, selectedId, threads]);
 
-  const projectNames = useMemo(() => Object.fromEntries(projects.map((project) => [project.id, project.title])), [projects]);
-  const taskNames = useMemo(() => Object.fromEntries(tasks.map((task) => [task.id, task.title])), [tasks]);
+  const projectNames = useMemo(
+    () => Object.fromEntries([
+      ...threads.map((thread) => [thread.projectId, thread.projectName]),
+      ...projects.map((project) => [project.id, project.title])
+    ]),
+    [projects, threads]
+  );
+  const taskNames = useMemo(
+    () => Object.fromEntries([
+      ...threads.filter((thread) => thread.taskId).map((thread) => [thread.taskId!, thread.taskName || '']),
+      ...tasks.map((task) => [task.id, task.title])
+    ]),
+    [tasks, threads]
+  );
   const visibleThreads = useMemo(() => filterDiscussions(threads.filter((thread) => projects.find((project) => project.id === thread.projectId)?.status !== 'Completed'), filters, currentUser.id, projectNames, taskNames), [threads, projects, filters, currentUser.id, projectNames, taskNames]);
   const selected = selectedId ? visibleThreads.find((thread) => thread.id === selectedId) : undefined;
   const chatUsers = useMemo(() => users.filter((user) => user.status === 'active') as ProjectMemberSummary[], [users]);
-  const mentionUsers = useMemo(
-    () => chatUsers,
-    [chatUsers]
-  );
+  const mentionUsers = useMemo(() => {
+    if (!selected) return [];
+    if (Array.isArray(selected.mentionableUserIds)) {
+      const mentionableIds = new Set(selected.mentionableUserIds);
+      return chatUsers.filter((user) => mentionableIds.has(user.id));
+    }
+    const project = projects.find((item) => item.id === selected.projectId);
+    return getProjectMentionCandidates(
+      chatUsers,
+      project ? [...project.memberIds, project.teamLeadId] : []
+    );
+  }, [chatUsers, projects, selected]);
   const matchingMentionUsers = useMemo(() => {
     const query = mentionTrigger?.query.trim().toLocaleLowerCase() || '';
     return query
       ? mentionUsers.filter((user) => user.name.toLocaleLowerCase().includes(query))
       : mentionUsers;
   }, [mentionTrigger, mentionUsers]);
-  const projectTasks = tasks.filter((task) => task.projectId === filters.projectId);
+  const chatProjects = useMemo(() => {
+    const options = new Map(projects.map((project) => [
+      project.id,
+      { id: project.id, title: project.title }
+    ]));
+    for (const thread of threads) {
+      if (!options.has(thread.projectId)) {
+        options.set(thread.projectId, { id: thread.projectId, title: thread.projectName });
+      }
+    }
+    return Array.from(options.values());
+  }, [projects, threads]);
+  const projectTasks = useMemo(() => {
+    const options = new Map(
+      tasks
+        .filter((task) => task.projectId === filters.projectId)
+        .map((task) => [task.id, { id: task.id, title: task.title }])
+    );
+    for (const thread of threads) {
+      if (thread.projectId === filters.projectId && thread.taskId && !options.has(thread.taskId)) {
+        options.set(thread.taskId, { id: thread.taskId, title: thread.taskName || 'Project task' });
+      }
+    }
+    return Array.from(options.values());
+  }, [filters.projectId, tasks, threads]);
   const availableProjects = projects.filter((project) => project.status !== 'Completed');
 
   const addFiles = async (files: FileList | null) => {
@@ -199,7 +250,7 @@ export const ProjectChatsView: React.FC = () => {
       </header>
 
       <div className="project-chat-toolbar flex shrink-0 flex-wrap items-center gap-2 rounded-xl p-2.5">
-        <div className="min-w-36 flex-1"><Select value={filters.projectId} onChange={(projectId) => setFilters({ ...filters, projectId, taskId: '' })} label="All projects">{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></div>
+        <div className="min-w-36 flex-1"><Select value={filters.projectId} onChange={(projectId) => setFilters({ ...filters, projectId, taskId: '' })} label="All projects">{chatProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></div>
         <div className="min-w-36 flex-1"><Select value={filters.taskId} onChange={(taskId) => setFilters({ ...filters, taskId })} label="All tasks" disabled={!filters.projectId}>{projectTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</Select></div>
         <div className="min-w-32 flex-1"><Select value={filters.type} onChange={(type) => setFilters({ ...filters, type })} label="All types">{DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}</Select></div>
         <div className="min-w-36 flex-1"><Select value={filters.sort} onChange={(sort) => setFilters({ ...filters, sort: sort as DiscussionFilters['sort'] })} label="Recently active"><option value="newest">Newest created</option><option value="oldest">Oldest created</option><option value="replies">Most replies</option></Select></div>
@@ -518,7 +569,7 @@ const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: Proj
         <UserAvatar user={user} size="sm" />
         <span className="min-w-0"><span className="project-chat-heading block truncate font-semibold">@{user.name}</span><span className="project-chat-secondary block truncate text-[10px]">{user.title || user.department || user.role}</span></span>
       </button>
-    )) : <p className="project-chat-secondary px-3 py-2 text-xs">No matching active organization member.</p>}
+    )) : <p className="project-chat-secondary px-3 py-2 text-xs">No matching eligible project member.</p>}
   </div>
 );
 const NewDiscussionDialog: React.FC<any> = ({
@@ -530,7 +581,11 @@ const NewDiscussionDialog: React.FC<any> = ({
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
-  const projectUsers: ProjectMemberSummary[] = users;
+  const selectedProject = projects.find((project: any) => project.id === form.projectId);
+  const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
+    users,
+    selectedProject ? [...selectedProject.memberIds, selectedProject.teamLeadId] : []
+  );
   const matchingUsers = trigger?.query
     ? projectUsers.filter((user) => user.status !== 'inactive' && user.name.toLocaleLowerCase().includes(trigger.query.toLocaleLowerCase()))
     : projectUsers.filter((user) => user.status !== 'inactive');
@@ -616,7 +671,7 @@ const NewDiscussionDialog: React.FC<any> = ({
               }}
               onClick={(event) => setTrigger(getMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart, projectUsers))}
               className={`${inputClass} mt-1 min-h-32`}
-              placeholder="Describe the context, decision, blocker, or question. Type @ to mention an organization member."
+              placeholder="Describe the context, decision, blocker, or question. Type @ to mention a project member."
             />
             <span className="project-chat-secondary mt-1 block text-right text-[10px] font-normal">{form.body.length}/{COMMENT_MAX_LENGTH}</span>
           </label>
