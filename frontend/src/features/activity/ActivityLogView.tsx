@@ -22,17 +22,17 @@ import {
 } from './activityTypes';
 
 // ─── Per-role module whitelists ──────────────────────────────────────────────
-const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile'];
+const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications'];
 const LEAD_MODULES   = [...MEMBER_MODULES, 'Permissions'];
 const HR_MODULES     = ['Attendance', 'HR'];
-const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'HR', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Permissions', 'Authentication', 'Activity Log', 'Settings', 'System'];
+const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'HR', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Permissions', 'Authentication', 'Activity Log', 'Settings', 'System'];
 
-const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out'];
+const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS, 'Permission Granted', 'Permission Revoked', 'Permission Expired'];
 const HR_ACTIONS     = ['Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected'];
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported'];
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
 
-const ENTITY_TYPES   = ['Project', 'Task', 'Comment', 'Thread', 'Message', 'User', 'Attendance Record', 'Approval', 'Permission', 'Audit Export'];
+const ENTITY_TYPES   = ['Project', 'Task', 'Comment', 'Thread', 'Message', 'User', 'Attendance Record', 'Approval', 'Permission', 'Audit Export', 'Notification Preference'];
 const STATUSES       = ['Todo', 'In Progress', 'Review', 'Pending Approval', 'Blocked', 'Done', 'Approved', 'Rejected', 'Archived'];
 const PRIORITIES     = ['Low', 'Medium', 'High', 'Urgent'];
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom', 'All'];

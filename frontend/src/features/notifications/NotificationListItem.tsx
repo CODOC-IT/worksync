@@ -180,7 +180,7 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
           <button
             type="button"
             onClick={onMarkAllRead}
-            className="rounded-lg px-1.5 py-1 text-[10px] font-semibold text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-cyan-300 group-hover:opacity-100"
+            className="rounded-lg px-1.5 py-1 text-[10px] font-semibold text-slate-500 opacity-100 transition hover:bg-white/10 hover:text-cyan-300 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
           >
             Mark all read
           </button>
@@ -193,7 +193,9 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
             aria-label="Remind me later"
             title="Remind me later"
             className={`rounded-lg p-1 text-slate-500 transition hover:bg-white/10 hover:text-amber-300 ${
-              showSnoozeMenu ? 'bg-white/10 text-amber-300' : 'opacity-0 group-hover:opacity-100'
+              showSnoozeMenu
+                ? 'bg-white/10 text-amber-300'
+                : 'opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100'
             }`}
           >
             <Clock size={13} />
@@ -207,7 +209,7 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
             else openDetail();
           }}
           aria-label="View full notification details"
-          className="rounded-lg p-1 text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-cyan-300 group-hover:opacity-100"
+          className="rounded-lg p-1 text-slate-500 opacity-100 transition hover:bg-white/10 hover:text-cyan-300 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
         >
           <Info size={13} />
         </button>
@@ -216,7 +218,7 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
             type="button"
             onClick={() => onClear(notification.id)}
             aria-label="Clear notification"
-            className="rounded-lg p-1 text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-rose-300 group-hover:opacity-100"
+            className="rounded-lg p-1 text-slate-500 opacity-100 transition hover:bg-white/10 hover:text-rose-300 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
           >
             <X size={13} />
           </button>
