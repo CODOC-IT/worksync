@@ -2,11 +2,21 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, Shield, Sparkles } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
+import type { User } from '../../types';
 import { supabase } from '../../../utils/supabase';
 
 interface LoginViewProps {
   onLoginSuccess: () => void;
 }
+
+const parseAuthResponse = async (response: Response): Promise<{ success?: boolean; message?: string; user?: User }> => {
+  const body = await response.text();
+  try {
+    return body ? JSON.parse(body) as { success?: boolean; message?: string; user?: User } : {};
+  } catch {
+    throw new Error(`Authentication service returned an unexpected response (HTTP ${response.status}).`);
+  }
+};
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const { loginUser } = useApp();
@@ -39,7 +49,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       if (error || !sessionData.session) throw new Error(error?.message || 'Authentication failed.');
       localStorage.setItem('worksync_auth_token', sessionData.session.access_token);
       const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${sessionData.session.access_token}` } });
-      const data = await response.json();
+      const data = await parseAuthResponse(response);
       if (!response.ok || !data.success || !data.user) throw new Error(data.message || 'Your account is not provisioned for WorkSync.');
       loginUser(data.user);
       onLoginSuccess();
