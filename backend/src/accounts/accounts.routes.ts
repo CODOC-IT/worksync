@@ -50,12 +50,10 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     invitedAuthUserId = invite.data.user.id;
     const [givenName, ...family] = input.fullName.split(/\s+/);
     const account = await withTransaction(async (run) => {
-      const department = await run<{ departmentid: number }>('SELECT departmentid FROM org.departments WHERE departmentid = $1 AND isactive = TRUE', [input.departmentId]);
-      if (!department.rows[0]) throw new AccountValidationError('Select an active department.');
       const roleCode = input.baseRole === 'HR' ? 'HRRepresentative' : 'TeamMember';
       const role = await run<{ roleid: number }>('SELECT roleid FROM iam.roles WHERE rolecode = $1', [roleCode]);
       if (!role.rows[0]) throw new Error('Required base role is not configured.');
-      const inserted = await run<{ userid: number }>(`INSERT INTO iam.users (organizationid, departmentid, email, username, authuserid, givenname, familyname, displayname, designation, accountstatus, createdbyuserid, invitationsentatutc) VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,'Pending',$9,CURRENT_TIMESTAMP) RETURNING userid`, [input.departmentId, input.email, input.username, invitedAuthUserId, givenName, family.join(' ') || givenName, input.fullName, input.designation || null, toUserPk(actor!.id)]);
+      const inserted = await run<{ userid: number }>(`INSERT INTO iam.users (organizationid, email, username, authuserid, givenname, familyname, displayname, designation, accountstatus, createdbyuserid, invitationsentatutc) VALUES (1,$1,$2,$3,$4,$5,$6,$7,'Pending',$8,CURRENT_TIMESTAMP) RETURNING userid`, [input.email, input.username, invitedAuthUserId, givenName, family.join(' ') || givenName, input.fullName, input.designation || null, toUserPk(actor!.id)]);
       const userId = inserted.rows[0].userid;
       await run('INSERT INTO iam.userroles (userid, roleid, grantedbyuserid) VALUES ($1,$2,$3)', [userId, role.rows[0].roleid, toUserPk(actor!.id)]);
       if (input.teamLeadAssignment) {

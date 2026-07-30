@@ -11,13 +11,11 @@ export const parseCreateAccount = (value: unknown): CreateAccountInput => {
   const username = typeof input.username === 'string' ? input.username.trim().toLowerCase() : '';
   const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
   const baseRole = input.baseRole as AccountBaseRole;
-  const departmentId = Number(input.departmentId);
   const designation = typeof input.designation === 'string' ? input.designation.replace(/<[^>]*>/g, '').trim() : undefined;
   if (fullName.length < 2 || fullName.length > 170) throw new AccountValidationError('Full name must be between 2 and 170 characters.');
   if (!usernamePattern.test(username)) throw new AccountValidationError('Username must be 3–80 letters, numbers, dots, hyphens, or underscores.');
   if (!emailPattern.test(email) || email.length > 254) throw new AccountValidationError('Enter a valid email address.');
   if (baseRole !== 'HR' && baseRole !== 'Team_Member') throw new AccountValidationError('baseRole must be HR or Team_Member.');
-  if (!Number.isSafeInteger(departmentId) || departmentId < 1) throw new AccountValidationError('Select a valid department.');
   let teamLeadAssignment: CreateAccountInput['teamLeadAssignment'];
   if (input.teamLeadAssignment !== undefined) {
     const assignment = input.teamLeadAssignment as Record<string, unknown>;
@@ -28,5 +26,5 @@ export const parseCreateAccount = (value: unknown): CreateAccountInput => {
     }
     teamLeadAssignment = { projectId, endsAtUtc: new Date(endsAtUtc).toISOString() };
   }
-  return { fullName, username, email, baseRole, departmentId, designation, teamLeadAssignment };
+  return { fullName, username, email, baseRole, designation, teamLeadAssignment };
 };
