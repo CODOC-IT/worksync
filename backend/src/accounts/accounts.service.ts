@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query, withTransaction } from '../db/pool.js';
-import { sendCredentialEmail, sendPasswordSetupEmail } from '../services/emailService.js';
+import { sendCredentialEmail, sendPasswordResetEmail } from '../services/emailService.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import {
   AccountAuthorizationError,
@@ -26,7 +26,7 @@ export interface AccountServiceDependencies {
   withTransaction: typeof withTransaction;
   supabase: () => SupabaseClient;
   sendCredentials: typeof sendCredentialEmail;
-  sendPasswordSetup: typeof sendPasswordSetupEmail;
+  sendPasswordReset: typeof sendPasswordResetEmail;
 }
 
 const defaultDependencies: AccountServiceDependencies = {
@@ -34,7 +34,7 @@ const defaultDependencies: AccountServiceDependencies = {
   withTransaction,
   supabase: getSupabaseServiceClient,
   sendCredentials: sendCredentialEmail,
-  sendPasswordSetup: sendPasswordSetupEmail
+  sendPasswordReset: sendPasswordResetEmail
 };
 
 const baseRoleCode: Record<AccountBaseRole, string> = {
@@ -57,9 +57,9 @@ const authCreateError = (message?: string): Error => {
 const authLinkError = (message?: string): Error => {
   const normalized = (message || '').toLowerCase();
   if (normalized.includes('rate limit')) {
-    return new AccountProvisioningUnavailableError('Password setup email rate limit reached. Please try again later.');
+    return new AccountProvisioningUnavailableError('Password reset email rate limit reached. Please try again later.');
   }
-  return new AccountProvisioningUnavailableError('Supabase could not create a password setup link.');
+  return new AccountProvisioningUnavailableError('Supabase could not create a password reset link.');
 };
 
 const assertActorCanCreate = (actor: ProvisioningActor, input: CreateAccountInput): void => {
@@ -180,8 +180,8 @@ const insertProfile = async (
   const inserted = await run<{ userid: number }>(
     `INSERT INTO iam.users
        (organizationid, departmentid, email, username, authuserid, givenname, familyname,
-        displayname, designation, accountstatus, createdbyuserid, invitationsentatutc)
-     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,'Pending',$9,NULL)
+        displayname, designation, accountstatus, createdbyuserid, invitationsentatutc, activatedatutc)
+     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,'Active',$9,NULL,CURRENT_TIMESTAMP)
      RETURNING userid`,
     [
       input.departmentId,
@@ -225,7 +225,7 @@ const insertProfile = async (
     email: input.email,
     baseRole: input.baseRole,
     departmentId: input.departmentId,
-    accountStatus: 'Pending',
+    accountStatus: 'Active',
     invitationSentAtUtc: null
   };
 });
@@ -244,7 +244,6 @@ export const createAccount = async (
     email: input.email,
     password: input.password,
     email_confirm: true,
-    app_metadata: { must_change_password: true },
     user_metadata: { username: input.username, full_name: input.fullName }
   });
   if (created.error || !created.data.user) throw authCreateError(created.error?.message);
@@ -266,7 +265,7 @@ export const createAccount = async (
     await dependencies.sendCredentials({
       toEmail: input.email,
       recipientName: input.fullName,
-      temporaryPassword: input.password,
+      password: input.password,
       role: input.baseRole === 'Team_Member' ? 'Member' : input.baseRole
     });
   } catch {
@@ -296,6 +295,8 @@ interface ResendTarget {
   displayname: string;
   departmentid: number | null;
   accountstatus: string;
+  createdbyuserid: number | null;
+  invitationsentatutc: string | null;
   rolecode: string | null;
 }
 
@@ -305,10 +306,11 @@ export const resendInvitation = async (
   dependencies: AccountServiceDependencies = defaultDependencies
 ): Promise<void> => {
   if (actor.role !== 'Admin' && actor.role !== 'HR') {
-    throw new AccountAuthorizationError('Only Admin and HR users can resend account invitations.');
+    throw new AccountAuthorizationError('Only Admin and HR users can send account password reset links.');
   }
   const targetResult = await dependencies.query<ResendTarget>(
     `SELECT u.userid, u.authuserid, u.email, u.displayname, u.departmentid, u.accountstatus,
+       u.createdbyuserid, u.invitationsentatutc,
        COALESCE(
          MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'),
          MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'),
@@ -324,12 +326,12 @@ export const resendInvitation = async (
   );
   const target = targetResult.rows[0];
   if (!target) throw new AccountValidationError('Account not found.');
-  if (target.accountstatus !== 'Pending' || !target.authuserid) {
-    throw new AccountValidationError('Only pending provisioned accounts are eligible for invitation resend.');
+  if (!target.authuserid || !target.createdbyuserid || target.invitationsentatutc) {
+    throw new AccountValidationError('A password reset link is only available when the original credential email was not recorded as sent.');
   }
   if (actor.role === 'HR') {
     if (publicRole(target.rolecode) !== 'Team_Member') {
-      throw new AccountAuthorizationError('HR users may only resend invitations for Member accounts.');
+      throw new AccountAuthorizationError('HR users may only send password reset links for Member accounts.');
     }
     if (!target.departmentid) throw new AccountAuthorizationError('The Member is outside your department hierarchy.');
     await assertDepartmentPermitted(actor, target.departmentid, dependencies);
@@ -344,13 +346,13 @@ export const resendInvitation = async (
   if (generated.error || !actionLink) throw authLinkError(generated.error?.message);
 
   try {
-    await dependencies.sendPasswordSetup({
+    await dependencies.sendPasswordReset({
       toEmail: target.email,
       recipientName: target.displayname,
       actionLink
     });
   } catch {
-    throw new AccountProvisioningUnavailableError('The password setup email could not be sent.');
+    throw new AccountProvisioningUnavailableError('The password reset email could not be sent.');
   }
 
   await dependencies.query(
@@ -358,34 +360,4 @@ export const resendInvitation = async (
       WHERE userid = $1`,
     [target.userid]
   );
-};
-
-export const completeFirstLogin = async (
-  authUserId: string,
-  password: string,
-  currentAppMetadata: Record<string, unknown>,
-  dependencies: AccountServiceDependencies = defaultDependencies
-): Promise<void> => {
-  const supabase = dependencies.supabase();
-  const passwordUpdate = await supabase.auth.admin.updateUserById(authUserId, { password });
-  if (passwordUpdate.error) {
-    throw new AccountProvisioningUnavailableError('Supabase could not update the password.');
-  }
-
-  const activated = await dependencies.query(
-    `UPDATE iam.users
-        SET accountstatus = 'Active',
-            activatedatutc = COALESCE(activatedatutc, CURRENT_TIMESTAMP),
-            updatedatutc = CURRENT_TIMESTAMP
-      WHERE authuserid = $1 AND accountstatus IN ('Pending', 'Active')`,
-    [authUserId]
-  );
-  if (!activated.rowCount) throw new AccountValidationError('This account is not awaiting first-login activation.');
-
-  const metadataUpdate = await supabase.auth.admin.updateUserById(authUserId, {
-    app_metadata: { ...currentAppMetadata, must_change_password: false }
-  });
-  if (metadataUpdate.error) {
-    throw new AccountProvisioningUnavailableError('Password changed, but account activation could not be finalized. Please retry.');
-  }
 };

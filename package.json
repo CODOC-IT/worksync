@@ -7,7 +7,7 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "server": "tsx backend/src/server.ts",
     "build": "vite build",
-    "test:accounts": "node --import tsx --test backend/src/accounts/accounts.validation.test.ts backend/src/accounts/accounts.service.test.ts backend/src/accounts/accounts.constraints.test.ts frontend/src/features/members/accountFormRules.test.ts",
+    "test:accounts": "node --import tsx --test backend/src/accounts/accounts.validation.test.ts backend/src/accounts/accounts.service.test.ts backend/src/accounts/accounts.constraints.test.ts backend/src/accounts/accounts.email.test.ts frontend/src/features/members/accountFormRules.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

@@ -11,8 +11,6 @@ export interface CreateAccountInput {
   teamLeadAssignment?: { projectId: string; endsAtUtc: string };
 }
 
-export interface ChangePasswordInput { password: string; }
-
 export interface ProvisioningActor {
   id: string;
   email: string;
@@ -27,7 +25,7 @@ export interface ProvisionedAccount {
   email: string;
   baseRole: AccountBaseRole;
   departmentId: number;
-  accountStatus: 'Pending';
+  accountStatus: 'Active';
   invitationSentAtUtc: string | null;
 }
 

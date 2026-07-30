@@ -186,11 +186,11 @@ export const TeamMembersView: React.FC = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) throw new Error(data.message || 'Could not resend the invitation.');
-      showToast('success', 'Invitation Sent', `A secure password setup link was sent to ${member.email}.`);
+      if (!response.ok || !data.success) throw new Error(data.message || 'Could not send the password reset email.');
+      showToast('success', 'Password Reset Sent', `A secure password reset link was sent to ${member.email}.`);
       refreshUsers();
     } catch (reason) {
-      showToast('error', 'Invitation Not Sent', reason instanceof Error ? reason.message : 'Could not resend the invitation.');
+      showToast('error', 'Password Reset Not Sent', reason instanceof Error ? reason.message : 'Could not send the password reset email.');
     } finally {
       setResendingUserId(null);
     }
@@ -553,7 +553,7 @@ export const TeamMembersView: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                {selectedMember.accountStatus === 'Pending'
+                {selectedMember.canResendInvitation === true
                   && (currentRole === 'Admin' || selectedMember.role === 'Team_Member' || selectedMember.role === 'Team_Lead') && (
                   <button
                     type="button"
@@ -562,7 +562,7 @@ export const TeamMembersView: React.FC = () => {
                     className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
                   >
                     <RefreshCcw size={14} className={resendingUserId === selectedMember.id ? 'animate-spin' : ''} />
-                    {resendingUserId === selectedMember.id ? 'Sending...' : 'Resend setup link'}
+                    {resendingUserId === selectedMember.id ? 'Sending...' : 'Send password reset'}
                   </button>
                 )}
                 <button
@@ -872,7 +872,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
       if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
       refreshUsers();
       if (data.data?.invitationStatus === 'email_failed') {
-        showToast('warning', 'Account Created - Email Failed', 'The pending account was saved. Use the resend action to send a password setup link.');
+        showToast('warning', 'Account Created - Email Failed', 'The active account was saved. Use the reset action to send a secure password reset link.');
       } else {
         showToast('success', 'Account Created', `Credentials were sent to ${form.email.trim().toLowerCase()}.`);
       }
@@ -887,7 +887,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   };
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden border border-white/10">
-      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">Create a pending account and email its temporary credentials.</p></div><button type="button" disabled={busy} onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-50"><X size={18} /></button></div>
+      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">Create an active account and email its permanent sign-in credentials.</p></div><button type="button" disabled={busy} onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-50"><X size={18} /></button></div>
       <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
         <AccountField label="Full name" required error={errors.fullName}><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} autoComplete="name" /></AccountField>
         <AccountField label="Username" required error={errors.username}><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} autoComplete="off" /></AccountField>
