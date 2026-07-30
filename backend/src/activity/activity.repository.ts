@@ -111,16 +111,22 @@ const visibilitySql = (
     return scopeClause;
   };
 
-  // ── HR only (no Team Lead active): own + attendance/HR + own project membership ──
+  // ── HR: near-admin visibility — all organization events except those performed by Admins ──
+  // HR can see everything an Admin sees with one exclusion: events where the actor was an
+  // Administrator. This applies whether the HR role is permanent or temporary.
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
-    const hrParts = [
-      ...ownParts,
-      projectMemberPart,
-      taskAssigneePart,
-      `a.modulecode IN ('Attendance', 'HR')`,
-    ];
     return {
-      clause: `(${hrParts.join(' OR ')})`,
+      clause: `a.actorrolesnapshot <> 'Admin'`,
+      extraParams: params.slice(1),
+    };
+  }
+
+  // ── HR + Team Lead combined: same near-admin scope ───────────────────────
+  // When both are active the HR scope already covers everything the lead scope would; no
+  // need to enumerate project membership predicates on top.
+  if (effectiveRoles.isHRandTeamLead) {
+    return {
+      clause: `a.actorrolesnapshot <> 'Admin'`,
       extraParams: params.slice(1),
     };
   }
@@ -149,10 +155,8 @@ const visibilitySql = (
     scopeParts.push(`a.projectid = ANY($${leadIdx}::int[])`);
   }
 
-  // HR+TeamLead combined: also add attendance/HR scope
-  if (effectiveRoles.isHRandTeamLead) {
-    scopeParts.push(`a.modulecode IN ('Attendance', 'HR')`);
-  }
+  // HR+TeamLead combined: handled above via the isHRandTeamLead branch.
+  // Only pure Team Lead (with no HR) reaches this point.
 
   return {
     clause: `(${scopeParts.join(' OR ')})`,
