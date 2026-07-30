@@ -221,6 +221,7 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
 
         const newUser = await userStore.createUser({
           name: sanitizedName,
+          username: String(email).split('@')[0].trim().toLowerCase(),
           email,
           password,
           role,
