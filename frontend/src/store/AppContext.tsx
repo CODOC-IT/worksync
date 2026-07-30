@@ -1885,6 +1885,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
 
     const checkIn = () => {
+      if (currentRole === 'Admin') {
+        pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
+        return;
+      }
       const todayStr = new Date().toISOString().split('T')[0];
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const isLate = nowTime > settings.workingHours.start;
@@ -1931,6 +1935,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const checkOut = () => {
+      if (currentRole === 'Admin') return;
       const todayStr = new Date().toISOString().split('T')[0];
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const hasOpenAttendance = attendanceRecords.some(
@@ -1983,6 +1988,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const startBreak = (breakType: BreakType) => {
+      if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
       const todayStr = new Date().toISOString().split('T')[0];
@@ -2015,6 +2021,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const endBreak = () => {
+      if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
       const todayStr = new Date().toISOString().split('T')[0];
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -2130,7 +2137,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             body: JSON.stringify({
               checkIn: updates.checkIn,
               checkOut: updates.checkOut || '',
-              breaks: normalizedBreaks
+              breaks: normalizedBreaks,
+              reason: reason?.trim() || ''
             })
           }
         );

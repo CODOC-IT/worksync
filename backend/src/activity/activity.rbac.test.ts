@@ -388,6 +388,28 @@ test('HR: loses attendance scope after temporary role expires', async () => {
   assert.ok(!descriptions.includes('Check-in after HR expiry'), 'Expired HR must lose visibility');
 });
 
+test('HR: revoked permission provides no HR access', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles
+    (userid, roleid, grantedbyuserid, startsatutc, revokedatutc, revokedbyuserid, revocationreason)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1,
+      CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour', 1, 'Revoked')`);
+
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(!effectiveRoles.isActiveHR, 'Revoked HR must not be active');
+});
+
+test('HR: future-dated permission provides no HR access', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles
+    (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1,
+      CURRENT_TIMESTAMP + INTERVAL '1 hour', CURRENT_TIMESTAMP + INTERVAL '2 hours')`);
+
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(!effectiveRoles.isActiveHR, 'Future HR must not be active');
+});
+
 test('Admin: can view all activity categories', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot) VALUES
     (1, 1, 'Created', 'Project', 'prj-99', '00000000-0000-0000-0000-000000000100', 'Projects', 'Admin project creation', 'Admin'),

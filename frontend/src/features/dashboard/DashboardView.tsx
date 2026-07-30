@@ -173,11 +173,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <div className="text-2xl font-bold text-white mb-1">{pendingApprovals.length + pendingHrRequests.length}</div>
           <span className="text-[10px] text-slate-400">{pendingApprovals.length} edits + {pendingHrRequests.length} HR</span>
         </GlassCard>
-        <GlassCard onClick={() => onNavigate('attendance')} glowColor="magenta">
+        {currentRole !== 'Admin' && <GlassCard onClick={() => onNavigate('attendance')} glowColor="magenta">
           <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Today</span><div className="p-1.5 rounded-lg bg-pink-500/20 text-pink-400"><Clock size={14} /></div></div>
           <div className="text-xl font-bold text-white mb-1 truncate">{myTodayAttendance ? (<span className="text-emerald-400">{myTodayAttendance.checkIn}</span>) : (<span className="text-amber-400">Not clocked in</span>)}</div>
           <span className="text-[10px] text-slate-400">{activeBreak?.isBreaking ? `On break (${Math.floor(activeBreak.elapsedSeconds / 60)}m)` : 'Tap to manage'}</span>
-        </GlassCard>
+        </GlassCard>}
       </div>
 
       {/* ── Row 1 (top): Calendar + Attendance | Activity Log | Approvals ── */}
@@ -302,7 +302,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* ── Attendance ── */}
-      <div className="flex flex-wrap gap-3">
+      {currentRole !== 'Admin' && <div className="flex flex-wrap gap-3">
         <div className="flex-1 min-w-[300px] max-w-full">
           <div className="glass-panel p-3 border border-pink-500/20 overflow-y-auto">
             <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
@@ -336,7 +336,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ── Row 2 (bottom): Projects ── */}
       <div className="flex flex-wrap gap-3">

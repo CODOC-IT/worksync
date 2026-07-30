@@ -2,6 +2,8 @@ import { Router, Response } from 'express';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import * as repo from '../reports/reports.repository.js';
+import { query } from '../db/pool.js';
+import { attendanceRole, getEffectiveRoles } from '../auth/effectiveRoles.js';
 
 const router = Router();
 
@@ -48,6 +50,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     const userId = user.id;
     const userPk = toUserPk(userId);
     const role = user.role;
+    const effectiveAttendanceRole = attendanceRole(await getEffectiveRoles(user.id));
 
     // ── Resolve visible projects based on role ──────────────
     const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to);
@@ -156,12 +159,27 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     let attendance = null;
     let hrOverviewStats = null;
 
-    // Admin / HR see all; Team_Lead sees project members; Member sees own
-    if (role === 'Admin' || role === 'HR') {
-      const attStats = await repo.getAttendanceStats(from, to);
-      const attRecords = await repo.getAttendanceRecords(from, to);
+    // Attendance reporting is restricted to active Admin/HR attendance permissions.
+    if (effectiveAttendanceRole === 'Admin' || effectiveAttendanceRole === 'HR') {
+      const visibleUsers = await query<{ userid: number }>(
+        `SELECT u.userid
+           FROM iam.users u
+          WHERE u.accountstatus = 'Active'
+            AND NOT EXISTS (
+              SELECT 1 FROM iam.userroles ur
+              JOIN iam.roles r ON r.roleid = ur.roleid
+              WHERE ur.userid = u.userid AND r.rolecode = 'Administrator'
+                AND ur.revokedatutc IS NULL AND ur.startsatutc <= now()
+                AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+            )`
+      );
+      const attendanceUserPks = visibleUsers.rows.map((row) => row.userid);
+      if (effectiveAttendanceRole === 'HR') attendanceUserPks.push(userPk);
+      const uniqueAttendanceUserPks = [...new Set(attendanceUserPks)];
+      const attStats = await repo.getAttendanceStats(from, to, uniqueAttendanceUserPks);
+      const attRecords = await repo.getAttendanceRecords(from, to, uniqueAttendanceUserPks);
       const pending = await repo.getPendingRequests();
-      const todayAtt = await repo.getTodayAttendance();
+      const todayAtt = await repo.getTodayAttendance(uniqueAttendanceUserPks);
 
       const totalHours = attStats.totalHours;
       const avgHours = attStats.totalRecords > 0 ? (totalHours / attStats.totalRecords).toFixed(1) : '0';
@@ -190,45 +208,6 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
         avgHours: avgHoursToday,
         pendingLeaveReqs: pending.pendingLeaves,
         pendingCorrections: pending.pendingCorrections,
-      };
-    } else if (role === 'Team_Lead') {
-      // Attendance for members of lead's projects
-      const projectMemberIds = [...new Set(members.map((m) => m.userid))];
-      const attStats = await repo.getAttendanceStats(from, to, projectMemberIds);
-      const attRecords = await repo.getAttendanceRecords(from, to, projectMemberIds);
-      const totalHours = attStats.totalHours;
-      const avgHours = attStats.totalRecords > 0 ? (totalHours / attStats.totalRecords).toFixed(1) : '0';
-
-      attendance = {
-        present: attStats.present,
-        late: attStats.late,
-        absent: attStats.absent,
-        onLeave: attStats.onLeave,
-        halfDay: attStats.halfDay,
-        avgHours,
-        total: attStats.totalRecords,
-        pendingCorrections: 0,
-        pendingLeaves: 0,
-        records: attRecords,
-      };
-    } else {
-      // Member sees own
-      const attStats = await repo.getAttendanceStats(from, to, [userPk]);
-      const attRecords = await repo.getAttendanceRecords(from, to, [userPk]);
-      const totalHours = attStats.totalHours;
-      const avgHours = attStats.totalRecords > 0 ? (totalHours / attStats.totalRecords).toFixed(1) : '0';
-
-      attendance = {
-        present: attStats.present,
-        late: attStats.late,
-        absent: attStats.absent,
-        onLeave: attStats.onLeave,
-        halfDay: attStats.halfDay,
-        avgHours,
-        total: attStats.totalRecords,
-        pendingCorrections: 0,
-        pendingLeaves: 0,
-        records: attRecords,
       };
     }
 
