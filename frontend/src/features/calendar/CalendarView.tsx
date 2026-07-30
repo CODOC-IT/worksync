@@ -9,6 +9,8 @@ import { DayEntriesDrawer } from './DayEntriesDrawer';
 import { CalendarFilterBar } from './CalendarFilterBar';
 import {
   buildCalendarEntries,
+  buildHolidayEntries,
+  buildApprovedLeaveEntries,
   groupEntriesByDate,
   filterCalendarEntries,
   getMonthGridDates,
@@ -40,7 +42,7 @@ const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1):
 };
 
 export const CalendarView: React.FC = () => {
-  const { projects, tasks, users, calendarEvents } = useApp();
+  const { projects, tasks, users, calendarEvents, approvedLeave } = useApp();
 
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
@@ -53,12 +55,25 @@ export const CalendarView: React.FC = () => {
   // across midnight — mirrors ProjectsView's own inline `todayStr` convention.
   const todayKey = toDateKey(new Date());
 
+  // Holiday coverage tracks the currently viewed year (plus its immediate neighbors, since a
+  // month/week grid can spill across a year boundary) rather than a fixed static range, so
+  // navigating Previous/Next keeps showing correct holidays regardless of year.
+  const anchorYear = anchorDate.getFullYear();
+
   const entriesByDate = useMemo(
     () =>
       groupEntriesByDate(
-        filterCalendarEntries(buildCalendarEntries(projects, tasks, calendarEvents), originFilter, activeKinds)
+        filterCalendarEntries(
+          [
+            ...buildCalendarEntries(projects, tasks, calendarEvents),
+            ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1]),
+            ...buildApprovedLeaveEntries(approvedLeave)
+          ],
+          originFilter,
+          activeKinds
+        )
       ),
-    [projects, tasks, calendarEvents, originFilter, activeKinds]
+    [projects, tasks, calendarEvents, approvedLeave, anchorYear, originFilter, activeKinds]
   );
 
   const monthDates = useMemo(
