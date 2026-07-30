@@ -31,7 +31,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     setLoading(true);
     try {
       if (!supabase) throw new Error('Supabase Auth is not configured.');
-      const { data: sessionData, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      let { data: sessionData, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error || !sessionData.session) {
+        const migration = await fetch('/api/auth/migrate-legacy-credentials', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
+        const migrationData = await migration.json().catch(() => ({}));
+        if (!migration.ok || !migrationData.success) throw new Error(migrationData.message || error?.message || 'Authentication failed.');
+        ({ data: sessionData, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password }));
+      }
       if (error || !sessionData.session) throw new Error(error?.message || 'Authentication failed.');
       localStorage.setItem('worksync_auth_token', sessionData.session.access_token);
       const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${sessionData.session.access_token}` } });
