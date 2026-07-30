@@ -7,6 +7,7 @@ import {
   CommentMentionRow,
   CommentRow,
   CreateThreadInput,
+  ProjectMentionableUserRow,
   DiscussionThreadRow
 } from './discussion.types.js';
 import { parseAttachmentDataUrl, writeAttachmentToDisk } from './fileStorage.js';
@@ -24,11 +25,12 @@ const ORGANIZATION_ID = 1;
 // redundantly.
 const THREAD_COLUMNS = `
   dt.threadid, dt.threadtype, dt.subject, COALESCE(dt.projectid, t.projectid) AS effectiveprojectid,
-  dt.taskid, dt.createdbyuserid, dt.createdatutc
+  p.projectname, dt.taskid, t.title AS tasktitle, dt.createdbyuserid, dt.createdatutc
 `;
 const THREAD_JOINS = `
   FROM collab.discussionthreads dt
   LEFT JOIN work.tasks t ON t.taskid = dt.taskid
+  JOIN work.projects p ON p.projectid = COALESCE(dt.projectid, t.projectid)
 `;
 
 export const findThreadsForProjects = async (projectIds: number[]): Promise<DiscussionThreadRow[]> => {
@@ -48,6 +50,57 @@ export const findThreadById = async (threadId: number): Promise<DiscussionThread
     [threadId]
   );
   return result.rows[0] || null;
+};
+
+// The server-authoritative mention directory for each project. A user is eligible when they are
+// active and either have a live ProjectMembers row (any project role), own the project, or hold
+// an active Admin/HR role. Team members and Team Leads from unrelated projects are deliberately
+// excluded, even if the client submits their ids directly.
+export const findMentionableUsersForProjects = async (
+  projectIds: number[]
+): Promise<ProjectMentionableUserRow[]> => {
+  if (projectIds.length === 0) return [];
+  const result = await query<ProjectMentionableUserRow>(
+    `SELECT DISTINCT eligible.projectid, eligible.userid
+     FROM (
+       SELECT pm.projectid, u.userid
+       FROM work.projectmembers pm
+       JOIN iam.users u ON u.userid = pm.userid
+       WHERE pm.projectid = ANY($1::int[])
+         AND pm.leftatutc IS NULL
+         AND u.organizationid = $2
+         AND u.accountstatus = 'Active'
+         AND u.deactivatedatutc IS NULL
+
+       UNION
+
+       SELECT p.projectid, u.userid
+       FROM work.projects p
+       JOIN iam.users u ON u.userid = p.owneruserid
+       WHERE p.projectid = ANY($1::int[])
+         AND u.organizationid = $2
+         AND u.accountstatus = 'Active'
+         AND u.deactivatedatutc IS NULL
+
+       UNION
+
+       SELECT p.projectid, u.userid
+       FROM iam.userroles ur
+       JOIN iam.roles r ON r.roleid = ur.roleid
+       JOIN iam.users u ON u.userid = ur.userid
+       JOIN work.projects p ON p.projectid = ANY($1::int[])
+       WHERE r.rolecode IN ('Administrator', 'HRRepresentative')
+         AND ur.startsatutc <= now()
+         AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+         AND ur.revokedatutc IS NULL
+         AND u.organizationid = $2
+         AND u.accountstatus = 'Active'
+         AND u.deactivatedatutc IS NULL
+     ) eligible
+     ORDER BY eligible.projectid, eligible.userid`,
+    [projectIds, ORGANIZATION_ID]
+  );
+  return result.rows;
 };
 
 export const findCommentsForThreads = async (threadIds: number[]): Promise<CommentRow[]> => {

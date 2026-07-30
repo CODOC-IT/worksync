@@ -20,11 +20,12 @@ import {
   UserRoundSearch,
   Users,
   X,
+  Plus,
 } from 'lucide-react';
 
 type SortOption = 'name' | 'role' | 'recent';
 type ViewMode = 'grid' | 'list';
-type SearchField = 'name' | 'email' | 'department' | 'title';
+type SearchField = 'name' | 'email' | 'title';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -98,6 +99,7 @@ export const TeamMembersView: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
+  const [createAccountOpen, setCreateAccountOpen] = useState(false);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
 
@@ -111,9 +113,7 @@ export const TeamMembersView: React.FC = () => {
               ? member.name
               : searchField === 'email'
                 ? member.email
-                : searchField === 'department'
-                  ? member.department
-                  : member.title;
+                : member.title;
           const matchesQuery = !query || searchValue.toLowerCase().includes(query);
 
           const matchesRole = roleFilter === 'all' || member.role === roleFilter;
@@ -195,6 +195,12 @@ export const TeamMembersView: React.FC = () => {
               </p>
             </div>
 
+            {canInspectMembers && (
+              <button type="button" onClick={() => setCreateAccountOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400">
+                <Plus size={16} /> Create account
+              </button>
+            )}
+
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:min-w-[32rem]">
               <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
                 <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Members</div>
@@ -247,7 +253,6 @@ export const TeamMembersView: React.FC = () => {
                 >
                   <option value="name">Name</option>
                   <option value="email">Email</option>
-                  <option value="department">Department</option>
                   <option value="title">Title</option>
                 </select>
 
@@ -725,6 +730,44 @@ export const TeamMembersView: React.FC = () => {
           </div>
         </div>
       )}
+      {createAccountOpen && <CreateAccountDialog isAdmin={currentRole === 'Admin'} projects={projects} onClose={() => setCreateAccountOpen(false)} />}
     </>
   );
 };
+
+const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onClose: () => void }> = ({ isAdmin, projects, onClose }) => {
+  const [form, setForm] = useState({ fullName: '', username: '', email: '', designation: '', baseRole: 'Team_Member', projectId: '', endsAtUtc: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const update = (field: string, value: string) => setForm((current) => ({ ...current, [field]: value }));
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      const token = localStorage.getItem('worksync_auth_token');
+      const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fullName: form.fullName, username: form.username, email: form.email, designation: form.designation || undefined, baseRole: form.baseRole, ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {}) }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
+      window.location.reload();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not create account.'); }
+    finally { setBusy(false); }
+  };
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden border border-white/10">
+      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">An email invitation lets the new member choose their own password.</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white"><X size={18} /></button></div>
+      <div className="grid gap-4 p-5 md:grid-cols-2">
+        <AccountField label="Full name *"><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} /></AccountField>
+        <AccountField label="Username *"><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} /></AccountField>
+        <AccountField label="Email *"><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} /></AccountField>
+        <AccountField label="Designation"><input value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} /></AccountField>
+        <AccountField label="Base role *"><select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>{isAdmin && <option value="HR">HR</option>}<option value="Team_Member">Team Member</option></select></AccountField>
+        {isAdmin && <><AccountField label="Team Lead project (optional)"><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry"> <input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
+        {error && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{error}</p>}
+      </div>
+      <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5">Cancel</button><button disabled={busy} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Sending invitation…' : 'Send invitation'}</button></div>
+    </form>
+  </div>;
+};
+
+const accountInput = 'mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500/40';
+const AccountField: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => <label className="text-xs font-semibold text-slate-300">{label}{children}</label>;

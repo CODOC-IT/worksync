@@ -9,6 +9,11 @@ import { isProjectAccessible } from '../projects/project.service.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import {
+  canReplyToDiscussion,
+  canStartDiscussion,
+  hasGlobalDiscussionAccess
+} from './discussion.access.js';
+import {
   API_TO_DB_DISCUSSION_TYPE,
   ChatAttachmentInput,
   CommentKindCode,
@@ -43,10 +48,10 @@ export class DiscussionValidationError extends Error {
   }
 }
 
-const canParticipate = (role: string): boolean => role === 'Admin' || role === 'Team_Member' || role === 'Team_Lead';
-
 const getAccessibleProjectIds = async (userId: string, role: string): Promise<number[]> => {
-  const rows = role === 'Admin' ? await projectRepo.findAllProjects() : await projectRepo.findProjectsForUser(toUserPk(userId));
+  const rows = hasGlobalDiscussionAccess(role)
+    ? await projectRepo.findAllProjects()
+    : await projectRepo.findProjectsForUser(toUserPk(userId));
   return rows.map((row) => row.projectid);
 };
 
@@ -70,15 +75,18 @@ const assertProjectDiscussionOpen = (statusCode: string): void => {
   }
 };
 
-const assertValidMentions = async (mentionIds: string[]): Promise<number[]> => {
+const assertValidMentions = async (mentionIds: string[], projectId: number): Promise<number[]> => {
   const mentionPks = Array.from(new Set(mentionIds.map(toUserPk)));
   if (mentionPks.length === 0) return [];
-  const activeUserIds = new Set((await userStore.getAllUsers())
-    .filter((user) => user.status === 'active')
-    .map((user) => user.id));
+  const mentionableUserIds = new Set(
+    (await repo.findMentionableUsersForProjects([projectId])).map((row) => row.userid)
+  );
   for (const pk of mentionPks) {
-    if (!activeUserIds.has(fromUserPk(pk))) {
-      throw new DiscussionValidationError('Mentioned users must be active organization members.', 'mentionIds');
+    if (!mentionableUserIds.has(pk)) {
+      throw new DiscussionValidationError(
+        'You can only mention active project members, HR, or Admin users.',
+        'mentionIds'
+      );
     }
   }
   return mentionPks;
@@ -98,11 +106,13 @@ const notify = (
 const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionThreadDTO[]> => {
   if (rows.length === 0) return [];
   const threadIds = rows.map((row) => row.threadid);
+  const projectIds = Array.from(new Set(rows.map((row) => row.effectiveprojectid)));
   const commentRows = await repo.findCommentsForThreads(threadIds);
   const commentIds = commentRows.map((c) => c.commentid);
-  const [mentionRows, attachmentRows] = await Promise.all([
+  const [mentionRows, attachmentRows, mentionableRows] = await Promise.all([
     repo.findMentionsForComments(commentIds),
-    repo.findAttachmentsForComments(commentIds)
+    repo.findAttachmentsForComments(commentIds),
+    repo.findMentionableUsersForProjects(projectIds)
   ]);
 
   return Promise.all(
@@ -110,7 +120,10 @@ const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionTh
       const rowsForThread = commentRows.filter((c) => c.threadid === row.threadid);
       const comments = await Promise.all(rowsForThread.map((c) => buildCommentDTO(c, mentionRows, attachmentRows)));
       const opening = rowsForThread.find((c) => !c.parentcommentid) || rowsForThread[0];
-      return buildThreadDTO(row, comments, opening?.commentkind || 'General');
+      const mentionableUserIds = mentionableRows
+        .filter((candidate) => candidate.projectid === row.effectiveprojectid)
+        .map((candidate) => fromUserPk(candidate.userid));
+      return buildThreadDTO(row, comments, opening?.commentkind || 'General', mentionableUserIds);
     })
   );
 };
@@ -118,7 +131,8 @@ const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionTh
 const hydrateThread = async (row: DiscussionThreadRow): Promise<DiscussionThreadDTO> => (await hydrateThreads([row]))[0];
 
 const assertThreadAccessible = async (row: DiscussionThreadRow, userId: string, role: string): Promise<void> => {
-  const accessible = await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role);
+  const accessible = hasGlobalDiscussionAccess(role)
+    || await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role);
   if (!accessible) throw new DiscussionNotFoundError('Discussion not found.');
   const project = await projectRepo.findProjectById(row.effectiveprojectid);
   if (!project) throw new DiscussionNotFoundError('Discussion not found.');
@@ -157,7 +171,9 @@ export const createThread = async (
   actorId: string,
   actorRole: string
 ): Promise<{ thread: DiscussionThreadDTO; notifiedUserIds: string[] }> => {
-  if (!canParticipate(actorRole)) throw new DiscussionAuthorizationError('You do not have permission to start discussions.');
+  if (!canStartDiscussion(actorRole)) {
+    throw new DiscussionAuthorizationError('You do not have permission to start discussions.');
+  }
 
   const projectRow = await projectRepo.findProjectById(toProjectPk(input.projectId));
   if (!projectRow) throw new DiscussionValidationError('Select a valid project.', 'projectId');
@@ -179,7 +195,7 @@ export const createThread = async (
 
   const title = input.title.trim();
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds);
+  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid);
   assertAttachmentsHaveContent(input.attachments);
   const commentKind: CommentKindCode = API_TO_DB_DISCUSSION_TYPE[input.type];
 
@@ -258,7 +274,9 @@ export const addComment = async (
   const row = await repo.findThreadById(toThreadPk(threadId));
   if (!row) throw new DiscussionNotFoundError('Discussion not found.');
   await assertThreadAccessible(row, actorId, actorRole);
-  if (!canParticipate(actorRole)) throw new DiscussionAuthorizationError('You do not have permission to reply.');
+  if (!canReplyToDiscussion(actorRole)) {
+    throw new DiscussionAuthorizationError('You do not have permission to reply.');
+  }
 
   let parentRow: CommentRow | null = null;
   if (input.parentCommentId) {
@@ -272,7 +290,7 @@ export const addComment = async (
   }
 
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds);
+  const mentionPks = await assertValidMentions(input.mentionIds, row.effectiveprojectid);
   assertAttachmentsHaveContent(input.attachments);
 
   const commentId = await repo.insertComment({

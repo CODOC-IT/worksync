@@ -3,6 +3,8 @@ import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.
 import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
+import { userStore } from '../store/userStore.js';
 import {
   NotificationCategory,
   NotificationDTO,
@@ -57,6 +59,54 @@ const TYPE_TO_PREFERENCE_CATEGORY: Partial<Record<string, 'assignments' | 'menti
   task_due_today: 'dueReminders',
   task_due_tomorrow: 'dueReminders',
   task_overdue: 'dueReminders'
+};
+
+// Human-readable label for each persisted preference toggle, used only for Activity Log
+// descriptions below. `toast` is deliberately absent — it's never persisted (see comment
+// above) so a toast change never produces an Activity Log entry.
+const PREFERENCE_ACTIVITY_LABELS: Record<Exclude<keyof NotificationPreferencesDTO, 'toast'>, string> = {
+  inApp: 'in-app notifications',
+  dueReminders: 'due reminder notifications',
+  mentions: 'mention notifications',
+  comments: 'comment notifications',
+  assignments: 'assignment notifications',
+  email: 'email notifications'
+};
+
+// Activity Log entry per changed preference, so a member/lead/HR/admin toggling notification
+// settings shows up as e.g. "Bilal turned off in-app notifications." Module is 'Notifications'
+// rather than 'Settings' so a plain Team Member's own change stays visible to them — the
+// Activity Log's module blocklist for plain Team Members excludes 'Settings' entirely (see
+// activity.repository.ts's buildMemberClause), and this event carries no projectId/taskId, so
+// only the actor themselves, HR, and Admin ever match its visibility scope.
+const logPreferenceChanges = (
+  userId: string,
+  current: NotificationPreferencesDTO,
+  next: NotificationPreferencesDTO,
+  requested: Partial<NotificationPreferencesDTO>
+): void => {
+  const actor = userStore.findById(userId);
+  const actorName = actor?.name || 'Someone';
+  (Object.keys(requested) as (keyof NotificationPreferencesDTO)[]).forEach((key) => {
+    if (key === 'toast') return;
+    if (current[key] === next[key]) return; // no actual change — never log a no-op
+    const label = PREFERENCE_ACTIVITY_LABELS[key];
+    const turnedOn = next[key];
+    recordActivitySafe({
+      actorId: userId,
+      actorName: actor?.name,
+      actorEmail: actor?.email,
+      actorRole: actor?.role,
+      action: 'Preference Changed',
+      module: 'Notifications',
+      entityType: 'Notification Preference',
+      entityId: `notification-preference-${key}`,
+      entityName: label,
+      description: `${actorName} turned ${turnedOn ? 'on' : 'off'} ${label}.`,
+      changes: [{ field: label, previousValue: String(current[key]), newValue: String(next[key]) }],
+      source: 'Web'
+    });
+  });
 };
 
 const isSuppressedForRecipient = async (recipientUserId: number, typeCode: string): Promise<boolean> => {
@@ -320,5 +370,6 @@ export const updatePreferences = async (
   }
 
   await Promise.all(writes);
+  logPreferenceChanges(userId, current, next, data);
   return next;
 };

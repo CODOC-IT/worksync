@@ -199,7 +199,7 @@ export const ApprovalsInboxView: React.FC = () => {
   const reviewableHRRequests = hrRequests.filter((request) => {
     if (request.userId === currentUser.id) return false;
     if (currentRole === 'HR') {
-      return request.type === 'Leave' && request.approvalStage === 'HR';
+      return request.approvalStage === 'HR';
     }
     if (currentRole === 'Admin') {
       return request.approvalStage === 'Admin';

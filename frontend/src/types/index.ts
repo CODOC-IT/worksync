@@ -542,3 +542,15 @@ export interface CalendarEvent {
   projectId?: string;
   taskId?: string;
 }
+
+// An approved HR leave request, read-only on the Calendar. Backed by
+// GET /api/calendar/approved-leave (backend/src/calendar/), which reads the same
+// public.worksync_hr_requests rows the HR approval flow already writes -- this is a display-only
+// projection, not a duplicate leave record.
+export interface ApprovedLeaveEntry {
+  id: string;
+  userId: string;
+  userName: string;
+  date: string; // YYYY-MM-DD
+  leaveType: 'Full Day Leave' | 'Half Day Leave';
+}

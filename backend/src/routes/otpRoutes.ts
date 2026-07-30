@@ -7,6 +7,9 @@ import { getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { UserRole } from '../types.js';
 
 const router = Router();
+router.use((_req, res: Response): void => {
+  res.status(410).json({ success: false, message: 'Public OTP registration has been retired. Accounts are created by invitation.' });
+});
 const USER_ROLES: UserRole[] = ['Team_Member', 'Team_Lead', 'HR', 'Admin'];
 
 const isUserRole = (role: unknown): role is UserRole =>

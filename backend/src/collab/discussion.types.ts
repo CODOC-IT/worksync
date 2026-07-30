@@ -40,9 +40,16 @@ export interface DiscussionThreadRow {
   threadtype: ThreadTypeCode;
   subject: string | null;
   effectiveprojectid: number;
+  projectname: string;
   taskid: number | null;
+  tasktitle: string | null;
   createdbyuserid: number;
   createdatutc: Date;
+}
+
+export interface ProjectMentionableUserRow {
+  projectid: number;
+  userid: number;
 }
 
 export interface CommentRow {
@@ -105,12 +112,15 @@ export interface DiscussionCommentDTO {
 export interface DiscussionThreadDTO {
   id: string;
   projectId: string;
+  projectName: string;
   taskId?: string;
+  taskName?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;
   createdAt: string;
   updatedAt: string;
+  mentionableUserIds: string[];
   comments: DiscussionCommentDTO[];
 }
 

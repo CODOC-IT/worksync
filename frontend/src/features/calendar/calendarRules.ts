@@ -1,8 +1,9 @@
-import { CalendarEvent, Project, Task } from '../../types';
+import { ApprovedLeaveEntry, CalendarEvent, Project, Task } from '../../types';
+import { getPakistanHolidays } from './pakistanHolidays';
 
 // Milestones and project deadlines reuse CalendarEvent's own type vocabulary instead of
-// duplicating it; 'Task Due' is the only kind CalendarEvent has no literal for.
-export type CalendarEntryKind = CalendarEvent['type'] | 'Task Due';
+// duplicating it; 'Task Due' and 'Holiday' are the only kinds CalendarEvent has no literal for.
+export type CalendarEntryKind = CalendarEvent['type'] | 'Task Due' | 'Holiday';
 
 export type CalendarNavigateTab = 'projects' | 'tasks';
 
@@ -17,7 +18,8 @@ export const ALL_CALENDAR_KINDS: CalendarEntryKind[] = [
   'Task Due',
   'Meeting',
   'Review',
-  'Leave'
+  'Leave',
+  'Holiday'
 ];
 
 export interface CalendarEntry {
@@ -137,6 +139,31 @@ export const buildCalendarEntries = (
   return entries;
 };
 
+// Static, read-only Pakistan public holiday entries -- see pakistanHolidays.ts for the
+// underlying data and its per-year coverage. `years` should cover whatever range the caller is
+// currently displaying (or navigating near); requesting the same year twice is harmless since
+// getPakistanHolidays is a pure lookup, but callers should dedupe before calling for efficiency.
+export const buildHolidayEntries = (years: number[]): CalendarEntry[] =>
+  Array.from(new Set(years)).flatMap((year) =>
+    getPakistanHolidays(year).map((holiday) => ({
+      id: `holiday-${holiday.date}-${holiday.name.replace(/\s+/g, '-').toLowerCase()}`,
+      date: holiday.date,
+      title: holiday.name,
+      kind: 'Holiday' as const
+    }))
+  );
+
+// Approved HR leave requests, read-only on the Calendar (see AppContext's approvedLeave, sourced
+// from GET /api/calendar/approved-leave). Visible to every role -- Employee/Team Lead/HR/Admin
+// alike -- matching this module's existing unfiltered-visibility convention.
+export const buildApprovedLeaveEntries = (approvedLeave: ApprovedLeaveEntry[]): CalendarEntry[] =>
+  approvedLeave.map((leave) => ({
+    id: `leave-${leave.id}`,
+    date: leave.date,
+    title: `${leave.userName} — ${leave.leaveType}`,
+    kind: 'Leave' as const
+  }));
+
 export const entryOrigin = (entry: CalendarEntry): CalendarEntryOrigin => {
   if (entry.kind === 'Deadline' || entry.kind === 'Milestone') return 'project';
   if (entry.kind === 'Task Due') return 'task';
@@ -216,9 +243,11 @@ export const getYearMonths = (year: number): CalendarYearMonth[] =>
 // mirrors its urgent/high fuchsia bucket, 'Task Due' mirrors StatusBadge's todo cyan and
 // boardAccess.getDueDateIndicator's "days left" cyan, 'Review' mirrors StatusBadge's own
 // literal 'review' amber bucket, 'Meeting' reuses the purple/violet brand accent seen in
-// Sidebar and GlassCard, and 'Leave' falls back to StatusBadge's neutral slate bucket since
-// no existing status maps to it. `glow` values are GlassCard's own glowColor tokens, each used
-// exactly once so every kind gets a visually distinct glass-panel glow.
+// Sidebar and GlassCard, 'Leave' falls back to StatusBadge's neutral slate bucket since no
+// existing status maps to it, and 'Holiday' uses StatusBadge's completed/approved emerald bucket
+// so read-only public holidays read as distinctly "settled" entries. `glow` values are
+// GlassCard's own glowColor tokens; with 7 kinds and 6 tokens, 'Holiday' shares 'none' with
+// 'Leave' (both are informational, non-project/non-task entries) rather than inventing a 7th.
 export const entryToneClasses = (kind: CalendarEntryKind): CalendarEntryTone => {
   switch (kind) {
     case 'Deadline':
@@ -250,6 +279,12 @@ export const entryToneClasses = (kind: CalendarEntryKind): CalendarEntryTone => 
         badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
         dotClass: 'bg-amber-400',
         glow: 'amber'
+      };
+    case 'Holiday':
+      return {
+        badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+        dotClass: 'bg-emerald-400',
+        glow: 'none'
       };
     case 'Leave':
     default:

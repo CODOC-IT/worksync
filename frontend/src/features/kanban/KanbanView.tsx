@@ -297,7 +297,7 @@ export const KanbanView: React.FC = () => {
               Loading project board...
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-4">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {BOARD_COLUMNS.map((status) => {
                 const columnTasks = boardTasks.filter((task) => task.status === status);
                 return (
@@ -554,7 +554,7 @@ const BoardColumn: React.FC<{
       event.preventDefault();
       onDrop();
     }}
-    className={`glass-panel flex h-full min-h-[320px] flex-col gap-3 p-3 transition ${
+    className={`glass-panel flex h-[70vh] min-h-[320px] flex-col gap-3 p-3 transition lg:h-full ${
       isDragOver ? 'border-cyan-400/60 bg-cyan-500/5' : ''
     }`}
   >
