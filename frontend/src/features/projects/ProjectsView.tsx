@@ -606,7 +606,6 @@ export const ProjectsView: React.FC = () => {
                   >
                     <option value="Active">Active</option>
                     <option value="Completed">Completed</option>
-                    <option value="Archived">Archived</option>
                   </select>
                 </div>
               )}
@@ -772,13 +771,13 @@ export const ProjectsView: React.FC = () => {
             {deleteTarget.status === 'Archived' ? (
               currentRole === 'Admin' ? (
                 <p className="text-xs text-slate-400">
-                  This project will be permanently deleted. This action cannot be undone. Are you sure you want to
-                  continue?
+                  This project and all of its related tasks and subtasks will be permanently deleted. This action
+                  cannot be undone. Are you sure you want to continue?
                 </p>
               ) : (
                 <p className="text-xs text-slate-400">
-                  This will submit a request to permanently delete this project for Admin approval. The project
-                  stays unchanged unless an Admin approves it.
+                  This will submit a request to permanently delete this project and its related tasks and subtasks
+                  for Admin approval. Everything stays unchanged unless an Admin approves it.
                 </p>
               )
             ) : currentRole === 'Admin' ? (
@@ -786,7 +785,8 @@ export const ProjectsView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
                     This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                    Archiving this project will also archive its linked tasks below.
+                    The project and these tasks will be archived. They will become read-only and can be found under
+                    Archived Tasks until the project is restored.
                   </p>
                   <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
                     {relatedTasks.map((t) => (
@@ -797,7 +797,9 @@ export const ProjectsView: React.FC = () => {
                   </ul>
                 </div>
               ) : (
-                <p className="text-xs text-slate-400">The project will be archived. This cannot be undone from here.</p>
+                <p className="text-xs text-slate-400">
+                  The project will be archived and can be restored later from the Archived projects view.
+                </p>
               )
             ) : (
               <p className="text-xs text-slate-400">

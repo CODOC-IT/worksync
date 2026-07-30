@@ -1068,6 +1068,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjects((prev) =>
         prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived', approvalStatus: 'Rejected' } : p))
       );
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Rejected' } : sa
@@ -1193,9 +1194,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         confirmActionSuccess('Delete Requested', result.message);
         return { success: true, message: result.message };
       }
-      // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an
-      // archived project are intentionally left exactly as they are.
+      // Admin archive actions (including approved Team Lead requests) also mark this project's
+      // non-deleted tasks as project-archived, so remove them from active local state immediately.
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       pushActivity('Deleted project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Deleted', result.message);
@@ -1224,6 +1226,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: true, message: result.message };
       }
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       pushActivity('Permanently deleted project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Permanently Deleted', result.message);
@@ -1236,11 +1239,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Restores an Archived project back to Active. For a Team Lead this creates a Pending
   // PROJECT_RESTORE approval request instead of restoring immediately (see project.controller.ts).
-  // Deliberately not routed through updateProject -- the backend clears
-  // ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic update path never
-  // touches (see project.service.ts's restoreProject comment). Members, milestones, files, notes,
-  // team lead, and tasks are untouched server-side, so the local merge here only needs to flip
-  // status, exactly like deleteProject's archive branch does the reverse.
+  // PROJECT_RESTORE approval request instead of restoring immediately. An approved restore clears
+  // the project-driven archive marker on its tasks in the same backend transaction, so active
+  // tasks are refreshed after the action completes.
   const restoreProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
@@ -1253,6 +1254,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: true, message: result.message };
       }
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        // The project and task rows are already restored transactionally on the server. A transient
+        // refresh failure should not report the restore itself as failed; the next normal load will
+        // repopulate the active task list.
+        console.warn('Project restored, but active tasks could not be refreshed immediately.', refreshError);
+      }
       pushActivity('Restored project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Restored', result.message);
@@ -1274,6 +1284,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await archiveProjectApi(projectId, `Deletion approved by ${currentUser.name}.`);
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
@@ -1317,6 +1328,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       } catch (refreshError) {
         console.warn('Failed to refresh projects after approving a request.', refreshError);
+      }
+      // Approval requests can archive, restore, or permanently delete a project. Refreshing the
+      // active task list keeps every task surface in sync with the transaction that changed it.
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        console.warn('Failed to refresh tasks after approving a project request.', refreshError);
       }
       pushActivity('Approved project request', 'Project', decided.projectId, decided.projectTitle);
 

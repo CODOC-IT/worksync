@@ -9,7 +9,7 @@ router.use(authenticateJWT);
 router.get('/edit-approvals', controller.listTaskEditApprovals);
 router.patch('/edit-approvals/:approvalId', controller.decideTaskEditApproval);
 
-// GET /api/tasks?projectId=prj-1
+// GET /api/tasks?projectId=prj-1&archived=true
 router.get('/', controller.listTasks);
 
 // GET /api/tasks/:id

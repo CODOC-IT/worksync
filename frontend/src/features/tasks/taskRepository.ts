@@ -49,6 +49,24 @@ export const loadTasksFromApi = async (): Promise<Task[] | null> => {
   return payload.data as Task[];
 };
 
+export const loadArchivedTasksFromApi = async (): Promise<Task[]> => {
+  const token = getAuthToken();
+  if (!token) return [];
+
+  const response = await fetch('/api/tasks?archived=true', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const payload = await parseResponse(response);
+
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to load archived tasks.');
+  }
+
+  return payload.data as Task[];
+};
+
 export const loadTaskDetailFromApi = async (taskId: string): Promise<Task> => {
   const token = getAuthToken();
   if (!token) throw new Error('Sign in before viewing task details.');

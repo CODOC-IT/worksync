@@ -63,7 +63,9 @@ export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[]): TaskDT
     approvalStatus: 'Approved',
     completionSummary: row.completionsummary || undefined,
     createdAt: formatDate(row.createdatutc),
-    reviewApproval: status === 'Review' ? 'Pending' : undefined
+    reviewApproval: status === 'Review' ? 'Pending' : undefined,
+    isArchived: Boolean(row.projectarchivedatutc),
+    archivedAt: row.projectarchivedatutc ? row.projectarchivedatutc.toISOString() : undefined
   };
 };
 
