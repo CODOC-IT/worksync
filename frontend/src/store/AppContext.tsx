@@ -18,6 +18,7 @@ import {
   ActivityLogItem,
   CalendarEvent,
   ApprovedLeaveEntry,
+  Holiday,
   ProjectApprovalRequest,
   SavedPrompt,
 
@@ -66,8 +67,13 @@ import {
   fetchActivities,
 } from '../features/activity/activityApi';
 import {
-  fetchApprovedLeave
+  fetchApprovedLeave,
+  fetchHolidays,
+  createHolidayApi,
+  updateHolidayApi,
+  deleteHolidayApi
 } from '../features/calendar/calendarRepository';
+import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -138,6 +144,10 @@ interface AppState {
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
   approvedLeave: ApprovedLeaveEntry[];
+  holidays: Holiday[];
+  createHoliday: (input: { name: string; date: string; isRecurringAnnual: boolean }) => Promise<{ success: boolean; message: string }>;
+  updateHoliday: (id: string, input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>) => Promise<{ success: boolean; message: string }>;
+  deleteHoliday: (id: string) => Promise<{ success: boolean; message: string }>;
   savedPrompts: SavedPrompt[];
 
   activeBreak: {
@@ -269,6 +279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
   const [approvedLeave, setApprovedLeave] = useState<ApprovedLeaveEntry[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
@@ -482,6 +493,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // hr.Holidays is the single source of truth for Calendar's holiday display (see
+    // calendarRules.ts's buildHolidayEntries). Visible to every role; only HR can mutate (see
+    // createHoliday/updateHoliday/deleteHoliday below, enforced server-side via effectiveRoles.ts).
+    const hydrateHolidays = async () => {
+      try {
+        const remoteHolidays = await fetchHolidays();
+        if (isActive) setHolidays(remoteHolidays);
+      } catch (error) {
+        console.warn('Holidays API request failed; Calendar will show no holiday entries.', error);
+      }
+    };
+
     // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
     // Team Lead sees their own submitted requests (any status), to check outcomes. Team Member
     // and HR never create these, so skipping the call for them avoids a wasted round trip --
@@ -567,6 +590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void hydrateTasks();
     void hydrateProjects();
     void hydrateApprovedLeave();
+    void hydrateHolidays();
     void hydrateProjectApprovalRequests();
     void hydrateAttendance();
     void hydrateActivityLogs();
@@ -948,12 +972,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      // Local-safe date defaults -- new Date().toISOString() reports UTC, which reads a full
+      // calendar day behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any
+      // other positive-offset timezone. See calendarRules.ts's todayDateKey/toDateKey.
+      const defaultTargetDate = new Date();
+      defaultTargetDate.setDate(defaultTargetDate.getDate() + 30);
       const created = await createProjectApi({
         title: data.title || 'Untitled Project',
         description: data.description || '',
         priority: data.priority || 'Medium',
-        startDate: data.startDate || new Date().toISOString().split('T')[0],
-        targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        startDate: data.startDate || todayDateKey(),
+        targetDate: data.targetDate || toDateKey(defaultTargetDate),
         teamLeadId: data.teamLeadId,
         memberIds: eligibleProjectMemberIds(data.memberIds || []),
         creationReason: data.creationReason
@@ -1318,6 +1347,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to reject project request.', error);
       return { success: false, message: error?.message || 'Failed to reject the request. Please try again.' };
+    }
+  };
+
+  // Holiday management (Calendar module). The currentRole check here is a UX convenience only --
+  // the real gate is server-side, via effectiveRoles.ts in backend/src/calendar/calendar.service.ts
+  // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
+  // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
+  const createHoliday = async (
+    input: { name: string; date: string; isRecurringAnnual: boolean }
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const created = await createHolidayApi(input);
+      setHolidays((prev) => [...prev, created]);
+      pushActivity('Added holiday', 'Settings', created.id, created.name);
+
+      const message = `"${created.name}" was added to the holiday calendar.`;
+      confirmActionSuccess('Holiday Added', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to create holiday.', error);
+      return { success: false, message: error?.message || 'Failed to add the holiday. Please try again.' };
+    }
+  };
+
+  const updateHoliday = async (
+    id: string,
+    input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const updated = await updateHolidayApi(id, input);
+      setHolidays((prev) => prev.map((h) => (h.id === id ? updated : h)));
+      pushActivity('Updated holiday', 'Settings', updated.id, updated.name);
+
+      const message = `"${updated.name}" was updated.`;
+      confirmActionSuccess('Holiday Updated', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to update holiday.', error);
+      return { success: false, message: error?.message || 'Failed to update the holiday. Please try again.' };
+    }
+  };
+
+  const deleteHoliday = async (id: string): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    const holiday = holidays.find((h) => h.id === id);
+    try {
+      await deleteHolidayApi(id);
+      setHolidays((prev) => prev.filter((h) => h.id !== id));
+      pushActivity('Deleted holiday', 'Settings', id, holiday?.name || 'Holiday');
+
+      const message = `${holiday ? `"${holiday.name}"` : 'The holiday'} was removed from the calendar.`;
+      confirmActionSuccess('Holiday Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to delete holiday.', error);
+      return { success: false, message: error?.message || 'Failed to delete the holiday. Please try again.' };
     }
   };
 
@@ -2777,6 +2867,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activityLogs,
         calendarEvents,
         approvedLeave,
+        holidays,
+        createHoliday,
+        updateHoliday,
+        deleteHoliday,
         savedPrompts,
         activeBreak,
         settings,
