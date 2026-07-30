@@ -686,8 +686,11 @@ export const TeamMembersView: React.FC = () => {
                   <option value="recent">Sort: Recently Added</option>
                 </select>
 
-                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400 sm:text-right">
-                  Showing <span className="font-semibold text-white">{members.length}</span> of <span className="font-semibold text-white">{totalMembers}</span>
+                <div className="whitespace-nowrap rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400 sm:text-right">
+                  <span>Showing </span>
+                  <span className="font-semibold text-white">{members.length}</span>
+                  <span> of </span>
+                  <span className="font-semibold text-white">{totalMembers}</span>
                 </div>
               </div>
             </div>
@@ -1230,14 +1233,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   }, []);
 
   const update = (field: keyof AccountFormValues, value: string) => {
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === 'baseRole' && value !== 'Team_Member') {
-        next.projectId = '';
-        next.endsAtUtc = '';
-      }
-      return next;
-    });
+    setForm((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined }));
     setServerError('');
   };
@@ -1265,8 +1261,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
           confirmPassword: form.confirmPassword,
           designation: form.designation || undefined,
           baseRole: form.baseRole,
-          departmentId: Number(form.departmentId),
-          ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {})
+          departmentId: Number(form.departmentId)
         })
       });
       const data = await response.json().catch(() => ({}));
@@ -1322,7 +1317,6 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
             {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
           </select>
         </AccountField>
-        {isAdmin && form.baseRole === 'Team_Member' && <><AccountField label="Team Lead project (optional)" error={errors.projectId}><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry" required={Boolean(form.projectId)} error={errors.endsAtUtc}><input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
         {serverError && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{serverError}</p>}
       </div>
       <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" disabled={busy} onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50">Cancel</button><button disabled={busy || departmentsBusy || departments.length === 0} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Creating account...' : 'Create and send credentials'}</button></div>
