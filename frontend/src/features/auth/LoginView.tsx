@@ -52,7 +52,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   };
 
-
   if (showForgotPassword) {
     return <ForgotPasswordView onBackToLogin={() => setShowForgotPassword(false)} />;
   }

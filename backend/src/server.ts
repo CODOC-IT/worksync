@@ -16,6 +16,7 @@ import attendanceRoutes from './routes/attendanceRoutes.js';
 import activityLogRoutes from './activityLog/activityLog.routes.js';
 import activityRoutes from './activity/activity.routes.js';
 import accountRoutes from './accounts/accounts.routes.js';
+import calendarRoutes from './calendar/calendar.routes.js';
 
 import { processEmailCandidates } from './notifications/notification.email.js';
 import { isDatabaseConfigured, bootstrapDatabase } from './db/pool.js';
@@ -48,6 +49,7 @@ app.use('/api/activity-log', activityLogRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/hr-requests', hrRequestRoutes);
+app.use('/api/calendar', calendarRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

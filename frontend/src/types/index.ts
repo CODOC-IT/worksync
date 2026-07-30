@@ -4,11 +4,15 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string;
   role: UserRole;
   department: string;
   avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
+  accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
+  invitationSentAtUtc?: string | null;
+  canResendInvitation?: boolean;
   lastActive?: string;
   githubUsername?: string;
   passwordHash?: string;
@@ -541,4 +545,16 @@ export interface CalendarEvent {
   type: 'Deadline' | 'Milestone' | 'Leave' | 'Meeting' | 'Review';
   projectId?: string;
   taskId?: string;
+}
+
+// An approved HR leave request, read-only on the Calendar. Backed by
+// GET /api/calendar/approved-leave (backend/src/calendar/), which reads the same
+// public.worksync_hr_requests rows the HR approval flow already writes -- this is a display-only
+// projection, not a duplicate leave record.
+export interface ApprovedLeaveEntry {
+  id: string;
+  userId: string;
+  userName: string;
+  date: string; // YYYY-MM-DD
+  leaveType: 'Full Day Leave' | 'Half Day Leave';
 }

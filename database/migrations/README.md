@@ -7,6 +7,14 @@ one-time baseline schema in `database/setup.sql` has been installed.
 does not delete IAM users, project memberships, role history, or legacy bcrypt credentials.
 It expects a Supabase Postgres database because it references `auth.users`.
 
+`20260730_02_account_credentials_invitations.sql` normalizes stored account identifiers and
+enforces organization-scoped, case-insensitive uniqueness for email and username. Resolve any
+pre-existing case-only duplicates before applying it.
+
+`20260730_03_permanent_account_passwords.sql` activates accounts created by the Admin/HR
+provisioning workflow and removes the retired first-login password-change flag from their
+Supabase Auth metadata. It does not change or re-hash any password.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

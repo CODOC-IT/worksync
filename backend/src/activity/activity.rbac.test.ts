@@ -388,6 +388,28 @@ test('HR: loses attendance scope after temporary role expires', async () => {
   assert.ok(!descriptions.includes('Check-in after HR expiry'), 'Expired HR must lose visibility');
 });
 
+test('HR: revoked permission provides no HR access', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles
+    (userid, roleid, grantedbyuserid, startsatutc, revokedatutc, revokedbyuserid, revocationreason)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1,
+      CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour', 1, 'Revoked')`);
+
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(!effectiveRoles.isActiveHR, 'Revoked HR must not be active');
+});
+
+test('HR: future-dated permission provides no HR access', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles
+    (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1,
+      CURRENT_TIMESTAMP + INTERVAL '1 hour', CURRENT_TIMESTAMP + INTERVAL '2 hours')`);
+
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(!effectiveRoles.isActiveHR, 'Future HR must not be active');
+});
+
 test('Admin: can view all activity categories', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot) VALUES
     (1, 1, 'Created', 'Project', 'prj-99', '00000000-0000-0000-0000-000000000100', 'Projects', 'Admin project creation', 'Admin'),
@@ -443,4 +465,114 @@ test('Overlapping Team Lead and HR: combined scopes without unrestricted access'
   assert.ok(descriptions.includes('Combined HR+Lead non-admin task activity'), 'Combined HR+Lead should see all non-admin activity');
   assert.ok(descriptions.includes('Combined HR attendance activity'), 'Combined HR+Lead should see attendance activity');
   assert.ok(!descriptions.includes('Admin action must stay hidden'), 'Combined HR+Lead must not see Admin-performed events');
+});
+
+// ─── Notification preference change events ('Notifications' module) ────────────
+// These events never carry a projectId/taskId, so the only visibility path for
+// Team Lead / Team Member viewers is the "own events" predicate -- Team Leads must never see
+// a Team Member's (or another Team Lead's) preference change purely by leading their project.
+
+test('Notification preference change: member sees their own, an unrelated Team Lead does not', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 4, 'Preference Changed', 'Notification Preference', 'notification-preference-inApp', '00000000-0000-0000-0000-000000000120', 'Notifications', 'Team Member turned off in-app notifications', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+
+  const memberRoles = await getEffectiveRoles('usr-4');
+  const memberResult = await findActivities({ page: 1, pageSize: 50 }, memberRoles, 'usr-4');
+  assert.ok(
+    memberResult.rows.some((r: any) => r.description === 'Team Member turned off in-app notifications'),
+    'Member should see their own preference change in their own Activity Log'
+  );
+
+  // usr-5 becomes a Team Lead scoped to Project A (where the actor, usr-4, is not even a member) --
+  // leading a project must not leak an unrelated member's preference change.
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  const tlUrId = memDb.public.one(`SELECT ur.userroleid FROM iam.userroles ur
+    JOIN iam.roles r ON r.roleid = ur.roleid
+    WHERE ur.userid = 5 AND r.rolecode = 'TeamLead'`).userroleid;
+  memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${tlUrId}, 1)`);
+
+  const leadRoles = await getEffectiveRoles('usr-5');
+  const leadResult = await findActivities({ page: 1, pageSize: 50 }, leadRoles, 'usr-5');
+  assert.ok(
+    !leadResult.rows.some((r: any) => r.description === 'Team Member turned off in-app notifications'),
+    "Team Lead must not see a Team Member's preference change"
+  );
+});
+
+test('Notification preference change: HR (near-admin) and Admin both see a Team Member\'s change', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 4, 'Preference Changed', 'Notification Preference', 'notification-preference-email', '00000000-0000-0000-0000-000000000121', 'Notifications', 'Team Member disabled email notifications', 'Team_Member')`);
+
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+
+  const hrRoles = await getEffectiveRoles('usr-5');
+  const hrResult = await findActivities({ page: 1, pageSize: 50 }, hrRoles, 'usr-5');
+  assert.ok(
+    hrResult.rows.some((r: any) => r.description === 'Team Member disabled email notifications'),
+    "HR should see a Team Member's preference change"
+  );
+
+  const adminRoles = await getEffectiveRoles('usr-1');
+  const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
+  assert.ok(
+    adminResult.rows.some((r: any) => r.description === 'Team Member disabled email notifications'),
+    "Admin should see a Team Member's preference change"
+  );
+});
+
+test('Notification preference change: HR\'s own change is hidden from Team Members but visible to Admin', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 5, 'Preference Changed', 'Notification Preference', 'notification-preference-mentions', '00000000-0000-0000-0000-000000000122', 'Notifications', 'HR turned on mention notifications', 'HR')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+
+  const memberRoles = await getEffectiveRoles('usr-4');
+  const memberResult = await findActivities({ page: 1, pageSize: 50 }, memberRoles, 'usr-4');
+  assert.ok(
+    !memberResult.rows.some((r: any) => r.description === 'HR turned on mention notifications'),
+    "Team Member must not see HR's own preference change"
+  );
+
+  const adminRoles = await getEffectiveRoles('usr-1');
+  const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
+  assert.ok(
+    adminResult.rows.some((r: any) => r.description === 'HR turned on mention notifications'),
+    "Admin should see HR's own preference change"
+  );
+});
+
+test('Notification preference change: Admin\'s own change is visible only to Admin', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 1, 'Preference Changed', 'Notification Preference', 'notification-preference-dueReminders', '00000000-0000-0000-0000-000000000123', 'Notifications', 'Admin turned off due reminder notifications', 'Admin')`);
+
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+
+  const hrRoles = await getEffectiveRoles('usr-5');
+  const hrResult = await findActivities({ page: 1, pageSize: 50 }, hrRoles, 'usr-5');
+  assert.ok(
+    !hrResult.rows.some((r: any) => r.description === 'Admin turned off due reminder notifications'),
+    "HR must not see Admin's own preference change"
+  );
+
+  const adminRoles = await getEffectiveRoles('usr-1');
+  const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
+  assert.ok(
+    adminResult.rows.some((r: any) => r.description === 'Admin turned off due reminder notifications'),
+    "Admin should see their own preference change"
+  );
 });

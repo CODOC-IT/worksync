@@ -17,6 +17,7 @@ import {
   ToastTone,
   ActivityLogItem,
   CalendarEvent,
+  ApprovedLeaveEntry,
   SavedPrompt,
 
   BreakType,
@@ -55,12 +56,17 @@ import {
   createProjectApi,
   updateProjectApi,
   archiveProjectApi,
+  permanentlyDeleteProjectApi,
+  restoreProjectApi,
   addProjectMemberApi,
   removeProjectMemberApi
 } from '../features/projects/projectRepository';
 import {
   fetchActivities,
 } from '../features/activity/activityApi';
+import {
+  fetchApprovedLeave
+} from '../features/calendar/calendarRepository';
 import {
   ActivityItem,
   DEFAULT_ACTIVITY_FILTERS,
@@ -124,6 +130,7 @@ interface AppState {
   notificationPreferences: NotificationPreferences;
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
+  approvedLeave: ApprovedLeaveEntry[];
   savedPrompts: SavedPrompt[];
 
   activeBreak: {
@@ -150,6 +157,8 @@ interface AppState {
   rejectProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   updateProject: (projectId: string, data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   deleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  permanentlyDeleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  restoreProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
   updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
@@ -205,6 +214,7 @@ interface AppState {
   snoozeNotification: (id: string, untilIso: string) => void;
   updateNotificationPreferences: (data: Partial<NotificationPreferences>) => void;
   dismissToast: (id: string) => void;
+  showToast: (tone: ToastTone, title: string, message: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
@@ -247,6 +257,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
+  const [approvedLeave, setApprovedLeave] = useState<ApprovedLeaveEntry[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
@@ -448,6 +459,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Calendar-only, read-only: approved HR leave requests for display alongside
+    // Deadlines/Milestones/Task Due. Never mutates leave data; the HR approval flow that owns it
+    // (backend/src/routes/hrRequestRoutes.ts) is untouched.
+    const hydrateApprovedLeave = async () => {
+      try {
+        const remoteApprovedLeave = await fetchApprovedLeave();
+        if (isActive) setApprovedLeave(remoteApprovedLeave);
+      } catch (error) {
+        console.warn('Approved leave API request failed; Calendar will show no leave entries.', error);
+      }
+    };
+
     const hydrateAttendance = async () => {
       try {
         const token = localStorage.getItem('worksync_auth_token');
@@ -516,6 +539,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void hydrateTasks();
     void hydrateProjects();
+    void hydrateApprovedLeave();
     void hydrateAttendance();
     void hydrateActivityLogs();
 
@@ -1128,6 +1152,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to delete project.', error);
       return { success: false, message: error?.message || 'Failed to delete the project. Please try again.' };
+    }
+  };
+
+  // Step two of the two-step delete: only usable on a project that's already Archived (the
+  // permanent-delete confirmation in ProjectsView only ever calls this for such a project). Unlike
+  // deleteProject/archiveProjectApi above, this removes the project from local state entirely --
+  // there's no longer a row to reflect a status on.
+  const permanentlyDeleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      await permanentlyDeleteProjectApi(projectId);
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      pushActivity('Permanently deleted project', 'Project', projectId, project.title);
+
+      const message = `"${project.title}" was permanently deleted.`;
+      confirmActionSuccess('Project Permanently Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to permanently delete project.', error);
+      return { success: false, message: error?.message || 'Failed to permanently delete the project. Please try again.' };
+    }
+  };
+
+  // Restores an Archived project back to Active. Deliberately not routed through updateProject --
+  // the backend clears ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic
+  // update path never touches (see project.service.ts's restoreProject comment). Members,
+  // milestones, files, notes, team lead, and tasks are untouched server-side, so the local merge
+  // here only needs to flip status, exactly like deleteProject's archive branch does the reverse.
+  const restoreProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      await restoreProjectApi(projectId);
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
+      pushActivity('Restored project', 'Project', projectId, project.title);
+
+      const message = `"${project.title}" was restored to Active.`;
+      confirmActionSuccess('Project Restored', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to restore project.', error);
+      return { success: false, message: error?.message || 'Failed to restore the project. Please try again.' };
     }
   };
 
@@ -1817,6 +1886,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
 
     const checkIn = () => {
+      if (currentRole === 'Admin') {
+        pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
+        return;
+      }
       const todayStr = new Date().toISOString().split('T')[0];
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const isLate = nowTime > settings.workingHours.start;
@@ -1863,6 +1936,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const checkOut = () => {
+      if (currentRole === 'Admin') return;
       const todayStr = new Date().toISOString().split('T')[0];
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const hasOpenAttendance = attendanceRecords.some(
@@ -1915,6 +1989,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const startBreak = (breakType: BreakType) => {
+      if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
       const todayStr = new Date().toISOString().split('T')[0];
@@ -1947,6 +2022,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const endBreak = () => {
+      if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
       const todayStr = new Date().toISOString().split('T')[0];
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -2062,7 +2138,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             body: JSON.stringify({
               checkIn: updates.checkIn,
               checkOut: updates.checkOut || '',
-              breaks: normalizedBreaks
+              breaks: normalizedBreaks,
+              reason: reason?.trim() || ''
             })
           }
         );
@@ -2653,6 +2730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notificationPreferences,
         activityLogs,
         calendarEvents,
+        approvedLeave,
         savedPrompts,
         activeBreak,
         settings,
@@ -2666,6 +2744,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectProject,
         updateProject,
         deleteProject,
+        permanentlyDeleteProject,
+        restoreProject,
         createTask,
         updateTask,
         deleteTask,
@@ -2692,6 +2772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snoozeNotification,
         updateNotificationPreferences,
         dismissToast,
+        showToast: pushToast,
         deactivateUser,
         exportBackup,
         updateCurrentUser,

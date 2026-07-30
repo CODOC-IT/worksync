@@ -61,8 +61,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onSelectTab 
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-96 max-w-[90vw] glass-panel border border-cyan-500/30 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+        // Below `sm`, the bell isn't flush with the viewport's right edge (the profile button
+        // sits after it in TopNav), so a bell-anchored `right-0` dropdown at this width can run
+        // off the left edge of narrow phone screens. `fixed` + inset positioning below the
+        // header sidesteps that on mobile; `sm:` reverts to the original bell-anchored popover.
+        <div className="fixed left-3 right-3 top-16 mt-2 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 sm:max-w-[90vw] glass-panel border border-cyan-500/30 shadow-2xl z-50 flex max-h-[calc(100vh-5rem)] flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
             <span className="text-sm font-bold text-white">Notifications</span>
             {unreadCount > 0 && (
               <button
@@ -75,7 +79,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onSelectTab 
             )}
           </div>
 
-          <div className="max-h-96 divide-y divide-white/5 overflow-y-auto">
+          <div className="min-h-0 flex-1 divide-y divide-white/5 overflow-y-auto sm:max-h-96 sm:flex-none">
             {preview.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-slate-500">You're all caught up.</div>
             ) : (
@@ -97,7 +101,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onSelectTab 
               setOpen(false);
               onSelectTab('notifications');
             }}
-            className="w-full border-t border-white/10 py-2.5 text-center text-xs font-semibold text-cyan-400 transition hover:bg-white/5"
+            className="w-full shrink-0 border-t border-white/10 py-2.5 text-center text-xs font-semibold text-cyan-400 transition hover:bg-white/5"
           >
             View all notifications
           </button>

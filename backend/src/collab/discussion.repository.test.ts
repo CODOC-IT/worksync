@@ -35,7 +35,23 @@ const SCHEMA_DDL = `
     UserId SERIAL PRIMARY KEY,
     OrganizationId INT NOT NULL REFERENCES org.Organizations(OrganizationId),
     Email VARCHAR(254) NOT NULL,
-    DisplayName VARCHAR(170) NOT NULL
+    DisplayName VARCHAR(170) NOT NULL,
+    AccountStatus VARCHAR(20) NOT NULL DEFAULT 'Active',
+    DeactivatedAtUtc TIMESTAMPTZ NULL
+  );
+
+  CREATE TABLE iam.Roles (
+    RoleId SERIAL PRIMARY KEY,
+    RoleCode VARCHAR(40) NOT NULL
+  );
+
+  CREATE TABLE iam.UserRoles (
+    UserRoleId BIGSERIAL PRIMARY KEY,
+    UserId INT NOT NULL REFERENCES iam.Users(UserId),
+    RoleId INT NOT NULL REFERENCES iam.Roles(RoleId),
+    StartsAtUtc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    EndsAtUtc TIMESTAMPTZ NULL,
+    RevokedAtUtc TIMESTAMPTZ NULL
   );
 
   CREATE TABLE work.ProjectStatuses (
@@ -56,6 +72,13 @@ const SCHEMA_DDL = `
     OwnerUserId INT NOT NULL REFERENCES iam.Users(UserId),
     ProjectStatusId SMALLINT NOT NULL REFERENCES work.ProjectStatuses(ProjectStatusId),
     PriorityId SMALLINT NOT NULL REFERENCES work.Priorities(PriorityId)
+  );
+
+  CREATE TABLE work.ProjectMembers (
+    ProjectMemberId BIGSERIAL PRIMARY KEY,
+    ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+    UserId INT NOT NULL REFERENCES iam.Users(UserId),
+    LeftAtUtc TIMESTAMPTZ NULL
   );
 
   CREATE TABLE work.TaskStatuses (
@@ -109,12 +132,28 @@ const SEED_DML = `
   INSERT INTO org.Organizations (OrganizationCode) VALUES ('WORKSYNC');
   INSERT INTO iam.Users (OrganizationId, Email, DisplayName) VALUES
     (1, 'lead@test.com', 'Team Lead User'),
-    (1, 'member@test.com', 'Team Member User');
+    (1, 'member@test.com', 'Team Member User'),
+    (1, 'admin@test.com', 'Admin User'),
+    (1, 'hr@test.com', 'HR User'),
+    (1, 'outsider@test.com', 'Unrelated Member'),
+    (1, 'inactive@test.com', 'Inactive Admin');
+  UPDATE iam.Users
+    SET AccountStatus = 'Deactivated', DeactivatedAtUtc = CURRENT_TIMESTAMP
+    WHERE Email = 'inactive@test.com';
+  INSERT INTO iam.Roles (RoleCode) VALUES
+    ('Administrator'), ('HRRepresentative'), ('TeamLead'), ('TeamMember');
+  INSERT INTO iam.UserRoles (UserId, RoleId) VALUES
+    (1, 3), (2, 4), (3, 1), (4, 2), (5, 4), (6, 1);
   INSERT INTO work.ProjectStatuses (StatusCode) VALUES ('Active');
   INSERT INTO work.Priorities (PriorityCode) VALUES ('Medium');
   INSERT INTO work.TaskStatuses (StatusCode) VALUES ('Todo');
   INSERT INTO work.Projects (OrganizationId, ProjectCode, ProjectName, OwnerUserId, ProjectStatusId, PriorityId)
     VALUES (1, 'PROJ-1', 'Test Project', 1, 1, 1), (1, 'PROJ-2', 'Other Project', 1, 1, 1);
+  INSERT INTO work.ProjectMembers (ProjectId, UserId, LeftAtUtc) VALUES
+    (1, 1, NULL),
+    (1, 2, NULL),
+    (2, 5, NULL),
+    (1, 5, CURRENT_TIMESTAMP);
   INSERT INTO work.Tasks (ProjectId, Title, TaskStatusId, PriorityId) VALUES (1, 'Test Task', 1, 1);
 `;
 
@@ -215,6 +254,18 @@ test('findThreadsForProjects: only returns threads whose effective project id is
   assert.equal(both.length, 2);
 
   assert.deepEqual(await repo.findThreadsForProjects([]), []);
+});
+
+test('findMentionableUsersForProjects: returns project participants plus active HR and Admin', async () => {
+  const repo = await import('./discussion.repository.js');
+  const mentionable = await repo.findMentionableUsersForProjects([1]);
+
+  assert.deepEqual(
+    mentionable.map((row) => row.userid),
+    [1, 2, 3, 4],
+    'owner/member/Admin/HR are eligible; unrelated, departed, and inactive users are not'
+  );
+  assert.deepEqual(await repo.findMentionableUsersForProjects([]), []);
 });
 
 test('insertComment: adds a one-level reply and preserves comment order', async () => {
