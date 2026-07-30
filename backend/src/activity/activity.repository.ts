@@ -174,10 +174,11 @@ const buildWhere = (
 
   const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1);
 
-  // For Admin the visibility clause is TRUE and no parameter is needed.
+  // For Admin and HR the visibility clause needs no $1 viewerPk parameter.
   // For all other roles $1 is the viewerPk used inside the scoped predicates.
-  const isAdminPath = effectiveRoles.permanentRole === 'Admin';
-  const values: unknown[] = isAdminPath ? [] : [viewerPk];
+  const isParamFreePath = effectiveRoles.permanentRole === 'Admin'
+    || effectiveRoles.isActiveHR;
+  const values: unknown[] = isParamFreePath ? [] : [viewerPk];
   values.push(...extraParams);
 
   // Current WorkSync authentication is organization 1 scoped. Keep every read explicitly
