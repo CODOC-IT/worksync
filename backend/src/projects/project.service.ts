@@ -76,7 +76,11 @@ const notifyRecipients = (
 };
 
 export const listProjectsForUser = async (userId: string, role: string): Promise<ProjectDTO[]> => {
-  const rows = role === 'Admin' ? await repo.findAllProjects() : await repo.findProjectsForUser(toUserPk(userId));
+  // HR gets the same "see every project" query Admin does -- read-only visibility only; nothing
+  // else in this file (assertCanCreate/assertCanManage) grants HR any write/manage capability, so
+  // this alone can't let HR do anything beyond viewing.
+  const rows =
+    role === 'Admin' || role === 'HR' ? await repo.findAllProjects() : await repo.findProjectsForUser(toUserPk(userId));
   if (rows.length === 0) return [];
   const membersByProject = await repo.findMembersForProjects(rows.map((row) => row.projectid));
   return Promise.all(
@@ -114,7 +118,9 @@ export const getProjectForUser = async (projectId: string, userId: string, role:
   if (!row) throw new ProjectNotFoundError('Project not found.');
 
   const members = await repo.findMembersForProject(row.projectid);
-  if (role !== 'Admin' && !isMemberOfRow(row, members, userId)) {
+  // Same HR read-only bypass as listProjectsForUser above -- HR can open any project's detail
+  // view, but this function only ever returns data, never grants a mutation.
+  if (role !== 'Admin' && role !== 'HR' && !isMemberOfRow(row, members, userId)) {
     throw new ProjectAuthorizationError('You do not have access to this project.');
   }
 
