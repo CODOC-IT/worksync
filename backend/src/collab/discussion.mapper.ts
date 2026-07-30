@@ -65,7 +65,8 @@ export const buildCommentDTO = async (
 export const buildThreadDTO = (
   row: DiscussionThreadRow,
   comments: DiscussionCommentDTO[],
-  openingCommentKind: CommentKindCode
+  openingCommentKind: CommentKindCode,
+  mentionableUserIds: string[]
 ): DiscussionThreadDTO => {
   const latestActivity = comments.reduce<string>((latest, comment) => {
     const candidate = comment.editedAt || comment.createdAt;
@@ -75,12 +76,15 @@ export const buildThreadDTO = (
   return {
     id: fromThreadPk(row.threadid),
     projectId: fromProjectPk(row.effectiveprojectid),
+    projectName: row.projectname,
     taskId: row.taskid ? fromTaskPk(row.taskid) : undefined,
+    taskName: row.tasktitle || undefined,
     title: row.subject || '',
     type: DB_TO_API_DISCUSSION_TYPE[openingCommentKind],
     creatorId: fromUserPk(row.createdbyuserid),
     createdAt: row.createdatutc.toISOString(),
     updatedAt: latestActivity,
+    mentionableUserIds,
     comments
   };
 };

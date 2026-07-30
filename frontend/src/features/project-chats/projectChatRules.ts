@@ -6,6 +6,10 @@ export interface MentionCandidate {
   status: string;
 }
 
+export interface ProjectMentionCandidate extends MentionCandidate {
+  role: string;
+}
+
 export interface MentionTrigger {
   start: number;
   end: number;
@@ -33,6 +37,17 @@ export const parseMentionIds = (body: string, users: MentionCandidate[]): string
   }
 
   return Array.from(mentionIds);
+};
+
+export const getProjectMentionCandidates = <T extends ProjectMentionCandidate>(
+  users: T[],
+  projectMemberIds: Iterable<string>
+): T[] => {
+  const memberIds = new Set(projectMemberIds);
+  return users.filter((user) =>
+    user.status !== 'inactive'
+    && (memberIds.has(user.id) || user.role === 'Admin' || user.role === 'HR')
+  );
 };
 
 export const getMentionTrigger = (
