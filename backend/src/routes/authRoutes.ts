@@ -8,6 +8,9 @@ import { recordActivitySafe } from '../activity/activity.service.js';
 
 const router = Router();
 
+const canManageAccounts = (role?: string) => role === 'Admin' || role === 'HR';
+const DEFAULT_TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
+
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void> => {
   try {
@@ -354,6 +357,131 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to change password.' });
+  }
+});
+
+// POST /api/auth/users
+router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const { name, email, password, role, department, title } = req.body;
+    if (!name || !email || !role || !department || !title) {
+      res.status(400).json({ success: false, message: 'Name, email, role, department, and title are required.' });
+      return;
+    }
+    if (req.user.role === 'HR' && role === 'Admin') {
+      res.status(403).json({ success: false, message: 'HR cannot create Administrator accounts.' });
+      return;
+    }
+
+    const resolvedPassword = typeof password === 'string' && password.trim().length >= 6
+      ? password
+      : DEFAULT_TEMPORARY_ACCOUNT_PASSWORD;
+
+    const newUser = await userStore.createUser({
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
+      password: resolvedPassword,
+      role,
+      department: String(department).trim(),
+      title: String(title).trim(),
+    });
+
+    res.status(201).json({ success: true, message: 'Account created successfully.', user: userStore.sanitizeUser(newUser) });
+  } catch (error: any) {
+    res.status(400).json({ success: false, message: error?.message || 'Failed to create account.' });
+  }
+});
+
+// PUT /api/auth/users/:id
+router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || req.body?.role === 'Admin')) {
+      res.status(403).json({ success: false, message: 'HR cannot edit Administrator roles.' });
+      return;
+    }
+
+    const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
+    res.status(200).json({ success: true, message: 'Account updated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/deactivate
+router.patch('/users/:id/deactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && targetUser.role === 'Admin') {
+      res.status(403).json({ success: false, message: 'HR cannot deactivate Administrator accounts.' });
+      return;
+    }
+
+    const updatedUser = await userStore.deactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to deactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/reactivate
+router.patch('/users/:id/reactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const updatedUser = await userStore.reactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account reactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to reactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// DELETE /api/auth/users/:id
+router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    await userStore.deleteManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deleted successfully.' });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to delete account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
   }
 });
 

@@ -10,13 +10,19 @@ import {
   CheckCircle2,
   ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
+  Pencil,
   FolderKanban,
   LayoutGrid,
   List,
   Mail,
+  Plus,
+  RotateCcw,
   Search,
   ShieldCheck,
   Sparkles,
+  UserMinus,
   UserRoundSearch,
   Users,
   X,
@@ -25,6 +31,17 @@ import {
 type SortOption = 'name' | 'role' | 'recent';
 type ViewMode = 'grid' | 'list';
 type SearchField = 'name' | 'email' | 'department' | 'title';
+type ManageModalMode = 'create' | 'edit';
+type AccountView = 'active' | 'deactivated';
+
+interface MemberFormState {
+  name: string;
+  email: string;
+  role: UserRole;
+  department: string;
+  title: string;
+  password: string;
+}
 
 const ROLE_LABELS: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -88,23 +105,52 @@ const formatDate = (value?: string) => {
 
 const formatRole = (role: UserRole) => ROLE_LABELS[role] || role.replace('_', ' ');
 
+const TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
+
+const EMPTY_MEMBER_FORM: MemberFormState = {
+  name: '',
+  email: '',
+  role: 'Team_Member',
+  department: 'Engineering',
+  title: '',
+  password: TEMPORARY_ACCOUNT_PASSWORD,
+};
+
 export const TeamMembersView: React.FC = () => {
-  const { users, tasks, projects, currentRole } = useApp();
+  const { users, tasks, projects, currentRole, currentUser, refreshUsers } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<SearchField>('name');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [sortBy, setSortBy] = useState<SortOption>('role');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [accountView, setAccountView] = useState<AccountView>('active');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [manageMode, setManageMode] = useState<ManageModalMode>('create');
+  const [memberForm, setMemberForm] = useState<MemberFormState>(EMPTY_MEMBER_FORM);
+  const [manageTargetId, setManageTargetId] = useState<string | null>(null);
+  const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [manageSubmitting, setManageSubmitting] = useState(false);
+  const [showTemporaryPassword, setShowTemporaryPassword] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{ type: 'deactivate' | 'reactivate'; memberId: string; memberName: string } | null>(null);
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
+  const canManageAccounts = currentRole === 'Admin' || currentRole === 'HR';
 
   const members = useMemo(
     () =>
       users
         .filter((member) => {
+          if (member.status === 'inactive') {
+            if (!canManageAccounts) return false;
+            if (accountView !== 'deactivated') return false;
+          } else if (canManageAccounts && accountView === 'deactivated') {
+            return false;
+          }
+
           const query = searchQuery.trim().toLowerCase();
           const searchValue =
             searchField === 'name'
@@ -127,7 +173,7 @@ export const TeamMembersView: React.FC = () => {
 
           return left.name.localeCompare(right.name);
         }),
-    [roleFilter, searchField, searchQuery, sortBy, tasks, users],
+    [accountView, canManageAccounts, roleFilter, searchField, searchQuery, sortBy, tasks, users],
   );
 
   const selectedMember = useMemo(
@@ -139,12 +185,22 @@ export const TeamMembersView: React.FC = () => {
     () => (selectedMember ? getMemberInsights(selectedMember, projects, tasks) : null),
     [projects, selectedMember, tasks],
   );
+  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && selectedMember?.role === 'Admin');
+
+  const activeMembersCount = useMemo(() => users.filter((member) => member.status !== 'inactive').length, [users]);
+  const deactivatedMembersCount = useMemo(() => users.filter((member) => member.status === 'inactive').length, [users]);
 
   useEffect(() => {
     if (!canInspectMembers) {
       setSelectedMemberId(null);
     }
   }, [canInspectMembers]);
+
+  useEffect(() => {
+    if (!canManageAccounts && accountView !== 'active') {
+      setAccountView('active');
+    }
+  }, [accountView, canManageAccounts]);
 
   const totalMembers = users.length;
   const teamLeadCount = users.filter((member) => member.role === 'Team_Lead').length;
@@ -170,6 +226,274 @@ export const TeamMembersView: React.FC = () => {
       setCopiedEmail(null);
     }
   };
+
+  const authHeaders = (json = true): Record<string, string> => {
+    const token = localStorage.getItem('worksync_auth_token');
+    const headers: Record<string, string> = {};
+    if (json) headers['Content-Type'] = 'application/json';
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  };
+
+  const openCreateModal = () => {
+    setManageMode('create');
+    setManageTargetId(null);
+    setMemberForm({ ...EMPTY_MEMBER_FORM });
+    setShowTemporaryPassword(false);
+    setManageModalOpen(true);
+  };
+
+  const openEditModal = (member: User) => {
+    setManageMode('edit');
+    setManageTargetId(member.id);
+    setMemberForm({
+      name: member.name,
+      email: member.email,
+      role: member.role,
+      department: member.department,
+      title: member.title,
+      password: '',
+    });
+    setShowTemporaryPassword(false);
+    setManageModalOpen(true);
+  };
+
+  const closeManageModal = () => {
+    if (manageSubmitting) return;
+    setManageModalOpen(false);
+    setManageTargetId(null);
+    setMemberForm({ ...EMPTY_MEMBER_FORM });
+    setShowTemporaryPassword(false);
+  };
+
+  const submitMemberForm = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setNotice(null);
+    setManageSubmitting(true);
+    try {
+      const isCreate = manageMode === 'create';
+      const payload = {
+        name: memberForm.name.trim(),
+        email: memberForm.email.trim().toLowerCase(),
+        role: memberForm.role,
+        department: memberForm.department.trim(),
+        title: memberForm.title.trim(),
+        ...(isCreate ? { password: memberForm.password } : {}),
+      };
+
+      const response = await fetch(isCreate ? '/api/auth/users' : `/api/auth/users/${encodeURIComponent(manageTargetId || '')}`, {
+        method: isCreate ? 'POST' : 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.message || `Failed to ${isCreate ? 'create' : 'update'} account.`);
+      }
+
+      refreshUsers();
+      setNotice({ type: 'success', message: data.message || `Account ${isCreate ? 'created' : 'updated'} successfully.` });
+      closeManageModal();
+    } catch (error) {
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Account request failed.' });
+    } finally {
+      setManageSubmitting(false);
+    }
+  };
+
+  const runAccountAction = async () => {
+    if (!confirmAction) return;
+    setNotice(null);
+    setConfirmSubmitting(true);
+    try {
+      const response = await fetch(
+        confirmAction.type === 'deactivate'
+          ? `/api/auth/users/${encodeURIComponent(confirmAction.memberId)}/deactivate`
+          : `/api/auth/users/${encodeURIComponent(confirmAction.memberId)}/reactivate`,
+        {
+          method: 'PATCH',
+          headers: authHeaders(false),
+        }
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.message || `Failed to ${confirmAction.type} account.`);
+      }
+
+      refreshUsers();
+      if (selectedMemberId === confirmAction.memberId) {
+        setSelectedMemberId(confirmAction.memberId);
+      }
+      setNotice({ type: 'success', message: data.message || 'Account updated successfully.' });
+      setConfirmAction(null);
+    } catch (error) {
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Account action failed.' });
+    } finally {
+      setConfirmSubmitting(false);
+    }
+  };
+
+  const renderGridCards = (items: User[], deactivated = false) => (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {items.map((member) => {
+        const isClickable = canInspectMembers;
+
+        return (
+          <GlassCard
+            key={member.id}
+            glowColor={member.role === 'Admin' ? 'amber' : member.role === 'HR' ? 'magenta' : member.role === 'Team_Lead' ? 'violet' : 'cyan'}
+            hover3dTilt={false}
+            onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
+            className={`h-full p-4 md:p-5 ${isClickable ? 'cursor-pointer' : 'cursor-default'} ${deactivated ? 'opacity-80' : ''}`}
+          >
+            <div className="flex h-full flex-col gap-4 rounded-[1.15rem] bg-gradient-to-b from-white/[0.02] to-transparent">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <img
+                    src={member.avatar}
+                    alt={member.name}
+                    className="h-13 w-13 rounded-2xl border border-white/10 object-cover bg-white/5 md:h-14 md:w-14"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="truncate text-[15px] font-semibold text-white md:text-base">{member.name}</h3>
+                    </div>
+                    <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-400">
+                        <Building2 size={13} />
+                        <span className="truncate">{member.department}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                  <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
+                    {formatRole(member.role)}
+                  </span>
+                  {member.status === 'inactive' && (
+                    <span className="whitespace-nowrap rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold leading-none text-rose-300">
+                      Deactivated
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-2.5 border-t border-white/10 pt-4 text-sm text-slate-300">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <div className="flex min-w-0 items-center gap-2 truncate">
+                    <Mail size={14} className="shrink-0 text-slate-500" />
+                    <span className="truncate">{member.email}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleCopyEmail(member.email);
+                    }}
+                    className="rounded-lg border border-white/10 bg-black/20 p-1.5 text-slate-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                    aria-label={`Copy ${member.name} email`}
+                  >
+                    {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 truncate rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  <Users size={14} className="shrink-0 text-slate-500" />
+                  <span className="truncate">Joined {formatDate(member.createdAt)}</span>
+                </div>
+              </div>
+
+              <div className="mt-auto flex items-center justify-end border-t border-white/10 pt-4 text-xs text-slate-400">
+                {isClickable ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-cyan-300">
+                    View details
+                    <ChevronRight size={14} />
+                  </span>
+                ) : (
+                  <span className="text-slate-500">&nbsp;</span>
+                )}
+              </div>
+            </div>
+          </GlassCard>
+        );
+      })}
+    </div>
+  );
+
+  const renderListRows = (items: User[], deactivated = false) => (
+    <div className="space-y-3">
+      {items.map((member) => {
+        const isClickable = canInspectMembers;
+
+        return (
+          <div
+            key={member.id}
+            onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
+            className={`rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 transition ${
+              isClickable ? 'cursor-pointer hover:border-cyan-500/30 hover:bg-white/[0.06]' : 'cursor-default'
+            } ${deactivated ? 'opacity-80' : ''}`}
+          >
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 items-center gap-4">
+                <img
+                  src={member.avatar}
+                  alt={member.name}
+                  className="h-12 w-12 rounded-2xl border border-white/10 object-cover bg-white/5"
+                />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="truncate text-sm font-semibold text-white md:text-base">{member.name}</h3>
+                    <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
+                      {formatRole(member.role)}
+                    </span>
+                    {member.status === 'inactive' && (
+                      <span className="whitespace-nowrap rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold leading-none text-rose-300">
+                        Deactivated
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 text-sm text-slate-300 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto] md:items-center lg:min-w-[42rem]">
+                <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+                  <Mail size={14} className="shrink-0 text-slate-500" />
+                  <span className="truncate">{member.email}</span>
+                </div>
+                <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-slate-400">
+                  <Building2 size={14} className="shrink-0 text-slate-500" />
+                  <span className="truncate">{member.department}</span>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleCopyEmail(member.email);
+                    }}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
+                      {copiedEmail === member.email ? 'Copied' : 'Copy email'}
+                    </span>
+                  </button>
+                  {isClickable && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300">
+                      Details
+                      <ChevronRight size={14} />
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <>
@@ -215,6 +539,12 @@ export const TeamMembersView: React.FC = () => {
             </div>
           </div>
         </section>
+
+        {notice && (
+          <section className={`rounded-2xl border px-4 py-3 text-sm ${notice.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-rose-500/30 bg-rose-500/10 text-rose-300'}`}>
+            {notice.message}
+          </section>
+        )}
 
         <section className="glass-panel border border-white/10 p-4 md:p-5">
           <div className="flex flex-col gap-4">
@@ -264,6 +594,42 @@ export const TeamMembersView: React.FC = () => {
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                {canManageAccounts && (
+                  <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setAccountView('active')}
+                      className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                        accountView === 'active' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Active Accounts
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAccountView('deactivated')}
+                      className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                        accountView === 'deactivated' ? 'bg-rose-500/15 text-rose-300' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Deactivated
+                    </button>
+                  </div>
+                )}
+
+                {canManageAccounts && (
+                  <button
+                    type="button"
+                    onClick={openCreateModal}
+                      className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
+                    >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Plus size={15} />
+                      Add account
+                    </span>
+                  </button>
+                )}
+
                 <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
                   <button
                     type="button"
@@ -331,151 +697,26 @@ export const TeamMembersView: React.FC = () => {
                   Adjust the search criteria or role filter to widen the roster view.
                 </p>
               </div>
-            ) : viewMode === 'grid' ? (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {members.map((member) => {
-                  const isClickable = canInspectMembers;
-
-                  return (
-                    <GlassCard
-                      key={member.id}
-                      glowColor={member.role === 'Admin' ? 'amber' : member.role === 'HR' ? 'magenta' : member.role === 'Team_Lead' ? 'violet' : 'cyan'}
-                      hover3dTilt={false}
-                      onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
-                      className={`h-full p-4 md:p-5 ${isClickable ? 'cursor-pointer' : 'cursor-default'}`}
-                    >
-                      <div className="flex h-full flex-col gap-4 rounded-[1.15rem] bg-gradient-to-b from-white/[0.02] to-transparent">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex min-w-0 items-start gap-3">
-                            <img
-                              src={member.avatar}
-                              alt={member.name}
-                              className="h-13 w-13 rounded-2xl border border-white/10 object-cover bg-white/5 md:h-14 md:w-14"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h3 className="truncate text-[15px] font-semibold text-white md:text-base">{member.name}</h3>
-                              </div>
-                              <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-400">
-                                  <Building2 size={13} />
-                                  <span className="truncate">{member.department}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
-                            {formatRole(member.role)}
-                          </span>
-                        </div>
-
-                        <div className="grid gap-2.5 border-t border-white/10 pt-4 text-sm text-slate-300">
-                          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                            <div className="flex min-w-0 items-center gap-2 truncate">
-                            <Mail size={14} className="shrink-0 text-slate-500" />
-                            <span className="truncate">{member.email}</span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleCopyEmail(member.email);
-                              }}
-                              className="rounded-lg border border-white/10 bg-black/20 p-1.5 text-slate-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
-                              aria-label={`Copy ${member.name} email`}
-                            >
-                              {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-2 truncate rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                            <Users size={14} className="shrink-0 text-slate-500" />
-                            <span className="truncate">Joined {formatDate(member.createdAt)}</span>
-                          </div>
-                        </div>
-
-                        <div className="mt-auto flex items-center justify-end border-t border-white/10 pt-4 text-xs text-slate-400">
-                          {isClickable ? (
-                            <span className="inline-flex items-center gap-1 font-semibold text-cyan-300">
-                              View details
-                              <ChevronRight size={14} />
-                            </span>
-                          ) : (
-                            <span className="text-slate-500">&nbsp;</span>
-                          )}
-                        </div>
-                      </div>
-                    </GlassCard>
-                  );
-                })}
-              </div>
             ) : (
-                <div className="space-y-3">
-                {members.map((member) => {
-                  const isClickable = canInspectMembers;
-
-                  return (
-                    <div
-                      key={member.id}
-                      onClick={isClickable ? () => setSelectedMemberId(member.id) : undefined}
-                      className={`rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 transition ${
-                        isClickable ? 'cursor-pointer hover:border-cyan-500/30 hover:bg-white/[0.06]' : 'cursor-default'
-                      }`}
-                    >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex min-w-0 items-center gap-4">
-                          <img
-                            src={member.avatar}
-                            alt={member.name}
-                            className="h-12 w-12 rounded-2xl border border-white/10 object-cover bg-white/5"
-                          />
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="truncate text-sm font-semibold text-white md:text-base">{member.name}</h3>
-                              <span className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold leading-none ${ROLE_BADGE_CLASS[member.role]}`}>
-                                {formatRole(member.role)}
-                              </span>
-                            </div>
-                            <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
-                          </div>
-                        </div>
-
-                        <div className="grid gap-3 text-sm text-slate-300 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto] md:items-center lg:min-w-[42rem]">
-                          <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
-                            <Mail size={14} className="shrink-0 text-slate-500" />
-                            <span className="truncate">{member.email}</span>
-                          </div>
-                          <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-slate-400">
-                            <Building2 size={14} className="shrink-0 text-slate-500" />
-                            <span className="truncate">{member.department}</span>
-                          </div>
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleCopyEmail(member.email);
-                              }}
-                              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-500/30 hover:text-cyan-300"
-                            >
-                              <span className="inline-flex items-center gap-1.5">
-                                {copiedEmail === member.email ? <Check size={13} /> : <Copy size={13} />}
-                                {copiedEmail === member.email ? 'Copied' : 'Copy email'}
-                              </span>
-                            </button>
-                            {isClickable && (
-                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-cyan-300">
-                                Details
-                                <ChevronRight size={14} />
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className={`text-sm font-semibold ${accountView === 'deactivated' ? 'text-rose-300' : 'text-white'}`}>
+                      {accountView === 'deactivated' ? 'Deactivated accounts' : 'Active accounts'}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {accountView === 'deactivated'
+                        ? 'Hidden from normal workspace activity and available here only for Admin/HR management.'
+                        : 'Current team members available in the workspace directory.'}
+                    </p>
+                  </div>
+                  <span className={`rounded-full border px-3 py-1 text-[11px] font-mono ${accountView === 'deactivated' ? 'border-rose-500/20 bg-rose-500/10 text-rose-300' : 'border-white/10 bg-white/5 text-slate-400'}`}>
+                    {accountView === 'deactivated' ? deactivatedMembersCount : activeMembersCount}
+                  </span>
+                </div>
+                {viewMode === 'grid'
+                  ? renderGridCards(members, accountView === 'deactivated')
+                  : renderListRows(members, accountView === 'deactivated')}
               </div>
             )}
           </div>
@@ -518,18 +759,67 @@ export const TeamMembersView: React.FC = () => {
                       <Mail size={13} />
                       {selectedMember.email}
                     </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px]">
+                      {selectedMember.status === 'inactive' ? 'Deactivated account' : 'Active account'}
+                    </span>
                   </div>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSelectedMemberId(null)}
-                className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
-                aria-label="Close member detail"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {canManageAccounts && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(selectedMember)}
+                      className="whitespace-nowrap rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <Pencil size={14} />
+                        Edit
+                      </span>
+                    </button>
+                    {selectedMember.status !== 'inactive' && canDeactivateSelectedMember ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAction({ type: 'deactivate', memberId: selectedMember.id, memberName: selectedMember.name })}
+                        className="whitespace-nowrap rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-300 transition hover:bg-amber-500/15"
+                      >
+                        <span className="inline-flex items-center gap-1.5">
+                          <UserMinus size={14} />
+                          Deactivate
+                        </span>
+                      </button>
+                    ) : selectedMember.status === 'inactive' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmAction({ type: 'reactivate', memberId: selectedMember.id, memberName: selectedMember.name })}
+                          className="whitespace-nowrap rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/15"
+                        >
+                          <span className="inline-flex items-center gap-1.5">
+                            <RotateCcw size={14} />
+                            Reactivate
+                          </span>
+                        </button>
+                      </>
+                    ) : currentRole === 'HR' && selectedMember.role === 'Admin' ? (
+                      <span className="whitespace-nowrap rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400">
+                        Administrator protected
+                      </span>
+                    ) : null}
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedMemberId(null)}
+                  className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                  aria-label="Close member detail"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             </div>
 
@@ -721,6 +1011,129 @@ export const TeamMembersView: React.FC = () => {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {canManageAccounts && manageModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeManageModal();
+          }}
+        >
+          <form onSubmit={submitMemberForm} className="glass-panel-glow w-full max-w-2xl border border-cyan-500/25">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">{manageMode === 'create' ? 'Add account' : 'Edit account'}</h2>
+                <p className="mt-1 text-xs text-slate-400">
+                  {manageMode === 'create'
+                    ? 'Create a new workspace account for a team member.'
+                    : 'Update account details for this member.'}
+                </p>
+              </div>
+              <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <label className="text-sm text-slate-300">
+                <span className="mb-1 block text-xs">Full name</span>
+                <input value={memberForm.name} onChange={(event) => setMemberForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+              </label>
+              <label className="text-sm text-slate-300">
+                <span className="mb-1 block text-xs">Email</span>
+                <input type="email" value={memberForm.email} onChange={(event) => setMemberForm((prev) => ({ ...prev, email: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+              </label>
+                <label className="text-sm text-slate-300">
+                  <span className="mb-1 block text-xs">Role</span>
+                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin'} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60">
+                    {currentRole === 'Admin' && <option value="Admin">Administrator</option>}
+                    {currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin' && <option value="Admin">Administrator</option>}
+                    <option value="Team_Lead">Team Lead</option>
+                    <option value="HR">HR</option>
+                    <option value="Team_Member">Team Member</option>
+                  </select>
+                  {currentRole === 'HR' && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      HR cannot create or change Administrator roles.
+                    </p>
+                  )}
+                </label>
+              <label className="text-sm text-slate-300">
+                <span className="mb-1 block text-xs">Department</span>
+                <input value={memberForm.department} onChange={(event) => setMemberForm((prev) => ({ ...prev, department: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+              </label>
+              <label className="text-sm text-slate-300 md:col-span-2">
+                <span className="mb-1 block text-xs">Title</span>
+                <input value={memberForm.title} onChange={(event) => setMemberForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+              </label>
+              {manageMode === 'create' && (
+                <label className="text-sm text-slate-300 md:col-span-2">
+                  <span className="mb-1 block text-xs">Temporary password</span>
+                  <div className="relative">
+                    <input
+                      type={showTemporaryPassword ? 'text' : 'password'}
+                      value={memberForm.password}
+                      onChange={(event) => setMemberForm((prev) => ({ ...prev, password: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 pr-12 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                      minLength={6}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTemporaryPassword((visible) => !visible)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition hover:text-white"
+                      aria-label={showTemporaryPassword ? 'Hide temporary password' : 'Show temporary password'}
+                    >
+                      {showTemporaryPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">Default temporary password: <span className="font-mono text-slate-300">{TEMPORARY_ACCOUNT_PASSWORD}</span></p>
+                </label>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
+              <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
+              <button type="submit" disabled={manageSubmitting} className="rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 disabled:opacity-60">
+                {manageSubmitting ? 'Saving...' : manageMode === 'create' ? 'Create account' : 'Save changes'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {canManageAccounts && confirmAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !confirmSubmitting) setConfirmAction(null);
+          }}
+        >
+          <div className="glass-panel-glow w-full max-w-md border border-white/10 p-5">
+            <h2 className="text-lg font-semibold text-white">
+              {confirmAction.type === 'deactivate'
+                ? 'Deactivate account'
+                : 'Reactivate account'}
+            </h2>
+            <p className="mt-3 text-sm text-slate-400">
+              {confirmAction.type === 'deactivate'
+                ? `This will block ${confirmAction.memberName} from signing in until the account is reactivated through the backend.`
+                : `This will restore ${confirmAction.memberName}'s access to the workspace and make the account active again.`}
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button type="button" onClick={() => setConfirmAction(null)} disabled={confirmSubmitting} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
+              <button
+                type="button"
+                onClick={() => void runAccountAction()}
+                disabled={confirmSubmitting}
+                className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium disabled:opacity-60 ${confirmAction.type === 'deactivate' ? 'border border-amber-500/30 bg-amber-500/12 text-amber-300' : 'border border-emerald-500/30 bg-emerald-500/12 text-emerald-300'}`}
+              >
+                {confirmSubmitting ? 'Processing...' : confirmAction.type === 'deactivate' ? 'Deactivate' : 'Reactivate'}
+              </button>
             </div>
           </div>
         </div>
