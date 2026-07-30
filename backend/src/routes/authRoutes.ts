@@ -5,41 +5,14 @@ import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { query } from '../db/pool.js';
-import { getSupabaseServiceClient } from '../db/supabase.js';
-import { toUserPk } from '../utils/idMapping.js';
 
 const router = Router();
 
-// One-time compatibility bridge for accounts that existed before the Supabase Auth cutover.
-// bcrypt hashes cannot be imported into Supabase; only a successful legacy-password check may
-// create the corresponding Auth account, and the plaintext password is never stored or logged.
-router.post('/migrate-legacy-credentials', loginRateLimiter, async (req, res: Response): Promise<void> => {
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-  const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  if (!email || !password) { res.status(400).json({ success: false, message: 'Email and password are required.' }); return; }
-  try {
-    const user = await userStore.findByEmailAsync(email);
-    if (!user?.passwordHash || user.status !== 'active' || !(await bcrypt.compare(password, user.passwordHash))) {
-      res.status(401).json({ success: false, message: 'Invalid email or password.' }); return;
-    }
-    const identity = await query<{ authuserid: string | null }>('SELECT authuserid FROM iam.users WHERE userid = $1', [toUserPk(user.id)]);
-    if (identity.rows[0]?.authuserid) { res.status(409).json({ success: false, message: 'This account is already linked. Sign in with Supabase Auth or use password recovery.' }); return; }
-    const created = await getSupabaseServiceClient().auth.admin.createUser({ email: user.email, password, email_confirm: true });
-    if (created.error || !created.data.user) { res.status(409).json({ success: false, message: 'A Supabase account already exists for this email. Use password recovery to set its password.' }); return; }
-    await query('UPDATE iam.users SET authuserid = $1, activatedatutc = COALESCE(activatedatutc, CURRENT_TIMESTAMP), updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2 AND authuserid IS NULL', [created.data.user.id, toUserPk(user.id)]);
-    recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role, action: 'Updated', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name, description: 'Legacy credentials were securely migrated to Supabase Auth.', result: 'Successful', source: 'Web', important: true });
-    res.status(200).json({ success: true, message: 'Your account has been migrated. Signing you in now.' });
-  } catch (error) {
-    console.error('[auth] Legacy credential migration failed.', error instanceof Error ? error.message : error);
-    res.status(503).json({ success: false, message: 'Account migration is temporarily unavailable. Please try again.' });
-  }
-});
+const canManageAccounts = (role?: string) => role === 'Admin' || role === 'HR';
+const DEFAULT_TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
 
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void> => {
-  res.status(410).json({ success: false, message: 'Legacy login has been retired. Sign in with Supabase Auth.' });
-  return;
   try {
     const { email, password } = req.body;
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -101,22 +74,18 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
 
 // GET /api/auth/role-status
 router.get('/role-status', async (_req, res: Response): Promise<void> => {
-  res.status(410).json({ success: false, message: 'Public registration bootstrap has been retired.' });
+  await userStore.syncUsersToDb();
+  res.status(200).json({
+    success: true,
+    hasAdmin: userStore.hasRole('Admin'),
+    hasHR: userStore.hasRole('HR')
+  });
 });
 
 // POST /api/auth/forgot-password
 // Body: { email }
 // Sends OTP to the user's email if account exists (don't reveal whether it exists)
 router.post('/forgot-password', async (req, res: Response): Promise<void> => {
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-  if (!email) { res.status(400).json({ success: false, message: 'Email is required.' }); return; }
-  const { getSupabaseServiceClient } = await import('../db/supabase.js');
-  const { error } = await getSupabaseServiceClient().auth.resetPasswordForEmail(email, {
-    redirectTo: process.env.SUPABASE_PASSWORD_RESET_REDIRECT_URL || undefined,
-  });
-  if (error) { res.status(503).json({ success: false, message: 'Password recovery is temporarily unavailable.' }); return; }
-  res.status(200).json({ success: true, message: 'If an account exists, a password recovery link has been sent.' });
-  return;
   try {
     const { email } = req.body;
 
@@ -170,8 +139,6 @@ router.post('/forgot-password', async (req, res: Response): Promise<void> => {
 // Body: { resetToken, newPassword }
 // Updates the user's password after OTP verification (resetToken from otp verify)
 router.put('/password', async (req, res: Response): Promise<void> => {
-  res.status(410).json({ success: false, message: 'Use the Supabase password recovery link to update your password.' });
-  return;
   try {
     const { resetToken, newPassword } = req.body;
 
@@ -390,6 +357,131 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to change password.' });
+  }
+});
+
+// POST /api/auth/users
+router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const { name, email, password, role, department, title } = req.body;
+    if (!name || !email || !role || !department || !title) {
+      res.status(400).json({ success: false, message: 'Name, email, role, department, and title are required.' });
+      return;
+    }
+    if (req.user.role === 'HR' && role === 'Admin') {
+      res.status(403).json({ success: false, message: 'HR cannot create Administrator accounts.' });
+      return;
+    }
+
+    const resolvedPassword = typeof password === 'string' && password.trim().length >= 6
+      ? password
+      : DEFAULT_TEMPORARY_ACCOUNT_PASSWORD;
+
+    const newUser = await userStore.createUser({
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
+      password: resolvedPassword,
+      role,
+      department: String(department).trim(),
+      title: String(title).trim(),
+    });
+
+    res.status(201).json({ success: true, message: 'Account created successfully.', user: userStore.sanitizeUser(newUser) });
+  } catch (error: any) {
+    res.status(400).json({ success: false, message: error?.message || 'Failed to create account.' });
+  }
+});
+
+// PUT /api/auth/users/:id
+router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || req.body?.role === 'Admin')) {
+      res.status(403).json({ success: false, message: 'HR cannot edit Administrator roles.' });
+      return;
+    }
+
+    const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
+    res.status(200).json({ success: true, message: 'Account updated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/deactivate
+router.patch('/users/:id/deactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && targetUser.role === 'Admin') {
+      res.status(403).json({ success: false, message: 'HR cannot deactivate Administrator accounts.' });
+      return;
+    }
+
+    const updatedUser = await userStore.deactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to deactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/reactivate
+router.patch('/users/:id/reactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const updatedUser = await userStore.reactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account reactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to reactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// DELETE /api/auth/users/:id
+router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    await userStore.deleteManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deleted successfully.' });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to delete account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
   }
 });
 

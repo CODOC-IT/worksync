@@ -81,6 +81,15 @@ interface DbUserRow {
   passwordalgorithm: string | null;
 }
 
+interface DbRoleRow {
+  roleid: number;
+  istemporary: boolean;
+}
+
+interface DbDepartmentRow {
+  departmentid: number;
+}
+
 function rowToUserRecord(row: DbUserRow): UserRecord {
   return {
     id: fromUserPk(row.userid),
@@ -101,13 +110,16 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
   };
 }
 
+const toDepartmentCode = (name: string): string => {
+  const cleaned = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return (cleaned || 'DEPARTMENT').slice(0, 24);
+};
+
 class UserStore {
   private dbAvailable: boolean = false;
   private fallbackUsers: Map<string, UserRecord> = new Map();
   private initialized = false;
-  // Holds the in-flight load so concurrent callers await the same query instead of each firing
-  // their own (the "has a load started?" boolean this replaces could not be un-set safely).
-  private initPromise: Promise<void> | null = null;
+  private dbLoadStarted = false;
 
   constructor() {
     if (this.isLegacyFileAuthEnabled()) {
@@ -120,52 +132,35 @@ class UserStore {
       && process.env.ENABLE_LEGACY_FILE_AUTH === 'true';
   }
 
-  // Loads the user directory once, and — critically — only marks itself initialized when that
-  // load actually SUCCEEDS. The previous version latched `initialized = true` before running the
-  // query, so a single transient failure (a DNS blip, an ECONNRESET from the pooler) left the
-  // store permanently empty and every subsequent login failed with "Invalid email or password"
-  // until the process was restarted. On a serverless instance that bricked the whole instance.
-  // Now a failed attempt simply leaves the store uninitialized and the next request retries.
   private async ensureInit(): Promise<void> {
     if (this.initialized) return;
-    if (this.initPromise) return this.initPromise;
+    if (this.dbLoadStarted) return;
+    this.dbLoadStarted = true;
+    this.initialized = true;
 
-    this.initPromise = this.loadUsers().finally(() => {
-      this.initPromise = null;
-    });
-    return this.initPromise;
-  }
+    if (isDatabaseConfigured()) {
+      try {
+        const result = await query<DbUserRow>(
+          USER_QUERY + ' WHERE u.organizationid = 1 ORDER BY u.userid'
+        );
+        this.dbAvailable = true;
+        // A configured database is authoritative. Clear local fallback users
+        // so registrations from a previous database are not carried forward.
+        this.fallbackUsers.clear();
+        for (const row of result.rows) {
+          const user = rowToUserRecord(row);
+          this.fallbackUsers.set(user.email.toLowerCase(), user);
+        }
+        if (result.rows.length > 0) {
+          console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
+        }
 
-  private async loadUsers(): Promise<void> {
-    if (!isDatabaseConfigured()) {
-      // No database to wait for — the file store (if enabled) is all there is, so this is a
-      // legitimately finished initialization rather than a failure worth retrying.
-      this.initialized = true;
-      return;
-    }
+        await this.alignDatabaseUserSequence();
 
-    try {
-      const result = await query<DbUserRow>(
-        USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
-      );
-      this.dbAvailable = true;
-      // A configured database is authoritative. Clear local fallback users
-      // so registrations from a previous database are not carried forward.
-      this.fallbackUsers.clear();
-      for (const row of result.rows) {
-        const user = rowToUserRecord(row);
-        this.fallbackUsers.set(user.email.toLowerCase(), user);
+        return;
+      } catch (err: any) {
+        console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
       }
-      this.initialized = true;
-      if (result.rows.length > 0) {
-        console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
-      }
-
-      await this.alignDatabaseUserSequence();
-    } catch (err: any) {
-      // Deliberately leaves `initialized` false so the next call retries rather than serving an
-      // empty directory forever.
-      console.warn(`[UserStore] Database query failed (${err.message}); will retry on next request.`);
     }
   }
 
@@ -189,6 +184,57 @@ class UserStore {
       // user list from loading.
       console.warn(`[UserStore] User ID sequence alignment skipped: ${err.message}`);
     }
+  }
+
+  private async getOrCreateDepartmentId(name: string): Promise<number | null> {
+    if (!this.dbAvailable) return null;
+    const normalized = name.trim();
+    if (!normalized) return null;
+
+    const existing = await query<DbDepartmentRow>(
+      `SELECT departmentid FROM org.departments
+       WHERE organizationid = 1 AND lower(departmentname) = lower($1)
+       LIMIT 1`,
+      [normalized]
+    );
+    if (existing.rows[0]) return existing.rows[0].departmentid;
+
+    const baseCode = toDepartmentCode(normalized);
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const code = attempt === 0 ? baseCode : `${baseCode.slice(0, 20)}_${attempt}`;
+      try {
+        const inserted = await query<DbDepartmentRow>(
+          `INSERT INTO org.departments (organizationid, departmentcode, departmentname)
+           VALUES (1, $1, $2)
+           RETURNING departmentid`,
+          [code, normalized]
+        );
+        return inserted.rows[0]?.departmentid ?? null;
+      } catch (error: any) {
+        if (!String(error?.message || '').includes('duplicate')) throw error;
+      }
+    }
+
+    const retry = await query<DbDepartmentRow>(
+      `SELECT departmentid FROM org.departments
+       WHERE organizationid = 1 AND lower(departmentname) = lower($1)
+       LIMIT 1`,
+      [normalized]
+    );
+    return retry.rows[0]?.departmentid ?? null;
+  }
+
+  private async getRoleDetails(role: UserRole): Promise<DbRoleRow> {
+    const roleCode = ROLE_TO_DB[role];
+    const roleResult = await query<DbRoleRow>(
+      'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
+      [roleCode]
+    );
+    const found = roleResult.rows[0];
+    if (!found) {
+      throw new Error(`Database role ${roleCode} is not configured.`);
+    }
+    return found;
   }
 
   private initFileStore(): void {
@@ -297,8 +343,14 @@ class UserStore {
   }): Promise<UserRecord> {
     await this.ensureInit();
 
-    const existing = this.findByEmail(userData.email);
-    if (existing) throw new Error('User with this email already exists.');
+    const existing = await this.findByEmailAsync(userData.email);
+    if (existing) {
+      throw new Error(
+        existing.status === 'inactive'
+          ? 'An account with this email already exists and is currently deactivated. Reactivate the existing account instead of creating a new one.'
+          : 'An account with this email already exists.'
+      );
+    }
 
     if (userData.role === 'Admin' && this.hasRole('Admin')) {
       throw new Error('An Administrator account already exists. Only one Admin is permitted.');
@@ -315,25 +367,18 @@ class UserStore {
         const [givenName, ...familyParts] = userData.name.trim().split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
 
-        const roleCode = ROLE_TO_DB[userData.role];
-        const roleResult = await query<{ roleid: number; istemporary: boolean }>(
-          'SELECT roleid, istemporary FROM iam.roles WHERE rolecode = $1',
-          [roleCode]
-        );
-        const role = roleResult.rows[0];
-        if (!role) {
-          throw new Error(`Database role ${roleCode} is not configured.`);
-        }
+        const role = await this.getRoleDetails(userData.role);
         const systemActorUserId = await getSystemActorUserId();
+        const departmentId = await this.getOrCreateDepartmentId(userData.department);
 
         // Users + credentials + role grant are inserted atomically so a failure cannot leave
         // an orphaned user row that permanently occupies the email without a usable account.
         const userId = await withTransaction(async (runQuery) => {
           const insertUser = await runQuery<{ userid: number }>(
-            `INSERT INTO iam.users (organizationid, email, givenname, familyname, displayname, designation, accountstatus)
-             VALUES ($1, $2, $3, $4, $5, $6, 'Active')
+            `INSERT INTO iam.users (organizationid, departmentid, email, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Active')
              RETURNING userid`,
-            [orgId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
+            [orgId, departmentId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
           );
           const newUserId = insertUser.rows[0].userid;
 
@@ -364,7 +409,7 @@ class UserStore {
           passwordHash,
           role: userData.role,
           department: userData.department,
-    avatar: '',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
           title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
           status: 'active',
           createdAt: new Date().toISOString()
@@ -400,7 +445,7 @@ class UserStore {
       passwordHash,
       role: userData.role,
       department: userData.department,
-      avatar: '',
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
       title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
       status: 'active',
       createdAt: new Date().toISOString()
@@ -410,6 +455,206 @@ class UserStore {
     this.persistFile(this.getFileStorePath());
     console.log(`[UserStore] Created user in file store: ${newUser.name} ✓`);
     return newUser;
+  }
+
+  public async updateManagedUser(
+    userId: string,
+    updates: Partial<Pick<UserRecord, 'name' | 'email' | 'role' | 'department' | 'title'>>,
+    actorId: string
+  ): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+
+    const nextRole = updates.role || user.role;
+    const nextEmail = (updates.email || user.email).trim().toLowerCase();
+    const nextName = (updates.name || user.name).trim();
+    const nextDepartment = (updates.department || user.department).trim() || user.department;
+    const nextTitle = (updates.title || user.title).trim() || user.title;
+
+    if (!nextName) throw new Error('Name is required.');
+    if (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw new Error('A valid email is required.');
+    if (!nextDepartment) throw new Error('Department is required.');
+
+    const duplicate = Array.from(this.fallbackUsers.values()).find(
+      (existing) => existing.id !== userId && existing.email.toLowerCase() === nextEmail
+    );
+    if (duplicate) throw new Error('A user with this email already exists.');
+
+    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
+    if (user.role === 'Admin' && nextRole !== 'Admin' && user.status === 'active' && activeAdminsCount <= 1) {
+      throw new Error('Cannot change the role of the sole active Admin account.');
+    }
+
+    if (nextRole === 'Admin' && user.role !== 'Admin' && this.hasRole('Admin')) {
+      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
+    }
+    if (nextRole === 'HR' && user.role !== 'HR' && this.hasRole('HR')) {
+      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
+    }
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(userId);
+        const [givenName, ...familyParts] = nextName.split(/\s+/);
+        const familyName = familyParts.join(' ') || givenName;
+        const departmentId = await this.getOrCreateDepartmentId(nextDepartment);
+
+        await query(
+          `UPDATE iam.users
+           SET departmentid = $1,
+               email = $2,
+               givenname = $3,
+               familyname = $4,
+               displayname = $5,
+               designation = $6,
+               updatedatutc = CURRENT_TIMESTAMP
+           WHERE userid = $7`,
+          [departmentId, nextEmail, givenName, familyName, nextName, nextTitle, uid]
+        );
+
+        if (nextRole !== user.role) {
+          const actorPk = toUserPk(actorId);
+          await query(
+            `UPDATE iam.userroles
+             SET revokedatutc = CURRENT_TIMESTAMP,
+                 revokedbyuserid = $2,
+                 revocationreason = 'Role updated from members module'
+             WHERE userid = $1 AND revokedatutc IS NULL`,
+            [uid, actorPk]
+          );
+
+          const role = await this.getRoleDetails(nextRole);
+          const systemActorUserId = await getSystemActorUserId();
+          const endsAtUtc = role.istemporary
+            ? new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+            : null;
+
+          await query(
+            `INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, endsatutc)
+             VALUES ($1, $2, $3, $4)`,
+            [uid, role.roleid, systemActorUserId, endsAtUtc]
+          );
+        }
+      } catch (err: any) {
+        console.warn(`[UserStore] DB updateManagedUser failed: ${err.message}`);
+        throw new Error('Database user update failed.');
+      }
+    }
+
+    const oldEmail = user.email.toLowerCase();
+    this.fallbackUsers.delete(oldEmail);
+    user.name = nextName;
+    user.email = nextEmail;
+    user.role = nextRole;
+    user.department = nextDepartment;
+    user.title = nextTitle;
+    this.fallbackUsers.set(user.email.toLowerCase(), user);
+    this.persistFile(this.getFileStorePath());
+    return this.sanitizeUser(user);
+  }
+
+  public async deactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+    if (user.status === 'inactive') return this.sanitizeUser(user);
+
+    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
+    if (user.role === 'Admin' && activeAdminsCount <= 1) {
+      throw new Error('Cannot deactivate the sole active Admin account.');
+    }
+
+    if (this.dbAvailable) {
+      try {
+        await query(
+          `UPDATE iam.users
+           SET accountstatus = 'Deactivated',
+               deactivatedatutc = CURRENT_TIMESTAMP,
+               updatedatutc = CURRENT_TIMESTAMP
+           WHERE userid = $1`,
+          [toUserPk(userId)]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB deactivateManagedUser failed: ${err.message}`);
+        throw new Error('Database user deactivation failed.');
+      }
+    }
+
+    user.status = 'inactive';
+    this.persistFile(this.getFileStorePath());
+    return this.sanitizeUser(user);
+  }
+
+  public async reactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+    if (user.status === 'active') return this.sanitizeUser(user);
+
+    if (user.role === 'Admin') {
+      const otherActiveAdmin = Array.from(this.fallbackUsers.values()).some(
+        (entry) => entry.id !== userId && entry.role === 'Admin' && entry.status === 'active'
+      );
+      if (otherActiveAdmin) {
+        throw new Error('An active Administrator account already exists. Only one Admin is permitted.');
+      }
+    }
+    if (user.role === 'HR') {
+      const otherActiveHr = Array.from(this.fallbackUsers.values()).some(
+        (entry) => entry.id !== userId && entry.role === 'HR' && entry.status === 'active'
+      );
+      if (otherActiveHr) {
+        throw new Error('An active HR account already exists. Only one HR is permitted.');
+      }
+    }
+
+    if (this.dbAvailable) {
+      try {
+        await query(
+          `UPDATE iam.users
+           SET accountstatus = 'Active',
+               deactivatedatutc = NULL,
+               updatedatutc = CURRENT_TIMESTAMP
+           WHERE userid = $1`,
+          [toUserPk(userId)]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB reactivateManagedUser failed: ${err.message}`);
+        throw new Error('Database user reactivation failed.');
+      }
+    }
+
+    user.status = 'active';
+    this.persistFile(this.getFileStorePath());
+    return this.sanitizeUser(user);
+  }
+
+  public async deleteManagedUser(userId: string): Promise<void> {
+    await this.ensureInit();
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+    if (user.status !== 'inactive') throw new Error('Only deactivated accounts can be deleted.');
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(userId);
+        await withTransaction(async (runQuery) => {
+          await runQuery('DELETE FROM iam.userroles WHERE userid = $1', [uid]);
+          await runQuery('DELETE FROM iam.usercredentials WHERE userid = $1', [uid]);
+          await runQuery('DELETE FROM iam.userprofiles WHERE userid = $1', [uid]);
+          await runQuery('DELETE FROM notify.notificationpreferences WHERE userid = $1', [uid]);
+          await runQuery('DELETE FROM config.usersettings WHERE userid = $1', [uid]);
+          await runQuery('DELETE FROM iam.users WHERE userid = $1', [uid]);
+        });
+      } catch (err: any) {
+        console.warn(`[UserStore] DB deleteManagedUser failed: ${err.message}`);
+        throw new Error('This deactivated account still has related workspace records and cannot be deleted permanently.');
+      }
+    }
+
+    this.fallbackUsers.delete(user.email.toLowerCase());
+    this.persistFile(this.getFileStorePath());
   }
 
   public sanitizeUser(user: UserRecord): Omit<UserRecord, 'passwordHash'> {
