@@ -1142,6 +1142,14 @@ export const TeamMembersView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {createAccountOpen && (
+        <CreateAccountDialog
+          isAdmin={currentRole === 'Admin'}
+          projects={projects}
+          onClose={() => setCreateAccountOpen(false)}
+        />
+      )}
     </>
   );
 };
