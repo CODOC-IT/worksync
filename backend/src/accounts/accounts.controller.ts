@@ -1,10 +1,10 @@
 import { Response } from 'express';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
-import { accountErrorStatus, AccountAuthorizationError, AccountValidationError } from './accounts.errors.js';
-import { completeFirstLogin, createAccount, listPermittedDepartments, resendInvitation } from './accounts.service.js';
+import { accountErrorStatus, AccountAuthorizationError } from './accounts.errors.js';
+import { createAccount, listPermittedDepartments, resendInvitation } from './accounts.service.js';
 import { ProvisioningActor } from './accounts.types.js';
-import { parseChangePassword, parseCreateAccount } from './accounts.validation.js';
+import { parseCreateAccount } from './accounts.validation.js';
 
 const actorFromRequest = (req: AuthenticatedRequest): ProvisioningActor => {
   if (!req.user) throw new AccountAuthorizationError('Authentication required.');
@@ -94,28 +94,14 @@ export const postInvitationResend = async (req: AuthenticatedRequest, res: Respo
       module: 'Authentication',
       entityType: 'User',
       entityId: req.params.userId,
-      entityName: 'Pending account',
-      description: `${actor.email} resent a password setup invitation.`,
+      entityName: 'Provisioned account',
+      description: `${actor.email} sent a password reset link.`,
       result: 'Successful',
       source: 'API',
       important: true
     });
-    res.status(200).json({ success: true, message: 'Password setup email sent.' });
+    res.status(200).json({ success: true, message: 'Password reset email sent.' });
   } catch (error) {
-    sendError(res, error, 'Could not resend the invitation.');
-  }
-};
-
-export const postFirstLoginPassword = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    if (!req.user) throw new AccountAuthorizationError('Authentication required.');
-    if (!req.user.mustChangePassword && req.user.accountStatus !== 'Pending') {
-      throw new AccountValidationError('This account does not require a first-login password change.');
-    }
-    const { password } = parseChangePassword(req.body);
-    await completeFirstLogin(req.user.authUserId, password, req.user.appMetadata);
-    res.status(200).json({ success: true, message: 'Password changed. Your account is now active.' });
-  } catch (error) {
-    sendError(res, error, 'Could not complete first-login password change.');
+    sendError(res, error, 'Could not send the password reset email.');
   }
 };

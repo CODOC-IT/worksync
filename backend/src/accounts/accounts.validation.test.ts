@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AccountValidationError } from './accounts.errors.js';
-import { isStrongPassword, parseChangePassword, parseCreateAccount } from './accounts.validation.js';
+import { isStrongPassword, parseCreateAccount } from './accounts.validation.js';
 
 const validInput = {
   fullName: 'Ayesha Khan',
@@ -13,7 +13,7 @@ const validInput = {
   departmentId: 2
 };
 
-test('create-account parser normalizes identifiers and keeps the temporary password only in parsed request data', () => {
+test('create-account parser normalizes identifiers and keeps the permanent password only in request memory', () => {
   const parsed = parseCreateAccount(validInput);
   assert.equal(parsed.email, 'ayesha@example.com');
   assert.equal(parsed.username, 'ayesha.khan');
@@ -27,7 +27,7 @@ test('shared password policy enforces length and all character classes', () => {
     assert.equal(isStrongPassword(password), false, password);
   }
   assert.throws(
-    () => parseChangePassword({ password: 'NoSpecial123', confirmPassword: 'NoSpecial123' }),
+    () => parseCreateAccount({ ...validInput, password: 'NoSpecial123', confirmPassword: 'NoSpecial123' }),
     AccountValidationError
   );
 });

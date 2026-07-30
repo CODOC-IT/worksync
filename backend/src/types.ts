@@ -13,6 +13,7 @@ export interface UserRecord {
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
   invitationSentAtUtc?: string | null;
+  canResendInvitation?: boolean;
   createdAt: string;
 }
 

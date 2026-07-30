@@ -59,8 +59,3 @@ export const parseCreateAccount = (value: unknown): CreateAccountInput => {
 
   return { fullName, username, email, password, baseRole, departmentId, designation, teamLeadAssignment };
 };
-
-export const parseChangePassword = (value: unknown) => {
-  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-  return { password: parsePasswordPair(input) };
-};

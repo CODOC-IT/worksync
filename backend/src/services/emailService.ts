@@ -32,58 +32,70 @@ const accountTransport = () => {
 export interface CredentialEmailInput {
   toEmail: string;
   recipientName: string;
-  temporaryPassword: string;
+  password: string;
   role: string;
 }
 
-export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<void> => {
-  const { smtpUser, organization, transporter } = accountTransport();
-  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+export const buildCredentialEmailContent = (
+  input: CredentialEmailInput,
+  organization: string,
+  loginUrl: string
+): { subject: string; text: string; html: string } => {
   const safe = {
     organization: escapeHtml(organization),
     name: escapeHtml(input.recipientName),
     email: escapeHtml(input.toEmail),
-    password: escapeHtml(input.temporaryPassword),
+    password: escapeHtml(input.password),
     role: escapeHtml(input.role),
     loginUrl: escapeHtml(loginUrl)
   };
-  await transporter.sendMail({
-    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
-    to: input.toEmail,
+  return {
     subject: `Your ${organization} account credentials`,
     text: [
       `Hello ${input.recipientName},`,
       '',
       `Your ${organization} account is ready.`,
       `Email: ${input.toEmail}`,
-      `Temporary password: ${input.temporaryPassword}`,
+      `Password: ${input.password}`,
       `Role: ${input.role}`,
+      'This password remains valid until you choose to reset it.',
       loginUrl ? `Sign in: ${loginUrl}` : '',
       '',
-      'You must replace this temporary password after signing in. Do not share it with anyone.'
+      'Keep your password secure and do not share it with anyone.'
     ].filter(Boolean).join('\n'),
     html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
       <h1 style="font-size:22px">Welcome to ${safe.organization}</h1>
       <p>Hello ${safe.name},</p>
-      <p>Your account has been created. Use these temporary credentials to sign in:</p>
+      <p>Your account has been created. Use these credentials to sign in:</p>
       <table style="border-collapse:collapse;width:100%">
         <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
-        <tr><td style="padding:6px"><strong>Temporary password</strong></td><td style="padding:6px">${safe.password}</td></tr>
+        <tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>
         <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
       </table>
+      <p>This password remains valid until you choose to reset it.</p>
       ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
-      <p>You must replace this temporary password after signing in. Do not share it with anyone.</p>
+      <p>Keep your password secure and do not share it with anyone.</p>
     </div>`
+  };
+};
+
+export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    ...buildCredentialEmailContent(input, organization, loginUrl)
   });
 };
 
-export interface PasswordSetupEmailInput {
+export interface PasswordResetEmailInput {
   toEmail: string;
   recipientName: string;
   actionLink: string;
 }
 
-export const sendPasswordSetupEmail = async (input: PasswordSetupEmailInput): Promise<void> => {
+export const sendPasswordResetEmail = async (input: PasswordResetEmailInput): Promise<void> => {
   const { smtpUser, organization, transporter } = accountTransport();
   const safeOrganization = escapeHtml(organization);
   const safeName = escapeHtml(input.recipientName);
@@ -91,13 +103,13 @@ export const sendPasswordSetupEmail = async (input: PasswordSetupEmailInput): Pr
   await transporter.sendMail({
     from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
     to: input.toEmail,
-    subject: `Set up your ${organization} password`,
-    text: `Hello ${input.recipientName},\n\nUse this secure link to set up or reset your ${organization} password:\n${input.actionLink}\n\nIf you did not expect this email, contact your administrator.`,
+    subject: `Reset your ${organization} password`,
+    text: `Hello ${input.recipientName},\n\nThe original account password is not stored in a retrievable form and cannot be re-sent. Use this secure link to choose a new password:\n${input.actionLink}\n\nIf you did not expect this email, contact your administrator.`,
     html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
-      <h1 style="font-size:22px">Set up your ${safeOrganization} password</h1>
+      <h1 style="font-size:22px">Reset your ${safeOrganization} password</h1>
       <p>Hello ${safeName},</p>
-      <p>Your original temporary password cannot be retrieved. Use this secure link to choose a new password:</p>
-      <p><a href="${safeLink}">Set up or reset your password</a></p>
+      <p>The original account password is not stored in a retrievable form and cannot be re-sent. Use this secure link to choose a new password:</p>
+      <p><a href="${safeLink}">Reset your password</a></p>
       <p>If you did not expect this email, contact your administrator.</p>
     </div>`
   });

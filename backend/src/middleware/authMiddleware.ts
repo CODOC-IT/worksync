@@ -11,8 +11,6 @@ export interface AuthenticatedRequest extends Request {
     authUserId: string;
     accountStatus: string;
     departmentId: number | null;
-    mustChangePassword: boolean;
-    appMetadata: Record<string, unknown>;
   };
 }
 
@@ -50,16 +48,13 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
       res.status(403).json({ success: false, message: 'This Supabase account is not provisioned for WorkSync.' });
       return false;
     }
-    const appMetadata = (data.user.app_metadata || {}) as Record<string, unknown>;
     req.user = {
       id: fromUserPk(account.userid),
       email: account.email,
       authUserId: data.user.id,
       departmentId: account.departmentid,
       role: account.rolecode === 'Administrator' ? 'Admin' : account.rolecode === 'HRRepresentative' ? 'HR' : account.rolecode === 'TeamLead' ? 'Team_Lead' : 'Team_Member',
-      accountStatus: account.accountstatus,
-      mustChangePassword: appMetadata.must_change_password === true,
-      appMetadata
+      accountStatus: account.accountstatus
     };
     return true;
   } catch {
@@ -68,28 +63,12 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
   }
 };
 
-export const authenticateSession = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  if (await resolveSession(req, res)) next();
-};
-
 export const authenticateJWT = async (
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   if (!await resolveSession(req, res)) return;
-  if (req.user?.mustChangePassword || req.user?.accountStatus === 'Pending') {
-    res.status(403).json({
-      success: false,
-      code: 'PASSWORD_CHANGE_REQUIRED',
-      message: 'Change your temporary password before using WorkSync.'
-    });
-    return;
-  }
   if (req.user?.accountStatus !== 'Active') {
     res.status(403).json({ success: false, message: 'Your WorkSync account is not active.' });
     return;
