@@ -12,9 +12,10 @@ export const getAccessibleProjects = (
   userId: string,
   projects: Project[]
 ): Project[] => {
-  if (role === 'Admin') return projects;
-  if (role === 'Team_Lead') return projects.filter((project) => project.teamLeadId === userId);
-  return projects.filter((project) => project.memberIds.includes(userId));
+  const activeProjects = projects.filter((project) => project.status !== 'Archived');
+  if (role === 'Admin') return activeProjects;
+  if (role === 'Team_Lead') return activeProjects.filter((project) => project.teamLeadId === userId);
+  return activeProjects.filter((project) => project.memberIds.includes(userId));
 };
 
 // Who may Approve/Reject a task sitting in Review with a Pending decision.

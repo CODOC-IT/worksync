@@ -169,6 +169,10 @@ export interface Task {
   // Project Board fields — populated by AppContext.updateTaskStatus (Kanban & task details).
   statusHistory?: TaskStatusHistoryEntry[];
   reviewApproval?: ReviewApprovalStatus;
+  /** True when this task is read-only because its parent project is archived. */
+  isArchived?: boolean;
+  /** Project-driven archive time supplied by the Task API. */
+  archivedAt?: string;
 }
 
 export type BreakType = 'Lunch' | 'Short Break' | 'Other';

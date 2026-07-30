@@ -44,7 +44,8 @@ export const listTasks = async (req: AuthenticatedRequest, res: Response): Promi
   if (!user) return;
   try {
     const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-    const data = await service.listTasksForUser(user.id, user.role, projectId);
+    const archived = req.query.archived === 'true';
+    const data = await service.listTasksForUser(user.id, user.role, projectId, archived);
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load tasks.');

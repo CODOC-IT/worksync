@@ -19,6 +19,10 @@ Supabase Auth metadata. It does not change or re-hash any password.
 table in existing environments. It uses the same lowercase-folded PostgreSQL identifiers as the
 repository and safely adopts an early quoted `"work"."ProjectApprovalRequests"` table if present.
 
+`20260730_05_project_task_archive_cascade.sql` adds a project-driven task archive marker,
+backfills tasks under already-archived projects, and preserves immutable audit snapshots when a
+project and its tasks are permanently deleted.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

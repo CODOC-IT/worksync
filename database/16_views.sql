@@ -29,7 +29,8 @@ FROM work.Tasks t
 JOIN work.Projects p ON p.ProjectId = t.ProjectId
 JOIN work.TaskStatuses ts ON ts.TaskStatusId = t.TaskStatusId
 JOIN work.Priorities pr ON pr.PriorityId = t.PriorityId
-WHERE t.ArchivedAtUtc IS NULL;
+WHERE t.ArchivedAtUtc IS NULL
+  AND t.ProjectArchivedAtUtc IS NULL;
 
 CREATE VIEW work.vw_CurrentTaskAssignees
 AS
@@ -84,6 +85,7 @@ LEFT JOIN work.TaskAssignees ta
 LEFT JOIN work.Tasks t
        ON t.TaskId = ta.TaskId
       AND t.ArchivedAtUtc IS NULL
+      AND t.ProjectArchivedAtUtc IS NULL
 LEFT JOIN work.TaskStatuses ts ON ts.TaskStatusId = t.TaskStatusId
 WHERE u.AccountStatus = 'Active'
 GROUP BY u.UserId, u.DisplayName, u.Email;
@@ -100,6 +102,7 @@ SELECT
     t.TaskId
 FROM work.Tasks t
 WHERE t.ArchivedAtUtc IS NULL
+  AND t.ProjectArchivedAtUtc IS NULL
 
 UNION ALL
 
@@ -113,6 +116,7 @@ SELECT
     t.TaskId
 FROM work.Tasks t
 WHERE t.ArchivedAtUtc IS NULL
+  AND t.ProjectArchivedAtUtc IS NULL
 
 UNION ALL
 

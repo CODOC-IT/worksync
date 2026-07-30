@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  Archive,
   ArrowDownAZ,
   Check,
   CheckSquare,
@@ -43,7 +44,7 @@ import {
   SubtaskFormInput,
   validateTaskInput
 } from './taskRules';
-import { loadTaskDetailFromApi } from './taskRepository';
+import { loadArchivedTasksFromApi, loadTaskDetailFromApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -133,6 +134,10 @@ export const TasksView: React.FC = () => {
   const [expandedTaskDetails, setExpandedTaskDetails] = useState<Record<string, Task>>({});
   const [expandingTaskId, setExpandingTaskId] = useState<string | null>(null);
   const [expandedTaskError, setExpandedTaskError] = useState<{ taskId: string; message: string } | null>(null);
+  const [showArchivedTasks, setShowArchivedTasks] = useState(false);
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [archivedTasksLoading, setArchivedTasksLoading] = useState(false);
+  const [archivedTasksError, setArchivedTasksError] = useState<string | null>(null);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
@@ -165,8 +170,9 @@ export const TasksView: React.FC = () => {
     [selectedProject, users]
   );
 
+  const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
-    () => filterAndSortTasks(tasks, projects, {
+    () => filterAndSortTasks(taskSource, projects, {
       search,
       projectId: projectFilter,
       status: statusFilter,
@@ -186,12 +192,12 @@ export const TasksView: React.FC = () => {
       projects,
       search,
       statusFilter,
-      tasks
+      taskSource
     ]
   );
   const parentTasks = useMemo(
-    () => tasks.filter((task) => !task.parentTaskId),
-    [tasks]
+    () => taskSource.filter((task) => !task.parentTaskId),
+    [taskSource]
   );
   const visibleTasks = useMemo(
     () => filteredTasks.filter((task) => !task.parentTaskId),
@@ -485,6 +491,25 @@ export const TasksView: React.FC = () => {
     setAssigneeFilter('');
     setMyTasksOnly(false);
     setDueDateDirection('asc');
+  };
+
+  const toggleArchivedTasks = async () => {
+    if (showArchivedTasks) {
+      setShowArchivedTasks(false);
+      setArchivedTasksError(null);
+      return;
+    }
+
+    setShowArchivedTasks(true);
+    setArchivedTasksLoading(true);
+    setArchivedTasksError(null);
+    try {
+      setArchivedTasks(await loadArchivedTasksFromApi());
+    } catch (error) {
+      setArchivedTasksError(error instanceof Error ? error.message : 'Unable to load archived tasks.');
+    } finally {
+      setArchivedTasksLoading(false);
+    }
   };
 
   const toggleTaskExpansion = async (task: Task) => {
@@ -996,18 +1021,32 @@ export const TasksView: React.FC = () => {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setMyTasksOnly((value) => !value)}
-              className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                myTasksOnly
-                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
-                  : 'border-white/10 text-slate-300 hover:bg-white/5'
-              }`}
-            >
-              <UserRound size={14} />
-              My Tasks
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setMyTasksOnly((value) => !value)}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                  myTasksOnly
+                    ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
+                    : 'border-white/10 text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                <UserRound size={14} />
+                My Tasks
+              </button>
+              <button
+                type="button"
+                onClick={() => void toggleArchivedTasks()}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                  showArchivedTasks
+                    ? 'border-slate-400/50 bg-slate-500/20 text-slate-200'
+                    : 'border-white/10 text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                <Archive size={14} />
+                {showArchivedTasks ? 'Show active tasks' : 'Show archived tasks'}
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
@@ -1070,17 +1109,23 @@ export const TasksView: React.FC = () => {
           </div>
         </div>
 
-        {isLoading ? (
+        {isLoading || archivedTasksLoading ? (
           <StateMessage
             icon={<LoaderCircle className="animate-spin text-cyan-400" size={24} />}
-            title="Loading tasks"
-            description="Preparing the current task workspace."
+            title={showArchivedTasks ? 'Loading archived tasks' : 'Loading tasks'}
+            description={showArchivedTasks ? 'Gathering tasks from archived projects.' : 'Preparing the current task workspace.'}
+          />
+        ) : archivedTasksError ? (
+          <StateMessage
+            icon={<AlertCircle className="text-rose-400" size={24} />}
+            title="Archived tasks unavailable"
+            description={archivedTasksError}
           />
         ) : parentTasks.length === 0 ? (
           <StateMessage
-            icon={<ClipboardList className="text-slate-500" size={26} />}
-            title="No tasks yet"
-            description="Create the first task for an active project."
+            icon={showArchivedTasks ? <Archive className="text-slate-500" size={26} /> : <ClipboardList className="text-slate-500" size={26} />}
+            title={showArchivedTasks ? 'No archived tasks' : 'No tasks yet'}
+            description={showArchivedTasks ? 'Tasks will appear here when their project is archived.' : 'Create the first task for an active project.'}
           />
         ) : visibleTasks.length === 0 ? (
           <StateMessage
@@ -1097,9 +1142,9 @@ export const TasksView: React.FC = () => {
               const assignees = getTaskAssigneeIds(task)
                 .map((id) => users.find((user) => user.id === id))
                 .filter(Boolean);
-              const overdue = isTaskOverdue(task, today);
-              const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
-              const mayDelete = canDeleteTask(currentRole, currentUser.id, project, task);
+              const overdue = !task.isArchived && isTaskOverdue(task, today);
+              const mayEdit = !task.isArchived && canEditTask(currentRole, currentUser.id, project, task);
+              const mayDelete = !task.isArchived && canDeleteTask(currentRole, currentUser.id, project, task);
 
               const loadedTask = expandedTaskDetails[task.id];
               const subtasks = loadedTask?.subtasks || task.subtasks || [];
@@ -1126,6 +1171,12 @@ export const TasksView: React.FC = () => {
                         {getProjectName(project)}
                       </p>
                     </div>
+                    {task.isArchived && (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-400/25 bg-slate-400/10 px-2 py-1 text-[10px] font-semibold text-slate-300">
+                        <Archive size={11} />
+                        Archived
+                      </span>
+                    )}
                     {(mayEdit || mayDelete) && (
                       <div
                         data-task-actions
