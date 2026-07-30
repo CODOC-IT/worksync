@@ -11,7 +11,7 @@ test('credential email presents the supplied password as permanent sign-in crede
   }, 'WorkSync', 'https://worksync.example/login');
 
   assert.match(content.text, /Password: Strong#123/);
-  assert.match(content.text, /remains valid until you choose to reset it/);
+  assert.match(content.text, /permanent sign-in password/);
   assert.match(content.html, /<strong>Password<\/strong>/);
   assert.doesNotMatch(`${content.text}\n${content.html}`, /temporary password|temporary credentials|must replace|change.*password/i);
 });

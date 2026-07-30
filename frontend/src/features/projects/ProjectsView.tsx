@@ -3,6 +3,7 @@ import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
 import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
+import { todayDateKey } from '../calendar/calendarRules';
 import {
   FolderKanban,
   Plus,
@@ -82,9 +83,16 @@ export const ProjectsView: React.FC = () => {
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
   const nonAdminUsers = users.filter((u) => u.role !== 'Admin');
-  const teamLeads = nonAdminUsers.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
+  // Team Lead dropdown: active Team_Lead or Team_Member users only -- Admin (already excluded via
+  // nonAdminUsers) and HR must not appear. Team Member dropdown below is unchanged.
+  const teamLeads = nonAdminUsers.filter(
+    (u) => (u.role === 'Team_Lead' || u.role === 'Team_Member') && u.status !== 'inactive'
+  );
   const assignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member');
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
+  // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
+  // positive-offset timezone. See calendarRules.ts's todayDateKey.
+  const todayStr = todayDateKey();
 
   const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
   const canManage = (project: Project) =>
@@ -778,7 +786,7 @@ export const ProjectsView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
                     This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                    The project will be archived (not permanently erased) and its tasks will remain untouched.
+                    Archiving this project will also archive its linked tasks below.
                   </p>
                   <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
                     {relatedTasks.map((t) => (

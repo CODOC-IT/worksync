@@ -19,7 +19,6 @@ import {
   List,
   Mail,
   Plus,
-  RefreshCcw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -38,6 +37,7 @@ type AccountView = 'active' | 'deactivated';
 
 interface MemberFormState {
   name: string;
+  username: string;
   email: string;
   role: UserRole;
   department: string;
@@ -111,6 +111,7 @@ const TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
 
 const EMPTY_MEMBER_FORM: MemberFormState = {
   name: '',
+  username: '',
   email: '',
   role: 'Team_Member',
   department: 'Engineering',
@@ -139,7 +140,6 @@ export const TeamMembersView: React.FC = () => {
   const [confirmAction, setConfirmAction] = useState<{ type: 'deactivate' | 'reactivate'; memberId: string; memberName: string } | null>(null);
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
-  const [resendingUserId, setResendingUserId] = useState<string | null>(null);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
   const canManageAccounts = currentRole === 'Admin' || currentRole === 'HR';
@@ -252,6 +252,7 @@ export const TeamMembersView: React.FC = () => {
     setManageTargetId(member.id);
     setMemberForm({
       name: member.name,
+      username: member.username || '',
       email: member.email,
       role: member.role,
       department: member.department,
@@ -278,6 +279,7 @@ export const TeamMembersView: React.FC = () => {
       const isCreate = manageMode === 'create';
       const payload = {
         name: memberForm.name.trim(),
+        username: memberForm.username.trim().toLowerCase(),
         email: memberForm.email.trim().toLowerCase(),
         role: memberForm.role,
         department: memberForm.department.trim(),
@@ -336,26 +338,6 @@ export const TeamMembersView: React.FC = () => {
       setConfirmSubmitting(false);
     }
   };
-  const handleResendInvitation = async (member: User) => {
-    if (resendingUserId) return;
-    setResendingUserId(member.id);
-    try {
-      const token = localStorage.getItem('worksync_auth_token');
-      const response = await fetch(`/api/accounts/${member.id}/invitation/resend`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) throw new Error(data.message || 'Could not send the password reset email.');
-      showToast('success', 'Password Reset Sent', `A secure password reset link was sent to ${member.email}.`);
-      refreshUsers();
-    } catch (reason) {
-      showToast('error', 'Password Reset Not Sent', reason instanceof Error ? reason.message : 'Could not send the password reset email.');
-    } finally {
-      setResendingUserId(null);
-    }
-  };
-
   const renderGridCards = (items: User[], deactivated = false) => (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {items.map((member) => {
@@ -383,6 +365,11 @@ export const TeamMembersView: React.FC = () => {
                     </div>
                     <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {member.username && (
+                        <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[11px] text-cyan-300">
+                          <span className="truncate">@{member.username}</span>
+                        </div>
+                      )}
                       <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-400">
                         <Building2 size={13} />
                         <span className="truncate">{member.department}</span>
@@ -477,6 +464,7 @@ export const TeamMembersView: React.FC = () => {
                     )}
                   </div>
                   <p className="mt-1 truncate text-sm text-slate-400">{member.title}</p>
+                  {member.username && <p className="mt-1 truncate text-xs text-cyan-300">@{member.username}</p>}
                 </div>
               </div>
 
@@ -548,8 +536,8 @@ export const TeamMembersView: React.FC = () => {
                 <div className="mt-2 text-2xl font-bold text-white">{totalMembers}</div>
               </GlassCard>
               <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
-                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Showing</div>
-                <div className="mt-2 text-2xl font-bold text-emerald-300">{members.length}</div>
+                <div className="whitespace-nowrap text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Team Members</div>
+                <div className="mt-2 text-2xl font-bold text-emerald-300">{teamMemberCount}</div>
               </GlassCard>
               <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
                 <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Team Leads</div>
@@ -644,11 +632,11 @@ export const TeamMembersView: React.FC = () => {
                   <button
                     type="button"
                     onClick={openCreateModal}
-                      className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
-                    >
+                       className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
+                     >
                     <span className="inline-flex items-center gap-1.5">
                       <Plus size={15} />
-                      Add account
+                      Create account
                     </span>
                   </button>
                 )}
@@ -686,9 +674,6 @@ export const TeamMembersView: React.FC = () => {
                   <option value="recent">Sort: Recently Added</option>
                 </select>
 
-                <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400 sm:text-right">
-                  Showing <span className="font-semibold text-white">{members.length}</span> of <span className="font-semibold text-white">{totalMembers}</span>
-                </div>
               </div>
             </div>
           </div>
@@ -782,6 +767,11 @@ export const TeamMembersView: React.FC = () => {
                       <Mail size={13} />
                       {selectedMember.email}
                     </span>
+                    {selectedMember.username && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[11px] text-cyan-300">
+                        @{selectedMember.username}
+                      </span>
+                    )}
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px]">
                       {selectedMember.status === 'inactive' ? 'Deactivated account' : 'Active account'}
                     </span>
@@ -832,18 +822,6 @@ export const TeamMembersView: React.FC = () => {
                       </span>
                     ) : null}
                   </>
-                )}
-                {selectedMember.canResendInvitation === true
-                  && (currentRole === 'Admin' || selectedMember.role === 'Team_Member' || selectedMember.role === 'Team_Lead') && (
-                  <button
-                    type="button"
-                    disabled={Boolean(resendingUserId)}
-                    onClick={() => void handleResendInvitation(selectedMember)}
-                    className="whitespace-nowrap inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
-                  >
-                    <RefreshCcw size={14} className={resendingUserId === selectedMember.id ? 'animate-spin' : ''} />
-                    {resendingUserId === selectedMember.id ? 'Sending...' : 'Send password reset'}
-                  </button>
                 )}
                 <button
                   type="button"
@@ -1060,10 +1038,10 @@ export const TeamMembersView: React.FC = () => {
           <form onSubmit={submitMemberForm} className="glass-panel-glow w-full max-w-2xl border border-cyan-500/25">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-white">{manageMode === 'create' ? 'Add account' : 'Edit account'}</h2>
+                <h2 className="text-lg font-semibold text-white">{manageMode === 'create' ? 'Create account' : 'Edit account'}</h2>
                 <p className="mt-1 text-xs text-slate-400">
                   {manageMode === 'create'
-                    ? 'Create a new workspace account for a team member.'
+                    ? 'Create an active account and email its permanent sign-in credentials.'
                     : 'Update account details for this member.'}
                 </p>
               </div>
@@ -1076,6 +1054,10 @@ export const TeamMembersView: React.FC = () => {
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Full name</span>
                 <input value={memberForm.name} onChange={(event) => setMemberForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+              </label>
+              <label className="text-sm text-slate-300">
+                <span className="mb-1 block text-xs">Username</span>
+                <input value={memberForm.username} onChange={(event) => setMemberForm((prev) => ({ ...prev, username: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
               </label>
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Email</span>
@@ -1133,7 +1115,7 @@ export const TeamMembersView: React.FC = () => {
             <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
               <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
               <button type="submit" disabled={manageSubmitting} className="rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 disabled:opacity-60">
-                {manageSubmitting ? 'Saving...' : manageMode === 'create' ? 'Create account' : 'Save changes'}
+                {manageSubmitting ? 'Saving...' : manageMode === 'create' ? 'Create and send credentials' : 'Save changes'}
               </button>
             </div>
           </form>
@@ -1230,14 +1212,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   }, []);
 
   const update = (field: keyof AccountFormValues, value: string) => {
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === 'baseRole' && value !== 'Team_Member') {
-        next.projectId = '';
-        next.endsAtUtc = '';
-      }
-      return next;
-    });
+    setForm((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined }));
     setServerError('');
   };
@@ -1265,15 +1240,14 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
           confirmPassword: form.confirmPassword,
           designation: form.designation || undefined,
           baseRole: form.baseRole,
-          departmentId: Number(form.departmentId),
-          ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {})
+          departmentId: Number(form.departmentId)
         })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
       refreshUsers();
       if (data.data?.invitationStatus === 'email_failed') {
-        showToast('warning', 'Account Created - Email Failed', 'The active account was saved. Use the reset action to send a secure password reset link.');
+        showToast('warning', 'Account Created - Email Failed', 'The active account was saved, but its credential email was not delivered.');
       } else {
         showToast('success', 'Account Created', `Credentials were sent to ${form.email.trim().toLowerCase()}.`);
       }
@@ -1322,7 +1296,6 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
             {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
           </select>
         </AccountField>
-        {isAdmin && form.baseRole === 'Team_Member' && <><AccountField label="Team Lead project (optional)" error={errors.projectId}><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry" required={Boolean(form.projectId)} error={errors.endsAtUtc}><input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
         {serverError && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{serverError}</p>}
       </div>
       <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" disabled={busy} onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50">Cancel</button><button disabled={busy || departmentsBusy || departments.length === 0} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Creating account...' : 'Create and send credentials'}</button></div>

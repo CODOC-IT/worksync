@@ -1,13 +1,11 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { TaskPriority, TaskStatus, Task } from '../../types';
+import { TaskPriority, TaskStatus, Task, ActivityLogItem } from '../../types';
 import {
   FolderKanban,
   CheckSquare,
-  Clock,
-  Play,
   Sparkles,
   Plus,
   ChevronLeft,
@@ -21,7 +19,10 @@ import {
   ChevronRight,
   ArrowUpRight,
   Inbox,
+  Filter,
 } from 'lucide-react';
+import { fetchActivities } from '../activity/activityApi';
+import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
 
 interface DashboardViewProps {
   onNavigate: (tab: string, filterId?: string) => void;
@@ -110,19 +111,97 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { currentRole, currentUser, projects, tasks, attendanceRecords, systemApprovals, hrRequests, activityLogs, users, checkIn, checkOut, activeBreak, startBreak, endBreak } = useApp();
+  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users } = useApp();
+
+  // ── Activity Log Filter State ──
+  type ActivityFilterOption = 'Today' | 'Last Day' | 'Last 3 Days';
+  const [activityFilter, setActivityFilter] = useState<ActivityFilterOption>('Today');
+  const [filteredActivityLogs, setFilteredActivityLogs] = useState<ActivityLogItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadFilteredActivities = async () => {
+      setActivityLoading(true);
+      try {
+        const now = new Date();
+        let fromDate: Date;
+        const toDate = now;
+
+        if (activityFilter === 'Today') {
+          fromDate = new Date(now);
+          fromDate.setHours(0, 0, 0, 0);
+        } else if (activityFilter === 'Last Day') {
+          fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        } else {
+          fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        }
+
+        const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: fromDate.toISOString().split('T')[0], customTo: toDate.toISOString().split('T')[0] };
+        const result = await fetchActivities(filters, 1, 50);
+        if (!cancelled && Array.isArray(result.items)) {
+          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
+            id: item.id,
+            userId: item.actor.id || '',
+            userName: item.actor.name,
+            userAvatar: item.actor.avatar || '',
+            action: `${item.action} ${item.entityType}`,
+            targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+            targetId: item.entityId,
+            targetTitle: item.entityName || item.description,
+            timestamp: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+          }));
+          if (!cancelled) setFilteredActivityLogs(mapped);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('Failed to load filtered activities.', err);
+          setFilteredActivityLogs([]);
+        }
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    };
+    loadFilteredActivities();
+    return () => { cancelled = true; };
+  }, [activityFilter]);
+
+  // ── Deadline Filter State ──
+  type DeadlineFilterOption = 'Due Today' | 'Due in 1 Day' | 'Due in 3 Days';
+  const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilterOption>('Due Today');
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
+  const todayEnd = new Date(today);
+  todayEnd.setHours(23, 59, 59, 999);
+  const oneDayFromNow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  oneDayFromNow.setHours(23, 59, 59, 999);
+  const threeDaysFromNow = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
+  threeDaysFromNow.setHours(23, 59, 59, 999);
 
   const activeProjects = useMemo(() => projects.filter((p) => p.status !== 'Archived').sort((a, b) => (a.targetDate || '9999').localeCompare(b.targetDate || '9999')), [projects]);
+
+  const filteredProjects = useMemo(() => {
+    return activeProjects.filter((p) => {
+      if (!p.targetDate) return false;
+      const targetDate = new Date(p.targetDate);
+      targetDate.setHours(23, 59, 59, 999);
+      if (deadlineFilter === 'Due Today') {
+        return targetDate >= today && targetDate <= todayEnd;
+      } else if (deadlineFilter === 'Due in 1 Day') {
+        return targetDate >= today && targetDate <= oneDayFromNow;
+      } else {
+        return targetDate >= today && targetDate <= threeDaysFromNow;
+      }
+    });
+  }, [activeProjects, deadlineFilter, today, todayEnd, oneDayFromNow, threeDaysFromNow]);
+
   const isMyTask = useCallback((t: Task) => t.assigneeId === currentUser.id || (t.assigneeIds ?? []).includes(currentUser.id), [currentUser.id]);
   const myTasks = useMemo(() => tasks.filter((t) => isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
-
-  const myTodayAttendance = useMemo(() => attendanceRecords.find((a) => a.userId === currentUser.id && a.date === todayStr), [attendanceRecords, currentUser.id, todayStr]);
 
   const deadlines = useMemo(() => [
     ...projects.filter((p) => p.status !== 'Archived' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
@@ -130,7 +209,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   ], [projects, tasks]);
 
   const upcomingDeadlines = useMemo(() => deadlines.filter((d) => d.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date)), [deadlines, todayStr]);
-  const sortedActivityLogs = useMemo(() => [...activityLogs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)), [activityLogs]);
 
   return (
     <div className="space-y-3">
@@ -150,14 +228,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (<button onClick={() => onNavigate('projects')} className="px-3 py-2 rounded-xl glass-button-neon text-xs font-semibold flex items-center gap-1.5"><Plus size={12} /> Project</button>)}
-          <button onClick={() => onNavigate('tasks')} className="px-3 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"><Plus size={12} /> Task</button>
+          {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (<button onClick={() => onNavigate('projects')} className="px-3 py-2 rounded-xl glass-button-neon text-xs font-semibold flex items-center gap-1.5">Project</button>)}
+          <button onClick={() => onNavigate('tasks')} className="px-3 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"> Task</button>
           <button onClick={() => onNavigate('ai-assistant')} className="px-3 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"><Sparkles size={12} /> AI</button>
         </div>
       </div>
 
       {/* ── Metric Cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
         <GlassCard onClick={() => onNavigate('projects')} glowColor="cyan">
           <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Projects</span><div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><FolderKanban size={14} /></div></div>
           <div className="text-2xl font-bold text-white mb-1">{activeProjects.length}</div>
@@ -173,14 +251,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <div className="text-2xl font-bold text-white mb-1">{pendingApprovals.length + pendingHrRequests.length}</div>
           <span className="text-[10px] text-slate-400">{pendingApprovals.length} edits + {pendingHrRequests.length} HR</span>
         </GlassCard>
-        {currentRole !== 'Admin' && <GlassCard onClick={() => onNavigate('attendance')} glowColor="magenta">
-          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Today</span><div className="p-1.5 rounded-lg bg-pink-500/20 text-pink-400"><Clock size={14} /></div></div>
-          <div className="text-xl font-bold text-white mb-1 truncate">{myTodayAttendance ? (<span className="text-emerald-400">{myTodayAttendance.checkIn}</span>) : (<span className="text-amber-400">Not clocked in</span>)}</div>
-          <span className="text-[10px] text-slate-400">{activeBreak?.isBreaking ? `On break (${Math.floor(activeBreak.elapsedSeconds / 60)}m)` : 'Tap to manage'}</span>
-        </GlassCard>}
       </div>
 
-      {/* ── Row 1 (top): Calendar + Attendance | Activity Log | Approvals ── */}
+      {/* ── Row 1 (top): Calendar | Activity Log | Approvals ── */}
       <div className="flex flex-wrap gap-3">
         {/* Calendar */}
         <div className="flex-1 min-w-[300px] max-w-full">
@@ -213,14 +286,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <div className="flex-1 min-w-[300px] max-w-full">
           <div className="glass-panel p-3 border border-purple-500/20 h-90 overflow-y-auto flex flex-col">
             <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10 shrink-0">
-              <div className="flex items-center gap-2"><Activity size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Activity Log</h3><span className="text-[10px] text-cyan-400 font-mono">({activityLogs.length})</span></div>
-              <button onClick={() => onNavigate('activity')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-1">Full Log <ChevronRight size={10} /></button>
+              <div className="flex items-center gap-2"><Activity size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Activity Log</h3></div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Filter size={10} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                  <select
+                    value={activityFilter}
+                    onChange={(e) => setActivityFilter(e.target.value as ActivityFilterOption)}
+                    className="appearance-none bg-slate-800/80 border border-white/10 rounded-md text-[10px] text-slate-300 pl-5 pr-4 py-1 focus:outline-none focus:border-cyan-500/50 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                    aria-label="Filter activity by date range"
+                  >
+                    <option value="Today">Today</option>
+                    <option value="Last Day">Last Day</option>
+                    <option value="Last 3 Days">Last 3 Days</option>
+                  </select>
+                </div>
+                <button onClick={() => onNavigate('activity')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-1">Full Log <ChevronRight size={10} /></button>
+              </div>
             </div>
             <div className="overflow-y-auto pr-1 space-y-2 flex-1 min-h-0">
-              {sortedActivityLogs.length === 0 ? (
-                <p className="text-[11px] text-slate-500 text-center py-12">No activity recorded yet</p>
+              {activityLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-4 h-4 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
+                </div>
+              ) : filteredActivityLogs.length === 0 ? (
+                <p className="text-[11px] text-slate-500 text-center py-12">No activity found for the selected period.</p>
               ) : (
-                sortedActivityLogs.map((log) => (
+                filteredActivityLogs.map((log) => (
                   <div key={log.id} className="p-2.5 rounded-xl bg-slate-900/50 border border-white/5 flex items-start gap-3 text-[10px]">
                     <img src={log.userAvatar} alt={log.userName} className="w-6 h-6 rounded-lg object-cover ring-1 ring-white/10 shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1">
@@ -301,60 +393,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* ── Attendance ── */}
-      {currentRole !== 'Admin' && <div className="flex flex-wrap gap-3">
-        <div className="flex-1 min-w-[300px] max-w-full">
-          <div className="glass-panel p-3 border border-pink-500/20 overflow-y-auto">
-            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-              <div className="flex items-center gap-2"><Clock size={14} className="text-pink-400" /><h3 className="font-bold text-xs text-white">Attendance</h3></div>
-              <span className="text-[10px] font-mono text-cyan-300">{todayStr}</span>
-            </div>
-            <div className="p-3 rounded-xl bg-slate-900/60 border border-white/10 text-center space-y-2">
-              <span className="text-[10px] text-slate-400 block font-mono">Status for Today</span>
-              <div className="text-lg font-bold text-white">
-                {myTodayAttendance ? (<span className="text-emerald-400 flex items-center justify-center gap-1.5"><CheckCircle2 size={14} /> {myTodayAttendance.checkIn}</span>) : (<span className="text-amber-400">Not Clocked In</span>)}
-              </div>
-              {!myTodayAttendance ? (
-                <button onClick={checkIn} className="w-full py-2 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-1.5"><Play size={12} /> Clock In Now</button>
-              ) : (
-                <div className="space-y-2 pt-1">
-                  {!activeBreak?.isBreaking ? (
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button onClick={() => startBreak('Lunch')} className="py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold">Lunch</button>
-                      <button onClick={() => startBreak('Short Break')} className="py-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-[10px] font-semibold">Short Break</button>
-                    </div>
-                  ) : (
-                    <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-center space-y-1">
-                      <div className="text-[10px] font-mono text-amber-300 font-bold">{activeBreak.breakType}</div>
-                      <div className="text-lg font-mono text-white font-bold animate-pulse">{Math.floor(activeBreak.elapsedSeconds / 60)}m {activeBreak.elapsedSeconds % 60}s</div>
-                      <button onClick={endBreak} className="w-full py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-[10px] font-bold">End Break</button>
-                    </div>
-                  )}
-                  {!myTodayAttendance.checkOut && (<button onClick={checkOut} className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold border border-white/10">Clock Out</button>)}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>}
+      {/* ── Attendance (removed) ── */}
 
       {/* ── Row 2 (bottom): Projects ── */}
       <div className="flex flex-wrap gap-3">
         <div className="flex-1 min-w-[300px] max-w-full">
           <div className="glass-panel h-full p-3 border border-cyan-500/20 h-90 overflow-y-auto flex flex-col">
             <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10 shrink-0">
-              <div className="flex items-center gap-2"><FolderKanban size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Projects</h3><span className="text-[10px] text-cyan-400 font-mono">({activeProjects.length})</span></div>
-              <button onClick={() => onNavigate('projects')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-0.5">All <ArrowUpRight size={10} /></button>
+              <div className="flex items-center gap-2"><FolderKanban size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Projects</h3></div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Filter size={10} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                  <select
+                    value={deadlineFilter}
+                    onChange={(e) => setDeadlineFilter(e.target.value as DeadlineFilterOption)}
+                    className="appearance-none bg-slate-800/80 border border-white/10 rounded-md text-[10px] text-slate-300 pl-5 pr-4 py-1 focus:outline-none focus:border-cyan-500/50 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                    aria-label="Filter projects by deadline"
+                  >
+                    <option value="Due Today">Due Today</option>
+                    <option value="Due in 1 Day">Due in 1 Day</option>
+                    <option value="Due in 3 Days">Due in 3 Days</option>
+                  </select>
+                </div>
+                <button onClick={() => onNavigate('projects')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-0.5">All <ArrowUpRight size={10} /></button>
+              </div>
             </div>
-            {activeProjects.length === 0 ? (
+            {filteredProjects.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <Inbox size={32} className="text-slate-600 mb-2" />
-                <p className="text-[11px] text-slate-500">No active projects</p>
-                <button onClick={() => onNavigate('projects')} className="mt-2 text-[10px] text-cyan-400 hover:underline font-mono">Create a project</button>
+                <p className="text-[11px] text-slate-500">No projects match the selected deadline filter.</p>
+                <button onClick={() => onNavigate('projects')} className="mt-2 text-[10px] text-cyan-400 hover:underline font-mono">View all projects</button>
               </div>
             ) : (
             <div className="overflow-y-auto pr-1 space-y-2 max-h-[210px]">
-                {activeProjects.map((p) => (
+                {filteredProjects.map((p) => (
                   <div key={p.id} onClick={() => onNavigate('projects', p.id)} className="p-3 rounded-xl bg-slate-900/50 border border-white/10 hover:border-cyan-500/30 cursor-pointer transition-all group">
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs font-bold text-white truncate group-hover:text-cyan-300 transition-colors">{p.title}</span>
