@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getSupabaseServiceClient } from '../db/supabase.js';
+import { getSupabaseServiceClient, isSupabaseServiceConfigured } from '../db/supabase.js';
 import { query, withTransaction } from '../db/pool.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
@@ -9,6 +9,17 @@ import { CreateAccountInput, ProvisioningActor } from './accounts.types.js';
 const router = Router();
 class AccountAuthorizationError extends Error {}
 class AccountConflictError extends Error {}
+class AccountProvisioningUnavailableError extends Error {}
+
+const invitationError = (message?: string): Error => {
+  const normalized = (message || '').toLowerCase();
+  if (normalized.includes('already') || normalized.includes('exists') || normalized.includes('registered')) {
+    return new AccountConflictError('This email already exists in Supabase Auth. Link or reconcile that identity before inviting the member.');
+  }
+  if (normalized.includes('rate limit')) return new AccountProvisioningUnavailableError('Supabase email rate limit reached. Please wait before sending another invitation.');
+  if (normalized.includes('redirect') || normalized.includes('url')) return new AccountProvisioningUnavailableError('Supabase invitation redirect URL is not configured for this deployment.');
+  return new AccountProvisioningUnavailableError('Supabase could not deliver the invitation. Check the Auth email provider and server configuration.');
+};
 
 const accessToken = (req: Request): string => {
   const value = req.header('authorization');
@@ -39,14 +50,16 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   let actor: ProvisioningActor | undefined;
   let invitedAuthUserId: string | undefined;
   try {
+    if (!isSupabaseServiceConfigured()) throw new AccountProvisioningUnavailableError('Account invitations are unavailable because the Supabase server credentials are not configured.');
     actor = await resolveActor(accessToken(req));
     const input = parseCreateAccount(req.body);
     assertCanCreate(actor, input);
     if (input.teamLeadAssignment && actor.role !== 'Admin') throw new AccountAuthorizationError('Only an Admin can assign a Team Lead.');
     const duplicate = await query('SELECT 1 FROM iam.users WHERE organizationid = 1 AND (lower(email) = $1 OR lower(username) = $2)', [input.email, input.username]);
     if (duplicate.rowCount) throw new AccountConflictError('An account with this email or username already exists.');
-    const invite = await getSupabaseServiceClient().auth.admin.inviteUserByEmail(input.email, { data: { username: input.username } });
-    if (invite.error || !invite.data.user) throw new Error('Supabase invitation could not be created.');
+    const redirectTo = process.env.SUPABASE_INVITE_REDIRECT_URL || process.env.SUPABASE_PASSWORD_RESET_REDIRECT_URL || undefined;
+    const invite = await getSupabaseServiceClient().auth.admin.inviteUserByEmail(input.email, { data: { username: input.username }, redirectTo });
+    if (invite.error || !invite.data.user) throw invitationError(invite.error?.message);
     invitedAuthUserId = invite.data.user.id;
     const [givenName, ...family] = input.fullName.split(/\s+/);
     const account = await withTransaction(async (run) => {
@@ -71,8 +84,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     res.status(201).json({ success: true, account, invitationStatus: 'sent' });
   } catch (error) {
     if (invitedAuthUserId) await getSupabaseServiceClient().auth.admin.deleteUser(invitedAuthUserId).catch(() => undefined);
+    if (error instanceof Error) console.error('[accounts] Invitation provisioning failed:', error.message);
     if (actor) recordActivitySafe({ actorId: actor.id, actorEmail: actor.email, actorRole: actor.role, action: 'Created', module: 'Authentication', entityType: 'User', entityId: 'provisioning', entityName: 'Account provisioning', description: 'Account invitation failed.', result: 'Failed', source: 'API', important: true });
-    const status = error instanceof AccountAuthorizationError ? 403 : error instanceof AccountConflictError ? 409 : error instanceof AccountValidationError ? 400 : 500;
+    const status = error instanceof AccountAuthorizationError ? 403 : error instanceof AccountConflictError ? 409 : error instanceof AccountValidationError ? 400 : error instanceof AccountProvisioningUnavailableError ? 503 : 500;
     res.status(status).json({ success: false, message: error instanceof Error ? error.message : 'Account provisioning failed.' });
   }
 });

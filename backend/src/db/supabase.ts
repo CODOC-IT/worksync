@@ -7,7 +7,6 @@ function resolveSupabaseUrl(): string {
 function resolveServiceRoleKey(): string {
   return (process.env.SUPABASE_SERVICE_ROLE_KEY
     || process.env.SUPABASE_SECRET_KEY
-    || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY
     || '') as string;
 }
 
@@ -20,7 +19,7 @@ export const getSupabaseServiceClient = (): SupabaseClient => {
   if (!isSupabaseServiceConfigured()) {
     throw new Error(
       'Supabase service role is not configured. Set SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) ' +
-      'and SUPABASE_URL (or VITE_SUPABASE_URL) in your .env file.'
+      'and SUPABASE_URL (or VITE_SUPABASE_URL) in your server environment. Never expose this key as VITE_*.'
     );
   }
   if (!serviceClient) {
