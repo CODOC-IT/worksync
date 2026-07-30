@@ -109,6 +109,14 @@ export const archiveProjectApi = async (id: string, reason: string): Promise<voi
   await apiFetch(`/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
 };
 
+export const permanentlyDeleteProjectApi = async (id: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(id)}/permanent`, { method: 'DELETE' });
+};
+
+export const restoreProjectApi = async (id: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+};
+
 export const addProjectMemberApi = async (
   id: string,
   userId: string,

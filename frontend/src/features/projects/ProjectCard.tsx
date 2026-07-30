@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, UserRound, Calendar, Flame, Pencil, Trash2 } from 'lucide-react';
+import { Users, UserRound, Calendar, Flame, Pencil, Trash2, ArchiveRestore } from 'lucide-react';
 import { Project, ProjectStatus, TaskPriority, User } from '../../types';
 
 interface ProjectCardProps {
@@ -9,6 +9,7 @@ interface ProjectCardProps {
   manageable: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onRestore?: () => void;
   onClick?: () => void;
 }
 
@@ -54,6 +55,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   manageable,
   onEdit,
   onDelete,
+  onRestore,
   onClick
 }) => {
   return (
@@ -73,6 +75,18 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           </span>
           {manageable && (
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+              {project.status === 'Archived' && onRestore && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRestore();
+                  }}
+                  className="rounded-lg p-1 text-slate-500 hover:bg-emerald-500/10 hover:text-emerald-400"
+                  title="Restore project"
+                >
+                  <ArchiveRestore size={12} />
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();

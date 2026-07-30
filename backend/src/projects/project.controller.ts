@@ -100,6 +100,30 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
   }
 };
 
+export const permanentlyDeleteProject = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  try {
+    await service.permanentlyDeleteProject(req.params.id, user.id, user.role);
+    res.json({ success: true, message: 'Project permanently deleted.' });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to permanently delete project.');
+  }
+};
+
+export const restoreProject = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  try {
+    await service.restoreProject(req.params.id, user.id, user.role);
+    res.json({ success: true, message: 'Project restored successfully.' });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to restore project.');
+  }
+};
+
 export const listMembers = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = requireUser(req, res);
   if (!user) return;

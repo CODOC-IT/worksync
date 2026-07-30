@@ -56,7 +56,7 @@ const formatBytes = (bytes: number): string => {
 };
 
 export const ProjectsView: React.FC = () => {
-  const { projects, tasks, users, currentRole, currentUser, createProject, updateProject, deleteProject } = useApp();
+  const { projects, tasks, users, currentRole, currentUser, createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -299,6 +299,11 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
+  const handleRestore = async (projectId: string) => {
+    const result = await restoreProject(projectId);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+  };
+
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
@@ -307,7 +312,12 @@ export const ProjectsView: React.FC = () => {
     if (!deleteTargetId || deleteSubmitting) return;
     setDeleteSubmitting(true);
     try {
-      const result = await deleteProject(deleteTargetId);
+      // Two-step delete: an already-Archived project's delete button means "permanently delete"
+      // instead of "archive" -- everything else about the button/modal is unchanged.
+      const result =
+        deleteTarget?.status === 'Archived'
+          ? await permanentlyDeleteProject(deleteTargetId)
+          : await deleteProject(deleteTargetId);
       setNotice({ type: result.success ? 'success' : 'error', message: result.message });
       if (result.success) setDeleteTargetId(null);
     } finally {
@@ -395,6 +405,7 @@ export const ProjectsView: React.FC = () => {
               manageable={manageable}
               onEdit={() => openEditForm(project)}
               onDelete={() => setDeleteTargetId(project.id)}
+              onRestore={() => handleRestore(project.id)}
               onClick={() => setSelectedProjectId(project.id)}
             />
           );
@@ -676,11 +687,20 @@ export const ProjectsView: React.FC = () => {
             <div className="flex items-center gap-2 text-rose-400">
               <AlertTriangle size={18} />
               <h2 className="text-sm font-bold text-white">
-                {currentRole === 'Admin' ? `Delete "${deleteTarget.title}"?` : `Request deletion of "${deleteTarget.title}"?`}
+                {deleteTarget.status === 'Archived'
+                  ? `Permanently delete "${deleteTarget.title}"?`
+                  : currentRole === 'Admin'
+                    ? `Delete "${deleteTarget.title}"?`
+                    : `Request deletion of "${deleteTarget.title}"?`}
               </h2>
             </div>
 
-            {currentRole === 'Admin' ? (
+            {deleteTarget.status === 'Archived' ? (
+              <p className="text-xs text-slate-400">
+                This project will be permanently deleted. This action cannot be undone. Are you sure you want to
+                continue?
+              </p>
+            ) : currentRole === 'Admin' ? (
               relatedTasks.length > 0 ? (
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
@@ -720,9 +740,11 @@ export const ProjectsView: React.FC = () => {
               >
                 {deleteSubmitting
                   ? 'Working...'
-                  : currentRole === 'Admin'
-                    ? 'Delete Project'
-                    : 'Request Deletion'}
+                  : deleteTarget.status === 'Archived'
+                    ? 'Yes, Permanently Delete'
+                    : currentRole === 'Admin'
+                      ? 'Delete Project'
+                      : 'Request Deletion'}
               </button>
             </div>
           </div>

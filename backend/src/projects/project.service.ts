@@ -346,6 +346,89 @@ export const archiveProject = async (
   });
 };
 
+// Step two of the two-step delete: only an already-Archived project may be hard-deleted, and
+// only once (repo.permanentlyDeleteProject's WHERE archivedatutc IS NOT NULL guards that). A
+// live FK from a module this function deliberately never touches (Tasks, Calendar Events,
+// Discussion Threads, AI PromptGenerations) surfaces as a Postgres 23503 error, which is mapped
+// to a validation error instead of a 500 -- "delete if possible, explain why not otherwise."
+export const permanentlyDeleteProject = async (
+  projectId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+  if (row.statuscode !== 'Archived') {
+    throw new ProjectValidationError('Only archived projects can be permanently deleted.');
+  }
+
+  let deleted: boolean;
+  try {
+    deleted = await repo.permanentlyDeleteProject(row.projectid);
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === '23503') {
+      throw new ProjectValidationError(
+        'This project still has tasks, calendar events, discussions, or AI activity linked to it. Remove those first.'
+      );
+    }
+    throw error;
+  }
+  if (!deleted) throw new ProjectValidationError('Project could not be permanently deleted.');
+
+  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  // No projectId here -- the row is gone, so a real FK reference would itself violate the
+  // AuditEvents FK. projectName is a plain snapshot column, safe to keep for readability.
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'Project', entityId: projectId,
+    entityName: row.projectname, projectName: row.projectname,
+    description: `${actorName} permanently deleted project “${row.projectname}”.`,
+    linkRoute: 'projects', important: true,
+    changes: [{ field: 'Status', previousValue: row.statuscode, newValue: 'Permanently Deleted' }]
+  });
+};
+
+// Restores an Archived project back to Active. Deliberately not routed through updateProject:
+// that generic path never touches ArchivedAtUtc/ArchivedByUserId/ArchiveReason, so a plain
+// status-only update would leave the row's archive fields stale (see repo.restoreProject's
+// comment) -- reusing it here would silently break a later archive of the same project. All
+// other project data (members, milestones, files, notes, team lead, tasks) is untouched by this
+// call, matching the DB's own design: none of that data was ever cleared by archiving it either.
+export const restoreProject = async (
+  projectId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+  if (row.statuscode !== 'Archived') {
+    throw new ProjectValidationError('Only archived projects can be restored.');
+  }
+
+  const members = await repo.findMembersForProject(row.projectid);
+  const restored = await repo.restoreProject(row.projectid);
+  if (!restored) throw new ProjectValidationError('Project could not be restored.');
+
+  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  notifyRecipients(members, actorId, {
+    type: 'project_restored',
+    title: 'Project Restored',
+    message: `${actorName} restored "${row.projectname}" from Archives.`,
+    actorId,
+    projectId
+  });
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Status Changed', module: 'Projects', entityType: 'Project', entityId: projectId,
+    entityName: row.projectname, projectId, projectName: row.projectname,
+    description: `${actorName} restored project “${row.projectname}” from Archives.`,
+    linkRoute: 'projects', important: true,
+    changes: [{ field: 'Status', previousValue: row.statuscode, newValue: 'Active' }]
+  });
+};
+
 export const addMember = async (
   projectId: string,
   memberUserId: string,
