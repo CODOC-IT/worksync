@@ -1,12 +1,17 @@
 import { Router } from 'express';
 import { authenticateJWT } from '../middleware/authMiddleware.js';
 import * as controller from './project.controller.js';
+import projectApprovalRoutes from './projectApproval.routes.js';
 
 const router = Router();
 
 // Every route requires a real authenticated session — project identity/authorization is always
 // derived from the verified JWT (req.user.id/role), never a client-supplied value.
 router.use(authenticateJWT);
+
+// /api/projects/approval-requests/* -- registered before the /:id routes below so this literal
+// path segment is never captured as a project id by Express's route matching.
+router.use('/approval-requests', projectApprovalRoutes);
 
 // GET /api/projects
 router.get('/', controller.listProjects);

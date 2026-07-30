@@ -71,6 +71,10 @@ export const ProjectsView: React.FC = () => {
 
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  // Only shown/required for Team Lead — Admin's direct archive/permanent-delete keeps its old
+  // auto-generated reason, matching the unchanged backend behavior for that role.
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteReasonError, setDeleteReasonError] = useState('');
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -242,6 +246,14 @@ export const ProjectsView: React.FC = () => {
       errors.targetDate = 'Deadline cannot be before the start date.';
     }
 
+    // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
+    // request, and the backend requires a non-empty reason to create one (see
+    // projectApproval.service.ts's createApprovalRequest). The existing "Creation Reason / Notes"
+    // field doubles as that reason rather than adding a separate field for it.
+    if (editingProjectId && currentRole === 'Team_Lead' && !data.creationReason.trim()) {
+      errors.creationReason = 'A reason is required so the Admin can review your edit request.';
+    }
+
     if (data.startDate && data.targetDate) {
       const violations = data.milestones
         .filter((m) => m.dueDate)
@@ -292,7 +304,11 @@ export const ProjectsView: React.FC = () => {
         formMode === 'create'
           ? await createProject(data)
           : editingProjectId
-            ? await updateProject(editingProjectId, { ...data, status: form.status })
+            ? await updateProject(
+                editingProjectId,
+                { ...data, status: form.status },
+                currentRole === 'Team_Lead' ? form.creationReason.trim() : undefined
+              )
             : { success: false, message: 'No project selected to update.' };
 
       if (!result.success) {
@@ -308,7 +324,16 @@ export const ProjectsView: React.FC = () => {
   };
 
   const handleRestore = async (projectId: string) => {
-    const result = await restoreProject(projectId);
+    // A Team Lead's restore doesn't apply immediately -- it becomes a PROJECT_RESTORE approval
+    // request, and the backend requires a non-empty reason to create one. Admin's restore stays
+    // a single click, unchanged.
+    let reason: string | undefined;
+    if (currentRole === 'Team_Lead') {
+      const entered = window.prompt('Reason for requesting this project be restored:');
+      if (!entered?.trim()) return;
+      reason = entered.trim();
+    }
+    const result = await restoreProject(projectId, reason);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
   };
 
@@ -316,18 +341,38 @@ export const ProjectsView: React.FC = () => {
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
 
+  const openDeleteConfirm = (projectId: string) => {
+    setDeleteTargetId(projectId);
+    setDeleteReason('');
+    setDeleteReasonError('');
+  };
+
+  const closeDeleteConfirm = () => {
+    setDeleteTargetId(null);
+    setDeleteReason('');
+    setDeleteReasonError('');
+  };
+
   const confirmDelete = async () => {
     if (!deleteTargetId || deleteSubmitting) return;
+    // A Team Lead's archive/permanent-delete doesn't apply immediately -- it becomes a
+    // PROJECT_ARCHIVE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
+    // non-empty reason to create one. Admin keeps the previous auto-generated reason.
+    if (currentRole === 'Team_Lead' && !deleteReason.trim()) {
+      setDeleteReasonError('A reason is required so the Admin can review your request.');
+      return;
+    }
+    setDeleteReasonError('');
     setDeleteSubmitting(true);
     try {
       // Two-step delete: an already-Archived project's delete button means "permanently delete"
       // instead of "archive" -- everything else about the button/modal is unchanged.
       const result =
         deleteTarget?.status === 'Archived'
-          ? await permanentlyDeleteProject(deleteTargetId)
-          : await deleteProject(deleteTargetId);
+          ? await permanentlyDeleteProject(deleteTargetId, deleteReason.trim() || undefined)
+          : await deleteProject(deleteTargetId, deleteReason.trim() || undefined);
       setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-      if (result.success) setDeleteTargetId(null);
+      if (result.success) closeDeleteConfirm();
     } finally {
       setDeleteSubmitting(false);
     }
@@ -412,7 +457,7 @@ export const ProjectsView: React.FC = () => {
               isOverdue={isOverdue}
               manageable={manageable}
               onEdit={() => openEditForm(project)}
-              onDelete={() => setDeleteTargetId(project.id)}
+              onDelete={() => openDeleteConfirm(project.id)}
               onRestore={() => handleRestore(project.id)}
               onClick={() => setSelectedProjectId(project.id)}
             />
@@ -642,11 +687,17 @@ export const ProjectsView: React.FC = () => {
                 )}
               </div>
 
-              {/* Creation reason / notes */}
+              {/* Creation reason / notes -- for a Team Lead editing an existing project, this
+                  also doubles as the PROJECT_EDIT approval request's required reason. */}
               <div>
                 <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
-                  <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
-                  <span className="text-slate-500 font-normal">(recommended for Admin review)</span>
+                  <StickyNote size={12} className="text-cyan-400" />{' '}
+                  {formMode === 'edit' && currentRole === 'Team_Lead' ? 'Reason for Change' : 'Creation Reason / Notes'}{' '}
+                  <span className="text-slate-500 font-normal">
+                    {formMode === 'edit' && currentRole === 'Team_Lead'
+                      ? '(required for Admin approval)'
+                      : '(recommended for Admin review)'}
+                  </span>
                 </label>
                 <textarea
                   value={form.creationReason}
@@ -655,6 +706,7 @@ export const ProjectsView: React.FC = () => {
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="Why is this project being created? Any context for the reviewer?"
                 />
+                {formErrors.creationReason && <p className="text-rose-400 mt-1">{formErrors.creationReason}</p>}
               </div>
 
               {formMode === 'create' && currentRole === 'Team_Lead' && (
@@ -700,7 +752,9 @@ export const ProjectsView: React.FC = () => {
               <AlertTriangle size={18} />
               <h2 className="text-sm font-bold text-white">
                 {deleteTarget.status === 'Archived'
-                  ? `Permanently delete "${deleteTarget.title}"?`
+                  ? currentRole === 'Admin'
+                    ? `Permanently delete "${deleteTarget.title}"?`
+                    : `Request permanent deletion of "${deleteTarget.title}"?`
                   : currentRole === 'Admin'
                     ? `Delete "${deleteTarget.title}"?`
                     : `Request deletion of "${deleteTarget.title}"?`}
@@ -708,10 +762,17 @@ export const ProjectsView: React.FC = () => {
             </div>
 
             {deleteTarget.status === 'Archived' ? (
-              <p className="text-xs text-slate-400">
-                This project will be permanently deleted. This action cannot be undone. Are you sure you want to
-                continue?
-              </p>
+              currentRole === 'Admin' ? (
+                <p className="text-xs text-slate-400">
+                  This project will be permanently deleted. This action cannot be undone. Are you sure you want to
+                  continue?
+                </p>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  This will submit a request to permanently delete this project for Admin approval. The project
+                  stays unchanged unless an Admin approves it.
+                </p>
+              )
             ) : currentRole === 'Admin' ? (
               relatedTasks.length > 0 ? (
                 <div className="space-y-2 text-xs">
@@ -732,14 +793,30 @@ export const ProjectsView: React.FC = () => {
               )
             ) : (
               <p className="text-xs text-slate-400">
-                This project will not be deleted immediately. A deletion request will be submitted for Admin approval,
-                and the project stays unchanged unless an Admin approves it.
+                This project will not be deleted immediately. An archive request will be submitted for Admin
+                approval, and the project stays unchanged unless an Admin approves it.
               </p>
+            )}
+
+            {currentRole === 'Team_Lead' && (
+              <div>
+                <label className="block text-xs text-slate-300 font-semibold mb-1">
+                  Reason <span className="text-slate-500 font-normal">(required for Admin approval)</span>
+                </label>
+                <textarea
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                  placeholder="Why is this needed? Any context for the Admin?"
+                />
+                {deleteReasonError && <p className="text-rose-400 text-xs mt-1">{deleteReasonError}</p>}
+              </div>
             )}
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
               <button
-                onClick={() => setDeleteTargetId(null)}
+                onClick={closeDeleteConfirm}
                 disabled={deleteSubmitting}
                 className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
               >
@@ -753,7 +830,9 @@ export const ProjectsView: React.FC = () => {
                 {deleteSubmitting
                   ? 'Working...'
                   : deleteTarget.status === 'Archived'
-                    ? 'Yes, Permanently Delete'
+                    ? currentRole === 'Admin'
+                      ? 'Yes, Permanently Delete'
+                      : 'Request Permanent Deletion'
                     : currentRole === 'Admin'
                       ? 'Delete Project'
                       : 'Request Deletion'}

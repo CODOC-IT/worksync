@@ -1,8 +1,18 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
+import * as approvalService from './projectApproval.service.js';
 import { validateCreateProjectBody, validateMemberBody, validateUpdateProjectBody } from './project.validation.js';
 import { CreateProjectInput, UpdateProjectInput } from './project.types.js';
+
+// Approval-gating for Team Leads on the four sensitive actions below (Edit/Archive/Restore/
+// Permanent Delete) lives right here at the controller layer, not inside project.service.ts's
+// own functions: a Team Lead's call never reaches those functions at all when gated -- it's
+// redirected to projectApproval.service.ts's createApprovalRequest instead, which persists a
+// Pending request and returns without touching the project. Admin calls (and Team Lead calls
+// once approved, executed under the Admin's own identity by projectApproval.service.ts) are
+// completely unaffected and reach project.service.ts exactly as before -- every validation rule
+// already enforced there keeps working unchanged, at whichever moment the action actually runs.
 
 // Controller = thin HTTP adapter. Every handler: read req, call the service, map the
 // result/error to a response. No SQL, no authorization decisions here — those are
@@ -80,6 +90,17 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
   }
 
   try {
+    if (user.role === 'Team_Lead') {
+      const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
+      const data = await approvalService.createApprovalRequest(
+        req.params.id, 'PROJECT_EDIT', changes, reason || '', user.id, user.role
+      );
+      res.json({
+        success: true, message: 'Your edit request was submitted for Admin approval.',
+        pendingApproval: true, data
+      });
+      return;
+    }
     const data = await service.updateProject(req.params.id, req.body as UpdateProjectInput, user.id, user.role);
     res.json({ success: true, message: 'Project updated successfully.', data });
   } catch (error) {
@@ -93,6 +114,16 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
 
   const { reason } = (req.body || {}) as { reason?: string };
   try {
+    if (user.role === 'Team_Lead') {
+      const data = await approvalService.createApprovalRequest(
+        req.params.id, 'PROJECT_ARCHIVE', null, reason || '', user.id, user.role
+      );
+      res.json({
+        success: true, message: 'Your archive request was submitted for Admin approval.',
+        pendingApproval: true, data
+      });
+      return;
+    }
     await service.archiveProject(req.params.id, reason || '', user.id, user.role);
     res.json({ success: true, message: 'Project archived successfully.' });
   } catch (error) {
@@ -105,6 +136,17 @@ export const permanentlyDeleteProject = async (req: AuthenticatedRequest, res: R
   if (!user) return;
 
   try {
+    if (user.role === 'Team_Lead') {
+      const { reason } = (req.body || {}) as { reason?: string };
+      const data = await approvalService.createApprovalRequest(
+        req.params.id, 'PROJECT_PERMANENT_DELETE', null, reason || '', user.id, user.role
+      );
+      res.json({
+        success: true, message: 'Your permanent delete request was submitted for Admin approval.',
+        pendingApproval: true, data
+      });
+      return;
+    }
     await service.permanentlyDeleteProject(req.params.id, user.id, user.role);
     res.json({ success: true, message: 'Project permanently deleted.' });
   } catch (error) {
@@ -117,6 +159,17 @@ export const restoreProject = async (req: AuthenticatedRequest, res: Response): 
   if (!user) return;
 
   try {
+    if (user.role === 'Team_Lead') {
+      const { reason } = (req.body || {}) as { reason?: string };
+      const data = await approvalService.createApprovalRequest(
+        req.params.id, 'PROJECT_RESTORE', null, reason || '', user.id, user.role
+      );
+      res.json({
+        success: true, message: 'Your restore request was submitted for Admin approval.',
+        pendingApproval: true, data
+      });
+      return;
+    }
     await service.restoreProject(req.params.id, user.id, user.role);
     res.json({ success: true, message: 'Project restored successfully.' });
   } catch (error) {
