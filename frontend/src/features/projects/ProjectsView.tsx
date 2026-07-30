@@ -243,13 +243,21 @@ export const ProjectsView: React.FC = () => {
     }
 
     if (data.startDate && data.targetDate) {
-      const outOfRange = data.milestones.filter(
-        (m) => m.dueDate && (m.dueDate < data.startDate || m.dueDate > data.targetDate)
-      );
-      if (outOfRange.length > 0) {
-        errors.milestones = `Milestone date(s) must fall within the project's start/end dates: ${outOfRange
-          .map((m) => m.title || 'Untitled')
-          .join(', ')}.`;
+      const violations = data.milestones
+        .filter((m) => m.dueDate)
+        .map((m) => {
+          const label = m.title || 'Untitled';
+          if (m.dueDate < data.startDate) {
+            return `"${label}" is before the project start date (${data.startDate})`;
+          }
+          if (m.dueDate > data.targetDate) {
+            return `"${label}" is after the project end date (${data.targetDate})`;
+          }
+          return null;
+        })
+        .filter((message): message is string => Boolean(message));
+      if (violations.length > 0) {
+        errors.milestones = `Milestone dates must fall within the project's start/end dates: ${violations.join('; ')}.`;
       }
     }
 
@@ -464,7 +472,11 @@ export const ProjectsView: React.FC = () => {
                     value={form.startDate}
                     onChange={(e) => setForm((prev) => ({ ...prev, startDate: e.target.value }))}
                     min={todayStr}
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                    // The original creation start date is fixed once a project exists -- only
+                    // Deadline/other fields remain editable, matching Team Lead's own
+                    // create-only-editable pattern just below.
+                    disabled={formMode === 'edit'}
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   {formErrors.startDate && <p className="text-rose-400 mt-1">{formErrors.startDate}</p>}
                 </div>

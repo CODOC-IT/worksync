@@ -264,11 +264,19 @@ export const archiveProject = async (
 
 // Hard delete for a project that's already archived. Cascades only rows this module owns
 // (ProjectMembers/Milestones/ReviewerDesignations/the ProjectFiles link row/TeamLeadProjectScopes
-// -- ProjectPolicies cascades via its own FK already) and detaches rows it doesn't own but that
-// reference it via a nullable FK (Notifications, AuditEvents) so that history survives without a
-// dangling link. Tasks/Calendar Events/Discussion Threads/AI PromptGenerations are NOT touched --
-// if any still reference this project the final DELETE hits their live FK and throws, which the
-// service layer maps to a "still has linked records" error rather than partially deleting.
+// -- ProjectPolicies cascades via its own FK already) and detaches Notifications (a nullable FK
+// this module doesn't own) so that history survives without a dangling link.
+//
+// AuditEvents rows are never touched, deleted, or modified -- audit.AuditEvents has a
+// BEFORE UPDATE OR DELETE trigger (database/22_audit_enhancements.sql) that rejects any mutation
+// unconditionally, including one issued by a FK referential action, so nulling ProjectId there is
+// not possible without violating audit immutability. Instead, FK_AuditEvents_Project was dropped
+// (database/24_audit_project_fk_relax.sql) -- a permanently-deleted project's audit history simply
+// keeps its now-historical ProjectId value forever, exactly as it was written.
+//
+// Tasks/Calendar Events/Discussion Threads/AI PromptGenerations are also NOT touched -- if any
+// still reference this project the final DELETE hits their live FK and throws, which the service
+// layer maps to a "still has linked records" error rather than partially deleting.
 export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
   withTransaction(async (runQuery) => {
     await runQuery('DELETE FROM work.projectmembers WHERE projectid = $1', [projectId]);
@@ -277,7 +285,6 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
     await runQuery('DELETE FROM collab.projectfiles WHERE projectid = $1', [projectId]);
     await runQuery('DELETE FROM iam.teamleadprojectscopes WHERE projectid = $1', [projectId]);
     await runQuery('UPDATE notify.notifications SET projectid = NULL WHERE projectid = $1', [projectId]);
-    await runQuery('UPDATE audit.auditevents SET projectid = NULL WHERE projectid = $1', [projectId]);
 
     const result = await runQuery(
       'DELETE FROM work.projects WHERE projectid = $1 AND archivedatutc IS NOT NULL',
