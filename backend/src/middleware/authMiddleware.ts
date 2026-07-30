@@ -25,7 +25,8 @@ export const authenticateJWT = async (req: AuthenticatedRequest, res: Response, 
     const result = await query<{ userid: number; email: string; accountstatus: string; rolecode: string | null }>(`
       SELECT u.userid, u.email, u.accountstatus,
         COALESCE(MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'TeamLead'), 'TeamMember') AS rolecode
-      FROM iam.users u LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+      FROM iam.users u LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
+        AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
       LEFT JOIN iam.roles r ON r.roleid = ur.roleid WHERE u.authuserid = $1 GROUP BY u.userid`, [data.user.id]);
     const account = result.rows[0];
     if (!account) { res.status(403).json({ success: false, message: 'This Supabase account is not provisioned for WorkSync.' }); return; }

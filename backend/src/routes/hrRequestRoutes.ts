@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { query, withTransaction } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
+import { attendanceRole, getEffectiveRoles } from '../auth/effectiveRoles.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -49,14 +50,14 @@ export const getInitialApprovalStage = (
   requestType: RequestType,
   requesterRole: string
 ): ApprovalStage =>
-  requestType === 'Leave' && !isHR(requesterRole) ? 'HR' : 'Admin';
+  isHR(requesterRole) ? 'Admin' : 'HR';
 
 export const canReviewRequestStage = (
   requestType: RequestType,
   stage: ApprovalStage,
   reviewerRole: string
 ): boolean =>
-  (stage === 'HR' && requestType === 'Leave' && isHR(reviewerRole)) ||
+  (stage === 'HR' && ['Correction', 'Leave', 'Break_Exception'].includes(requestType) && isHR(reviewerRole)) ||
   (stage === 'Admin' && isAdmin(reviewerRole));
 
 const ensureTable = async (): Promise<void> => {
@@ -151,18 +152,19 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
       return;
     }
     await ensureTable();
+    const effectiveRole = attendanceRole(await getEffectiveRoles(req.user.id));
     let result;
-    if (isAdmin(req.user.role)) {
+    if (effectiveRole === 'Admin') {
       result = await query<HRRequestRow>(
         `SELECT * FROM public.worksync_hr_requests
           WHERE approval_stage = 'Admin'
           ORDER BY submitted_at DESC`
       );
-    } else if (isHR(req.user.role)) {
+    } else if (effectiveRole === 'HR') {
       result = await query<HRRequestRow>(
         `SELECT * FROM public.worksync_hr_requests
           WHERE user_id = $1
-             OR (approval_stage = 'HR' AND request_type = 'Leave' AND user_id <> $1)
+             OR (approval_stage = 'HR' AND user_id <> $1)
           ORDER BY submitted_at DESC`,
         [req.user.id]
       );
@@ -199,7 +201,8 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       res.status(400).json({ success: false, message: 'A valid request type and reason are required.' });
       return;
     }
-    if (isAdmin(req.user.role)) {
+    const effectiveRole = attendanceRole(await getEffectiveRoles(req.user.id));
+    if (effectiveRole === 'Admin') {
       res.status(403).json({ success: false, message: 'Admins do not submit attendance approval requests.' });
       return;
     }
@@ -255,7 +258,8 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       }
     }
 
-    const approvalStage = getInitialApprovalStage(type, req.user.role);
+    const requesterAttendanceRole = effectiveRole === 'HR' ? 'HR' : 'Team_Member';
+    const approvalStage = getInitialApprovalStage(type, requesterAttendanceRole);
     const id = `hrq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const result = await query<HRRequestRow>(
       `INSERT INTO public.worksync_hr_requests (
@@ -267,7 +271,7 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         id,
         req.user.id,
         typeof userName === 'string' ? userName.trim() : null,
-        req.user.role,
+        requesterAttendanceRole,
         type,
         requestDate,
         cleanReason,
@@ -367,26 +371,10 @@ const decideRequest = async (
       if (row.user_id === req.user!.id) {
         throw Object.assign(new Error('You cannot approve your own request.'), { statusCode: 403 });
       }
-      const authorized = canReviewRequestStage(
-        row.request_type,
-        row.approval_stage,
-        req.user!.role
-      );
+      const reviewer = attendanceRole(await getEffectiveRoles(req.user!.id));
+      const authorized = canReviewRequestStage(row.request_type, row.approval_stage, reviewer);
       if (!authorized) {
         throw Object.assign(new Error(`Only ${row.approval_stage} can decide this request.`), { statusCode: 403 });
-      }
-
-      if (decision === 'Approved' && row.request_type === 'Leave' && row.approval_stage === 'HR') {
-        const forwarded = await runQuery<HRRequestRow>(
-          `UPDATE public.worksync_hr_requests
-              SET approval_stage = 'Admin',
-                  decided_by = $2,
-                  decision_reason = $3
-            WHERE id = $1
-            RETURNING *`,
-          [row.id, req.user!.id, decisionReason || 'Approved by HR and forwarded to Admin.']
-        );
-        return forwarded.rows[0];
       }
 
       if (decision === 'Approved') {

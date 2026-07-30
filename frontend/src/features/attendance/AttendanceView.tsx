@@ -289,8 +289,10 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   };
 
   const handleSave = async () => {
-    if (requiresApproval && !reason.trim()) {
-      setMessage('A reason is required for an attendance edit request.');
+    if (!reason.trim()) {
+      setMessage(requiresApproval
+        ? 'A reason is required for an attendance edit request.'
+        : 'A reason is required for an administrator correction.');
       return;
     }
     const result = await onSave(record.id, { checkIn, checkOut, breaks }, reason);
@@ -410,7 +412,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         )}
       </div>
 
-      {requiresApproval && (
+      {
         <label className="mt-4 block text-xs text-slate-400">
           Reason for change
           <textarea
@@ -422,7 +424,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             placeholder="Explain why these attendance values should be changed..."
           />
         </label>
-      )}
+      }
 
       {message && <p className="text-xs text-rose-300 mt-3">{message}</p>}
 
@@ -762,10 +764,11 @@ export const AttendanceView: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <Clock size={18} className="text-cyan-400" />
-        <h2 className="text-base font-bold text-white">My Attendance</h2>
-      </div>
+      {!isAdmin && (<>
+        <div className="flex items-center gap-2">
+          <Clock size={18} className="text-cyan-400" />
+          <h2 className="text-base font-bold text-white">My Attendance</h2>
+        </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <GlassCard glowColor="cyan">
@@ -919,6 +922,7 @@ export const AttendanceView: React.FC = () => {
         getRequestStatus={getCorrectionRequestStatus}
         emptyMessage="No personal attendance records found."
       />
+      </>)}
 
       {leaveFormOpen && (
         <LeaveApplicationForm

@@ -44,7 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pendingHrCount = hrRequests.filter((request) =>
     request.status === 'Pending' &&
     request.userId !== currentUser.id &&
-    ((currentRole === 'HR' && request.type === 'Leave' && request.approvalStage === 'HR') ||
+    ((currentRole === 'HR' && request.approvalStage === 'HR') ||
       (currentRole === 'Admin' && request.approvalStage === 'Admin'))
   ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
