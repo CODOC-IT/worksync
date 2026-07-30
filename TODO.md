@@ -38,13 +38,9 @@
 - [x] Smaller OTP boxes on mobile (`w-10 h-12` → `sm:w-12 sm:h-14`)
 - [x] Tighter gaps (`gap-2` → `sm:gap-3`)
 
-### Step 8: ForgotPasswordView - Mobile OTP Inputs
-- [x] Smaller OTP boxes on mobile
-- [x] Tighter gaps
-
-### Step 9: index.css - Additional Utilities
+### Step 8: index.css - Additional Utilities
 - [x] Add mobile sidebar overlay animation styles
 
-### Step 10: Build & Verify
+### Step 9: Build & Verify
 - [x] TypeScript compilation passes (no errors)
 

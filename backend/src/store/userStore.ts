@@ -52,8 +52,6 @@ const getSystemActorUserId = async (): Promise<number> => {
 const USER_QUERY = `
   SELECT u.userid, u.email, u.username, u.displayname, u.designation,
          u.accountstatus, u.invitationsentatutc, u.createdatutc,
-         (u.authuserid IS NOT NULL AND u.createdbyuserid IS NOT NULL
-           AND u.invitationsentatutc IS NULL) AS canresendinvitation,
          r.rolecode, d.departmentname,
          uc.passwordhash, uc.passwordalgorithm
   FROM iam.users u
@@ -73,7 +71,6 @@ interface DbUserRow {
   designation: string | null;
   accountstatus: string;
   invitationsentatutc: string | null;
-  canresendinvitation: boolean;
   createdatutc: string;
   rolecode: string | null;
   departmentname: string | null;
@@ -105,7 +102,6 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     status: STATUS_MAP[row.accountstatus] || 'active',
     accountStatus: row.accountstatus as UserRecord['accountStatus'],
     invitationSentAtUtc: row.invitationsentatutc ? new Date(row.invitationsentatutc).toISOString() : null,
-    canResendInvitation: row.canresendinvitation,
     createdAt: row.createdatutc ? new Date(row.createdatutc).toISOString() : new Date().toISOString()
   };
 }
