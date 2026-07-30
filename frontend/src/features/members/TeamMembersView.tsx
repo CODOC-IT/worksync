@@ -241,14 +241,6 @@ export const TeamMembersView: React.FC = () => {
     return headers;
   };
 
-  const openCreateModal = () => {
-    setManageMode('create');
-    setManageTargetId(null);
-    setMemberForm({ ...EMPTY_MEMBER_FORM });
-    setShowTemporaryPassword(false);
-    setManageModalOpen(true);
-  };
-
   const openEditModal = (member: User) => {
     setManageMode('edit');
     setManageTargetId(member.id);
@@ -653,12 +645,12 @@ export const TeamMembersView: React.FC = () => {
                 {canManageAccounts && (
                   <button
                     type="button"
-                    onClick={openCreateModal}
-                      className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
-                    >
+                    onClick={() => setCreateAccountOpen(true)}
+                       className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
+                     >
                     <span className="inline-flex items-center gap-1.5">
                       <Plus size={15} />
-                      Add account
+                      Create account and send credentials
                     </span>
                   </button>
                 )}
@@ -1072,12 +1064,8 @@ export const TeamMembersView: React.FC = () => {
           <form onSubmit={submitMemberForm} className="glass-panel-glow w-full max-w-2xl border border-cyan-500/25">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-white">{manageMode === 'create' ? 'Add account' : 'Edit account'}</h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  {manageMode === 'create'
-                    ? 'Create a new workspace account for a team member.'
-                    : 'Update account details for this member.'}
-                </p>
+                <h2 className="text-lg font-semibold text-white">Edit account</h2>
+                <p className="mt-1 text-xs text-slate-400">Update account details for this member.</p>
               </div>
               <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:text-white">
                 <X size={18} />
@@ -1149,7 +1137,7 @@ export const TeamMembersView: React.FC = () => {
             <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
               <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
               <button type="submit" disabled={manageSubmitting} className="rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 disabled:opacity-60">
-                {manageSubmitting ? 'Saving...' : manageMode === 'create' ? 'Create account' : 'Save changes'}
+                {manageSubmitting ? 'Saving...' : 'Save changes'}
               </button>
             </div>
           </form>
