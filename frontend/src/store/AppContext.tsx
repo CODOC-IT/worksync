@@ -214,6 +214,7 @@ interface AppState {
   snoozeNotification: (id: string, untilIso: string) => void;
   updateNotificationPreferences: (data: Partial<NotificationPreferences>) => void;
   dismissToast: (id: string) => void;
+  showToast: (tone: ToastTone, title: string, message: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
@@ -2771,6 +2772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snoozeNotification,
         updateNotificationPreferences,
         dismissToast,
+        showToast: pushToast,
         deactivateUser,
         exportBackup,
         updateCurrentUser,

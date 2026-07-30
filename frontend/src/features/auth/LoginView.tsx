@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, Shield, Sparkles } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { ForgotPasswordView } from './ForgotPasswordView';
 import { supabase } from '../../../utils/supabase';
+import { FirstLoginPasswordView } from './FirstLoginPasswordView';
 
 interface LoginViewProps {
   onLoginSuccess: () => void;
@@ -17,6 +18,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [firstLoginToken, setFirstLoginToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user.app_metadata?.must_change_password === true) {
+        localStorage.setItem('worksync_auth_token', data.session.access_token);
+        setFirstLoginToken(data.session.access_token);
+      }
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user.app_metadata?.must_change_password === true) {
+        localStorage.setItem('worksync_auth_token', session.access_token);
+        setFirstLoginToken(session.access_token);
+      }
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
   const handleLoginSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -40,8 +59,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       }
       if (error || !sessionData.session) throw new Error(error?.message || 'Authentication failed.');
       localStorage.setItem('worksync_auth_token', sessionData.session.access_token);
+      if (sessionData.user.app_metadata?.must_change_password === true) {
+        setFirstLoginToken(sessionData.session.access_token);
+        return;
+      }
       const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${sessionData.session.access_token}` } });
       const data = await response.json();
+      if (response.status === 403 && data.code === 'PASSWORD_CHANGE_REQUIRED') {
+        setFirstLoginToken(sessionData.session.access_token);
+        return;
+      }
       if (!response.ok || !data.success || !data.user) throw new Error(data.message || 'Your account is not provisioned for WorkSync.');
       loginUser(data.user);
       onLoginSuccess();
@@ -52,6 +79,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   };
 
+  if (firstLoginToken) {
+    return <FirstLoginPasswordView accessToken={firstLoginToken} onComplete={(user) => { loginUser(user); onLoginSuccess(); }} />;
+  }
 
   if (showForgotPassword) {
     return <ForgotPasswordView onBackToLogin={() => setShowForgotPassword(false)} />;
