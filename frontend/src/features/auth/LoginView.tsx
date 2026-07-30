@@ -3,13 +3,13 @@ import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, Shield, Sparkles } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { ForgotPasswordView } from './ForgotPasswordView';
+import { supabase } from '../../../utils/supabase';
 
 interface LoginViewProps {
   onLoginSuccess: () => void;
-  onSwitchToSignup: () => void;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchToSignup }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const { loginUser } = useApp();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
@@ -30,17 +30,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
 
     setLoading(true);
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password })
-      });
+      if (!supabase) throw new Error('Supabase Auth is not configured.');
+      const { data: sessionData, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error || !sessionData.session) throw new Error(error?.message || 'Authentication failed.');
+      localStorage.setItem('worksync_auth_token', sessionData.session.access_token);
+      const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${sessionData.session.access_token}` } });
       const data = await response.json();
-      if (!response.ok || !data.success || !data.token || !data.user) {
-        throw new Error(data.message || 'Authentication failed.');
-      }
-
-      localStorage.setItem('worksync_auth_token', data.token);
+      if (!response.ok || !data.success || !data.user) throw new Error(data.message || 'Your account is not provisioned for WorkSync.');
       loginUser(data.user);
       onLoginSuccess();
     } catch (error: any) {
@@ -128,16 +124,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onSwitchTo
                 <Shield size={18} className="text-cyan-400" />
                 <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">Account Portal</span>
               </div>
-              <div className="flex items-center gap-3 text-xs">
-                <span className="text-slate-400 hidden sm:inline">New here?</span>
-                <button
-                  type="button"
-                  onClick={onSwitchToSignup}
-                  className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-cyan-300 border border-cyan-500/30 text-xs font-semibold transition-all"
-                >
-                  Create Account
-                </button>
-              </div>
+              <span className="text-xs text-slate-400">Need access? Contact an Administrator or HR.</span>
             </div>
 
             <div className="space-y-5 my-auto">

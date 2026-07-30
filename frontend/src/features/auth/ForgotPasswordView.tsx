@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mail, Shield, ArrowLeft, CheckCircle, AlertCircle, RefreshCw, Lock, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { supabase } from '../../../utils/supabase';
 
 interface ForgotPasswordViewProps {
   onBackToLogin: () => void;
@@ -62,16 +63,11 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onBackTo
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim() })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message);
-      setSuccessMsg('If an account exists, a verification code has been sent.');
+      if (!supabase) throw new Error('Supabase Auth is not configured.');
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${window.location.origin}` });
+      if (error) throw error;
+      setSuccessMsg('If an account exists, a password recovery link has been sent.');
       setTimeout(() => setSuccessMsg(null), 5000);
-      setStep('otp');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to send verification code.');
     } finally {

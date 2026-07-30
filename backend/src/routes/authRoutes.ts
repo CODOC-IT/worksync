@@ -10,6 +10,8 @@ const router = Router();
 
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void> => {
+  res.status(410).json({ success: false, message: 'Legacy login has been retired. Sign in with Supabase Auth.' });
+  return;
   try {
     const { email, password } = req.body;
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -71,18 +73,22 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
 
 // GET /api/auth/role-status
 router.get('/role-status', async (_req, res: Response): Promise<void> => {
-  await userStore.syncUsersToDb();
-  res.status(200).json({
-    success: true,
-    hasAdmin: userStore.hasRole('Admin'),
-    hasHR: userStore.hasRole('HR')
-  });
+  res.status(410).json({ success: false, message: 'Public registration bootstrap has been retired.' });
 });
 
 // POST /api/auth/forgot-password
 // Body: { email }
 // Sends OTP to the user's email if account exists (don't reveal whether it exists)
 router.post('/forgot-password', async (req, res: Response): Promise<void> => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  if (!email) { res.status(400).json({ success: false, message: 'Email is required.' }); return; }
+  const { getSupabaseServiceClient } = await import('../db/supabase.js');
+  const { error } = await getSupabaseServiceClient().auth.resetPasswordForEmail(email, {
+    redirectTo: process.env.SUPABASE_PASSWORD_RESET_REDIRECT_URL || undefined,
+  });
+  if (error) { res.status(503).json({ success: false, message: 'Password recovery is temporarily unavailable.' }); return; }
+  res.status(200).json({ success: true, message: 'If an account exists, a password recovery link has been sent.' });
+  return;
   try {
     const { email } = req.body;
 
@@ -136,6 +142,8 @@ router.post('/forgot-password', async (req, res: Response): Promise<void> => {
 // Body: { resetToken, newPassword }
 // Updates the user's password after OTP verification (resetToken from otp verify)
 router.put('/password', async (req, res: Response): Promise<void> => {
+  res.status(410).json({ success: false, message: 'Use the Supabase password recovery link to update your password.' });
+  return;
   try {
     const { resetToken, newPassword } = req.body;
 
