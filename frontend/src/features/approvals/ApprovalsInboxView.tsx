@@ -154,6 +154,9 @@ export const ApprovalsInboxView: React.FC = () => {
     }
 
     return systemApprovals.filter((approval) => {
+      if (approval.type === 'Task_Creation' || approval.type === 'Controlled_Edit') {
+        return false;
+      }
       const project = getApprovalProject(
         approval,
         projects,
@@ -651,9 +654,7 @@ export const ApprovalsInboxView: React.FC = () => {
           [
             'All',
             'Project_Creation',
-            'Project_Deletion',
-            'Task_Creation',
-            'Controlled_Edit'
+            'Project_Deletion'
           ] as TypeFilter[]
         ).map((type) => (
           <button

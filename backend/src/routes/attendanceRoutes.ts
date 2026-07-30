@@ -5,7 +5,6 @@ import { query } from '../db/pool.js';
 import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
 import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
-import { recordActivity } from '../activity/activity.service.js';
 
 const router = Router();
 
@@ -104,13 +103,16 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
   }
 });
 
-// PUT /api/attendance/:userId/:date — preserves the existing Admin direct-edit capability.
+// Retained for API compatibility, but attendance records are now view-only for Admin.
 router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
+    res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
+    return;
+    /*
     const effectiveRoles = await getEffectiveRoles(req.user.id);
     if (!effectiveRoles.isAdmin) {
       res.status(403).json({ success: false, message: 'Only Admin can directly edit attendance.' });
@@ -200,7 +202,7 @@ router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, 
         { field: 'checkOut', previousValue: null, newValue: checkOut || null },
       ],
     });
-    res.json({ success: true, message: 'Attendance record updated.' });
+    res.json({ success: true, message: 'Attendance record updated.' }); */
   } catch (err: any) {
     console.error('[Attendance Update Error]', err);
     res.status(500).json({ success: false, message: 'Failed to update attendance record.' });
