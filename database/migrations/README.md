@@ -15,6 +15,10 @@ pre-existing case-only duplicates before applying it.
 provisioning workflow and removes the retired first-login password-change flag from their
 Supabase Auth metadata. It does not change or re-hash any password.
 
+`20260730_04_project_approval_requests.sql` installs the persistent project-management approval
+table in existing environments. It uses the same lowercase-folded PostgreSQL identifiers as the
+repository and safely adopts an early quoted `"work"."ProjectApprovalRequests"` table if present.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
