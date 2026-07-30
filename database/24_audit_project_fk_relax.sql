@@ -1,0 +1,15 @@
+-- audit.AuditEvents rows are permanently immutable: 22_audit_enhancements.sql's
+-- tr_audit_events_immutable trigger rejects any UPDATE or DELETE on that table unconditionally,
+-- for every row, with no exceptions. FK_AuditEvents_Project is a plain, non-cascading foreign key
+-- from audit.AuditEvents.ProjectId to work.Projects.ProjectId -- so permanently deleting a project
+-- that has ever been logged in the audit trail (effectively every real project, since creation
+-- alone writes an audit event) is impossible: Postgres cannot satisfy the FK by nulling or
+-- cascading the reference, because doing so requires an UPDATE against audit.AuditEvents, and
+-- that UPDATE is rejected by the immutability trigger regardless of whether it was issued by a
+-- user or by the FK's own referential action.
+--
+-- This constraint is dropped so a permanently-deleted project's audit history keeps its (now
+-- historical) ProjectId value forever. No audit row's data -- ProjectId included -- is modified
+-- or deleted by this change, now or ever: the immutability trigger itself is untouched and
+-- continues to reject every UPDATE/DELETE on audit.AuditEvents and audit.AuditEventChanges.
+ALTER TABLE audit.AuditEvents DROP CONSTRAINT IF EXISTS FK_AuditEvents_Project;

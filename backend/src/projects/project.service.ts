@@ -254,11 +254,29 @@ export const updateProject = async (
   if (input.description !== undefined && !input.description.trim()) {
     throw new ProjectValidationError('Project description cannot be empty.');
   }
+  // Start date is fixed at creation and never editable again, matching the edit form's disabled
+  // Start Date field (frontend/.../ProjectsView.tsx) -- enforced here too since a client could
+  // otherwise call this endpoint directly and bypass the disabled UI field.
+  if (input.startDate !== undefined && input.startDate !== row.startdate) {
+    throw new ProjectValidationError('Start date cannot be changed after project creation.');
+  }
+  // An end-date change that would strand an existing milestone past the new deadline is rejected
+  // outright, reusing repo.findMilestonesForProject (already used by buildDetailDTO) rather than
+  // adding a new query.
+  if (input.targetDate !== undefined && input.targetDate !== row.enddate) {
+    const milestones = await repo.findMilestonesForProject(row.projectid);
+    const strandedMilestones = milestones.filter((milestone) => milestone.duedate > input.targetDate!);
+    if (strandedMilestones.length > 0) {
+      throw new ProjectValidationError(
+        `Cannot change the end date to ${input.targetDate}: ${strandedMilestones.length} existing milestone(s) ` +
+        `(${strandedMilestones.map((milestone) => milestone.milestonename).join(', ')}) fall after that date.`
+      );
+    }
+  }
 
   const updates: repo.UpdateProjectRow = {
     title: input.title?.trim(),
     description: input.description?.trim(),
-    startDate: input.startDate,
     targetDate: input.targetDate,
     creationReason: input.creationReason?.trim()
   };
