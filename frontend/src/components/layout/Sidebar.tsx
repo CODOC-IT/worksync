@@ -38,7 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   mobileOpen,
   onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
+  const { currentRole, currentUser, systemApprovals, hrRequests, accountChangeRequests, notifications, logoutUser } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) =>
     sa.status === 'Pending' &&
@@ -51,7 +51,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ((currentRole === 'HR' && request.approvalStage === 'HR') ||
       (currentRole === 'Admin' && request.approvalStage === 'Admin'))
   ).length;
+  const pendingAccountChangeCount = accountChangeRequests.filter((request) =>
+    request.status === 'Pending' &&
+    request.userId !== currentUser.id &&
+    ((currentRole === 'HR' && request.assignedApproverRole === 'HR') ||
+      (currentRole === 'Admin' && request.assignedApproverRole === 'Admin'))
+  ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
+
+  const totalPendingHR = pendingHrCount + pendingAccountChangeCount;
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -64,11 +72,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   label: 'Approvals Inbox',
   icon: CheckCircle,
   badge:
-    currentRole === 'HR' && pendingHrCount > 0
-        ? pendingHrCount
+    currentRole === 'HR' && totalPendingHR > 0
+        ? totalPendingHR
       : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
-          pendingApprovalsCount + (currentRole === 'Admin' ? pendingHrCount : 0) > 0
-        ? pendingApprovalsCount + (currentRole === 'Admin' ? pendingHrCount : 0)
+          pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0) > 0
+        ? pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0)
         : undefined,
   hidden: currentRole === 'Team_Member'
 },

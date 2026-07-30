@@ -13,6 +13,8 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Shield,
+  User as UserIcon,
   X,
   XCircle
 } from 'lucide-react';
@@ -140,6 +142,7 @@ export const ApprovalsInboxView: React.FC = () => {
     users,
     systemApprovals,
     hrRequests,
+    accountChangeRequests,
     projectApprovalRequests,
     approveApprovalItem,
     rejectApprovalItem,
@@ -248,6 +251,25 @@ export const ApprovalsInboxView: React.FC = () => {
     (request) => statusFilter === 'All' || request.status === statusFilter
   );
   const pendingProjectApprovalCount = projectApprovalRequests.filter(
+    (request) => request.status === 'Pending'
+  ).length;
+
+  const reviewableAccountChangeRequests = accountChangeRequests.filter((request) => {
+    if (request.userId === currentUser.id) return false;
+    if (currentRole === 'Admin') {
+      return request.assignedApproverRole === 'Admin';
+    }
+    if (currentRole === 'HR') {
+      return request.assignedApproverRole === 'HR';
+    }
+    return false;
+  });
+
+  const filteredAccountChangeRequests = reviewableAccountChangeRequests.filter(
+    (request) => statusFilter === 'All' || request.status === statusFilter
+  );
+
+  const pendingAccountChangeCount = reviewableAccountChangeRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
 
@@ -420,11 +442,11 @@ export const ApprovalsInboxView: React.FC = () => {
             </p>
           </div>
 
-          {pendingHRCount > 0 && (
+          {pendingHRCount + pendingAccountChangeCount > 0 && (
             <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
               <Clock size={13} />
-              {pendingHRCount} pending request
-              {pendingHRCount !== 1 ? 's' : ''}
+              {pendingHRCount + pendingAccountChangeCount} pending request
+              {pendingHRCount + pendingAccountChangeCount !== 1 ? 's' : ''}
             </span>
           )}
         </header>
@@ -611,6 +633,64 @@ export const ApprovalsInboxView: React.FC = () => {
             })}
           </div>
         )}
+
+        {currentRole === 'HR' && filteredAccountChangeRequests.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <UserIcon size={16} className="text-cyan-400" />
+              Account Change Requests
+            </h2>
+            {filteredAccountChangeRequests.map((request) => {
+              const employee = users.find((user) => user.id === request.userId);
+              return (
+                <div key={request.id} className="glass-panel space-y-4 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                          <UserIcon size={13} />
+                          Account Change
+                        </span>
+                        <StatusBadge status={request.status} size="sm" />
+                      </div>
+                      <h3 className="font-semibold text-slate-100">
+                        {employee?.name || request.userName || 'Unknown Employee'}
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+                  </div>
+
+                  {Object.keys(request.requestedChanges).length > 0 && (
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Changes</span>
+                      <div className="space-y-1">
+                        {request.passwordChangeRequested && (
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-slate-500 w-24 shrink-0">password:</span>
+                            <span className="text-amber-400">Password change requested</span>
+                          </div>
+                        )}
+                        {Object.entries(request.requestedChanges).map(([field, value]) => (
+                          <div key={field} className="flex items-baseline gap-2">
+                            <span className="text-slate-500 w-24 shrink-0">{field}:</span>
+                            <span className="text-emerald-300">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
     );
   }
@@ -657,11 +737,11 @@ export const ApprovalsInboxView: React.FC = () => {
           </p>
         </div>
 
-        {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount > 0 && (
+        {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount > 0 && (
           <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
             <Clock size={13} />
-            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount} pending decision
-            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount !== 1 ? 's' : ''}
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount} pending decision
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount !== 1 ? 's' : ''}
           </span>
         )}
       </header>
@@ -863,8 +943,61 @@ export const ApprovalsInboxView: React.FC = () => {
         </div>
       )}
 
+      {currentRole === 'Admin' && filteredAccountChangeRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <Shield size={16} className="text-cyan-400" />
+            Account Change Requests
+          </h2>
+          {filteredAccountChangeRequests.map((request) => {
+            const employee = users.find((user) => user.id === request.userId);
+            return (
+              <div key={request.id} className="glass-panel space-y-4 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                        <UserIcon size={13} />
+                        Account Change
+                      </span>
+                      <StatusBadge status={request.status} size="sm" />
+                    </div>
+                    <h3 className="font-semibold text-slate-100">
+                      {employee?.name || request.userName || 'Unknown Employee'}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+                </div>
+
+                {Object.keys(request.requestedChanges).length > 0 && (
+                  <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
+                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Changes</span>
+                    <div className="space-y-1">
+                      {Object.entries(request.requestedChanges).map(([field, value]) => (
+                        <div key={field} className="flex items-baseline gap-2">
+                          <span className="text-slate-500 w-24 shrink-0">{field}:</span>
+                          <span className="text-emerald-300">{field === 'password' ? '••••••' : value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {filteredApprovals.length === 0 &&
       filteredProjectApprovalRequests.length === 0 &&
+      filteredAccountChangeRequests.length === 0 &&
       !(currentRole === 'Admin' && filteredHRRequests.length > 0) ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <CheckCircle2

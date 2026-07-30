@@ -7,6 +7,7 @@ import assistantRoutes from './routes/assistantRoutes.js';
 import otpRoutes from './routes/otpRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import hrRequestRoutes from './routes/hrRequestRoutes.js';
+import accountChangeRequestRoutes from './routes/accountChangeRequestRoutes.js';
 
 import taskRoutes from './tasks/task.routes.js';
 import projectRoutes from './projects/project.routes.js';
@@ -49,6 +50,7 @@ app.use('/api/activity-log', activityLogRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/hr-requests', hrRequestRoutes);
+app.use('/api/account-change-requests', accountChangeRequestRoutes);
 app.use('/api/calendar', calendarRoutes);
 
 // Health check
