@@ -12,7 +12,6 @@ export interface User {
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
   invitationSentAtUtc?: string | null;
-  canResendInvitation?: boolean;
   lastActive?: string;
   githubUsername?: string;
   passwordHash?: string;
@@ -170,6 +169,10 @@ export interface Task {
   // Project Board fields — populated by AppContext.updateTaskStatus (Kanban & task details).
   statusHistory?: TaskStatusHistoryEntry[];
   reviewApproval?: ReviewApprovalStatus;
+  /** True when this task is read-only because its parent project is archived. */
+  isArchived?: boolean;
+  /** Project-driven archive time supplied by the Task API. */
+  archivedAt?: string;
 }
 
 export type BreakType = 'Lunch' | 'Short Break' | 'Other';
@@ -604,4 +607,19 @@ export interface ApprovedLeaveEntry {
   userName: string;
   date: string; // YYYY-MM-DD
   leaveType: 'Full Day Leave' | 'Half Day Leave';
+}
+
+// A Calendar-displayed holiday. hr.Holidays (database/06_hr_tables.sql) is the single source of
+// truth via GET/POST/PUT/DELETE /api/calendar/holidays (backend/src/calendar/) -- HR-only for
+// create/update/delete (enforced server-side via effectiveRoles.ts), visible to every role.
+// `date` for a recurring holiday is one representative occurrence; the Calendar re-derives
+// month/day from it and repeats across every displayed year (see calendarRules.ts's
+// buildHolidayEntries).
+export interface Holiday {
+  id: string;
+  name: string;
+  date: string; // YYYY-MM-DD
+  isRecurringAnnual: boolean;
+  createdByUserId: string;
+  createdAt: string;
 }

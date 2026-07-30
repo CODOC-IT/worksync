@@ -19,7 +19,6 @@ import {
   List,
   Mail,
   Plus,
-  RefreshCcw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -141,7 +140,6 @@ export const TeamMembersView: React.FC = () => {
   const [confirmAction, setConfirmAction] = useState<{ type: 'deactivate' | 'reactivate'; memberId: string; memberName: string } | null>(null);
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
-  const [resendingUserId, setResendingUserId] = useState<string | null>(null);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
   const canManageAccounts = currentRole === 'Admin' || currentRole === 'HR';
@@ -241,14 +239,6 @@ export const TeamMembersView: React.FC = () => {
     return headers;
   };
 
-  const openCreateModal = () => {
-    setManageMode('create');
-    setManageTargetId(null);
-    setMemberForm({ ...EMPTY_MEMBER_FORM });
-    setShowTemporaryPassword(false);
-    setManageModalOpen(true);
-  };
-
   const openEditModal = (member: User) => {
     setManageMode('edit');
     setManageTargetId(member.id);
@@ -340,26 +330,6 @@ export const TeamMembersView: React.FC = () => {
       setConfirmSubmitting(false);
     }
   };
-  const handleResendInvitation = async (member: User) => {
-    if (resendingUserId) return;
-    setResendingUserId(member.id);
-    try {
-      const token = localStorage.getItem('worksync_auth_token');
-      const response = await fetch(`/api/accounts/${member.id}/invitation/resend`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.success) throw new Error(data.message || 'Could not send the password reset email.');
-      showToast('success', 'Password Reset Sent', `A secure password reset link was sent to ${member.email}.`);
-      refreshUsers();
-    } catch (reason) {
-      showToast('error', 'Password Reset Not Sent', reason instanceof Error ? reason.message : 'Could not send the password reset email.');
-    } finally {
-      setResendingUserId(null);
-    }
-  };
-
   const renderGridCards = (items: User[], deactivated = false) => (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {items.map((member) => {
@@ -653,12 +623,12 @@ export const TeamMembersView: React.FC = () => {
                 {canManageAccounts && (
                   <button
                     type="button"
-                    onClick={openCreateModal}
-                      className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
-                    >
+                    onClick={() => setCreateAccountOpen(true)}
+                       className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
+                     >
                     <span className="inline-flex items-center gap-1.5">
                       <Plus size={15} />
-                      Add account
+                      Create account
                     </span>
                   </button>
                 )}
@@ -844,18 +814,6 @@ export const TeamMembersView: React.FC = () => {
                       </span>
                     ) : null}
                   </>
-                )}
-                {selectedMember.canResendInvitation === true
-                  && (currentRole === 'Admin' || selectedMember.role === 'Team_Member' || selectedMember.role === 'Team_Lead') && (
-                  <button
-                    type="button"
-                    disabled={Boolean(resendingUserId)}
-                    onClick={() => void handleResendInvitation(selectedMember)}
-                    className="whitespace-nowrap inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
-                  >
-                    <RefreshCcw size={14} className={resendingUserId === selectedMember.id ? 'animate-spin' : ''} />
-                    {resendingUserId === selectedMember.id ? 'Sending...' : 'Send password reset'}
-                  </button>
                 )}
                 <button
                   type="button"
@@ -1072,12 +1030,8 @@ export const TeamMembersView: React.FC = () => {
           <form onSubmit={submitMemberForm} className="glass-panel-glow w-full max-w-2xl border border-cyan-500/25">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-white">{manageMode === 'create' ? 'Add account' : 'Edit account'}</h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  {manageMode === 'create'
-                    ? 'Create a new workspace account for a team member.'
-                    : 'Update account details for this member.'}
-                </p>
+                <h2 className="text-lg font-semibold text-white">Edit account</h2>
+                <p className="mt-1 text-xs text-slate-400">Update account details for this member.</p>
               </div>
               <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:text-white">
                 <X size={18} />
@@ -1149,7 +1103,7 @@ export const TeamMembersView: React.FC = () => {
             <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
               <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
               <button type="submit" disabled={manageSubmitting} className="rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 disabled:opacity-60">
-                {manageSubmitting ? 'Saving...' : manageMode === 'create' ? 'Create account' : 'Save changes'}
+                {manageSubmitting ? 'Saving...' : 'Save changes'}
               </button>
             </div>
           </form>
@@ -1187,6 +1141,14 @@ export const TeamMembersView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {createAccountOpen && (
+        <CreateAccountDialog
+          isAdmin={currentRole === 'Admin'}
+          projects={projects}
+          onClose={() => setCreateAccountOpen(false)}
+        />
       )}
     </>
   );
@@ -1281,7 +1243,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
       if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
       refreshUsers();
       if (data.data?.invitationStatus === 'email_failed') {
-        showToast('warning', 'Account Created - Email Failed', 'The active account was saved. Use the reset action to send a secure password reset link.');
+        showToast('warning', 'Account Created - Email Failed', 'The active account was saved, but its credential email was not delivered.');
       } else {
         showToast('success', 'Account Created', `Credentials were sent to ${form.email.trim().toLowerCase()}.`);
       }

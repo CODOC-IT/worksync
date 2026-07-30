@@ -2,11 +2,12 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
 import * as approvalService from './projectApproval.service.js';
+import { getProjectUpdateApprovalType, PROJECT_DELETE_APPROVAL_TYPE } from './projectApproval.routing.js';
 import { validateCreateProjectBody, validateMemberBody, validateUpdateProjectBody } from './project.validation.js';
 import { CreateProjectInput, UpdateProjectInput } from './project.types.js';
 
-// Approval-gating for Team Leads on the four sensitive actions below (Edit/Archive/Restore/
-// Permanent Delete) lives right here at the controller layer, not inside project.service.ts's
+// Approval-gating for Team Leads on the five sensitive actions below (Edit/Archive/Delete/
+// Restore/Permanent Delete) lives right here at the controller layer, not inside project.service.ts's
 // own functions: a Team Lead's call never reaches those functions at all when gated -- it's
 // redirected to projectApproval.service.ts's createApprovalRequest instead, which persists a
 // Pending request and returns without touching the project. Admin calls (and Team Lead calls
@@ -92,11 +93,13 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
   try {
     if (user.role === 'Team_Lead') {
       const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
+      const requestType = getProjectUpdateApprovalType(changes.status);
       const data = await approvalService.createApprovalRequest(
-        req.params.id, 'PROJECT_EDIT', changes, reason || '', user.id, user.role
+        req.params.id, requestType, requestType === 'PROJECT_ARCHIVE' ? null : changes, reason || '', user.id, user.role
       );
       res.json({
-        success: true, message: 'Your edit request was submitted for Admin approval.',
+        success: true,
+        message: `Your ${requestType === 'PROJECT_ARCHIVE' ? 'archive' : 'edit'} request was submitted for Admin approval.`,
         pendingApproval: true, data
       });
       return;
@@ -116,10 +119,10 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
   try {
     if (user.role === 'Team_Lead') {
       const data = await approvalService.createApprovalRequest(
-        req.params.id, 'PROJECT_ARCHIVE', null, reason || '', user.id, user.role
+        req.params.id, PROJECT_DELETE_APPROVAL_TYPE, null, reason || '', user.id, user.role
       );
       res.json({
-        success: true, message: 'Your archive request was submitted for Admin approval.',
+        success: true, message: 'Your delete request was submitted for Admin approval.',
         pendingApproval: true, data
       });
       return;

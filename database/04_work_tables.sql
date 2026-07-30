@@ -146,6 +146,7 @@ CREATE TABLE work.Tasks
     CompletedAtUtc        timestamptz(0) NULL,
     CompletionSummary     varchar(2000) NULL,
     ArchivedAtUtc         timestamptz(0) NULL,
+    ProjectArchivedAtUtc  timestamptz(0) NULL,
     CreatedAtUtc          timestamptz(0) NOT NULL CONSTRAINT DF_Tasks_Created DEFAULT (CURRENT_TIMESTAMP),
     UpdatedAtUtc          timestamptz(0) NOT NULL CONSTRAINT DF_Tasks_Updated DEFAULT (CURRENT_TIMESTAMP),
     RowVersion            bigint NOT NULL DEFAULT 1,

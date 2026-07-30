@@ -19,6 +19,7 @@ import {
   ActivityLogItem,
   CalendarEvent,
   ApprovedLeaveEntry,
+  Holiday,
   ProjectApprovalRequest,
   SavedPrompt,
 
@@ -67,8 +68,13 @@ import {
   fetchActivities,
 } from '../features/activity/activityApi';
 import {
-  fetchApprovedLeave
+  fetchApprovedLeave,
+  fetchHolidays,
+  createHolidayApi,
+  updateHolidayApi,
+  deleteHolidayApi
 } from '../features/calendar/calendarRepository';
+import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -140,6 +146,10 @@ interface AppState {
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
   approvedLeave: ApprovedLeaveEntry[];
+  holidays: Holiday[];
+  createHoliday: (input: { name: string; date: string; isRecurringAnnual: boolean }) => Promise<{ success: boolean; message: string }>;
+  updateHoliday: (id: string, input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>) => Promise<{ success: boolean; message: string }>;
+  deleteHoliday: (id: string) => Promise<{ success: boolean; message: string }>;
   savedPrompts: SavedPrompt[];
 
   activeBreak: {
@@ -273,6 +283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
   const [approvedLeave, setApprovedLeave] = useState<ApprovedLeaveEntry[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
@@ -518,6 +529,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // hr.Holidays is the single source of truth for Calendar's holiday display (see
+    // calendarRules.ts's buildHolidayEntries). Visible to every role; only HR can mutate (see
+    // createHoliday/updateHoliday/deleteHoliday below, enforced server-side via effectiveRoles.ts).
+    const hydrateHolidays = async () => {
+      try {
+        const remoteHolidays = await fetchHolidays();
+        if (isActive) setHolidays(remoteHolidays);
+      } catch (error) {
+        console.warn('Holidays API request failed; Calendar will show no holiday entries.', error);
+      }
+    };
+
     // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
     // Team Lead sees their own submitted requests (any status), to check outcomes. Team Member
     // and HR never create these, so skipping the call for them avoids a wasted round trip --
@@ -603,6 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void hydrateTasks();
     void hydrateProjects();
     void hydrateApprovedLeave();
+    void hydrateHolidays();
     void hydrateProjectApprovalRequests();
     void hydrateAttendance();
     void hydrateActivityLogs();
@@ -984,12 +1008,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      // Local-safe date defaults -- new Date().toISOString() reports UTC, which reads a full
+      // calendar day behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any
+      // other positive-offset timezone. See calendarRules.ts's todayDateKey/toDateKey.
+      const defaultTargetDate = new Date();
+      defaultTargetDate.setDate(defaultTargetDate.getDate() + 30);
       const created = await createProjectApi({
         title: data.title || 'Untitled Project',
         description: data.description || '',
         priority: data.priority || 'Medium',
-        startDate: data.startDate || new Date().toISOString().split('T')[0],
-        targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        startDate: data.startDate || todayDateKey(),
+        targetDate: data.targetDate || toDateKey(defaultTargetDate),
         teamLeadId: data.teamLeadId,
         memberIds: eligibleProjectMemberIds(data.memberIds || []),
         creationReason: data.creationReason
@@ -1075,6 +1104,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjects((prev) =>
         prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived', approvalStatus: 'Rejected' } : p))
       );
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Rejected' } : sa
@@ -1182,9 +1212,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Archives an Active project (or, for an already-Archived one, is the first half of the
-  // two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead this now
-  // creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
+  // Soft-deletes an Active project by archiving it (or, for an already-Archived one, is the first
+  // half of the two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead
+  // this creates a Pending PROJECT_DELETE approval request instead of archiving immediately (see
   // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
   // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
   // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
@@ -1196,13 +1226,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const result = await archiveProjectApi(projectId, reason?.trim() || `Deleted by ${currentUser.name}.`);
       if (result.pendingApproval) {
-        pushActivity('Requested project archive', 'Project', projectId, project.title);
-        confirmActionSuccess('Archive Requested', result.message);
+        pushActivity('Requested project delete', 'Project', projectId, project.title);
+        confirmActionSuccess('Delete Requested', result.message);
         return { success: true, message: result.message };
       }
-      // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an
-      // archived project are intentionally left exactly as they are.
+      // Admin archive actions (including approved Team Lead requests) also mark this project's
+      // non-deleted tasks as project-archived, so remove them from active local state immediately.
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       pushActivity('Deleted project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Deleted', result.message);
@@ -1231,6 +1262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: true, message: result.message };
       }
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       pushActivity('Permanently deleted project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Permanently Deleted', result.message);
@@ -1243,11 +1275,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Restores an Archived project back to Active. For a Team Lead this creates a Pending
   // PROJECT_RESTORE approval request instead of restoring immediately (see project.controller.ts).
-  // Deliberately not routed through updateProject -- the backend clears
-  // ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic update path never
-  // touches (see project.service.ts's restoreProject comment). Members, milestones, files, notes,
-  // team lead, and tasks are untouched server-side, so the local merge here only needs to flip
-  // status, exactly like deleteProject's archive branch does the reverse.
+  // PROJECT_RESTORE approval request instead of restoring immediately. An approved restore clears
+  // the project-driven archive marker on its tasks in the same backend transaction, so active
+  // tasks are refreshed after the action completes.
   const restoreProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
@@ -1260,6 +1290,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: true, message: result.message };
       }
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        // The project and task rows are already restored transactionally on the server. A transient
+        // refresh failure should not report the restore itself as failed; the next normal load will
+        // repopulate the active task list.
+        console.warn('Project restored, but active tasks could not be refreshed immediately.', refreshError);
+      }
       pushActivity('Restored project', 'Project', projectId, project.title);
 
       confirmActionSuccess('Project Restored', result.message);
@@ -1281,6 +1320,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await archiveProjectApi(projectId, `Deletion approved by ${currentUser.name}.`);
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
@@ -1325,6 +1365,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (refreshError) {
         console.warn('Failed to refresh projects after approving a request.', refreshError);
       }
+      // Approval requests can archive, restore, or permanently delete a project. Refreshing the
+      // active task list keeps every task surface in sync with the transaction that changed it.
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        console.warn('Failed to refresh tasks after approving a project request.', refreshError);
+      }
       pushActivity('Approved project request', 'Project', decided.projectId, decided.projectTitle);
 
       const message = `Request for "${decided.projectTitle}" was approved.`;
@@ -1354,6 +1402,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to reject project request.', error);
       return { success: false, message: error?.message || 'Failed to reject the request. Please try again.' };
+    }
+  };
+
+  // Holiday management (Calendar module). The currentRole check here is a UX convenience only --
+  // the real gate is server-side, via effectiveRoles.ts in backend/src/calendar/calendar.service.ts
+  // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
+  // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
+  const createHoliday = async (
+    input: { name: string; date: string; isRecurringAnnual: boolean }
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const created = await createHolidayApi(input);
+      setHolidays((prev) => [...prev, created]);
+      pushActivity('Added holiday', 'Settings', created.id, created.name);
+
+      const message = `"${created.name}" was added to the holiday calendar.`;
+      confirmActionSuccess('Holiday Added', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to create holiday.', error);
+      return { success: false, message: error?.message || 'Failed to add the holiday. Please try again.' };
+    }
+  };
+
+  const updateHoliday = async (
+    id: string,
+    input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const updated = await updateHolidayApi(id, input);
+      setHolidays((prev) => prev.map((h) => (h.id === id ? updated : h)));
+      pushActivity('Updated holiday', 'Settings', updated.id, updated.name);
+
+      const message = `"${updated.name}" was updated.`;
+      confirmActionSuccess('Holiday Updated', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to update holiday.', error);
+      return { success: false, message: error?.message || 'Failed to update the holiday. Please try again.' };
+    }
+  };
+
+  const deleteHoliday = async (id: string): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    const holiday = holidays.find((h) => h.id === id);
+    try {
+      await deleteHolidayApi(id);
+      setHolidays((prev) => prev.filter((h) => h.id !== id));
+      pushActivity('Deleted holiday', 'Settings', id, holiday?.name || 'Holiday');
+
+      const message = `${holiday ? `"${holiday.name}"` : 'The holiday'} was removed from the calendar.`;
+      confirmActionSuccess('Holiday Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to delete holiday.', error);
+      return { success: false, message: error?.message || 'Failed to delete the holiday. Please try again.' };
     }
   };
 
@@ -2858,6 +2967,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activityLogs,
         calendarEvents,
         approvedLeave,
+        holidays,
+        createHoliday,
+        updateHoliday,
+        deleteHoliday,
         savedPrompts,
         activeBreak,
         settings,

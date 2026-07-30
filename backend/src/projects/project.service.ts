@@ -254,6 +254,15 @@ export const updateProject = async (
   if (input.description !== undefined && !input.description.trim()) {
     throw new ProjectValidationError('Project description cannot be empty.');
   }
+  // Archiving/restoring must use their dedicated endpoints so the project and all of its related
+  // tasks change archive state in one transaction. Rejecting this generic status shortcut also
+  // prevents API clients from bypassing the task cascade implemented by archiveProject/restoreProject.
+  if (input.status === 'Archived' && row.statuscode !== 'Archived') {
+    throw new ProjectValidationError('Use the project archive action to archive this project and its tasks.');
+  }
+  if (row.statuscode === 'Archived' && input.status && input.status !== 'Archived') {
+    throw new ProjectValidationError('Use the project restore action to restore this project and its tasks.');
+  }
   // Start date is fixed at creation and never editable again, matching the edit form's disabled
   // Start Date field (frontend/.../ProjectsView.tsx) -- enforced here too since a client could
   // otherwise call this endpoint directly and bypass the disabled UI field.
@@ -281,9 +290,8 @@ export const updateProject = async (
     creationReason: input.creationReason?.trim()
   };
   if (input.priority) updates.priorityId = await repo.getPriorityId(API_TO_DB_PRIORITY[input.priority]);
-  // Activating a pending project (Admin-only) goes through this same update path — status is
-  // just another field, matching the mandate that PUT /api/projects/:id is the one place a
-  // project's fields (including status) change.
+  // Ordinary lifecycle changes (such as activating a pending project) still use this update path.
+  // Archive/restore are deliberately handled above by their transactional cascade endpoints.
   if (input.status) {
     if (input.status !== row.statuscode && input.status !== 'Pending Approval' && actorRole !== 'Admin') {
       throw new ProjectAuthorizationError('Only Admins can change a project\'s status.');
@@ -365,10 +373,8 @@ export const archiveProject = async (
 };
 
 // Step two of the two-step delete: only an already-Archived project may be hard-deleted, and
-// only once (repo.permanentlyDeleteProject's WHERE archivedatutc IS NOT NULL guards that). A
-// live FK from a module this function deliberately never touches (Tasks, Calendar Events,
-// Discussion Threads, AI PromptGenerations) surfaces as a Postgres 23503 error, which is mapped
-// to a validation error instead of a 500 -- "delete if possible, explain why not otherwise."
+// only once. Related tasks/subtasks are deleted transactionally by the repository. A remaining
+// project-level Calendar/Discussion/AI FK still surfaces as a clear validation error.
 export const permanentlyDeleteProject = async (
   projectId: string,
   actorId: string,
@@ -387,7 +393,7 @@ export const permanentlyDeleteProject = async (
   } catch (error) {
     if ((error as { code?: string } | null)?.code === '23503') {
       throw new ProjectValidationError(
-        'This project still has tasks, calendar events, discussions, or AI activity linked to it. Remove those first.'
+        'This project still has calendar events, project discussions, or AI activity linked to it. Remove those first.'
       );
     }
     throw error;
@@ -411,8 +417,8 @@ export const permanentlyDeleteProject = async (
 // that generic path never touches ArchivedAtUtc/ArchivedByUserId/ArchiveReason, so a plain
 // status-only update would leave the row's archive fields stale (see repo.restoreProject's
 // comment) -- reusing it here would silently break a later archive of the same project. All
-// other project data (members, milestones, files, notes, team lead, tasks) is untouched by this
-// call, matching the DB's own design: none of that data was ever cleared by archiving it either.
+// Other project data (members, milestones, files, notes, team lead) is untouched; related tasks'
+// project-driven archive markers are cleared in the same transaction so they become active again.
 export const restoreProject = async (
   projectId: string,
   actorId: string,

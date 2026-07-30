@@ -3,6 +3,7 @@ import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
 import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
+import { todayDateKey } from '../calendar/calendarRules';
 import {
   FolderKanban,
   Plus,
@@ -82,9 +83,16 @@ export const ProjectsView: React.FC = () => {
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
   const nonAdminUsers = users.filter((u) => u.role !== 'Admin');
-  const teamLeads = nonAdminUsers.filter((u) => u.role === 'Team_Lead' && u.status !== 'inactive');
+  // Team Lead dropdown: active Team_Lead or Team_Member users only -- Admin (already excluded via
+  // nonAdminUsers) and HR must not appear. Team Member dropdown below is unchanged.
+  const teamLeads = nonAdminUsers.filter(
+    (u) => (u.role === 'Team_Lead' || u.role === 'Team_Member') && u.status !== 'inactive'
+  );
   const assignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member');
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
+  // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
+  // positive-offset timezone. See calendarRules.ts's todayDateKey.
+  const todayStr = todayDateKey();
 
   const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
   const canManage = (project: Project) =>
@@ -355,8 +363,8 @@ export const ProjectsView: React.FC = () => {
 
   const confirmDelete = async () => {
     if (!deleteTargetId || deleteSubmitting) return;
-    // A Team Lead's archive/permanent-delete doesn't apply immediately -- it becomes a
-    // PROJECT_ARCHIVE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
+    // A Team Lead's delete/permanent-delete doesn't apply immediately -- it becomes a
+    // PROJECT_DELETE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
     // non-empty reason to create one. Admin keeps the previous auto-generated reason.
     if (currentRole === 'Team_Lead' && !deleteReason.trim()) {
       setDeleteReasonError('A reason is required so the Admin can review your request.');
@@ -598,7 +606,6 @@ export const ProjectsView: React.FC = () => {
                   >
                     <option value="Active">Active</option>
                     <option value="Completed">Completed</option>
-                    <option value="Archived">Archived</option>
                   </select>
                 </div>
               )}
@@ -764,13 +771,13 @@ export const ProjectsView: React.FC = () => {
             {deleteTarget.status === 'Archived' ? (
               currentRole === 'Admin' ? (
                 <p className="text-xs text-slate-400">
-                  This project will be permanently deleted. This action cannot be undone. Are you sure you want to
-                  continue?
+                  This project and all of its related tasks and subtasks will be permanently deleted. This action
+                  cannot be undone. Are you sure you want to continue?
                 </p>
               ) : (
                 <p className="text-xs text-slate-400">
-                  This will submit a request to permanently delete this project for Admin approval. The project
-                  stays unchanged unless an Admin approves it.
+                  This will submit a request to permanently delete this project and its related tasks and subtasks
+                  for Admin approval. Everything stays unchanged unless an Admin approves it.
                 </p>
               )
             ) : currentRole === 'Admin' ? (
@@ -778,7 +785,8 @@ export const ProjectsView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
                     This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                    The project will be archived (not permanently erased) and its tasks will remain untouched.
+                    The project and these tasks will be archived. They will become read-only and can be found under
+                    Archived Tasks until the project is restored.
                   </p>
                   <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
                     {relatedTasks.map((t) => (
@@ -789,11 +797,13 @@ export const ProjectsView: React.FC = () => {
                   </ul>
                 </div>
               ) : (
-                <p className="text-xs text-slate-400">The project will be archived. This cannot be undone from here.</p>
+                <p className="text-xs text-slate-400">
+                  The project will be archived and can be restored later from the Archived projects view.
+                </p>
               )
             ) : (
               <p className="text-xs text-slate-400">
-                This project will not be deleted immediately. An archive request will be submitted for Admin
+                This project will not be deleted immediately. A delete request will be submitted for Admin
                 approval, and the project stays unchanged unless an Admin approves it.
               </p>
             )}

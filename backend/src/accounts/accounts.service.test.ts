@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { QueryResult, QueryResultRow } from 'pg';
-import { createAccount, resendInvitation, AccountServiceDependencies } from './accounts.service.js';
+import { createAccount, AccountServiceDependencies } from './accounts.service.js';
 import { AccountConflictError, AccountAuthorizationError } from './accounts.errors.js';
 import { CreateAccountInput, ProvisioningActor } from './accounts.types.js';
 
@@ -98,8 +98,7 @@ const harness = (options: HarnessOptions = {}) => {
     sendCredentials: async (payload: { password: string }) => {
       calls.emailPassword = payload.password;
       if (options.emailFails) throw new Error('SMTP unavailable');
-    },
-    sendPasswordReset: async () => undefined
+    }
   } as unknown as AccountServiceDependencies;
   return { calls, dependencies };
 };
@@ -144,44 +143,4 @@ test('Auth failure creates no profile and HR cannot create privileged roles', as
     () => createAccount(hrActor, { ...input, baseRole: 'Admin' }, harness().dependencies),
     AccountAuthorizationError
   );
-});
-
-test('credential-email recovery sends a reset link without attempting to recover the permanent password', async () => {
-  let emailed: Record<string, unknown> | undefined;
-  const dependencies = {
-    query: async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
-      if (sql.includes('GROUP BY u.userid')) {
-        return result([{
-          userid: 99,
-          authuserid: 'auth-99',
-          email: 'ayesha@example.com',
-          displayname: 'Ayesha Khan',
-          departmentid: 2,
-          accountstatus: 'Active',
-          createdbyuserid: 1,
-          invitationsentatutc: null,
-          rolecode: 'TeamMember'
-        }] as unknown as T[]);
-      }
-      if (sql.includes('UPDATE iam.users SET invitationsentatutc')) return result([] as T[], 1);
-      throw new Error(`Unexpected query: ${sql}`);
-    },
-    withTransaction: async () => { throw new Error('not used'); },
-    supabase: () => ({
-      auth: {
-        admin: {
-          generateLink: async () => ({
-            data: { properties: { action_link: 'https://auth.example/reset-token' } },
-            error: null
-          })
-        }
-      }
-    }) as unknown as SupabaseClient,
-    sendCredentials: async () => { throw new Error('credential sender must not be used'); },
-    sendPasswordReset: async (payload: Record<string, unknown>) => { emailed = payload; }
-  } as unknown as AccountServiceDependencies;
-
-  await resendInvitation(actor, 'usr-99', dependencies);
-  assert.equal(emailed?.actionLink, 'https://auth.example/reset-token');
-  assert.equal('password' in (emailed || {}), false);
 });

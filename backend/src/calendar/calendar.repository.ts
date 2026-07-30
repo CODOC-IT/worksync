@@ -33,3 +33,92 @@ export const findApprovedLeave = async (): Promise<ApprovedLeaveRow[]> => {
     throw error;
   }
 };
+
+// hr.Holidays (database/06_hr_tables.sql) is a real, versioned table -- unlike
+// public.worksync_hr_requests above, it needs no missing-table fallback. Single-tenant app, same
+// OrganizationId = 1 convention as project.repository.ts.
+const ORGANIZATION_ID = 1;
+
+export interface HolidayRow {
+  holidayid: number;
+  holidayname: string;
+  holidaydate: string;
+  isrecurringannual: boolean;
+  createdbyuserid: number;
+  createdatutc: Date;
+}
+
+const HOLIDAY_COLUMNS = `
+  holidayid, holidayname, holidaydate::text AS holidaydate, isrecurringannual, createdbyuserid, createdatutc
+`;
+
+// Every holiday, for display -- Calendar shows the same set to every role (see
+// calendar.service.ts's listHolidays); only create/update/delete are HR-gated.
+export const findHolidays = async (): Promise<HolidayRow[]> => {
+  const result = await query<HolidayRow>(
+    `SELECT ${HOLIDAY_COLUMNS} FROM hr.holidays WHERE organizationid = $1 ORDER BY holidaydate`,
+    [ORGANIZATION_ID]
+  );
+  return result.rows;
+};
+
+export const findHolidayById = async (id: number): Promise<HolidayRow | null> => {
+  const result = await query<HolidayRow>(
+    `SELECT ${HOLIDAY_COLUMNS} FROM hr.holidays WHERE holidayid = $1 AND organizationid = $2`,
+    [id, ORGANIZATION_ID]
+  );
+  return result.rows[0] || null;
+};
+
+export interface InsertHolidayInput {
+  name: string;
+  date: string;
+  isRecurringAnnual: boolean;
+  createdByUserId: number;
+}
+
+export const insertHoliday = async (input: InsertHolidayInput): Promise<number> => {
+  const result = await query<{ holidayid: number }>(
+    `INSERT INTO hr.holidays (organizationid, departmentid, holidayname, holidaydate, isrecurringannual, createdbyuserid)
+     VALUES ($1, NULL, $2, $3, $4, $5)
+     RETURNING holidayid`,
+    [ORGANIZATION_ID, input.name, input.date, input.isRecurringAnnual, input.createdByUserId]
+  );
+  return result.rows[0].holidayid;
+};
+
+export interface UpdateHolidayInput {
+  name?: string;
+  date?: string;
+  isRecurringAnnual?: boolean;
+}
+
+export const updateHoliday = async (id: number, updates: UpdateHolidayInput): Promise<boolean> => {
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+  const addSet = (column: string, value: unknown) => {
+    params.push(value);
+    setClauses.push(`${column} = $${params.length}`);
+  };
+
+  if (updates.name !== undefined) addSet('holidayname', updates.name);
+  if (updates.date !== undefined) addSet('holidaydate', updates.date);
+  if (updates.isRecurringAnnual !== undefined) addSet('isrecurringannual', updates.isRecurringAnnual);
+  if (setClauses.length === 0) return true;
+
+  params.push(id, ORGANIZATION_ID);
+  const result = await query(
+    `UPDATE hr.holidays SET ${setClauses.join(', ')}
+      WHERE holidayid = $${params.length - 1} AND organizationid = $${params.length}`,
+    params
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
+export const deleteHoliday = async (id: number): Promise<boolean> => {
+  const result = await query('DELETE FROM hr.holidays WHERE holidayid = $1 AND organizationid = $2', [
+    id,
+    ORGANIZATION_ID
+  ]);
+  return (result.rowCount ?? 0) > 0;
+};

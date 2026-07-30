@@ -58,7 +58,7 @@ export const buildCredentialEmailContent = (
       `Email: ${input.toEmail}`,
       `Password: ${input.password}`,
       `Role: ${input.role}`,
-      'This password remains valid until you choose to reset it.',
+      'This is your permanent sign-in password.',
       loginUrl ? `Sign in: ${loginUrl}` : '',
       '',
       'Keep your password secure and do not share it with anyone.'
@@ -72,7 +72,7 @@ export const buildCredentialEmailContent = (
         <tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>
         <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
       </table>
-      <p>This password remains valid until you choose to reset it.</p>
+      <p>This is your permanent sign-in password.</p>
       ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
       <p>Keep your password secure and do not share it with anyone.</p>
     </div>`
@@ -86,32 +86,6 @@ export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<
     from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
     to: input.toEmail,
     ...buildCredentialEmailContent(input, organization, loginUrl)
-  });
-};
-
-export interface PasswordResetEmailInput {
-  toEmail: string;
-  recipientName: string;
-  actionLink: string;
-}
-
-export const sendPasswordResetEmail = async (input: PasswordResetEmailInput): Promise<void> => {
-  const { smtpUser, organization, transporter } = accountTransport();
-  const safeOrganization = escapeHtml(organization);
-  const safeName = escapeHtml(input.recipientName);
-  const safeLink = escapeHtml(input.actionLink);
-  await transporter.sendMail({
-    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
-    to: input.toEmail,
-    subject: `Reset your ${organization} password`,
-    text: `Hello ${input.recipientName},\n\nThe original account password is not stored in a retrievable form and cannot be re-sent. Use this secure link to choose a new password:\n${input.actionLink}\n\nIf you did not expect this email, contact your administrator.`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
-      <h1 style="font-size:22px">Reset your ${safeOrganization} password</h1>
-      <p>Hello ${safeName},</p>
-      <p>The original account password is not stored in a retrievable form and cannot be re-sent. Use this secure link to choose a new password:</p>
-      <p><a href="${safeLink}">Reset your password</a></p>
-      <p>If you did not expect this email, contact your administrator.</p>
-    </div>`
   });
 };
 

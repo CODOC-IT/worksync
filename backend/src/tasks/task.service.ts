@@ -50,6 +50,15 @@ const buildDTOs = async (rows: TaskRow[]): Promise<TaskDTO[]> => {
 
 const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 
+const assertTaskCanBeWorkedOn = (row: TaskRow): void => {
+  if (row.archivedatutc) throw new TaskNotFoundError('Task not found.');
+  if (row.projectarchivedatutc) {
+    throw new TaskAuthorizationError(
+      'This task is archived with its project and cannot be changed until the project is restored.'
+    );
+  }
+};
+
 // Mirrors the exact rule frontend/src/features/tasks/taskRules.ts's canEditTask already
 // established (Admin always; Team Lead only for their own project; Team Member only if
 // assigned) — re-derived server-side since the backend must never trust the client's own
@@ -184,17 +193,18 @@ const publishSafely = (
 export const listTasksForUser = async (
   userId: string,
   role: string,
-  projectId?: string
+  projectId?: string,
+  archived = false
 ): Promise<TaskDTO[]> => {
   if (projectId) {
     if (!(await isProjectAccessible(projectId, userId, role))) {
       throw new TaskAuthorizationError('Project not found or access denied.');
     }
-    const rows = await repo.findTasksForProject(toProjectPkOrNull(projectId)!);
+    const rows = await repo.findTasksForProject(toProjectPkOrNull(projectId)!, archived);
     return buildDTOs(rows);
   }
 
-  const allRows = role === 'Admin' ? await repo.findAllTasks() : await repo.findAllTasks();
+  const allRows = archived ? await repo.findArchivedProjectTasks() : await repo.findAllTasks();
   if (role === 'Admin') return buildDTOs(allRows);
 
   // Non-admins: filter down to only tasks in projects they can access (mirrors the old
@@ -211,7 +221,7 @@ export const listTasksForUser = async (
 
 export const getTaskForUser = async (taskId: string, userId: string, role: string): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
-  if (!row) throw new TaskNotFoundError('Task not found.');
+  if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
   if (!(await isProjectAccessible(projectFrontendId(row), userId, role))) {
     throw new TaskAuthorizationError('You do not have access to this task.');
   }
@@ -354,6 +364,7 @@ export const updateTask = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   await assertCanEditTask(row, actorId, actorRole);
 
   if (input.assigneeIds !== undefined) {
@@ -462,7 +473,8 @@ export const createTaskEditApproval = async (
     throw new TaskAuthorizationError('Only Team Members can submit task edit requests.');
   }
   const row = await repo.findTaskById(toTaskPk(taskId));
-  if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
+  if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   const assignees = await repo.findAssigneesForTask(row.taskid);
   if (!assignees.some((assignee) => fromUserPk(assignee.userid) === actorId)) {
     throw new TaskAuthorizationError('You can only request edits to tasks assigned to you.');
@@ -579,7 +591,8 @@ export const decideTaskEditApproval = async (
   const approval = approvals.find((candidate) => candidate.id === approvalId);
   if (!approval) throw new TaskAuthorizationError('This task edit request is not assigned to you.');
   const row = await repo.findTaskById(toTaskPk(approval.targetId));
-  if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
+  if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   if (!(await isProjectLead(fromProjectPk(row.projectid), actorId, actorRole))) {
     throw new TaskAuthorizationError('Only this project\'s Team Lead can decide the task update.');
   }
@@ -598,6 +611,7 @@ export const decideTaskEditApproval = async (
 export const deleteTask = async (taskId: string, actorId: string, actorRole: string): Promise<void> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   await assertCanDeleteTask(row, actorId, actorRole);
 
   const dto = await buildDTO(row);
@@ -643,6 +657,7 @@ export const changeTaskStatus = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   await assertCanChangeTaskStatus(row, actorId, actorRole);
 
   if (!input.note?.trim()) throw new TaskValidationError('A reason is required for every status change.');
@@ -878,6 +893,7 @@ export const reopenTask = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
 
   // Admin is intentionally excluded here, unlike everywhere else in this service: reopening is a
   // delivery decision owned by whoever leads the project, not a system-administration action.
@@ -956,6 +972,7 @@ const decideReview = async (
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
+  assertTaskCanBeWorkedOn(row);
   if (row.statuscode !== 'Review') {
     throw new TaskValidationError('Only a task currently in Review can be approved or rejected.');
   }

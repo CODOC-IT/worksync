@@ -14,6 +14,7 @@ const TASK_COLUMNS = `
   t.taskid, t.projectid, t.parenttaskid, t.tasknumber, t.title, t.description,
   ts.statuscode, pr.prioritycode, t.startdate::text, t.duedate::text,
   t.createdbyuserid, t.completedatutc, t.completionsummary, t.archivedatutc,
+  t.projectarchivedatutc,
   t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode,
   (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount,
   -- Completed-subtask tally, derived from work.TaskStatuses.IsCompletedState rather than a
@@ -55,14 +56,30 @@ export const getTaskStatusMeta = async (
 
 export const findAllTasks = async (): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL ORDER BY t.taskid`
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL AND t.projectarchivedatutc IS NULL
+     ORDER BY t.taskid`
   );
   return result.rows;
 };
 
-export const findTasksForProject = async (projectId: number): Promise<TaskRow[]> => {
+export const findArchivedProjectTasks = async (): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.projectid = $1 AND t.parenttaskid IS NULL AND t.archivedatutc IS NULL ORDER BY t.taskid`,
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL AND t.projectarchivedatutc IS NOT NULL
+     ORDER BY t.taskid`
+  );
+  return result.rows;
+};
+
+export const findTasksForProject = async (projectId: number, archived = false): Promise<TaskRow[]> => {
+  const result = await query<TaskRow>(
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.projectid = $1
+       AND t.parenttaskid IS NULL
+       AND t.archivedatutc IS NULL
+       AND t.projectarchivedatutc IS ${archived ? 'NOT NULL' : 'NULL'}
+     ORDER BY t.taskid`,
     [projectId]
   );
   return result.rows;
@@ -235,12 +252,15 @@ export const findPendingTaskEditApprovalsForReviewer = async (
             i.fieldcode, i.oldvaluejson, i.proposedvaluejson
        FROM work.taskchangerequests cr
        JOIN work.tasks t ON t.taskid = cr.taskid
+       JOIN work.projects p ON p.projectid = t.projectid
        JOIN work.changerequesttypes ct ON ct.changerequesttypeid = cr.changerequesttypeid
        LEFT JOIN work.taskchangerequestitems i ON i.changerequestid = cr.changerequestid
       WHERE cr.assignedrevieweruserid = $1
         AND cr.requeststatus = 'Pending'
         AND cr.cancelledatutc IS NULL
         AND t.archivedatutc IS NULL
+        AND t.projectarchivedatutc IS NULL
+        AND p.archivedatutc IS NULL
         AND ct.typecode = 'Description'
         AND cr.requestreason = 'Controlled task edit approval'
       ORDER BY cr.submittedatutc DESC, cr.changerequestid DESC`,

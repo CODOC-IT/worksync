@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { MonthGrid } from './MonthGrid';
 import { WeekGrid } from './WeekGrid';
@@ -7,6 +7,7 @@ import { DayGrid } from './DayGrid';
 import { YearGrid } from './YearGrid';
 import { DayEntriesDrawer } from './DayEntriesDrawer';
 import { CalendarFilterBar } from './CalendarFilterBar';
+import { ManageHolidaysModal } from './ManageHolidaysModal';
 import {
   buildCalendarEntries,
   buildHolidayEntries,
@@ -42,7 +43,7 @@ const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1):
 };
 
 export const CalendarView: React.FC = () => {
-  const { projects, tasks, users, calendarEvents, approvedLeave } = useApp();
+  const { projects, tasks, users, calendarEvents, approvedLeave, holidays, currentRole } = useApp();
 
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
@@ -50,6 +51,7 @@ export const CalendarView: React.FC = () => {
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
   const [activeKinds, setActiveKinds] = useState<Set<CalendarEntryKind>>(new Set(ALL_CALENDAR_KINDS));
+  const [manageHolidaysOpen, setManageHolidaysOpen] = useState(false);
 
   // Recomputed every render (not memoized) so "today" stays correct if the app is left open
   // across midnight — mirrors ProjectsView's own inline `todayStr` convention.
@@ -66,14 +68,14 @@ export const CalendarView: React.FC = () => {
         filterCalendarEntries(
           [
             ...buildCalendarEntries(projects, tasks, calendarEvents),
-            ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1]),
+            ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1], holidays),
             ...buildApprovedLeaveEntries(approvedLeave)
           ],
           originFilter,
           activeKinds
         )
       ),
-    [projects, tasks, calendarEvents, approvedLeave, anchorYear, originFilter, activeKinds]
+    [projects, tasks, calendarEvents, approvedLeave, holidays, anchorYear, originFilter, activeKinds]
   );
 
   const monthDates = useMemo(
@@ -143,21 +145,36 @@ export const CalendarView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 rounded-xl border border-white/10 bg-slate-900/50 shrink-0">
-          {VIEW_MODES.map((mode) => (
+        <div className="flex items-center gap-2 shrink-0">
+          {/* HR-only: hidden completely for Admin and every other role. This is a UX
+              convenience -- the real gate is server-side (see AppContext's createHoliday's
+              comment / backend/src/calendar/calendar.service.ts's assertIsHR). */}
+          {currentRole === 'HR' && (
             <button
-              key={mode}
               type="button"
-              onClick={() => setViewMode(mode)}
-              className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold capitalize transition ${
-                viewMode === mode
-                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
-              }`}
+              onClick={() => setManageHolidaysOpen(true)}
+              className="px-2 sm:px-3 py-1.5 rounded-xl border border-white/10 bg-slate-900/50 text-[10px] sm:text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 flex items-center gap-1.5"
             >
-              {mode}
+              <Settings size={13} /> Manage Holidays
             </button>
-          ))}
+          )}
+
+          <div className="flex items-center gap-1 p-1 rounded-xl border border-white/10 bg-slate-900/50">
+            {VIEW_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[10px] sm:text-xs font-semibold capitalize transition ${
+                  viewMode === mode
+                    ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
+                }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -255,6 +272,10 @@ export const CalendarView: React.FC = () => {
         onToggleEntry={(id) => setExpandedEntryId((prev) => (prev === id ? null : id))}
         onClose={closeDayModal}
       />
+
+      {manageHolidaysOpen && currentRole === 'HR' && (
+        <ManageHolidaysModal onClose={() => setManageHolidaysOpen(false)} />
+      )}
     </div>
   );
 };
