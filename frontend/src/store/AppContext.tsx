@@ -17,6 +17,7 @@ import {
   ToastTone,
   ActivityLogItem,
   CalendarEvent,
+  ApprovedLeaveEntry,
   SavedPrompt,
 
   BreakType,
@@ -63,6 +64,9 @@ import {
 import {
   fetchActivities,
 } from '../features/activity/activityApi';
+import {
+  fetchApprovedLeave
+} from '../features/calendar/calendarRepository';
 import {
   ActivityItem,
   DEFAULT_ACTIVITY_FILTERS,
@@ -126,6 +130,7 @@ interface AppState {
   notificationPreferences: NotificationPreferences;
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
+  approvedLeave: ApprovedLeaveEntry[];
   savedPrompts: SavedPrompt[];
 
   activeBreak: {
@@ -251,6 +256,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
+  const [approvedLeave, setApprovedLeave] = useState<ApprovedLeaveEntry[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
@@ -452,6 +458,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Calendar-only, read-only: approved HR leave requests for display alongside
+    // Deadlines/Milestones/Task Due. Never mutates leave data; the HR approval flow that owns it
+    // (backend/src/routes/hrRequestRoutes.ts) is untouched.
+    const hydrateApprovedLeave = async () => {
+      try {
+        const remoteApprovedLeave = await fetchApprovedLeave();
+        if (isActive) setApprovedLeave(remoteApprovedLeave);
+      } catch (error) {
+        console.warn('Approved leave API request failed; Calendar will show no leave entries.', error);
+      }
+    };
+
     const hydrateAttendance = async () => {
       try {
         const token = localStorage.getItem('worksync_auth_token');
@@ -520,6 +538,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void hydrateTasks();
     void hydrateProjects();
+    void hydrateApprovedLeave();
     void hydrateAttendance();
     void hydrateActivityLogs();
 
@@ -2702,6 +2721,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notificationPreferences,
         activityLogs,
         calendarEvents,
+        approvedLeave,
         savedPrompts,
         activeBreak,
         settings,
