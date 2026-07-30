@@ -584,7 +584,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
 
         {/* Date range — always present */}
-        <FilterSelect label="Date range" value={filters.datePreset} onChange={(v) => update('datePreset', v)} options={DATE_PRESETS} includeNoneOption={false} />
+        <FilterSelect label="Date range" value={filters.datePreset} onChange={(v) => update('datePreset', v)} options={DATE_PRESETS} includeEmptyOption={false} />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
             <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} />
@@ -601,7 +601,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         ) : isHRTab ? (
           <FilterSelect label="Employee" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
         ) : isLeadTab ? (
-          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
+          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} emptyOptionLabel="None" />
         ) : null /* Team Member (my-work tab) — always own-only, no member selector needed */}
 
         {/* Project filter — shown for project-scoped tabs, not HR-only tab */}
@@ -706,8 +706,9 @@ const FilterSelect: React.FC<{
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string } | string>;
-  includeNoneOption?: boolean;
-}> = ({ label, value, onChange, options, includeNoneOption = true }) => (
+  includeEmptyOption?: boolean;
+  emptyOptionLabel?: string;
+}> = ({ label, value, onChange, options, includeEmptyOption = true, emptyOptionLabel = 'All' }) => (
   <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
     {label}
     <select
@@ -715,7 +716,7 @@ const FilterSelect: React.FC<{
       onChange={(e) => onChange(e.target.value)}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none"
     >
-      {includeNoneOption && <option value="">None</option>}
+      {includeEmptyOption && <option value="">{emptyOptionLabel}</option>}
       {options.map((option) => {
         const optValue = typeof option === 'string' ? option : option.value;
         const optLabel = typeof option === 'string' ? option.replaceAll('_', ' ') : option.label;
