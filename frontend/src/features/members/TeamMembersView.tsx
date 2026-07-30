@@ -548,7 +548,7 @@ export const TeamMembersView: React.FC = () => {
                 <div className="mt-2 text-2xl font-bold text-white">{totalMembers}</div>
               </GlassCard>
               <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
-                <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Showing</div>
+                <div className="whitespace-nowrap text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Showing</div>
                 <div className="mt-2 text-2xl font-bold text-emerald-300">{members.length}</div>
               </GlassCard>
               <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
