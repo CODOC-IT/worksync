@@ -652,7 +652,7 @@ export const ApprovalsInboxView: React.FC = () => {
 
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
             {currentRole === 'Admin'
-              ? 'Review project creation, task creation and controlled edit requests across every project.'
+              ? 'Review project management, attendance and leave requests that require Admin approval.'
               : 'Review requests for the projects you lead. Project creation proposals route to Admin.'}
           </p>
         </div>
