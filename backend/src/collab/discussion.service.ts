@@ -19,6 +19,14 @@ import {
   DiscussionType
 } from './discussion.types.js';
 
+// Resolve the actor's display name from the database-authoritative user store.
+// `findById` uses the in-memory cache which may be empty on a cold serverless request;
+// `syncUsersToDb()` is idempotent and cheap after the first call — it populates the cache
+// so `findById` returns the real name for every subsequent lookup in the same request.
+const ensureUserCacheWarmed = async (): Promise<void> => {
+  await userStore.syncUsersToDb();
+};
+
 // Service Layer — business logic, authorization, and notification publishing (matching
 // backend/src/projects and backend/src/tasks). No SQL here (discussion.repository.ts); no
 // Express req/res here (discussion.controller.ts). Replaces the old
@@ -190,7 +198,8 @@ export const createThread = async (
   const thread = await hydrateThread(row!);
 
   const members = await projectRepo.findMembersForProject(projectRow.projectid);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  await ensureUserCacheWarmed();
+  const actorName = userStore.findById(actorId)?.name || actorId;
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
 
   notify(
@@ -282,7 +291,8 @@ export const addComment = async (
   ]);
   const comment = await buildCommentDTO(commentRow!, mentionRows, attachmentRows);
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  await ensureUserCacheWarmed();
+  const actorName = userStore.findById(actorId)?.name || actorId;
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
   const projectId = fromProjectPk(row.effectiveprojectid);
   const taskId = row.taskid ? fromTaskPk(row.taskid) : undefined;
@@ -348,9 +358,10 @@ export const editComment = async (commentId: string, body: string, actorId: stri
   ]);
   const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows);
 
+  await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);
   const taskRow = threadRow.taskid ? await taskRepo.findTaskById(threadRow.taskid) : undefined;
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = userStore.findById(actorId)?.name || actorId;
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: 'Updated', module: 'Project Chats', entityType: 'Comment', entityId: dto.id,
@@ -370,7 +381,7 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
   if (!threadRow) throw new DiscussionNotFoundError('Comment not found.');
   await assertThreadAccessible(threadRow, actorId, actorRole);
   const actorPk = toUserPk(actorId);
-  if (commentRow.authoruserid !== actorPk) {
+  if (commentRow.authoruserid !== actorPk && actorRole !== 'Admin') {
     throw new DiscussionAuthorizationError('You can only delete your own comments.');
   }
 
@@ -382,15 +393,23 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
   ]);
   const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows);
 
+  await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = userStore.findById(actorId)?.name || actorId;
+  const originalAuthor = userStore.findById(fromUserPk(commentRow.authoruserid));
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: actorPk !== commentRow.authoruserid ? fromUserPk(commentRow.authoruserid) : undefined,
+    affectedUserName: actorPk !== commentRow.authoruserid ? originalAuthor?.name : undefined,
     action: 'Deleted', module: 'Project Chats', entityType: 'Comment', entityId: dto.id,
     entityName: threadRow.subject || undefined, projectId: fromProjectPk(threadRow.effectiveprojectid),
     projectName: projectRow?.projectname,
-    description: `${actorName} deleted a comment on "${threadRow.subject}".`, reason: commentRow.commenttext,
-    linkRoute: 'project-chats'
+    description: actorPk !== commentRow.authoruserid
+      ? `${actorName} (Admin) deleted a comment by ${originalAuthor?.name || fromUserPk(commentRow.authoruserid)} on "${threadRow.subject}".`
+      : `${actorName} deleted a comment on "${threadRow.subject}".`,
+    reason: commentRow.commenttext,
+    linkRoute: 'project-chats',
+    important: actorPk !== commentRow.authoruserid,
   });
 
   return dto;
