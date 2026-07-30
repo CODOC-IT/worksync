@@ -46,6 +46,7 @@ export interface TaskRow {
   rowversion: string;
   projectcode: string;
   subtaskcount?: number;
+  completedsubtaskcount?: number;
 }
 
 export interface TaskAssigneeRow {
@@ -82,6 +83,14 @@ export interface TaskDTO {
   dueDate: string;
   estimatedHours: number;
   subtaskCount: number;
+  /** How many of `subtaskCount` are in a completed state — server-computed, see task.repository.ts. */
+  completedSubtaskCount: number;
+  /** 0-100 whole-number completion percentage of this task's subtasks. */
+  subtaskProgress: number;
+  /** When this task itself entered a completed state (ISO), if it has. */
+  completedAt?: string;
+  /** True when this task/subtask is in a completed state — what the board's checklist renders. */
+  completed: boolean;
   subtasks: TaskDTO[];
   dependencies: string[];
   tags: string[];
@@ -94,6 +103,8 @@ export interface TaskDTO {
 
 export interface TaskStatusHistoryDTO {
   id: string;
+  /** The task this entry belongs to — a parent's history includes its subtasks' entries too. */
+  taskId: string;
   fromStatus: ApiTaskStatus | null;
   toStatus: ApiTaskStatus;
   note: string;
@@ -137,4 +148,25 @@ export interface UpdateTaskInput {
 export interface ChangeStatusInput {
   status: ApiTaskStatus;
   note: string;
+}
+
+export interface TaskEditApprovalInput {
+  title: string;
+  description: string;
+  priority: ApiTaskPriority;
+  startDate: string;
+  dueDate: string;
+}
+
+export interface TaskEditApprovalRow {
+  changerequestid: number;
+  taskid: number;
+  projectid: number;
+  tasktitle: string;
+  requestedbyuserid: number;
+  requeststatus: 'Pending' | 'Approved' | 'Rejected';
+  submittedatutc: Date;
+  fieldcode: string | null;
+  oldvaluejson: string | null;
+  proposedvaluejson: string | null;
 }

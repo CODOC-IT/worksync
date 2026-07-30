@@ -44,12 +44,11 @@ const getScopeDescription = (
   activeTab: 'my-work' | 'hr' | 'lead',
 ): string => {
   if (!scope) return '';
-  const { permanentRole, isActiveTeamLead, isActiveHR, isHRandTeamLead } = scope;
+  const { permanentRole, isActiveTeamLead, isActiveHR } = scope;
   if (permanentRole === 'Admin') return 'Showing organization-wide activity.';
   if (permanentRole === 'HR' || isActiveHR) {
-    if (activeTab === 'hr') return 'Showing HR and attendance activity.';
     if (activeTab === 'lead') return 'Showing activity for projects you lead.';
-    return 'Showing your activity.';
+    return 'Showing organization-wide activity (excluding Administrator actions).';
   }
   if (permanentRole === 'Team_Lead' || isActiveTeamLead) {
     return 'Showing your activity and activity for projects you lead.';
@@ -180,21 +179,17 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const activeFiltersForRole = useMemo((): ActivityFilters => {
     const f = { ...filters };
 
-    // HR Activity tab: scope to Attendance/HR modules, exclude own-only flag
-    if (showHRTab && activeTab === 'hr') {
-      return { ...f, module: '', myActivityOnly: false, hrActivityOnly: true };
-    }
     // Led Project Activity tab: backend visibility covers it via RBAC, send no extra flags
     if (showLeadTab && activeTab === 'lead') {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
-    // Admin: no restrictions from the frontend side; backend handles everything
-    if (scope?.permanentRole === 'Admin') {
+    // Admin or HR: org-wide (backend enforces the Admin-actor exclusion for HR)
+    if (scope?.permanentRole === 'Admin' || scope?.isActiveHR) {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
     // My Work Activity (default): restrict to the viewer's own events
     return { ...f, myActivityOnly: true, hrActivityOnly: false };
-  }, [filters, scope, showHRTab, showLeadTab, activeTab]);
+  }, [filters, scope, showLeadTab, activeTab]);
 
   // ── Debounced search ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -349,13 +344,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   }
 
   // ── Compute available modules/actions for the current role + tab ─────────
-  const availableModules = scope?.permanentRole === 'Admin' ? ADMIN_MODULES
-    : showHRTab && activeTab === 'hr' ? HR_MODULES
+  const availableModules = (scope?.permanentRole === 'Admin' || scope?.isActiveHR) ? ADMIN_MODULES
     : (scope?.isActiveTeamLead) ? LEAD_MODULES
     : MEMBER_MODULES;
 
-  const availableActions = scope?.permanentRole === 'Admin' ? ADMIN_ACTIONS
-    : showHRTab && activeTab === 'hr' ? HR_ACTIONS
+  const availableActions = (scope?.permanentRole === 'Admin' || scope?.isActiveHR) ? ADMIN_ACTIONS
     : (scope?.isActiveTeamLead) ? LEAD_ACTIONS
     : MEMBER_ACTIONS;
 
@@ -407,8 +400,8 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </header>
 
-      {/* ── Role-based tabs (only shown when role has multiple scopes) ── */}
-      {(showHRTab || (showLeadTab && !scopeIsAdmin)) && (
+      {/* ── Role-based tabs (only shown when user is also a Team Lead, not for plain HR) ── */}
+      {showLeadTab && !scopeIsAdmin && (
         <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1 shrink-0">
           <button
             onClick={() => changeTab('my-work')}
@@ -422,14 +415,6 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${activeTab === 'lead' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <Eye size={14} /> Led Project Activity
-            </button>
-          )}
-          {showHRTab && (
-            <button
-              onClick={() => changeTab('hr')}
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${activeTab === 'hr' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <Building size={14} /> HR Activity
             </button>
           )}
         </div>
@@ -460,8 +445,8 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           availableModules={availableModules}
           availableActions={availableActions}
           activeTab={activeTab}
-          isAdmin={scopeIsAdmin}
-          showHRTab={showHRTab}
+          isAdmin={scopeIsAdmin || !!(scope?.isActiveHR)}
+          showHRTab={false}
           showLeadTab={showLeadTab}
           onClose={() => setFiltersOpen(false)}
           onClear={clearAllFilters}

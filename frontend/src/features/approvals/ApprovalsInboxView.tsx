@@ -59,7 +59,14 @@ const getApprovalProject = (
     return projects.find((project) => project.id === approval.projectId);
   }
 
-  const task = tasks.find((item) => item.id === approval.targetId);
+  if (approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate && approval.projectId) {
+    return projects.find((project) => project.id === approval.projectId);
+  }
+
+  const task = tasks.find((item) =>
+    item.id === approval.targetId ||
+    item.subtasks.some((subtask) => subtask.id === approval.targetId)
+  );
 
   return task
     ? projects.find((project) => project.id === task.projectId)
@@ -92,6 +99,13 @@ const canDecide = (
   }
 
   if (approval.type === 'Controlled_Edit') {
+    if (approval.proposedTaskUpdate) {
+      return Boolean(
+        role === 'Team_Lead' &&
+        project &&
+        project.teamLeadId === userId
+      );
+    }
     return Boolean(
       role === 'Admin' ||
       (role === 'Team_Lead' &&
@@ -154,6 +168,7 @@ export const ApprovalsInboxView: React.FC = () => {
       );
 
       const isOwnRequest =
+        !approval.proposedTaskUpdate &&
         approval.requestedBy === currentUser.id;
 
       return isDecidable || isOwnRequest;
@@ -181,7 +196,18 @@ export const ApprovalsInboxView: React.FC = () => {
     }
   );
 
-  const filteredHRRequests = hrRequests.filter(
+  const reviewableHRRequests = hrRequests.filter((request) => {
+    if (request.userId === currentUser.id) return false;
+    if (currentRole === 'HR') {
+      return request.type === 'Leave' && request.approvalStage === 'HR';
+    }
+    if (currentRole === 'Admin') {
+      return request.approvalStage === 'Admin';
+    }
+    return false;
+  });
+
+  const filteredHRRequests = reviewableHRRequests.filter(
     (request) =>
       statusFilter === 'All' ||
       request.status === statusFilter
@@ -191,7 +217,7 @@ export const ApprovalsInboxView: React.FC = () => {
     (approval) => approval.status === 'Pending'
   ).length;
 
-  const pendingHRCount = hrRequests.filter(
+  const pendingHRCount = reviewableHRRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
 
@@ -343,8 +369,8 @@ export const ApprovalsInboxView: React.FC = () => {
             </h1>
 
             <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Review attendance corrections, leave requests
-              and break exception requests.
+              Review Team Member leave requests before they are forwarded
+              to Admin for final approval.
             </p>
           </div>
 
@@ -585,11 +611,11 @@ export const ApprovalsInboxView: React.FC = () => {
           </p>
         </div>
 
-        {pendingSystemCount > 0 && (
+        {pendingSystemCount + pendingHRCount > 0 && (
           <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
             <Clock size={13} />
-            {pendingSystemCount} pending decision
-            {pendingSystemCount !== 1 ? 's' : ''}
+            {pendingSystemCount + pendingHRCount} pending decision
+            {pendingSystemCount + pendingHRCount !== 1 ? 's' : ''}
           </span>
         )}
       </header>
@@ -647,7 +673,77 @@ export const ApprovalsInboxView: React.FC = () => {
         ))}
       </div>
 
-      {filteredApprovals.length === 0 ? (
+      {currentRole === 'Admin' && filteredHRRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <Clock size={16} className="text-cyan-400" />
+            Attendance and Leave Requests
+          </h2>
+          {filteredHRRequests.map((request) => {
+            const employee = users.find((user) => user.id === request.userId);
+            return (
+              <div key={request.id} className="glass-panel space-y-4 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-300">
+                        {request.type === 'Leave' ? 'Leave Request' : 'Attendance Edit'}
+                      </span>
+                      <StatusBadge status={request.status} size="sm" />
+                    </div>
+                    <h3 className="mt-2 font-semibold text-white">
+                      {employee?.name || request.userName || 'Unknown Employee'}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Attendance date: {request.date} · Requested by {request.userName || employee?.name || 'Unknown'} · {request.submittedAt}
+                    </p>
+                  </div>
+                </div>
+
+                {request.type === 'Correction' ? (
+                  <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-2">
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">Current values</span>
+                      <p className="mt-1 text-slate-300">Check-in: {request.details.currentCheckIn === '' ? 'Not recorded' : request.details.currentCheckIn}</p>
+                      <p className="text-slate-300">Check-out: {request.details.currentCheckOut === '' ? 'Not recorded' : request.details.currentCheckOut}</p>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested values</span>
+                      <p className="mt-1 text-emerald-300">Check-in: {request.details.requestedCheckIn === '' ? 'Not recorded' : request.details.requestedCheckIn}</p>
+                      <p className="text-emerald-300">Check-out: {request.details.requestedCheckOut === '' ? 'Not recorded' : request.details.requestedCheckOut}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-3">
+                    <div><span className="block text-[10px] uppercase text-slate-500">Employee</span><span className="mt-1 block text-slate-200">{employee?.name || request.userName || 'Unknown'}</span></div>
+                    <div><span className="block text-[10px] uppercase text-slate-500">Leave type</span><span className="mt-1 block text-slate-200">{request.details.leaveType || 'Not provided'}</span></div>
+                    <div><span className="block text-[10px] uppercase text-slate-500">Date</span><span className="mt-1 block text-slate-200">{request.date}</span></div>
+                  </div>
+                )}
+
+                <div>
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Reason</span>
+                  <p className="mt-1 text-xs text-slate-300">{request.reason}</p>
+                </div>
+
+                {request.status === 'Pending' && (
+                  <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+                    <button type="button" onClick={() => handleHRReject(request.id)} className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300">
+                      Reject
+                    </button>
+                    <button type="button" onClick={() => handleHRApprove(request.id)} className="glass-button-neon rounded-lg px-3 py-1.5 text-xs font-bold">
+                      Approve
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {filteredApprovals.length === 0 &&
+      !(currentRole === 'Admin' && filteredHRRequests.length > 0) ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <CheckCircle2
             className="text-slate-500"
@@ -727,7 +823,44 @@ export const ApprovalsInboxView: React.FC = () => {
                   {approval.details}
                 </p>
 
-                {approval.proposedDiff && (
+                {approval.proposedTaskUpdate && approval.previousTaskSnapshot && (
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/40 text-xs">
+                    {([
+                      ['Title', 'title'],
+                      ['Description', 'description'],
+                      ['Priority', 'priority'],
+                      ['Start date', 'startDate'],
+                      ['Due date', 'dueDate']
+                    ] as const).map(([label, field]) => {
+                      const currentValue = approval.previousTaskSnapshot![field];
+                      const proposedValue = approval.proposedTaskUpdate![field];
+                      const changed = currentValue !== proposedValue;
+                      const displayValue = (value: string) => value === '' ? '(empty)' : value;
+                      return (
+                        <div key={field} className="grid gap-2 border-b border-white/5 p-3 last:border-b-0 sm:grid-cols-[7rem_1fr_1fr]">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                            {label}
+                          </span>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Current</span>
+                            <span className={changed ? 'text-slate-300' : 'text-slate-400'}>
+                              {displayValue(currentValue)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Proposed</span>
+                            <span className={changed ? 'text-emerald-300' : 'text-slate-400'}>
+                              {displayValue(proposedValue)}
+                              {!changed && <span className="ml-2 text-[10px] text-slate-600">(unchanged)</span>}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!approval.proposedTaskUpdate && approval.proposedDiff && (
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
                     <span className="block text-[10px] uppercase tracking-wider text-slate-500">
                       Proposed change —{' '}

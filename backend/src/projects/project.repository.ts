@@ -290,8 +290,8 @@ export const getProjectProgress = async (projectId: number): Promise<number> => 
        COUNT(*)::text AS total,
        SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END)::text AS completed
      FROM work.tasks t
-     JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
-     WHERE t.projectid = $1`,
+      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+      WHERE t.projectid = $1 AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL`,
     [projectId]
   );
   const total = Number(result.rows[0]?.total || 0);

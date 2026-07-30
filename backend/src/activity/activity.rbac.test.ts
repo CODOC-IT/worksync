@@ -344,18 +344,32 @@ test('HR: can view attendance activity', async () => {
   assert.ok(descriptions.includes('Member check-in visible to HR'), 'HR should see attendance activity');
 });
 
-test('HR: cannot access unrelated project activity through HR permission', async () => {
+test('HR: can view non-HR project activity (near-admin visibility)', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
-    VALUES (1, 5, 'Updated', 'Task', 'tsk-6', 2, '00000000-0000-0000-0000-000000000080', 'Tasks', 'Project task not in HR scope', 'Team_Member')`);
+    VALUES (1, 5, 'Updated', 'Task', 'tsk-hr-proj', 2, '00000000-0000-0000-0000-000000000085', 'Tasks', 'Project task visible to HR', 'Team_Member')`);
 
   const { findActivities } = await import('./activity.repository.js');
   const { getEffectiveRoles } = await import('./activity.rbac.js');
   const effectiveRoles = await getEffectiveRoles('usr-4');
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
-  assert.ok(!descriptions.includes('Project task not in HR scope'), 'HR must not see unrelated project activity through HR permission');
+  assert.ok(descriptions.includes('Project task visible to HR'), 'HR should see all non-Admin project activity');
+});
+
+test('HR: cannot see activity performed by Admins', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 1, 'Permission Granted', 'Permission', 'perm-admin-hr', '00000000-0000-0000-0000-000000000086', 'Permissions', 'Admin action hidden from HR', 'Admin')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(!descriptions.includes('Admin action hidden from HR'), 'HR must not see events performed by Admins');
 });
 
 test('HR: loses attendance scope after temporary role expires', async () => {
@@ -371,7 +385,7 @@ test('HR: loses attendance scope after temporary role expires', async () => {
 
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
-  assert.ok(!descriptions.includes('Check-in after HR expiry'), 'Expired HR must lose unrelated attendance visibility');
+  assert.ok(!descriptions.includes('Check-in after HR expiry'), 'Expired HR must lose visibility');
 });
 
 test('Admin: can view all activity categories', async () => {
@@ -412,9 +426,9 @@ test('Overlapping Team Lead and HR: combined scopes without unrestricted access'
   memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${tlUrId}, 2)`);
 
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
-    (1, 5, 'Updated', 'Task', 'tsk-7', 2, '00000000-0000-0000-0000-000000000110', 'Tasks', 'Combined lead project activity', 'Team_Member'),
+    (1, 5, 'Updated', 'Task', 'tsk-7', 2, '00000000-0000-0000-0000-000000000110', 'Tasks', 'Combined HR+Lead non-admin task activity', 'Team_Member'),
     (1, 4, 'Checked In', 'Attendance', 'att-40', NULL, '00000000-0000-0000-0000-000000000111', 'Attendance', 'Combined HR attendance activity', 'Team_Member'),
-    (1, 5, 'Permission Revoked', 'Permission', 'perm-unrelated', NULL, '00000000-0000-0000-0000-000000000112', 'Permissions', 'Restricted unrelated activity', 'Team_Member')`);
+    (1, 1, 'Permission Revoked', 'Permission', 'perm-admin-combined', NULL, '00000000-0000-0000-0000-000000000112', 'Permissions', 'Admin action must stay hidden', 'Admin')`);
 
   const { findActivities } = await import('./activity.repository.js');
   const { getEffectiveRoles } = await import('./activity.rbac.js');
@@ -426,7 +440,7 @@ test('Overlapping Team Lead and HR: combined scopes without unrestricted access'
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
 
-  assert.ok(descriptions.includes('Combined lead project activity'), 'Combined roles should see led project activity');
-  assert.ok(descriptions.includes('Combined HR attendance activity'), 'Combined roles should see HR attendance activity');
-  assert.ok(!descriptions.includes('Restricted unrelated activity'), 'Combined roles must not see restricted unrelated activity');
+  assert.ok(descriptions.includes('Combined HR+Lead non-admin task activity'), 'Combined HR+Lead should see all non-admin activity');
+  assert.ok(descriptions.includes('Combined HR attendance activity'), 'Combined HR+Lead should see attendance activity');
+  assert.ok(!descriptions.includes('Admin action must stay hidden'), 'Combined HR+Lead must not see Admin-performed events');
 });

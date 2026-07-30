@@ -57,7 +57,7 @@ import {
   ClipboardList
 } from 'lucide-react';
 
-type ReportTab = 'overview' | 'projects' | 'teams' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
+type ReportTab = 'overview' | 'projects' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
 
 interface DateRange {
   from: string;
@@ -194,6 +194,8 @@ export const ReportsView: React.FC = () => {
   const [deadlineFilterDateRange, setDeadlineFilterDateRange] = useState('all');
   const [deadlineFilterStatus, setDeadlineFilterStatus] = useState('');
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -269,7 +271,7 @@ export const ReportsView: React.FC = () => {
       (p) => isInDateRange(p.startDate, from, to) || isInDateRange(p.targetDate, from, to) || p.status === 'Active'
     );
     const validTasks = tasks.filter(
-      (t) => isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done'
+      (t) => !t.parentTaskId && (isInDateRange(t.dueDate, from, to) || isInDateRange(t.createdAt, from, to) || t.status !== 'Done')
     );
     const validAttendance = attendanceRecords.filter(
       (a) => isInDateRange(a.date, from, to)
@@ -367,7 +369,7 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       const o = reportData.overview || {};
       return {
-        totalProjects: o.totalProjects ?? 0,
+        totalProjects: (o.totalProjects ?? 0) + (o.archivedCount ?? 0),
         activeTasks: o.activeTasks ?? 0,
         completedTasks: o.completedTasks ?? 0,
         overdueTasks: o.overdueTasks ?? 0,
@@ -382,7 +384,7 @@ export const ReportsView: React.FC = () => {
     if (apiAvailable) {
       return (reportData.projects || []).map((p: any) => ({
         name: p.title.length > 20 ? p.title.slice(0, 20) + '...' : p.title,
-        progress: p.progress,
+        progress: p.progress ?? 0,
       }));
     }
     return [];
@@ -508,7 +510,7 @@ export const ReportsView: React.FC = () => {
         projectCount: projectIds.length,
         totalTasks,
         hasTasks: totalTasks > 0,
-        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : 'Light',
+        workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : totalTasks > 0 ? 'Light' : 'No Tasks',
       };
     }).sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
   }, [apiAvailable, reportData, roleFiltered.projects, users]);
@@ -547,7 +549,7 @@ export const ReportsView: React.FC = () => {
     return [...roles].sort();
   }, [workloadData]);
 
-  const workloadWorkloadOptions = ['Light', 'Moderate', 'Heavy'];
+  const workloadWorkloadOptions = ['No Tasks', 'Light', 'Moderate', 'Heavy'];
 
   // ── Member detail fetch ─────────────────────────────────────────────
   useEffect(() => {
@@ -715,13 +717,6 @@ export const ReportsView: React.FC = () => {
     return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
-  const teamStats = useMemo(() => {
-    if (apiAvailable) {
-      return reportData.teams || [];
-    }
-    return [];
-  }, [apiAvailable, reportData]);
-
   // ── Rest of the component: unchanged UI code ─────────────────────────
 
   const chartColors = useMemo(() => {
@@ -769,7 +764,7 @@ export const ReportsView: React.FC = () => {
   const visibleTabs = useMemo<ReportTab[]>(() => {
     switch (currentRole) {
       case 'Admin':
-        return ['overview', 'projects', 'tasks', 'teams', 'workload', 'deadlines', 'attendance'];
+        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'HR':
         return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
       case 'Team_Lead':
@@ -785,7 +780,6 @@ export const ReportsView: React.FC = () => {
     overview: 'Overview',
     projects: 'Projects',
     tasks: 'Tasks',
-    teams: 'Teams',
     workload: 'Workload',
     deadlines: 'Deadlines',
     attendance: 'Attendance',
@@ -810,7 +804,6 @@ export const ReportsView: React.FC = () => {
       overview: 'Overall Summary Report',
       projects: 'Project Analytics Report',
       tasks: 'Tasks Report',
-      teams: 'Team Analytics Report',
       workload: 'Member Workload Report',
       deadlines: 'Deadlines Report',
       attendance: 'Attendance Report',
@@ -849,21 +842,6 @@ export const ReportsView: React.FC = () => {
         bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.code || '\u2014')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
-    } else if (tab === 'teams') {
-      bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
-      bodyHtml += kpi('Departments', teamStats.length);
-      bodyHtml += kpi('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0));
-      bodyHtml += kpi('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0));
-      const avgRate = teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%';
-      bodyHtml += kpi('Avg Rate', avgRate);
-      bodyHtml += `</div>`;
-      bodyHtml += section('Department Performance');
-      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
-      bodyHtml += `<thead><tr>${th('Department')}${th('Members')}${th('Projects')}${th('Tasks')}${th('Completed')}${th('Rate')}</tr></thead><tbody>`;
-      teamStats.forEach((t: any) => {
-        bodyHtml += `<tr>${td(t.department || '\u2014', '#0f172a')}${td(t.members ?? 0)}${td(t.projects ?? 0)}${td(t.tasks ?? 0)}${td(t.completed ?? 0)}${td((t.rate ?? 0) + '%')}</tr>`;
-      });
-      bodyHtml += `</tbody></table>`;
     } else if (tab === 'workload') {
       const wlMembers = workloadData as any[];
       bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
@@ -877,7 +855,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += `<thead><tr>${th('Member')}${th('Role')}${th('Active')}${th('Completed')}${th('Overdue')}${th('Projects')}${th('Workload')}</tr></thead><tbody>`;
       wlMembers.forEach((w: any) => {
         const total = (w.active || 0) + (w.completed || 0) + (w.review || 0) + (w.overdue || 0);
-        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+        const wl = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
         bodyHtml += `<tr>${td(w.shortName || w.name || '\u2014', '#0f172a')}${td(w.role || w.department || '\u2014')}${td(w.active ?? 0)}${td(w.completed ?? 0)}${td(w.overdue > 0 ? `<span style="color:#991b1b;">${w.overdue}</span>` : '0')}${td(w.projectCount || 0)}${td(wl)}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
@@ -1003,6 +981,25 @@ export const ReportsView: React.FC = () => {
           bodyHtml += `<tr>${td(p.name || '\u2014')}${td(p.value ?? 0)}</tr>`;
         });
         bodyHtml += `</tbody></table>`;
+        const projArr = (reportData?.projects || roleFiltered.projects || []) as any[];
+        if (projArr.length > 0) {
+          bodyHtml += section(`Project Breakdown (${projArr.length} total)`);
+          bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;">`;
+          bodyHtml += kpi('Total Projects', kpiStats.totalProjects ?? 0);
+          bodyHtml += kpi('Active', projArr.filter((p: any) => p.status === 'Active').length);
+          bodyHtml += kpi('Completed', projArr.filter((p: any) => p.status === 'Completed').length);
+          bodyHtml += kpi('Archived', reportData?.overview?.archivedCount ?? 0);
+          const avgProg = projArr.length > 0 ? Math.round(projArr.reduce((s: number, p: any) => s + (p.progress || 0), 0) / projArr.length) : 0;
+          bodyHtml += kpi('Avg Progress', `${avgProg}%`);
+          bodyHtml += `</div>`;
+          bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+          bodyHtml += `<thead><tr>${th('Project')}${th('Status')}${th('Progress')}${th('Tasks')}${th('Health')}</tr></thead><tbody>`;
+          projArr.forEach((p: any) => {
+            const health = (p.progress || 0) >= 70 ? 'On Track' : (p.progress || 0) >= 40 ? 'At Risk' : p.status === 'Archived' ? 'Archived' : 'Needs Attention';
+            bodyHtml += `<tr>${td(p.title || '\u2014', '#0f172a')}${td(p.status || '\u2014')}${td(`${p.progress || 0}%`)}${td(p.taskCount || 0)}${td(health)}</tr>`;
+          });
+          bodyHtml += `</tbody></table>`;
+        }
       } else {
         bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
         bodyHtml += kpi('Present Today', hrOverviewStats.presentToday);
@@ -1107,6 +1104,49 @@ ${bodyHtml}
       return;
     }
     handlePdfExport();
+  };
+
+  const handleAttendancePdfExport = () => {
+    const now = new Date().toLocaleString();
+    const from = dateRange.from;
+    const to = dateRange.to;
+    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+    if (attendanceSearchQuery) {
+      filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+    }
+    if (filtered.length === 0) return;
+    const th = (text: string) => `<th style="background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;border-bottom:2px solid #e2e8f0;color:#334155;font-size:10px;">${text}</th>`;
+    const td = (text: string | number, cls?: string) => `<td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:${cls || '#475569'};font-size:10px;">${text}</td>`;
+    const kpi = (label: string, value: string | number) => `<div style="flex:1;min-width:100px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;text-align:center;"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${label}</div><div style="font-size:20px;font-weight:700;color:#0f172a;margin-top:2px;">${value}</div></div>`;
+    let bodyHtml = '';
+    bodyHtml += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;">`;
+    bodyHtml += kpi('Records', filtered.length);
+    const presentCount = filtered.filter((a: any) => a.status === 'Present').length;
+    const lateCount = filtered.filter((a: any) => a.status === 'Late').length;
+    const absentCount = filtered.filter((a: any) => a.status === 'Absent').length;
+    bodyHtml += kpi('Present', presentCount);
+    bodyHtml += kpi('Late', lateCount);
+    bodyHtml += kpi('Absent', absentCount);
+    bodyHtml += `</div>`;
+    bodyHtml += `<h3 style="font-size:13px;font-weight:600;margin:20px 0 8px;color:#1e293b;border-left:3px solid #3b82f6;padding-left:8px;">Attendance Records</h3>`;
+    bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+    bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
+    filtered.forEach((a: any) => {
+      const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+      bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
+    });
+    bodyHtml += `</tbody></table>`;
+    const attTitle = `Attendance Report${attendanceStatusFilter ? ` (${attendanceStatusFilter})` : ''}`;
+    const fullHtml = `<!DOCTYPE html><html><head><title>${attTitle}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1e293b;margin:0;}.header{text-align:center;padding-bottom:16px;border-bottom:3px solid #3b82f6;margin-bottom:24px;}.header h1{margin:0;font-size:22px;font-weight:700;color:#0f172a;}.header .meta{font-size:11px;color:#64748b;margin-top:6px;}.footer{text-align:center;margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:9px;color:#94a3b8;}</style></head><body><div class="header"><h1>${attTitle}</h1><div class="meta">${from} \u2014 ${to} &nbsp;|&nbsp; ${filtered.length} records &nbsp;|&nbsp; Generated ${now}</div></div>${bodyHtml}<div class="footer">${attTitle} &middot; WorkSync Reports &middot; ${now}</div></body></html>`;
+    const printFrame = document.createElement('iframe');
+    printFrame.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;';
+    document.body.appendChild(printFrame);
+    const contentWindow = printFrame.contentWindow;
+    if (!contentWindow) { document.body.removeChild(printFrame); return; }
+    const doc = contentWindow.document;
+    doc.open(); doc.write(fullHtml); doc.close();
+    setTimeout(() => { contentWindow.print(); setTimeout(() => document.body.removeChild(printFrame), 1000); }, 300);
   };
 
   const handleTaskPdfExport = () => {
@@ -1563,44 +1603,33 @@ ${bodyHtml}
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Contributors', kpiStats.activeMembers, <Users size={14} className="text-cyan-400" />, 'cyan')}</div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health')}
-                <div className={`mt-3 ${projectHealthData.length > 10 ? 'overflow-y-auto' : ''}`} style={{ height: Math.min(projectHealthData.length * 32 + 40, 400) }}>
-                  <div style={{ height: Math.max(projectHealthData.length * 32 + 40, 260) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                        <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                        <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                        <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                        <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+          <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+            <div className="glass-panel p-4 rounded-lg">
+              {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Project Health', `${projectHealthData.length} projects`)}
+              <div className="mt-3 max-h-[400px] overflow-y-auto space-y-1">
+                {projectHealthData.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-4">No project data available for this period</p>
+                ) : (
+                  projectHealthData.map((p: any, i: number) => {
+                    const proj = (reportData?.projects || [])[i] || p;
+                    return (
+                      <div key={p.name} className="flex items-center gap-3 py-2 px-2 rounded hover:bg-slate-800/30 transition-colors">
+                        <StatusBadge status={proj.status || 'Unknown'} size="sm" />
+                        <span className="text-xs text-slate-200 truncate flex-1 min-w-0">{p.name}</span>
+                        <div className="w-28 shrink-0 h-3 rounded bg-slate-700/50 overflow-hidden">
+                          <div
+                            className={`h-full rounded transition-all ${p.progress >= 70 ? 'bg-emerald-500' : p.progress >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                            style={{ width: `${Math.min(p.progress, 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-400 w-10 text-right shrink-0">{p.progress}%</span>
+                      </div>
+                    );
+                  })
+                )}
               </div>
-            </GlassCard>
-
-            <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-              <div className="glass-panel p-4 rounded-lg">
-                {renderSectionHeader(<TrendingUp size={16} className="text-violet-400" />, 'Task Activity Trend')}
-                <div className="mt-3" style={{ height: 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={taskCompletionTrend} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis dataKey="date" tick={{ fill: chartTextColor, fontSize: 9 }} tickFormatter={formatDateLabel} />
-                      <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <Tooltip content={({ active, payload, label }) => <CustomTooltip active={active} payload={payload} label={formatDateLabel(label)} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Area type="monotone" dataKey="Created" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.2} />
-                      <Area type="monotone" dataKey="Completed" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.3} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </GlassCard>
-          </div>
+            </div>
+          </GlassCard>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <GlassCard glowColor="emerald" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1774,31 +1803,8 @@ ${bodyHtml}
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Active', roleFiltered.projects.filter((p: any) => p.status === 'Active').length, <Activity size={14} className="text-emerald-400" />, 'emerald')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', roleFiltered.projects.filter((p: any) => p.status === 'Completed').length, <CheckCircle2 size={14} className="text-emerald-400" />, 'magenta')}</div>
         <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Archived Projects', reportData?.overview?.archivedCount ?? 0, <History size={14} className="text-slate-400" />, 'slate')}</div>
+        <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Pending Approvals', roleFiltered.projects.filter((p: any) => p.status === 'Pending Approval').length, <Clock size={14} className="text-amber-400" />, 'amber')}</div>
       </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Project Progress')}
-          <div className="mt-3 overflow-x-auto">
-            <div style={{ minWidth: Math.max(projectHealthData.length * 80, 400), height: 300 }}>
-              {projectHealthData.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-8">No project data available</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={projectHealthData} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                    <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} angle={-25} textAnchor="end" height={60} />
-                    <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px' }} />
-                    <Bar dataKey="progress" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Progress %" />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
 
       <GlassCard>
         <div className="p-4 space-y-3">
@@ -2197,86 +2203,6 @@ ${bodyHtml}
     );
   };
 
-  const renderTeamsTab = () => (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {renderKPICard('Departments', teamStats.length, <Users size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Total Tasks', teamStats.reduce((s: number, t: any) => s + (t.tasks || 0), 0), <CheckSquare size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Completed', teamStats.reduce((s: number, t: any) => s + (t.completed || 0), 0), <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Avg Rate', teamStats.length > 0 ? `${Math.round(teamStats.reduce((s: number, t: any) => s + (t.rate || 0), 0) / teamStats.length)}%` : '0%', <Target size={14} className="text-emerald-400" />, 'magenta')}
-      </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Department Performance')}
-          <div className="mt-3" style={{ height: 300 }}>
-            {teamStats.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No department data available</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={teamStats} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="department" tick={{ fill: chartTextColor, fontSize: 9 }} angle={-20} textAnchor="end" height={60} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Legend wrapperStyle={{ fontSize: '10px' }} />
-                  <Bar dataKey="tasks" fill={chartColors.cyan} radius={[4, 4, 0, 0]} name="Tasks" />
-                  <Bar dataKey="completed" fill={chartColors.emerald} radius={[4, 4, 0, 0]} name="Completed" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </GlassCard>
-
-      <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
-        <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
-          <colgroup>
-            <col style={{ width: '22%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '15%' }} />
-            <col style={{ width: '24%' }} />
-          </colgroup>
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th>Department</th>
-              <th>Members</th>
-              <th>Projects</th>
-              <th>Tasks</th>
-              <th>Completed</th>
-              <th>Completion Rate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {teamStats.length === 0 ? (
-              <tr><td colSpan={6} className="text-center text-slate-500 py-6">No data available</td></tr>
-            ) : (
-              teamStats.map((t: any) => (
-                <tr key={t.department}>
-                  <td className="text-white font-medium truncate">{t.department}</td>
-                  <td className="font-mono text-xs">{t.members}</td>
-                  <td className="font-mono text-xs">{t.projects}</td>
-                  <td className="font-mono text-xs">{t.tasks}</td>
-                  <td className="font-mono text-xs text-emerald-400">{t.completed}</td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <div className="w-12 h-1.5 rounded-full bg-slate-700">
-                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${t.rate}%` }} />
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-300">{t.rate}%</span>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-
   const renderWorkloadTab = () => {
     const members = filteredWorkloadMembers;
     return (
@@ -2288,57 +2214,6 @@ ${bodyHtml}
           {renderKPICard('Members with Overdue', workloadKpiStats.membersWithOverdue, <AlertTriangle size={14} className="text-rose-400" />, 'rose',
             workloadKpiStats.membersWithOverdue > 0 ? renderInsightBadge(false, `${workloadKpiStats.membersWithOverdue} need attention`) : undefined
           )}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Tasks Per Member')}
-              <div className="h-60">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                      <Legend wrapperStyle={{ fontSize: '10px' }} />
-                      <Bar dataKey="active" fill={chartColors.cyan} radius={[0, 4, 4, 0]} name="Active" stackId="a" />
-                      <Bar dataKey="review" fill={chartColors.amber} radius={[0, 0, 0, 0]} name="Review" stackId="a" />
-                      <Bar dataKey="overdue" fill={chartColors.rose} radius={[0, 0, 0, 0]} name="Overdue" stackId="a" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </div>
-          </GlassCard>
-
-          <GlassCard>
-            <div className="p-4">
-              {renderSectionHeader(<CheckCircle2 size={16} className="text-emerald-400" />, 'Completion By Member')}
-              <div className="h-60">
-                {members.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={members.map((m: any) => ({
-                      name: m.name,
-                      shortName: m.shortName,
-                      rate: m.totalTasks > 0 ? Math.round((m.completed / m.totalTasks) * 100) : 0,
-                    }))} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                      <XAxis type="number" tick={{ fill: chartTextColor, fontSize: 10 }} domain={[0, 100]} />
-                      <YAxis dataKey="shortName" type="category" tick={{ fill: chartTextColor, fontSize: 10 }} width={80} />
-                      <Tooltip formatter={(value: any) => `${value}%`} />
-                      <Bar dataKey="rate" fill={chartColors.emerald} radius={[0, 4, 4, 0]} name="Completion Rate" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </div>
-          </GlassCard>
         </div>
 
         <GlassCard>
@@ -2417,7 +2292,7 @@ ${bodyHtml}
                   <tbody>
                     {members.map((m: any) => {
                       const total = m.totalTasks;
-                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                      const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                       return (
                         <tr
                           key={m.userId}
@@ -2441,7 +2316,8 @@ ${bodyHtml}
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
                               wlLabel === 'Heavy' ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
                               wlLabel === 'Moderate' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-                              'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                              wlLabel === 'Light' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
+                              'text-slate-400 bg-slate-500/10 border-slate-500/20'
                             }`}>{wlLabel}</span>
                           </td>
                         </tr>
@@ -2467,7 +2343,7 @@ ${bodyHtml}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {members.map((m: any) => {
                     const total = m.totalTasks;
-                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+                    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
                     const barWidth = Math.min(total / 12, 1) * 100;
                     return (
                       <div
@@ -2498,11 +2374,11 @@ ${bodyHtml}
                           <div className="mt-2">
                             <div className="flex justify-between text-[9px] text-slate-500 mb-1">
                               <span>Current workload</span>
-                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : 'text-emerald-400'}>{wlLabel}</span>
+                              <span className={wlLabel === 'Heavy' ? 'text-rose-400' : wlLabel === 'Moderate' ? 'text-amber-400' : wlLabel === 'Light' ? 'text-emerald-400' : 'text-slate-400'}>{wlLabel}</span>
                             </div>
                             <div className="h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
                               <div className={`h-full rounded-full transition-all duration-300 ${
-                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'
+                                wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'
                               }`} style={{ width: `${barWidth}%` }} />
                             </div>
                           </div>
@@ -2750,21 +2626,29 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<Activity size={16} className="text-cyan-400" />, 'Status Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskStatusDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={taskStatusDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
-                      {taskStatusDistData.map((_entry: any, idx: number) => (
-                        <Cell key={idx} fill={['#22d3ee', '#f59e0b', '#f59e0b', '#10b981', '#f43f5e'][idx % 5]} stroke={chartPieStroke} strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
-                  </PieChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskStatusDistData.map((d: any) => d.value), 1);
+                  const statusColorMap: Record<string, string> = {
+                    'Todo': 'bg-cyan-500', 'In Progress': 'bg-amber-500', 'Review': 'bg-amber-500',
+                    'Done': 'bg-emerald-500', 'Blocked': 'bg-rose-500',
+                  };
+                  return taskStatusDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${statusColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -2773,21 +2657,28 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-4">
             {renderSectionHeader(<BarChart3 size={16} className="text-violet-400" />, 'Priority Distribution')}
-            <div className="h-52">
+            <div className="mt-3 space-y-1.5">
               {taskPriorityDistData.every((d) => d.value === 0) ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">No data</div>
+                <div className="text-slate-500 text-xs py-4 text-center">No data</div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={taskPriorityDistData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
-                      {taskPriorityDistData.map((_entry: any, idx: number) => (
-                        <Cell key={idx} fill={['#10b981', '#f59e0b', '#f97316', '#f43f5e'][idx % 4]} stroke={chartPieStroke} strokeWidth={2} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                    <Legend wrapperStyle={{ fontSize: '10px', color: chartTextColor }} />
-                  </PieChart>
-                </ResponsiveContainer>
+                (() => {
+                  const maxVal = Math.max(...taskPriorityDistData.map((d: any) => d.value), 1);
+                  const priorityColorMap: Record<string, string> = {
+                    'Urgent': 'bg-rose-500', 'High': 'bg-orange-500', 'Medium': 'bg-amber-500', 'Low': 'bg-emerald-500',
+                  };
+                  return taskPriorityDistData.map((d: any) => {
+                    const pct = Math.round((d.value / maxVal) * 100);
+                    return (
+                      <div key={d.name} className="flex items-center gap-2 py-0.5">
+                        <span className="text-xs text-slate-300 w-20 shrink-0">{d.name}</span>
+                        <div className="flex-1 h-4 rounded bg-slate-700/50 overflow-hidden">
+                          <div className={`h-full rounded transition-all ${priorityColorMap[d.name] || 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-slate-400 w-8 text-right font-mono shrink-0">{d.value}</span>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
           </div>
@@ -3147,7 +3038,7 @@ ${bodyHtml}
       .sort((a: any, b: any) => (b.timestamp || b.changedAt || '').localeCompare(a.timestamp || a.changedAt || ''));
 
     const total = m.totalTasks;
-    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : 'Light';
+    const wlLabel = total >= 8 ? 'Heavy' : total >= 4 ? 'Moderate' : total > 0 ? 'Light' : 'No Tasks';
     const barWidth = Math.min(total / 12, 1) * 100;
 
     return (
@@ -3205,10 +3096,10 @@ ${bodyHtml}
               <div className="pt-2 border-t border-slate-700/30">
                 <div className="flex justify-between text-[10px] text-slate-500 mb-1">
                   <span>Workload Level</span>
-                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : 'text-emerald-400 font-semibold'}>{wlLabel}</span>
+                  <span className={wlLabel === 'Heavy' ? 'text-rose-400 font-semibold' : wlLabel === 'Moderate' ? 'text-amber-400 font-semibold' : wlLabel === 'Light' ? 'text-emerald-400 font-semibold' : 'text-slate-400 font-semibold'}>{wlLabel}</span>
                 </div>
                 <div className="h-2 rounded-full bg-slate-700/50 overflow-hidden">
-                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${barWidth}%` }} />
+                  <div className={`h-full rounded-full ${wlLabel === 'Heavy' ? 'bg-rose-500' : wlLabel === 'Moderate' ? 'bg-amber-500' : wlLabel === 'Light' ? 'bg-emerald-500' : 'bg-slate-500'}`} style={{ width: `${barWidth}%` }} />
                 </div>
               </div>
             )}
@@ -3434,36 +3325,67 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
-          <div className="mt-3" style={{ height: 260 }}>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={[
-                  { name: 'Present', value: attendanceStats.present },
-                  { name: 'Late', value: attendanceStats.late },
-                  { name: 'Absent', value: attendanceStats.absent },
-                  { name: 'On Leave', value: attendanceStats.onLeave },
-                  { name: 'Half Day', value: attendanceStats.halfDay }
-                ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {[chartColors.emerald, chartColors.amber, chartColors.rose, chartColors.cyan, chartColors.violet].map((color, i) => (
-                      <Cell key={i} fill={color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+      <div className="flex justify-end">
+        <button
+          onClick={handleAttendancePdfExport}
+          className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+        >
+          <FileText size={11} />
+          Export Filtered PDF
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-slate-400">Filter by status:</span>
+        <div className="flex flex-wrap gap-1.5">
+          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+            const isActive = attendanceStatusFilter === s;
+            if (s === '') {
+              return (
+                <button key={s} onClick={() => setAttendanceStatusFilter('')}
+                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-all ${isActive
+                    ? 'bg-slate-600/60 text-slate-200 border border-white/10'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/60 hover:text-slate-200'}`}>
+                  All
+                </button>
+              );
+            }
+            const colorClass = s === 'Present' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              : s === 'Late' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+              : s === 'Absent' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              : s === 'On Leave' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+              : 'bg-violet-500/20 text-violet-400 border-violet-500/30';
+            return (
+              <button key={s} onClick={() => setAttendanceStatusFilter(s === attendanceStatusFilter ? '' : s)}
+                className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
+                {s}
+              </button>
+            );
+          })}
         </div>
-      </GlassCard>
+        <select
+          value={attendanceSearchQuery}
+          onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+        >
+          <option value="">All Users</option>
+          {(() => {
+            const seenIds = new Set<string>();
+            return (roleFiltered.attendance || []).filter((a: any) => {
+              if (seenIds.has(a.userId)) return false;
+              seenIds.add(a.userId);
+              return true;
+            }).sort((a: any, b: any) => {
+              const nameA = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              const nameB = users.find((u: any) => u.id === b.userId)?.name || b.userId;
+              return nameA.localeCompare(nameB);
+            }).map((a: any) => {
+              const userName = users.find((u: any) => u.id === a.userId)?.name || a.userId;
+              return <option key={a.userId} value={a.userId}>{userName}</option>;
+            });
+          })()}
+        </select>
+      </div>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[400px]">
         <table className="density-table w-full" style={{ tableLayout: 'fixed' }}>
@@ -3488,10 +3410,16 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {(roleFiltered.attendance || []).length === 0 ? (
-              <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
-            ) : (
-              (roleFiltered.attendance as any[]).map((a: any) => (
+              {(() => {
+                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                if (attendanceSearchQuery) {
+                  filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+                }
+                if (filtered.length === 0) {
+                  return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
+                }
+                return filtered.map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs truncate">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
@@ -3501,8 +3429,8 @@ ${bodyHtml}
                   <td className="font-mono text-xs">{a.totalHours || 0}h</td>
                   <td className="font-mono text-xs text-slate-400">{a.breaksCount || 0}</td>
                 </tr>
-              ))
-            )}
+                ));
+              })()}
           </tbody>
         </table>
       </div>
@@ -3537,8 +3465,6 @@ ${bodyHtml}
           return selectedProjectId ? renderProjectDetail() : renderProjectsTab();
         case 'tasks':
           return selectedTaskId ? renderTaskDetail() : renderTasksTab();
-        case 'teams':
-          return renderTeamsTab();
         case 'workload':
           return selectedMemberId ? renderMemberDetail() : renderWorkloadTab();
         case 'deadlines':

@@ -96,7 +96,9 @@ class UserStore {
   private dbAvailable: boolean = false;
   private fallbackUsers: Map<string, UserRecord> = new Map();
   private initialized = false;
-  private dbLoadStarted = false;
+  // Holds the in-flight load so concurrent callers await the same query instead of each firing
+  // their own (the "has a load started?" boolean this replaces could not be un-set safely).
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
     if (this.isLegacyFileAuthEnabled()) {
@@ -109,35 +111,52 @@ class UserStore {
       && process.env.ENABLE_LEGACY_FILE_AUTH === 'true';
   }
 
+  // Loads the user directory once, and — critically — only marks itself initialized when that
+  // load actually SUCCEEDS. The previous version latched `initialized = true` before running the
+  // query, so a single transient failure (a DNS blip, an ECONNRESET from the pooler) left the
+  // store permanently empty and every subsequent login failed with "Invalid email or password"
+  // until the process was restarted. On a serverless instance that bricked the whole instance.
+  // Now a failed attempt simply leaves the store uninitialized and the next request retries.
   private async ensureInit(): Promise<void> {
     if (this.initialized) return;
-    if (this.dbLoadStarted) return;
-    this.dbLoadStarted = true;
-    this.initialized = true;
+    if (this.initPromise) return this.initPromise;
 
-    if (isDatabaseConfigured()) {
-      try {
-        const result = await query<DbUserRow>(
-          USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
-        );
-        this.dbAvailable = true;
-        // A configured database is authoritative. Clear local fallback users
-        // so registrations from a previous database are not carried forward.
-        this.fallbackUsers.clear();
-        for (const row of result.rows) {
-          const user = rowToUserRecord(row);
-          this.fallbackUsers.set(user.email.toLowerCase(), user);
-        }
-        if (result.rows.length > 0) {
-          console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
-        }
+    this.initPromise = this.loadUsers().finally(() => {
+      this.initPromise = null;
+    });
+    return this.initPromise;
+  }
 
-        await this.alignDatabaseUserSequence();
+  private async loadUsers(): Promise<void> {
+    if (!isDatabaseConfigured()) {
+      // No database to wait for — the file store (if enabled) is all there is, so this is a
+      // legitimately finished initialization rather than a failure worth retrying.
+      this.initialized = true;
+      return;
+    }
 
-        return;
-      } catch (err: any) {
-        console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
+    try {
+      const result = await query<DbUserRow>(
+        USER_QUERY + ' WHERE u.deactivatedatutc IS NULL AND u.organizationid = 1 ORDER BY u.userid'
+      );
+      this.dbAvailable = true;
+      // A configured database is authoritative. Clear local fallback users
+      // so registrations from a previous database are not carried forward.
+      this.fallbackUsers.clear();
+      for (const row of result.rows) {
+        const user = rowToUserRecord(row);
+        this.fallbackUsers.set(user.email.toLowerCase(), user);
       }
+      this.initialized = true;
+      if (result.rows.length > 0) {
+        console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
+      }
+
+      await this.alignDatabaseUserSequence();
+    } catch (err: any) {
+      // Deliberately leaves `initialized` false so the next call retries rather than serving an
+      // empty directory forever.
+      console.warn(`[UserStore] Database query failed (${err.message}); will retry on next request.`);
     }
   }
 
@@ -336,7 +355,7 @@ class UserStore {
           passwordHash,
           role: userData.role,
           department: userData.department,
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    avatar: '',
           title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
           status: 'active',
           createdAt: new Date().toISOString()
@@ -372,7 +391,7 @@ class UserStore {
       passwordHash,
       role: userData.role,
       department: userData.department,
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatar: '',
       title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
       status: 'active',
       createdAt: new Date().toISOString()

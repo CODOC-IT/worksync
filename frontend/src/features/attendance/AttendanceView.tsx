@@ -127,10 +127,11 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
           <button
             type="button"
             onClick={() => onEdit(record)}
-            className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
+            disabled={requestStatus === 'Pending'}
+            className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Pencil size={13} />
-            Edit Attendance
+            {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
           </button>
         )}
         {canRequestChange && onRequestChange && (
@@ -244,22 +245,26 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
 interface AttendanceEditorProps {
   record: AttendanceRecord;
   employee?: User;
+  requiresApproval?: boolean;
   onCancel: () => void;
   onSave: (
     recordId: string,
-    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-  ) => { success: boolean; message: string };
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>,
+    reason?: string
+  ) => Promise<{ success: boolean; message: string }>;
 }
 
 const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   record,
   employee,
+  requiresApproval = false,
   onCancel,
   onSave
 }) => {
   const [checkIn, setCheckIn] = useState(record.checkIn);
   const [checkOut, setCheckOut] = useState(record.checkOut || '');
   const [breaks, setBreaks] = useState<WorkBreak[]>(record.breaks || []);
+  const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
 
   const updateBreak = (index: number, updates: Partial<WorkBreak>) => {
@@ -283,8 +288,12 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
     ]);
   };
 
-  const handleSave = () => {
-    const result = onSave(record.id, { checkIn, checkOut, breaks });
+  const handleSave = async () => {
+    if (requiresApproval && !reason.trim()) {
+      setMessage('A reason is required for an attendance edit request.');
+      return;
+    }
+    const result = await onSave(record.id, { checkIn, checkOut, breaks }, reason);
     setMessage(result.message);
     if (result.success) onCancel();
   };
@@ -401,6 +410,20 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         )}
       </div>
 
+      {requiresApproval && (
+        <label className="mt-4 block text-xs text-slate-400">
+          Reason for change
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            rows={3}
+            required
+            className={`${inputClass} mt-1 resize-none`}
+            placeholder="Explain why these attendance values should be changed..."
+          />
+        </label>
+      )}
+
       {message && <p className="text-xs text-rose-300 mt-3">{message}</p>}
 
       <button
@@ -409,8 +432,101 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         className="mt-4 w-full py-3 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2"
       >
         <Save size={15} />
-        Save Attendance Changes
+        {requiresApproval ? 'Submit Attendance Edit Request' : 'Save Attendance Changes'}
       </button>
+    </div>
+  );
+};
+
+interface LeaveApplicationFormProps {
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (
+    leaveType: 'Full Day Leave' | 'Half Day Leave',
+    date: string,
+    reason: string
+  ) => Promise<{ success: boolean; message: string }>;
+}
+
+const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
+  pending,
+  onClose,
+  onSubmit
+}) => {
+  const [leaveType, setLeaveType] = useState<'Full Day Leave' | 'Half Day Leave'>('Full Day Leave');
+  const [date, setDate] = useState('');
+  const [reason, setReason] = useState('');
+  const [message, setMessage] = useState('');
+
+  const handleSubmit = async () => {
+    if (!leaveType || !date || !reason.trim()) {
+      setMessage('Leave type, leave date, and reason are required.');
+      return;
+    }
+    const result = await onSubmit(leaveType, date, reason.trim());
+    setMessage(result.message);
+    if (result.success) onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div className="glass-panel w-full max-w-lg border-violet-500/30 p-5">
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div>
+            <h3 className="font-bold text-white">Apply Leave</h3>
+            <p className="mt-1 text-xs text-slate-400">Submit a leave request for approval.</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close leave form" className="p-2 text-slate-400 hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-4 space-y-4">
+          <label className="block text-xs text-slate-300">
+            Leave Type
+            <select
+              value={leaveType}
+              onChange={(event) => setLeaveType(event.target.value as typeof leaveType)}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
+              required
+            >
+              <option value="Full Day Leave">Full Day Leave</option>
+              <option value="Half Day Leave">Half Day Leave</option>
+            </select>
+          </label>
+          <label className="block text-xs text-slate-300">
+            Leave Date
+            <input
+              type="date"
+              value={date}
+              onChange={(event) => setDate(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
+              required
+            />
+          </label>
+          <label className="block text-xs text-slate-300">
+            Reason
+            <textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              rows={4}
+              className="mt-1 w-full resize-none rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
+              required
+            />
+          </label>
+        </div>
+        {message && <p className="mt-3 text-xs text-rose-300">{message}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg bg-white/5 px-4 py-2 text-xs text-slate-300">Cancel</button>
+          <button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={pending}
+            className="glass-button-neon rounded-lg px-4 py-2 text-xs font-bold disabled:opacity-60"
+          >
+            {pending ? 'Submitting...' : 'Submit Leave Request'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -527,7 +643,8 @@ export const AttendanceView: React.FC = () => {
   } = useApp();
   const [selectedUserId, setSelectedUserId] = useState('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
-  const [requestRecordId, setRequestRecordId] = useState<string | null>(null);
+  const [leaveFormOpen, setLeaveFormOpen] = useState(false);
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [authorizationError, setAuthorizationError] = useState('');
 
   const todayStr = new Date().toISOString().split('T')[0];
@@ -544,9 +661,7 @@ export const AttendanceView: React.FC = () => {
     record.userId === currentUser.id;
   const isTeamMember = currentRole === 'Team_Member';
   const canEditRecord = (record: AttendanceRecord) =>
-    isAdmin || (isOwnRecord(record) && !isTeamMember);
-  const canRequestChange = (record: AttendanceRecord) =>
-    isTeamMember && isOwnRecord(record);
+    isAdmin || isOwnRecord(record);
   const getCorrectionRequestStatus = (
     record: AttendanceRecord
   ): HRRequest['status'] | undefined => {
@@ -562,8 +677,6 @@ export const AttendanceView: React.FC = () => {
     return latestRequest?.status;
   };
 
-  const hasPendingCorrectionRequest = (record: AttendanceRecord) =>
-    getCorrectionRequestStatus(record) === 'Pending';
   const hrTeamAttendance = attendanceRecords.filter((record) => {
     if (record.userId === currentUser.id) return false;
 
@@ -587,40 +700,6 @@ export const AttendanceView: React.FC = () => {
   const editingRecord = attendanceRecords.find(
     (record) => record.id === editingRecordId
   );
-  const requestRecord = attendanceRecords.find(
-    (record) => record.id === requestRecordId
-  );
-
-  const openRequestModal = (record: AttendanceRecord) => {
-    const requestStatus = getCorrectionRequestStatus(record);
-    if (
-      !canRequestChange(record) ||
-      requestStatus === 'Pending' ||
-      requestStatus === 'Approved'
-    ) return;
-    setRequestRecordId(record.id);
-  };
-
-  const submitAttendanceChangeRequest = (
-    record: AttendanceRecord,
-    reason: string
-  ) => {
-    void submitHRRequest(
-      'Correction',
-      reason,
-      {
-        requestedCheckIn: record.checkIn,
-        requestedCheckOut: record.checkOut,
-        attendanceChangeReason: reason
-      },
-      record.date
-    ).then((result) => {
-      if (result.success) {
-        setRequestRecordId(null);
-      }
-    });
-  };
-
   const openEditor = (record: AttendanceRecord) => {
     if (!canEditRecord(record)) {
       setAuthorizationError(
@@ -631,6 +710,17 @@ export const AttendanceView: React.FC = () => {
     }
     setAuthorizationError('');
     setEditingRecordId(record.id);
+  };
+
+  const submitLeave = async (
+    leaveType: 'Full Day Leave' | 'Half Day Leave',
+    date: string,
+    reason: string
+  ) => {
+    setLeaveSubmitting(true);
+    const result = await submitHRRequest('Leave', reason, { leaveType, leaveDays: 1 }, date);
+    setLeaveSubmitting(false);
+    return result;
   };
 
   return (
@@ -650,13 +740,24 @@ export const AttendanceView: React.FC = () => {
               </p>
             </div>
           </div>
-          <div className="text-left sm:text-right">
+          <div className="flex items-center gap-3">
+            {!isAdmin && (
+              <button
+                type="button"
+                onClick={() => setLeaveFormOpen(true)}
+                className="glass-button-neon rounded-xl px-4 py-2.5 text-xs font-bold"
+              >
+                Apply Leave
+              </button>
+            )}
+            <div className="text-left sm:text-right">
             <span className="text-xs text-slate-400 font-mono block">
               Current User
             </span>
             <span className="text-sm font-bold text-cyan-300">
               {currentUser.name}
             </span>
+            </div>
           </div>
         </div>
       </div>
@@ -812,20 +913,18 @@ export const AttendanceView: React.FC = () => {
         records={myAttendanceRecords}
         users={users}
         todayStr={todayStr}
-        readOnly={isTeamMember}
-        onEdit={isTeamMember ? undefined : openEditor}
-        canRequestChange={isTeamMember}
+        readOnly={false}
+        onEdit={openEditor}
+        canRequestChange={false}
         getRequestStatus={getCorrectionRequestStatus}
-        onRequestChange={openRequestModal}
         emptyMessage="No personal attendance records found."
       />
 
-      {requestRecord && (
-        <AttendanceChangeRequestModal
-          record={requestRecord}
-          pending={hasPendingCorrectionRequest(requestRecord)}
-          onClose={() => setRequestRecordId(null)}
-          onSubmit={submitAttendanceChangeRequest}
+      {leaveFormOpen && (
+        <LeaveApplicationForm
+          pending={leaveSubmitting}
+          onClose={() => setLeaveFormOpen(false)}
+          onSubmit={submitLeave}
         />
       )}
 
@@ -840,6 +939,7 @@ export const AttendanceView: React.FC = () => {
           key={editingRecord.id}
           record={editingRecord}
           employee={users.find((user) => user.id === editingRecord.userId)}
+          requiresApproval={!isAdmin}
           onCancel={() => setEditingRecordId(null)}
           onSave={updateAttendanceRecord}
         />

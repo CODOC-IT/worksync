@@ -131,6 +131,25 @@ export const validateChangeStatusBody = (body: unknown): ValidationResult => {
   return { valid: true };
 };
 
+// Reopen carries a `reason` rather than the `note` every other transition uses: the board
+// surfaces it as a distinct, mandatory "why are you reopening this?" prompt, and keeping the
+// field name different makes an accidentally-reused status-change payload fail loudly here
+// instead of silently reopening a task with a note meant for something else.
+const REOPEN_TARGETS = new Set(['Review', 'In Progress', 'Todo']);
+
+export const validateReopenBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const input = body as { status?: unknown; reason?: unknown };
+
+  if (typeof input.status !== 'string' || !REOPEN_TARGETS.has(input.status)) {
+    return { valid: false, message: 'status must be one of Review, In Progress, Todo.' };
+  }
+  if (typeof input.reason !== 'string' || !input.reason.trim()) {
+    return { valid: false, message: 'A reason is required to reopen a completed task.' };
+  }
+  return { valid: true };
+};
+
 export const validateReviewDecisionBody = (body: unknown): ValidationResult => {
   if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
   const { note } = body as { note?: unknown };

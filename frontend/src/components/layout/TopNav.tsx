@@ -66,11 +66,19 @@ export const TopNav: React.FC<TopNavProps> = ({
           onClick={() => onSelectTab('profile')}
           className="flex items-center gap-2 pl-2 pr-2 sm:pr-3 py-1 rounded-xl bg-slate-900/50 border border-white/10 hover:border-cyan-500/40 transition-all text-xs"
         >
-          <img
-            src={currentUser.avatar}
-            alt={currentUser.name}
-            className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg object-cover ring-1 ring-cyan-500/40"
-          />
+          {currentUser.avatar && !currentUser.avatar.includes('unsplash') ? (
+            <img
+              src={currentUser.avatar}
+              alt={currentUser.name}
+              className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg object-cover ring-1 ring-cyan-500/40"
+            />
+          ) : (
+            <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-cyan-500/20 flex items-center justify-center ring-1 ring-cyan-500/40">
+              <span className="text-[9px] font-bold text-cyan-400">
+                {currentUser.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0].toUpperCase()).join('')}
+              </span>
+            </div>
+          )}
           <div className="text-left hidden md:block">
             <span className="font-semibold text-slate-200 block leading-tight">{currentUser.name}</span>
             <span className="text-[10px] text-slate-400 block leading-tight">{currentUser.title}</span>
