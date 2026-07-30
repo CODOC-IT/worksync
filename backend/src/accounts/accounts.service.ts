@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query, withTransaction } from '../db/pool.js';
-import { sendCredentialEmail, sendPasswordResetEmail } from '../services/emailService.js';
+import { sendCredentialEmail } from '../services/emailService.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import {
   AccountAuthorizationError,
@@ -26,15 +26,13 @@ export interface AccountServiceDependencies {
   withTransaction: typeof withTransaction;
   supabase: () => SupabaseClient;
   sendCredentials: typeof sendCredentialEmail;
-  sendPasswordReset: typeof sendPasswordResetEmail;
 }
 
 const defaultDependencies: AccountServiceDependencies = {
   query,
   withTransaction,
   supabase: getSupabaseServiceClient,
-  sendCredentials: sendCredentialEmail,
-  sendPasswordReset: sendPasswordResetEmail
+  sendCredentials: sendCredentialEmail
 };
 
 const baseRoleCode: Record<AccountBaseRole, string> = {
@@ -43,23 +41,12 @@ const baseRoleCode: Record<AccountBaseRole, string> = {
   Team_Member: 'TeamMember'
 };
 
-const publicRole = (roleCode: string | null): AccountBaseRole =>
-  roleCode === 'Administrator' ? 'Admin' : roleCode === 'HRRepresentative' ? 'HR' : 'Team_Member';
-
 const authCreateError = (message?: string): Error => {
   const normalized = (message || '').toLowerCase();
   if (normalized.includes('already') || normalized.includes('exists') || normalized.includes('registered')) {
     return new AccountConflictError('An account already exists for this email.');
   }
   return new AccountProvisioningUnavailableError('Supabase could not create the account identity.');
-};
-
-const authLinkError = (message?: string): Error => {
-  const normalized = (message || '').toLowerCase();
-  if (normalized.includes('rate limit')) {
-    return new AccountProvisioningUnavailableError('Password reset email rate limit reached. Please try again later.');
-  }
-  return new AccountProvisioningUnavailableError('Supabase could not create a password reset link.');
 };
 
 const assertActorCanCreate = (actor: ProvisioningActor, input: CreateAccountInput): void => {
@@ -286,78 +273,4 @@ export const createAccount = async (
     // failure into a false 500 response that could cause an operator to create a duplicate.
   }
   return { account, invitationStatus: 'sent' };
-};
-
-interface ResendTarget {
-  userid: number;
-  authuserid: string | null;
-  email: string;
-  displayname: string;
-  departmentid: number | null;
-  accountstatus: string;
-  createdbyuserid: number | null;
-  invitationsentatutc: string | null;
-  rolecode: string | null;
-}
-
-export const resendInvitation = async (
-  actor: ProvisioningActor,
-  targetUserId: string,
-  dependencies: AccountServiceDependencies = defaultDependencies
-): Promise<void> => {
-  if (actor.role !== 'Admin' && actor.role !== 'HR') {
-    throw new AccountAuthorizationError('Only Admin and HR users can send account password reset links.');
-  }
-  const targetResult = await dependencies.query<ResendTarget>(
-    `SELECT u.userid, u.authuserid, u.email, u.displayname, u.departmentid, u.accountstatus,
-       u.createdbyuserid, u.invitationsentatutc,
-       COALESCE(
-         MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'),
-         MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'),
-         MAX(r.rolecode) FILTER (WHERE r.rolecode = 'TeamMember')
-       ) AS rolecode
-     FROM iam.users u
-     LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
-       AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-     LEFT JOIN iam.roles r ON r.roleid = ur.roleid
-     WHERE u.userid = $1
-     GROUP BY u.userid`,
-    [toUserPk(targetUserId)]
-  );
-  const target = targetResult.rows[0];
-  if (!target) throw new AccountValidationError('Account not found.');
-  if (!target.authuserid || !target.createdbyuserid || target.invitationsentatutc) {
-    throw new AccountValidationError('A password reset link is only available when the original credential email was not recorded as sent.');
-  }
-  if (actor.role === 'HR') {
-    if (publicRole(target.rolecode) !== 'Team_Member') {
-      throw new AccountAuthorizationError('HR users may only send password reset links for Member accounts.');
-    }
-    if (!target.departmentid) throw new AccountAuthorizationError('The Member is outside your department hierarchy.');
-    await assertDepartmentPermitted(actor, target.departmentid, dependencies);
-  }
-
-  const generated = await dependencies.supabase().auth.admin.generateLink({
-    type: 'recovery',
-    email: target.email,
-    options: { redirectTo: process.env.SUPABASE_PASSWORD_RESET_REDIRECT_URL || process.env.APP_LOGIN_URL || undefined }
-  });
-  const actionLink = generated.data?.properties?.action_link;
-  if (generated.error || !actionLink) throw authLinkError(generated.error?.message);
-
-  try {
-    await dependencies.sendPasswordReset({
-      toEmail: target.email,
-      recipientName: target.displayname,
-      actionLink
-    });
-  } catch {
-    throw new AccountProvisioningUnavailableError('The password reset email could not be sent.');
-  }
-
-  await dependencies.query(
-    `UPDATE iam.users SET invitationsentatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP
-      WHERE userid = $1`,
-    [target.userid]
-  );
 };

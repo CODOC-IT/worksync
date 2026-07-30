@@ -12,7 +12,6 @@ export interface User {
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
   invitationSentAtUtc?: string | null;
-  canResendInvitation?: boolean;
   lastActive?: string;
   githubUsername?: string;
   passwordHash?: string;
