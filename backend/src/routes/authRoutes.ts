@@ -368,9 +368,9 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    const { name, email, password, role, department, title } = req.body;
-    if (!name || !email || !role || !department || !title) {
-      res.status(400).json({ success: false, message: 'Name, email, role, department, and title are required.' });
+    const { name, username, email, password, role, department, title } = req.body;
+    if (!name || !username || !email || !role || !department || !title) {
+      res.status(400).json({ success: false, message: 'Name, username, email, role, department, and title are required.' });
       return;
     }
     if (req.user.role === 'HR' && role === 'Admin') {
@@ -384,6 +384,7 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
 
     const newUser = await userStore.createUser({
       name: String(name).trim(),
+      username: String(username).trim().toLowerCase(),
       email: String(email).trim().toLowerCase(),
       password: resolvedPassword,
       role,

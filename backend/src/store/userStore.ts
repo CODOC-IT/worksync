@@ -335,6 +335,7 @@ class UserStore {
 
   public async createUser(userData: {
     name: string;
+    username: string;
     email: string;
     password: string;
     role: UserRole;
@@ -350,6 +351,17 @@ class UserStore {
           ? 'An account with this email already exists and is currently deactivated. Reactivate the existing account instead of creating a new one.'
           : 'An account with this email already exists.'
       );
+    }
+
+    const normalizedUsername = userData.username.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{2,79}$/i.test(normalizedUsername)) {
+      throw new Error('Username must be 3-80 letters, numbers, dots, hyphens, or underscores.');
+    }
+    const usernameDuplicate = Array.from(this.fallbackUsers.values()).find(
+      (entry) => entry.username?.toLowerCase() === normalizedUsername
+    );
+    if (usernameDuplicate) {
+      throw new Error('This username is already in use.');
     }
 
     if (userData.role === 'Admin' && this.hasRole('Admin')) {
@@ -375,10 +387,10 @@ class UserStore {
         // an orphaned user row that permanently occupies the email without a usable account.
         const userId = await withTransaction(async (runQuery) => {
           const insertUser = await runQuery<{ userid: number }>(
-            `INSERT INTO iam.users (organizationid, departmentid, email, givenname, familyname, displayname, designation, accountstatus)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'Active')
+            `INSERT INTO iam.users (organizationid, departmentid, email, username, givenname, familyname, displayname, designation, accountstatus)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Active')
              RETURNING userid`,
-            [orgId, departmentId, userData.email.toLowerCase(), givenName, familyName, userData.name, userData.title || null]
+            [orgId, departmentId, userData.email.toLowerCase(), normalizedUsername, givenName, familyName, userData.name, userData.title || null]
           );
           const newUserId = insertUser.rows[0].userid;
 
@@ -406,6 +418,7 @@ class UserStore {
           id: fromUserPk(userId),
           name: userData.name,
           email: userData.email.toLowerCase(),
+          username: normalizedUsername,
           passwordHash,
           role: userData.role,
           department: userData.department,
@@ -442,6 +455,7 @@ class UserStore {
       id: `usr-${nextId}`,
       name: userData.name,
       email: userData.email.toLowerCase(),
+      username: normalizedUsername,
       passwordHash,
       role: userData.role,
       department: userData.department,
@@ -459,7 +473,7 @@ class UserStore {
 
   public async updateManagedUser(
     userId: string,
-    updates: Partial<Pick<UserRecord, 'name' | 'email' | 'role' | 'department' | 'title'>>,
+    updates: Partial<Pick<UserRecord, 'name' | 'username' | 'email' | 'role' | 'department' | 'title'>>,
     actorId: string
   ): Promise<Omit<UserRecord, 'passwordHash'>> {
     await this.ensureInit();
@@ -467,12 +481,14 @@ class UserStore {
     if (!user) throw new Error('User not found.');
 
     const nextRole = updates.role || user.role;
+    const nextUsername = (updates.username || user.username || '').trim().toLowerCase();
     const nextEmail = (updates.email || user.email).trim().toLowerCase();
     const nextName = (updates.name || user.name).trim();
     const nextDepartment = (updates.department || user.department).trim() || user.department;
     const nextTitle = (updates.title || user.title).trim() || user.title;
 
     if (!nextName) throw new Error('Name is required.');
+    if (!nextUsername || !/^[a-z0-9][a-z0-9._-]{2,79}$/i.test(nextUsername)) throw new Error('A valid username is required.');
     if (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw new Error('A valid email is required.');
     if (!nextDepartment) throw new Error('Department is required.');
 
@@ -480,6 +496,10 @@ class UserStore {
       (existing) => existing.id !== userId && existing.email.toLowerCase() === nextEmail
     );
     if (duplicate) throw new Error('A user with this email already exists.');
+    const usernameDuplicate = Array.from(this.fallbackUsers.values()).find(
+      (existing) => existing.id !== userId && existing.username?.toLowerCase() === nextUsername
+    );
+    if (usernameDuplicate) throw new Error('This username is already in use.');
 
     const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
     if (user.role === 'Admin' && nextRole !== 'Admin' && user.status === 'active' && activeAdminsCount <= 1) {
@@ -504,13 +524,14 @@ class UserStore {
           `UPDATE iam.users
            SET departmentid = $1,
                email = $2,
-               givenname = $3,
-               familyname = $4,
-               displayname = $5,
-               designation = $6,
+               username = $3,
+               givenname = $4,
+               familyname = $5,
+               displayname = $6,
+               designation = $7,
                updatedatutc = CURRENT_TIMESTAMP
-           WHERE userid = $7`,
-          [departmentId, nextEmail, givenName, familyName, nextName, nextTitle, uid]
+           WHERE userid = $8`,
+          [departmentId, nextEmail, nextUsername, givenName, familyName, nextName, nextTitle, uid]
         );
 
         if (nextRole !== user.role) {
@@ -545,6 +566,7 @@ class UserStore {
     const oldEmail = user.email.toLowerCase();
     this.fallbackUsers.delete(oldEmail);
     user.name = nextName;
+    user.username = nextUsername;
     user.email = nextEmail;
     user.role = nextRole;
     user.department = nextDepartment;
