@@ -40,7 +40,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { currentRole, currentUser, systemApprovals, hrRequests, notifications, logoutUser } = useApp();
 
-  const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
+  const pendingApprovalsCount = systemApprovals.filter((sa) =>
+    sa.status === 'Pending' &&
+    sa.type !== 'Task_Creation' &&
+    sa.type !== 'Controlled_Edit'
+  ).length;
   const pendingHrCount = hrRequests.filter((request) =>
     request.status === 'Pending' &&
     request.userId !== currentUser.id &&

@@ -2076,7 +2076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const isAdmin = currentRole === 'Admin';
       const isOwnRecord = record.userId === currentUser.id;
-      const canEditRecord = isOwnRecord || isAdmin;
+      const canEditRecord = isOwnRecord && !isAdmin;
       if (!canEditRecord) {
         return {
           success: false,
@@ -2105,72 +2105,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, message: 'Every saved break must have valid start and end times.' };
       }
 
-      if (!isAdmin) {
-        if (!isOwnRecord) {
-          return { success: false, message: 'You can only request changes to your own attendance.' };
-        }
-        const cleanReason = reason?.trim() || '';
-        if (!cleanReason) {
-          return { success: false, message: 'A reason is required for an attendance edit request.' };
-        }
-        return submitHRRequest(
-          'Correction',
-          cleanReason,
-          {
-            currentCheckIn: record.checkIn,
-            currentCheckOut: record.checkOut || '',
-            requestedCheckIn: updates.checkIn,
-            requestedCheckOut: updates.checkOut || '',
-            currentBreaks: record.breaks,
-            requestedBreaks: normalizedBreaks,
-            attendanceChangeReason: cleanReason
-          },
-          record.date
-        );
+      const cleanReason = reason?.trim() || '';
+      if (!cleanReason) {
+        return { success: false, message: 'A reason is required for an attendance edit request.' };
       }
-
-      try {
-        const response = await fetch(
-          `/api/attendance/${encodeURIComponent(record.userId)}/${encodeURIComponent(record.date)}`,
-          {
-            method: 'PUT',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-              checkIn: updates.checkIn,
-              checkOut: updates.checkOut || '',
-              breaks: normalizedBreaks,
-              reason: reason?.trim() || ''
-            })
-          }
-        );
-        const data = await response.json().catch(() => null);
-        if (!response.ok || !data?.success) {
-          throw new Error(data?.message || 'Failed to save attendance changes.');
-        }
-      } catch (error: any) {
-        return { success: false, message: error?.message || 'Failed to save attendance changes.' };
-      }
-
-      setAttendanceRecords((prev) =>
-        prev.map((item) =>
-          item.id === recordId
-            ? {
-              ...item,
-              checkIn: updates.checkIn,
-              checkOut: updates.checkOut || undefined,
-              breaks: normalizedBreaks
-            }
-            : item
-        )
+      return submitHRRequest(
+        'Correction',
+        cleanReason,
+        {
+          currentCheckIn: record.checkIn,
+          currentCheckOut: record.checkOut || '',
+          requestedCheckIn: updates.checkIn,
+          requestedCheckOut: updates.checkOut || '',
+          currentBreaks: record.breaks,
+          requestedBreaks: normalizedBreaks,
+          attendanceChangeReason: cleanReason
+        },
+        record.date
       );
-
-      pushActivity(
-        `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
-        'Attendance',
-        record.id,
-        currentUser.name
-      );
-      return { success: true, message: 'Attendance record updated.' };
     };
 
     // HR Requests
