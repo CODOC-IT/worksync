@@ -41,6 +41,7 @@ export interface TaskRow {
   completedatutc: Date | null;
   completionsummary: string | null;
   archivedatutc: Date | null;
+  projectarchivedatutc: Date | null;
   createdatutc: Date;
   updatedatutc: Date;
   rowversion: string;
@@ -99,6 +100,8 @@ export interface TaskDTO {
   completionSummary?: string;
   createdAt: string;
   reviewApproval?: 'Pending';
+  isArchived: boolean;
+  archivedAt?: string;
 }
 
 export interface TaskStatusHistoryDTO {

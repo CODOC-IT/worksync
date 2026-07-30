@@ -82,110 +82,6 @@ router.get('/role-status', async (_req, res: Response): Promise<void> => {
   });
 });
 
-// POST /api/auth/forgot-password
-// Body: { email }
-// Sends OTP to the user's email if account exists (don't reveal whether it exists)
-router.post('/forgot-password', async (req, res: Response): Promise<void> => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      res.status(400).json({ success: false, message: 'Email is required.' });
-      return;
-    }
-
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email.trim())) {
-      res.status(400).json({ success: false, message: 'Invalid email address format.' });
-      return;
-    }
-
-    const { otpStore } = await import('../store/otpStore.js');
-    const { sendOTPEmail, isEmailConfigured } = await import('../services/emailService.js');
-
-    if (!isEmailConfigured()) {
-      res.status(503).json({ success: false, message: 'Email service is not configured.' });
-      return;
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const user = await userStore.findByEmailAsync(normalizedEmail);
-
-    if (user && user.status === 'active') {
-      const { allowed } = otpStore.canResend(normalizedEmail);
-      if (allowed) {
-        try {
-          const otp = otpStore.generate(normalizedEmail);
-          await sendOTPEmail(normalizedEmail, user.name, otp);
-        } catch (error: any) {
-          // Keep the public response indistinguishable for known and unknown addresses.
-          console.error('[Forgot Password Email Error]', error.message);
-        }
-      }
-    }
-
-    // Always return 200 to prevent email enumeration
-    res.status(200).json({
-      success: true,
-      message: 'If an account exists with that email, a verification code has been sent.'
-    });
-  } catch (error: any) {
-    console.error('[Forgot Password Error]', error.message);
-    res.status(500).json({ success: false, message: 'Failed to process request.' });
-  }
-});
-
-// PUT /api/auth/password
-// Body: { resetToken, newPassword }
-// Updates the user's password after OTP verification (resetToken from otp verify)
-router.put('/password', async (req, res: Response): Promise<void> => {
-  try {
-    const { resetToken, newPassword } = req.body;
-
-    if (!resetToken || !newPassword) {
-      res.status(400).json({ success: false, message: 'Reset token and new password are required.' });
-      return;
-    }
-
-    if (typeof newPassword !== 'string' || newPassword.length < 6) {
-      res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
-      return;
-    }
-
-    let payload: { email: string; purpose: string };
-    try {
-      payload = jwt.verify(resetToken, getJwtSecret()) as { email: string; purpose: string };
-    } catch {
-      res.status(401).json({ success: false, message: 'Invalid or expired reset token. Please request a new one.' });
-      return;
-    }
-
-    if (payload.purpose !== 'password_reset') {
-      res.status(401).json({ success: false, message: 'Invalid reset token.' });
-      return;
-    }
-
-    const user = await userStore.findByEmailAsync(payload.email);
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found.' });
-      return;
-    }
-
-    if (user.status !== 'active') {
-      res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
-      return;
-    }
-
-    const bcrypt = await import('bcryptjs');
-    const newHash = bcrypt.hashSync(newPassword, 10);
-    await userStore.updatePassword(payload.email, newHash);
-
-    res.status(200).json({ success: true, message: 'Password updated successfully. Please sign in with your new password.' });
-  } catch {
-    res.status(500).json({ success: false, message: 'Failed to update password.' });
-  }
-});
-
 // GET /api/auth/me
 router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -245,10 +141,18 @@ router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Respons
 });
 
 // PUT /api/auth/profile/display-name
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct display name editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
     const { name } = req.body;
@@ -279,11 +183,107 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
   }
 });
 
+// PUT /api/auth/profile/username
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/username', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct username editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { username } = req.body;
+
+    if (!username || typeof username !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Username is required.' });
+    }
+
+    const normalizedUsername = username.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (normalizedUsername.length < 3) {
+      return void res.status(400).json({ success: false, message: 'Username must be at least 3 characters long.' });
+    }
+
+    if (normalizedUsername.length > 80) {
+      return void res.status(400).json({ success: false, message: 'Username must not exceed 80 characters.' });
+    }
+
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(normalizedUsername)) {
+      return void res.status(400).json({ success: false, message: 'Username can only contain letters, numbers, dots, hyphens, and underscores.' });
+    }
+
+    const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Username updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update username.';
+    return void res.status(message.includes('already in use') ? 409 : 500).json({ success: false, message });
+  }
+});
+
+// PUT /api/auth/profile/email
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct email editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const normalizedEmail = email.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return void res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Email updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update email.';
+    return void res.status(message.includes('already exists') ? 409 : 500).json({ success: false, message });
+  }
+});
+
 // PUT /api/auth/profile/avatar
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct profile picture editing is restricted to Administrators.'
+      });
     }
 
     const { avatar } = req.body;
@@ -315,10 +315,19 @@ router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest,
 });
 
 // PUT /api/auth/profile/password
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    if (req.user.role !== 'Admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Direct password changing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
       return;
     }
 
@@ -368,9 +377,9 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
       return;
     }
 
-    const { name, email, password, role, department, title } = req.body;
-    if (!name || !email || !role || !department || !title) {
-      res.status(400).json({ success: false, message: 'Name, email, role, department, and title are required.' });
+    const { name, username, email, password, role, department, title } = req.body;
+    if (!name || !username || !email || !role || !department || !title) {
+      res.status(400).json({ success: false, message: 'Name, username, email, role, department, and title are required.' });
       return;
     }
     if (req.user.role === 'HR' && role === 'Admin') {
@@ -384,6 +393,7 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
 
     const newUser = await userStore.createUser({
       name: String(name).trim(),
+      username: String(username).trim().toLowerCase(),
       email: String(email).trim().toLowerCase(),
       password: resolvedPassword,
       role,

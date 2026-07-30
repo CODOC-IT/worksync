@@ -156,6 +156,7 @@ export const canEditTask = (
   project: Project,
   task: Task
 ): boolean => {
+  if (!isActiveProject(project) || task.isArchived) return false;
   if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
 
   const isProjectLead = role === 'Team_Lead' && project.teamLeadId === userId;
@@ -172,7 +173,7 @@ export const canDeleteTask = (
   task: Task,
   teamLeadCanDeleteTasks = true
 ): boolean => {
-  if (!teamLeadCanDeleteTasks || !isActiveProject(project)) return false;
+  if (!teamLeadCanDeleteTasks || !isActiveProject(project) || task.isArchived) return false;
   return getTaskAssigneeIds(task).includes(userId)
     || (role === 'Team_Lead' && project.teamLeadId === userId);
 };

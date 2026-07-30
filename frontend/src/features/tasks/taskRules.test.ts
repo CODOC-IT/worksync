@@ -304,3 +304,22 @@ test('enforces edit and delete permission checks', () => {
   });
   assert.equal(deniedDelete.success, false);
 });
+
+test('makes every related task read-only while its project is archived', () => {
+  const archivedProject = { ...project, status: 'Archived' as const };
+  const archivedTask = { ...task, isArchived: true, archivedAt: '2026-07-30T10:00:00.000Z' };
+
+  assert.equal(canEditTask('Team_Lead', 'lead', archivedProject, archivedTask), false);
+  assert.equal(canEditTask('Team_Member', 'member', archivedProject, archivedTask), false);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', archivedProject, archivedTask), false);
+  assert.equal(canDeleteTask('Team_Lead', 'lead', project, archivedTask), false);
+
+  const deniedUpdate = prepareTaskUpdate(archivedTask.id, { title: 'Should not change' }, {
+    currentRole: 'Team_Lead',
+    currentUserId: 'lead',
+    projects: [archivedProject],
+    tasks: [archivedTask],
+    users
+  });
+  assert.equal(deniedUpdate.success, false);
+});

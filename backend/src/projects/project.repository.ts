@@ -252,20 +252,31 @@ export const archiveProject = async (
   archiveReason: string
 ): Promise<boolean> => {
   const statusId = await getProjectStatusId('Archived');
-  const result = await query(
-    `UPDATE work.projects
-     SET projectstatusid = $1, archivedatutc = CURRENT_TIMESTAMP, archivedbyuserid = $2,
-         archivereason = $3, updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
-     WHERE projectid = $4 AND archivedatutc IS NULL`,
-    [statusId, archivedByUserId, archiveReason, projectId]
-  );
-  return (result.rowCount ?? 0) > 0;
+  return withTransaction(async (runQuery) => {
+    const result = await runQuery(
+      `UPDATE work.projects
+       SET projectstatusid = $1, archivedatutc = CURRENT_TIMESTAMP, archivedbyuserid = $2,
+           archivereason = $3, updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
+       WHERE projectid = $4 AND archivedatutc IS NULL`,
+      [statusId, archivedByUserId, archiveReason, projectId]
+    );
+    if ((result.rowCount ?? 0) === 0) return false;
+
+    await runQuery(
+      `UPDATE work.tasks
+       SET projectarchivedatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP,
+           rowversion = rowversion + 1
+       WHERE projectid = $1 AND archivedatutc IS NULL AND projectarchivedatutc IS NULL`,
+      [projectId]
+    );
+    return true;
+  });
 };
 
-// Hard delete for a project that's already archived. Cascades only rows this module owns
-// (ProjectMembers/Milestones/ReviewerDesignations/the ProjectFiles link row/TeamLeadProjectScopes
-// -- ProjectPolicies cascades via its own FK already) and detaches Notifications (a nullable FK
-// this module doesn't own) so that history survives without a dangling link.
+// Hard delete for an already-archived project. Its tasks and the task-owned operational rows are
+// deleted in the same transaction. Notifications/AI generations keep their historical content
+// but lose the nullable live task link. Immutable audit rows retain historical ids; the task and
+// project audit FKs are intentionally relaxed by database/24 and database/25.
 //
 // AuditEvents rows are never touched, deleted, or modified -- audit.AuditEvents has a
 // BEFORE UPDATE OR DELETE trigger (database/22_audit_enhancements.sql) that rejects any mutation
@@ -274,11 +285,116 @@ export const archiveProject = async (
 // (database/24_audit_project_fk_relax.sql) -- a permanently-deleted project's audit history simply
 // keeps its now-historical ProjectId value forever, exactly as it was written.
 //
-// Tasks/Calendar Events/Discussion Threads/AI PromptGenerations are also NOT touched -- if any
-// still reference this project the final DELETE hits their live FK and throws, which the service
-// layer maps to a "still has linked records" error rather than partially deleting.
+// Project-level Calendar Events/Discussion Threads/AI PromptGenerations remain protected. If one
+// still references the project, the final DELETE fails and this whole transaction (including
+// task deletion) rolls back.
 export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
   withTransaction(async (runQuery) => {
+    await runQuery(
+      `UPDATE notify.notifications
+       SET taskid = NULL, changerequestid = NULL
+       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+          OR changerequestid IN (
+            SELECT cr.changerequestid
+            FROM work.taskchangerequests cr
+            JOIN work.tasks t ON t.taskid = cr.taskid
+            WHERE t.projectid = $1
+          )`,
+      [projectId]
+    );
+    await runQuery(
+      `UPDATE ai.promptgenerations
+       SET taskid = NULL
+       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)`,
+      [projectId]
+    );
+
+    // Task/change-request discussions cannot survive without their sole parent. Delete their
+    // comments first; mention/file links cascade from comments through their existing FKs.
+    await runQuery(
+      `DELETE FROM collab.comments
+       WHERE threadid IN (
+         SELECT dt.threadid
+         FROM collab.discussionthreads dt
+         WHERE dt.taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+            OR dt.changerequestid IN (
+              SELECT cr.changerequestid
+              FROM work.taskchangerequests cr
+              JOIN work.tasks t ON t.taskid = cr.taskid
+              WHERE t.projectid = $1
+            )
+       )`,
+      [projectId]
+    );
+    await runQuery(
+      `DELETE FROM collab.discussionthreads
+       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+          OR changerequestid IN (
+            SELECT cr.changerequestid
+            FROM work.taskchangerequests cr
+            JOIN work.tasks t ON t.taskid = cr.taskid
+            WHERE t.projectid = $1
+          )`,
+      [projectId]
+    );
+
+    await runQuery(
+      `DELETE FROM work.changerequestreviews
+       WHERE changerequestid IN (
+         SELECT cr.changerequestid
+         FROM work.taskchangerequests cr
+         JOIN work.tasks t ON t.taskid = cr.taskid
+         WHERE t.projectid = $1
+       )`,
+      [projectId]
+    );
+    await runQuery(
+      `DELETE FROM work.taskchangerequestitems
+       WHERE changerequestid IN (
+         SELECT cr.changerequestid
+         FROM work.taskchangerequests cr
+         JOIN work.tasks t ON t.taskid = cr.taskid
+         WHERE t.projectid = $1
+       )`,
+      [projectId]
+    );
+    await runQuery(
+      `DELETE FROM work.taskchangerequests
+       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)`,
+      [projectId]
+    );
+
+    await runQuery(
+      `DELETE FROM work.taskdependencies
+       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+          OR dependsontaskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)`,
+      [projectId]
+    );
+    await runQuery(
+      'DELETE FROM work.taskassignees WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)',
+      [projectId]
+    );
+    await runQuery(
+      'DELETE FROM work.taskacceptancecriteria WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)',
+      [projectId]
+    );
+    await runQuery(
+      'DELETE FROM work.taskstatushistory WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)',
+      [projectId]
+    );
+    await runQuery(
+      'DELETE FROM work.taskblockers WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)',
+      [projectId]
+    );
+    await runQuery(
+      'DELETE FROM collab.taskfiles WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)',
+      [projectId]
+    );
+
+    // Break the self-reference before deleting every task/subtask in one statement.
+    await runQuery('UPDATE work.tasks SET parenttaskid = NULL WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM work.tasks WHERE projectid = $1', [projectId]);
+
     await runQuery('DELETE FROM work.projectmembers WHERE projectid = $1', [projectId]);
     await runQuery('DELETE FROM work.projectmilestones WHERE projectid = $1', [projectId]);
     await runQuery('DELETE FROM work.projectreviewerdesignations WHERE projectid = $1', [projectId]);
@@ -301,14 +417,25 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
 // silently no-op on an Active project.
 export const restoreProject = async (projectId: number): Promise<boolean> => {
   const statusId = await getProjectStatusId('Active');
-  const result = await query(
-    `UPDATE work.projects
-     SET projectstatusid = $1, archivedatutc = NULL, archivedbyuserid = NULL, archivereason = NULL,
-         updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
-     WHERE projectid = $2 AND archivedatutc IS NOT NULL`,
-    [statusId, projectId]
-  );
-  return (result.rowCount ?? 0) > 0;
+  return withTransaction(async (runQuery) => {
+    const result = await runQuery(
+      `UPDATE work.projects
+       SET projectstatusid = $1, archivedatutc = NULL, archivedbyuserid = NULL, archivereason = NULL,
+           updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
+       WHERE projectid = $2 AND archivedatutc IS NOT NULL`,
+      [statusId, projectId]
+    );
+    if ((result.rowCount ?? 0) === 0) return false;
+
+    await runQuery(
+      `UPDATE work.tasks
+       SET projectarchivedatutc = NULL, updatedatutc = CURRENT_TIMESTAMP,
+           rowversion = rowversion + 1
+       WHERE projectid = $1 AND projectarchivedatutc IS NOT NULL`,
+      [projectId]
+    );
+    return true;
+  });
 };
 
 export const addProjectMember = async (

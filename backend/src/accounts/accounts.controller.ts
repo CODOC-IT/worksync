@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { accountErrorStatus, AccountAuthorizationError } from './accounts.errors.js';
-import { createAccount, listPermittedDepartments, resendInvitation } from './accounts.service.js';
+import { createAccount, listPermittedDepartments } from './accounts.service.js';
 import { ProvisioningActor } from './accounts.types.js';
 import { parseCreateAccount } from './accounts.validation.js';
 
@@ -30,7 +30,6 @@ export const getDepartments = async (req: AuthenticatedRequest, res: Response): 
     sendError(res, error, 'Could not load departments.');
   }
 };
-
 export const postAccount = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   let actor: ProvisioningActor | undefined;
   try {
@@ -78,30 +77,5 @@ export const postAccount = async (req: AuthenticatedRequest, res: Response): Pro
       });
     }
     sendError(res, error, 'Account creation failed.');
-  }
-};
-
-export const postInvitationResend = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const actor = actorFromRequest(req);
-    await resendInvitation(actor, req.params.userId);
-    recordActivitySafe({
-      actorId: actor.id,
-      actorEmail: actor.email,
-      actorRole: actor.role,
-      affectedUserId: req.params.userId,
-      action: 'Updated',
-      module: 'Authentication',
-      entityType: 'User',
-      entityId: req.params.userId,
-      entityName: 'Provisioned account',
-      description: `${actor.email} sent a password reset link.`,
-      result: 'Successful',
-      source: 'API',
-      important: true
-    });
-    res.status(200).json({ success: true, message: 'Password reset email sent.' });
-  } catch (error) {
-    sendError(res, error, 'Could not send the password reset email.');
   }
 };

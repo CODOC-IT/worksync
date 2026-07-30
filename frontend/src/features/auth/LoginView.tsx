@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, Shield, Sparkles } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { ForgotPasswordView } from './ForgotPasswordView';
 import { supabase } from '../../../utils/supabase';
 
 interface LoginViewProps {
@@ -11,7 +10,6 @@ interface LoginViewProps {
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const { loginUser } = useApp();
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -51,10 +49,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       setLoading(false);
     }
   };
-
-  if (showForgotPassword) {
-    return <ForgotPasswordView onBackToLogin={() => setShowForgotPassword(false)} />;
-  }
 
   return (
     <div
@@ -168,16 +162,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-slate-300 block">Password</label>
-                    <button
-                      type="button"
-                      onClick={() => setShowForgotPassword(true)}
-                      className="text-[11px] text-cyan-400 hover:underline"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
+                  <label className="text-xs font-medium text-slate-300 block">Password</label>
                   <div className="relative">
                     <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input

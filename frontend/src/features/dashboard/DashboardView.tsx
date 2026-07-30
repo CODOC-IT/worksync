@@ -198,14 +198,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   }, [activeProjects, deadlineFilter, today, todayEnd, oneDayFromNow, threeDaysFromNow]);
 
   const isMyTask = useCallback((t: Task) => t.assigneeId === currentUser.id || (t.assigneeIds ?? []).includes(currentUser.id), [currentUser.id]);
-  const myTasks = useMemo(() => tasks.filter((t) => isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
+  const myTasks = useMemo(() => tasks.filter((t) => !t.isArchived && isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
 
   const deadlines = useMemo(() => [
     ...projects.filter((p) => p.status !== 'Archived' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
-    ...tasks.filter((t) => t.dueDate && t.status !== 'Done').map((t) => ({ date: t.dueDate, label: `Task: ${t.title}` })),
+    ...tasks.filter((t) => !t.isArchived && t.dueDate && t.status !== 'Done').map((t) => ({ date: t.dueDate, label: `Task: ${t.title}` })),
   ], [projects, tasks]);
 
   const upcomingDeadlines = useMemo(() => deadlines.filter((d) => d.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date)), [deadlines, todayStr]);
