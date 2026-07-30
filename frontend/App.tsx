@@ -7,7 +7,6 @@ import { ShortcutsModal } from "../frontend/src/components/common/ShortcutsModal
 
 // Features
 import { LoginView } from '../frontend/src/features/auth/LoginView';
-import { SignupView } from '../frontend/src/features/auth/SignupView';
 import { DashboardView } from '../frontend/src/features/dashboard/DashboardView';
 import { ProfileView } from '../frontend/src/features/profile/ProfileView';
 import { ProjectsView } from '../frontend/src/features/projects/ProjectsView';
@@ -176,16 +175,6 @@ const AppContent: React.FC = () => {
     return (
       <LoginView
         onLoginSuccess={() => setCurrentTab("dashboard")}
-        onSwitchToSignup={() => setCurrentTab("signup")}
-      />
-    );
-  }
-
-  if (currentTab === "signup") {
-    return (
-      <SignupView
-        onSignupSuccess={() => setCurrentTab("dashboard")}
-        onSwitchToLogin={() => setCurrentTab("login")}
       />
     );
   }

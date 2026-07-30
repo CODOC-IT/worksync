@@ -1,56 +1,36 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { query } from '../db/pool.js';
+import { getSupabaseServiceClient, isSupabaseServiceConfigured } from '../db/supabase.js';
+import { fromUserPk } from '../utils/idMapping.js';
 
-export const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
-
-export const getJwtSecret = (): string => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    console.error(
-      '\n[FATAL SECURITY ERROR] JWT_SECRET is missing or shorter than 32 characters.\n' +
-      'Please configure JWT_SECRET in your .env file with a secure random key.\n'
-    );
-    if (process.env.NODE_ENV !== 'test') {
-      process.exit(1);
-    }
-  }
-  return secret || '';
-};
+export interface AuthenticatedRequest extends Request { user?: { id: string; email: string; role: string; authUserId: string; }; }
 
 export const validateAuthConfig = (): void => {
-  const secret = getJwtSecret();
-  const maskedSecret = secret.substring(0, 4) + '•'.repeat(Math.max(0, secret.length - 4));
-  console.log(`[Auth] JWT_SECRET validated & loaded: ${maskedSecret} ✓`);
+  if (!isSupabaseServiceConfigured() && process.env.NODE_ENV !== 'test') {
+    throw new Error('Supabase Auth requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  }
 };
 
-export interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: string;
-  };
-}
+// Kept only so legacy route modules compile during this one-release retirement window. No route
+// may issue or validate these application JWTs after the Supabase cutover.
+export const JWT_EXPIRES_IN = '0s';
+export const getJwtSecret = (): string => '';
 
-export const authenticateJWT = (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): void => {
-  const authHeader = req.headers.authorization;
-
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    const secret = getJwtSecret();
-
-    jwt.verify(token, secret, (err, payload) => {
-      if (err) {
-        res.status(403).json({ success: false, message: 'Invalid or expired token.' });
-        return;
-      }
-      req.user = payload as AuthenticatedRequest['user'];
-      next();
-    });
-  } else {
-    res.status(401).json({ success: false, message: 'Authorization header with Bearer token required.' });
-  }
+export const authenticateJWT = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+  const header = req.header('authorization');
+  if (!header?.startsWith('Bearer ')) { res.status(401).json({ success: false, message: 'Authorization header with Bearer token required.' }); return; }
+  try {
+    const { data, error } = await getSupabaseServiceClient().auth.getUser(header.slice(7));
+    if (error || !data.user) { res.status(401).json({ success: false, message: 'Invalid or expired session.' }); return; }
+    const result = await query<{ userid: number; email: string; accountstatus: string; rolecode: string | null }>(`
+      SELECT u.userid, u.email, u.accountstatus,
+        COALESCE(MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'TeamLead'), 'TeamMember') AS rolecode
+      FROM iam.users u LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+      LEFT JOIN iam.roles r ON r.roleid = ur.roleid WHERE u.authuserid = $1 GROUP BY u.userid`, [data.user.id]);
+    const account = result.rows[0];
+    if (!account) { res.status(403).json({ success: false, message: 'This Supabase account is not provisioned for WorkSync.' }); return; }
+    if (account.accountstatus !== 'Active') { res.status(403).json({ success: false, message: 'Your WorkSync account is not active.' }); return; }
+    req.user = { id: fromUserPk(account.userid), email: account.email, authUserId: data.user.id, role: account.rolecode === 'Administrator' ? 'Admin' : account.rolecode === 'HRRepresentative' ? 'HR' : account.rolecode === 'TeamLead' ? 'Team_Lead' : 'Team_Member' };
+    next();
+  } catch { res.status(503).json({ success: false, message: 'Authentication service is unavailable.' }); }
 };
