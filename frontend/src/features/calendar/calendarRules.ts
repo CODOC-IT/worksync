@@ -1,5 +1,4 @@
-import { ApprovedLeaveEntry, CalendarEvent, Project, Task } from '../../types';
-import { getPakistanHolidays } from './pakistanHolidays';
+import { ApprovedLeaveEntry, CalendarEvent, Holiday, Project, Task } from '../../types';
 
 // Milestones and project deadlines reuse CalendarEvent's own type vocabulary instead of
 // duplicating it; 'Task Due' and 'Holiday' are the only kinds CalendarEvent has no literal for.
@@ -63,6 +62,14 @@ export const toDateKey = (date: Date): string =>
 // Mirrors the `${dateStr}T00:00:00` local-midnight parse already used in AppContext's
 // due-tomorrow scanner and boardAccess.getDueDateIndicator.
 export const parseDateKey = (dateKey: string): Date => new Date(`${dateKey}T00:00:00`);
+
+// Timezone-safe "today" as a YYYY-MM-DD string, reusing toDateKey's local-getter approach (see
+// its comment above). Callers that need "today" for a Calendar-relevant comparison (overdue
+// checks, date-picker minimums, default due dates) should use this instead of
+// `new Date().toISOString().split('T')[0]`, which reports UTC and reads a full calendar day
+// behind local time for roughly 5 hours after midnight in Pakistan (UTC+5) and any other
+// positive-offset timezone.
+export const todayDateKey = (): string => toDateKey(new Date());
 
 const sortByTimeThenTitle = (left: CalendarEntry, right: CalendarEntry): number => {
   const timeComparison = (left.time || '').localeCompare(right.time || '');
@@ -139,19 +146,38 @@ export const buildCalendarEntries = (
   return entries;
 };
 
-// Static, read-only Pakistan public holiday entries -- see pakistanHolidays.ts for the
-// underlying data and its per-year coverage. `years` should cover whatever range the caller is
-// currently displaying (or navigating near); requesting the same year twice is harmless since
-// getPakistanHolidays is a pure lookup, but callers should dedupe before calling for efficiency.
-export const buildHolidayEntries = (years: number[]): CalendarEntry[] =>
-  Array.from(new Set(years)).flatMap((year) =>
-    getPakistanHolidays(year).map((holiday) => ({
-      id: `holiday-${holiday.date}-${holiday.name.replace(/\s+/g, '-').toLowerCase()}`,
+// Holiday entries, read-only on the Calendar. hr.Holidays is the single source of truth (see
+// AppContext's `holidays`, fetched from GET /api/calendar/holidays) -- HR manages the underlying
+// rows via Manage Holidays; every role sees the resulting entries. A recurring holiday's stored
+// `date` is one representative occurrence; its month/day is repeated across every year in
+// `years`. A non-recurring (dated, e.g. lunar-calendar) holiday only appears in the specific year
+// its stored date falls in. `years` should cover whatever range the caller is currently
+// displaying; requesting the same year twice is harmless (deduped internally).
+export const buildHolidayEntries = (years: number[], holidays: Holiday[]): CalendarEntry[] => {
+  const uniqueYears = Array.from(new Set(years));
+
+  return holidays.flatMap((holiday) => {
+    const [, month, day] = holiday.date.split('-');
+
+    if (holiday.isRecurringAnnual) {
+      return uniqueYears.map((year) => ({
+        id: `holiday-${holiday.id}-${year}`,
+        date: `${year}-${month}-${day}`,
+        title: holiday.name,
+        kind: 'Holiday' as const
+      }));
+    }
+
+    const holidayYear = Number(holiday.date.slice(0, 4));
+    if (!uniqueYears.includes(holidayYear)) return [];
+    return [{
+      id: `holiday-${holiday.id}`,
       date: holiday.date,
       title: holiday.name,
       kind: 'Holiday' as const
-    }))
-  );
+    }];
+  });
+};
 
 // Approved HR leave requests, read-only on the Calendar (see AppContext's approvedLeave, sourced
 // from GET /api/calendar/approved-leave). Visible to every role -- Employee/Team Lead/HR/Admin

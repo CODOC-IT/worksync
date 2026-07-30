@@ -3,6 +3,7 @@ import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
+import { todayDateKey, toDateKey } from '../calendar/calendarRules';
 import {
   CheckCircle2,
   Clock,
@@ -653,7 +654,12 @@ export const AttendanceView: React.FC = () => {
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [authorizationError, setAuthorizationError] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
+  // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
+  // positive-offset timezone. A leave request submitted in that window with the old computation
+  // could be recorded for the wrong day, then render on the wrong Calendar day. See
+  // calendarRules.ts's todayDateKey.
+  const todayStr = todayDateKey();
   const todayAttendance = attendanceRecords.find(
     (record) => record.userId === currentUser.id && record.date === todayStr
   );
@@ -671,7 +677,7 @@ export const AttendanceView: React.FC = () => {
     }
     const start = new Date(`${todayStr}T00:00:00`);
     start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
-    return record.date >= start.toISOString().split('T')[0] && record.date <= todayStr;
+    return record.date >= toDateKey(start) && record.date <= todayStr;
   };
   const filterByRole = (record: AttendanceRecord) =>
     roleFilter === 'all' || users.find((user) => user.id === record.userId)?.role === roleFilter;
