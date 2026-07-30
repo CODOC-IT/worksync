@@ -1,0 +1,44 @@
+// Types for the Project Management Approval Workflow (Team Lead -> Admin). Mirrors the layering
+// convention of project.types.ts: DB row shapes (lowercase columns, matching Postgres's unquoted
+// identifier folding -- see database/25_project_approvals.sql) plus the DTO shape returned to
+// the frontend.
+
+export type ProjectApprovalRequestType =
+  | 'PROJECT_EDIT'
+  | 'PROJECT_ARCHIVE'
+  | 'PROJECT_DELETE'
+  | 'PROJECT_RESTORE'
+  | 'PROJECT_PERMANENT_DELETE';
+
+export type ProjectApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected';
+
+export interface ProjectApprovalRequestRow {
+  approvalrequestid: string;
+  projectid: number;
+  requesttype: ProjectApprovalRequestType;
+  requestedbyuserid: number;
+  requestedchangesjson: string | null;
+  reason: string;
+  requeststatus: ProjectApprovalRequestStatus;
+  reviewedbyuserid: number | null;
+  decisionreason: string | null;
+  createdatutc: Date;
+  decidedatutc: Date | null;
+}
+
+export interface ProjectApprovalRequestDTO {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  requestType: ProjectApprovalRequestType;
+  requestedByUserId: string;
+  requestedByName: string;
+  requestedChanges: Record<string, unknown> | null;
+  reason: string;
+  status: ProjectApprovalRequestStatus;
+  reviewedByUserId?: string;
+  reviewedByName?: string;
+  decisionReason?: string;
+  createdAt: string;
+  decidedAt?: string;
+}

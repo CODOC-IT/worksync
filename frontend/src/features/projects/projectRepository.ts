@@ -1,4 +1,4 @@
-import { Project, User } from '../../types';
+import { Project, ProjectApprovalRequest, User } from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // projectApiClient — thin fetch wrapper over /api/projects (backend/src/projects/project.routes.ts).
@@ -95,26 +95,59 @@ export interface UpdateProjectPayload {
   status?: Project['status'];
   teamLeadId?: string;
   creationReason?: string;
+  // Approval-request reason, only meaningful (and required) when the caller is a Team Lead --
+  // see backend/src/projects/project.controller.ts's updateProject. Ignored for Admin's direct
+  // edits, which apply immediately as before.
+  reason?: string;
 }
 
-export const updateProjectApi = async (id: string, payload: UpdateProjectPayload): Promise<Project> => {
-  const { data } = await apiFetch<{ data: Project }>(`/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload)
-  });
-  return data;
+// Every gated action (Edit/Archive/Restore/Permanent Delete) now returns one of two shapes,
+// distinguished by `pendingApproval`: an Admin's call executes immediately and returns the
+// resulting `project` (or nothing, for archive/restore/permanent-delete which never returned
+// project data even before this change); a Team Lead's call instead creates a request and
+// returns it as `approvalRequest`, with the underlying project left untouched. See
+// backend/src/projects/projectApproval.service.ts for the workflow this mirrors.
+export interface ProjectActionResult {
+  pendingApproval: boolean;
+  message: string;
+  project?: Project;
+  approvalRequest?: ProjectApprovalRequest;
+}
+
+export const updateProjectApi = async (id: string, payload: UpdateProjectPayload): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data: Project | ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data as ProjectApprovalRequest }
+    : { pendingApproval: false, message: response.message, project: response.data as Project };
 };
 
-export const archiveProjectApi = async (id: string, reason: string): Promise<void> => {
-  await apiFetch(`/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+export const archiveProjectApi = async (id: string, reason: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
 };
 
-export const permanentlyDeleteProjectApi = async (id: string): Promise<void> => {
-  await apiFetch(`/${encodeURIComponent(id)}/permanent`, { method: 'DELETE' });
+export const permanentlyDeleteProjectApi = async (id: string, reason?: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}/permanent`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
 };
 
-export const restoreProjectApi = async (id: string): Promise<void> => {
-  await apiFetch(`/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+export const restoreProjectApi = async (id: string, reason?: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
 };
 
 export const addProjectMemberApi = async (

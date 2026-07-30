@@ -18,6 +18,7 @@ import {
   ActivityLogItem,
   CalendarEvent,
   ApprovedLeaveEntry,
+  ProjectApprovalRequest,
   SavedPrompt,
 
   BreakType,
@@ -67,6 +68,12 @@ import {
 import {
   fetchApprovedLeave
 } from '../features/calendar/calendarRepository';
+import {
+  fetchPendingProjectApprovals,
+  fetchMyProjectApprovalRequests,
+  approveProjectApprovalRequestApi,
+  rejectProjectApprovalRequestApi
+} from '../features/projects/projectApprovalRepository';
 import {
   ActivityItem,
   DEFAULT_ACTIVITY_FILTERS,
@@ -155,10 +162,13 @@ interface AppState {
   createProject: (data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   approveProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
   rejectProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
-  updateProject: (projectId: string, data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
-  deleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
-  permanentlyDeleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
-  restoreProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  updateProject: (projectId: string, data: Partial<Project>, approvalReason?: string) => Promise<{ success: boolean; message: string }>;
+  deleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  permanentlyDeleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  restoreProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  projectApprovalRequests: ProjectApprovalRequest[];
+  approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
   updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
@@ -241,6 +251,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
+  const [projectApprovalRequests, setProjectApprovalRequests] = useState<ProjectApprovalRequest[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
   const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>([]);
@@ -471,6 +482,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
+    // Team Lead sees their own submitted requests (any status), to check outcomes. Team Member
+    // and HR never create these, so skipping the call for them avoids a wasted round trip --
+    // this is not authorization (the backend endpoints themselves already gate that).
+    const hydrateProjectApprovalRequests = async () => {
+      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead') return;
+      try {
+        const remote = currentRole === 'Admin'
+          ? await fetchPendingProjectApprovals()
+          : await fetchMyProjectApprovalRequests();
+        if (isActive) setProjectApprovalRequests(remote);
+      } catch (error) {
+        console.warn('Project approval requests API request failed.', error);
+      }
+    };
+
     const hydrateAttendance = async () => {
       try {
         const token = localStorage.getItem('worksync_auth_token');
@@ -540,13 +567,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void hydrateTasks();
     void hydrateProjects();
     void hydrateApprovedLeave();
+    void hydrateProjectApprovalRequests();
     void hydrateAttendance();
     void hydrateActivityLogs();
 
     return () => {
       isActive = false;
     };
-  }, [currentUser.id, taskReloadVersion]);
+  }, [currentUser.id, taskReloadVersion, currentRole]);
 
   // Derive systemApprovals from loaded backend data (projects + tasks)
   const approvalsHydratedRef = useRef(false);
@@ -975,7 +1003,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      const updated = await updateProjectApi(projectId, { status: 'Active' });
+      const result = await updateProjectApi(projectId, { status: 'Active' });
+      const updated = result.project!;
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
@@ -1026,15 +1055,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // For a Team Lead, this creates a Pending PROJECT_EDIT approval request instead of applying
+  // the change (see backend/src/projects/project.controller.ts's updateProject) -- `approvalReason`
+  // is their comment for the Admin, required in that case. Admin calls are unaffected: they still
+  // apply immediately, exactly as before.
   const updateProject = async (
     projectId: string,
-    data: Partial<Project>
+    data: Partial<Project>,
+    approvalReason?: string
   ): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      const updated = await updateProjectApi(projectId, {
+      const result = await updateProjectApi(projectId, {
         title: data.title,
         description: data.description,
         priority: data.priority,
@@ -1042,20 +1076,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetDate: data.targetDate,
         status: data.status,
         teamLeadId: data.teamLeadId,
-        creationReason: data.creationReason
+        creationReason: data.creationReason,
+        reason: approvalReason
       });
-      setProjects((prev) =>
-        prev.map((p) =>
-          p.id === projectId
-            ? { ...p, ...updated, milestones: data.milestones ?? p.milestones, files: data.files ?? p.files }
-            : p
-        )
-      );
-      pushActivity('Updated project', 'Project', projectId, updated.title);
+
+      if (!result.pendingApproval && result.project) {
+        const updated = result.project;
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === projectId
+              ? { ...p, ...updated, milestones: data.milestones ?? p.milestones, files: data.files ?? p.files }
+              : p
+          )
+        );
+        pushActivity('Updated project', 'Project', projectId, updated.title);
+      } else {
+        pushActivity('Requested project edit', 'Project', projectId, project.title);
+      }
 
       // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
       // UpdateProjectPayload) -- it goes through the dedicated member endpoints instead, one
-      // call per added/removed user, diffed against the project's current membership.
+      // call per added/removed user, diffed against the project's current membership. Member
+      // changes are never approval-gated (not one of this workflow's five integration points),
+      // so they apply immediately regardless of whether the rest of this edit is pending.
       if (data.memberIds) {
         const beforeIds = new Set(project.memberIds);
         const afterIds = eligibleProjectMemberIds(data.memberIds);
@@ -1089,7 +1132,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      const message = `Your changes to "${updated.title}" were saved successfully.`;
+      if (result.pendingApproval) {
+        confirmActionSuccess('Edit Requested', result.message);
+        return { success: true, message: result.message };
+      }
+
+      const message = `Your changes to "${result.project!.title}" were saved successfully.`;
       confirmActionSuccess('Project Updated', message);
       return { success: true, message };
     } catch (error: any) {
@@ -1098,57 +1146,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+  // Archives an Active project (or, for an already-Archived one, is the first half of the
+  // two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead this now
+  // creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
+  // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
+  // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
+  // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
+  // session could see it, so it's gone rather than kept alongside a real one.
+  const deleteProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
-    // Team Leads cannot delete immediately: their delete action files a Project Deletion
-    // approval request instead (local-only, same as the Project Creation approval flow); the
-    // actual archive only happens once an Admin approves it via approveProjectDeletion below.
-    // This entire branch never calls the backend (there's no API for "request a deletion"), so
-    // unlike every other Project mutation, the Admin notification here has no server-side
-    // equivalent to rely on -- it must be dispatched from here, or Admins never learn a
-    // deletion request exists at all.
-    if (currentRole !== 'Admin') {
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Deletion',
-        targetId: projectId,
-        targetTitle: project.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} requested deletion of project "${project.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Deletion Requested',
-        message: `${currentUser.name} requested deletion of project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId
-      });
-      pushActivity('Requested project deletion', 'Project', projectId, project.title);
-
-      const message = `Your request to delete "${project.title}" was submitted for Admin approval.`;
-      confirmActionSuccess('Deletion Requested', message);
-      return { success: true, message };
-    }
-
     try {
-      await archiveProjectApi(projectId, `Deleted by ${currentUser.name}.`);
+      const result = await archiveProjectApi(projectId, reason?.trim() || `Deleted by ${currentUser.name}.`);
+      if (result.pendingApproval) {
+        pushActivity('Requested project archive', 'Project', projectId, project.title);
+        confirmActionSuccess('Archive Requested', result.message);
+        return { success: true, message: result.message };
+      }
       // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an
       // archived project are intentionally left exactly as they are.
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
       pushActivity('Deleted project', 'Project', projectId, project.title);
 
-      const message = `"${project.title}" was archived successfully.`;
-      confirmActionSuccess('Project Deleted', message);
-      return { success: true, message };
+      confirmActionSuccess('Project Deleted', result.message);
+      return { success: true, message: result.message };
     } catch (error: any) {
       console.error('Failed to delete project.', error);
       return { success: false, message: error?.message || 'Failed to delete the project. Please try again.' };
@@ -1156,44 +1178,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Step two of the two-step delete: only usable on a project that's already Archived (the
-  // permanent-delete confirmation in ProjectsView only ever calls this for such a project). Unlike
-  // deleteProject/archiveProjectApi above, this removes the project from local state entirely --
-  // there's no longer a row to reflect a status on.
-  const permanentlyDeleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+  // permanent-delete confirmation in ProjectsView only ever calls this for such a project). For a
+  // Team Lead this creates a Pending PROJECT_PERMANENT_DELETE approval request instead of
+  // executing (see project.controller.ts). Unlike deleteProject/archiveProjectApi above, a
+  // successful direct execution removes the project from local state entirely -- there's no
+  // longer a row to reflect a status on.
+  const permanentlyDeleteProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      await permanentlyDeleteProjectApi(projectId);
+      const result = await permanentlyDeleteProjectApi(projectId, reason);
+      if (result.pendingApproval) {
+        pushActivity('Requested permanent project delete', 'Project', projectId, project.title);
+        confirmActionSuccess('Permanent Delete Requested', result.message);
+        return { success: true, message: result.message };
+      }
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
       pushActivity('Permanently deleted project', 'Project', projectId, project.title);
 
-      const message = `"${project.title}" was permanently deleted.`;
-      confirmActionSuccess('Project Permanently Deleted', message);
-      return { success: true, message };
+      confirmActionSuccess('Project Permanently Deleted', result.message);
+      return { success: true, message: result.message };
     } catch (error: any) {
       console.error('Failed to permanently delete project.', error);
       return { success: false, message: error?.message || 'Failed to permanently delete the project. Please try again.' };
     }
   };
 
-  // Restores an Archived project back to Active. Deliberately not routed through updateProject --
-  // the backend clears ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic
-  // update path never touches (see project.service.ts's restoreProject comment). Members,
-  // milestones, files, notes, team lead, and tasks are untouched server-side, so the local merge
-  // here only needs to flip status, exactly like deleteProject's archive branch does the reverse.
-  const restoreProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+  // Restores an Archived project back to Active. For a Team Lead this creates a Pending
+  // PROJECT_RESTORE approval request instead of restoring immediately (see project.controller.ts).
+  // Deliberately not routed through updateProject -- the backend clears
+  // ArchivedAtUtc/ArchivedByUserId/ArchiveReason together, which the generic update path never
+  // touches (see project.service.ts's restoreProject comment). Members, milestones, files, notes,
+  // team lead, and tasks are untouched server-side, so the local merge here only needs to flip
+  // status, exactly like deleteProject's archive branch does the reverse.
+  const restoreProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      await restoreProjectApi(projectId);
+      const result = await restoreProjectApi(projectId, reason);
+      if (result.pendingApproval) {
+        pushActivity('Requested project restore', 'Project', projectId, project.title);
+        confirmActionSuccess('Restore Requested', result.message);
+        return { success: true, message: result.message };
+      }
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
       pushActivity('Restored project', 'Project', projectId, project.title);
 
-      const message = `"${project.title}" was restored to Active.`;
-      confirmActionSuccess('Project Restored', message);
-      return { success: true, message };
+      confirmActionSuccess('Project Restored', result.message);
+      return { success: true, message: result.message };
     } catch (error: any) {
       console.error('Failed to restore project.', error);
       return { success: false, message: error?.message || 'Failed to restore the project. Please try again.' };
@@ -1224,6 +1258,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to approve project deletion.', error);
       return { success: false, message: error?.message || 'Failed to approve the deletion. Please try again.' };
+    }
+  };
+
+  // Admin decision on a real, backend-persisted Project Management Approval Workflow request
+  // (PROJECT_EDIT/ARCHIVE/DELETE/RESTORE/PERMANENT_DELETE -- see backend/src/projects/
+  // projectApproval.service.ts). Approving executes the underlying action server-side; since each
+  // request type changes `projects` differently (and permanent delete removes the row entirely),
+  // the simplest correct move is to just reload the full project list from the server rather than
+  // guess the new local shape here.
+  const approveProjectApprovalRequest = async (
+    approvalRequestId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can approve project requests.' };
+
+    try {
+      const decided = await approveProjectApprovalRequestApi(approvalRequestId, reason);
+      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      try {
+        const remoteProjects = await fetchProjectsApi();
+        setProjects(
+          remoteProjects.map((p) => ({
+            ...p,
+            milestones: p.milestones || [],
+            files: p.files || [],
+            pinnedMessagesCount: p.pinnedMessagesCount ?? 0
+          }))
+        );
+      } catch (refreshError) {
+        console.warn('Failed to refresh projects after approving a request.', refreshError);
+      }
+      pushActivity('Approved project request', 'Project', decided.projectId, decided.projectTitle);
+
+      const message = `Request for "${decided.projectTitle}" was approved.`;
+      confirmActionSuccess('Request Approved', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to approve project request.', error);
+      return { success: false, message: error?.message || 'Failed to approve the request. Please try again.' };
+    }
+  };
+
+  // Rejecting just marks the request decided -- the project is never touched.
+  const rejectProjectApprovalRequest = async (
+    approvalRequestId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can reject project requests.' };
+
+    try {
+      const decided = await rejectProjectApprovalRequestApi(approvalRequestId, reason);
+      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      pushActivity('Rejected project request', 'Project', decided.projectId, decided.projectTitle);
+
+      const message = `Request for "${decided.projectTitle}" was rejected.`;
+      confirmActionSuccess('Request Rejected', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to reject project request.', error);
+      return { success: false, message: error?.message || 'Failed to reject the request. Please try again.' };
     }
   };
 
@@ -2746,6 +2840,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteProject,
         permanentlyDeleteProject,
         restoreProject,
+        projectApprovalRequests,
+        approveProjectApprovalRequest,
+        rejectProjectApprovalRequest,
         createTask,
         updateTask,
         deleteTask,
