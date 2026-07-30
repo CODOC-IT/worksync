@@ -1,13 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { GlassCard } from '../../components/common/GlassCard';
 import {
-  Mail, Briefcase, Shield, Camera, Save, AlertCircle,
+  Mail, Briefcase, Shield, Save, AlertCircle,
   CheckCircle2, Calendar, Flag, Trophy, Loader2,
   FolderKanban, CheckSquare, Inbox, Bell, Clock, Eye,
-  ChevronRight,
-  Activity as ActivityIcon
+  ChevronRight, AtSign,
+  Activity as ActivityIcon, Send, Lock, User as UserIcon, Key
 } from 'lucide-react';
 
 const getAuthHeaders = (): Record<string, string> => {
@@ -97,8 +97,7 @@ const ROLE_TABS: Record<string, TabDef[]> = {
 };
 
 export const ProfileView: React.FC = () => {
-  const { currentUser, tasks, projects, notifications, updateCurrentUser } = useApp();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { currentUser, tasks, projects, notifications, updateCurrentUser, submitAccountChangeRequest } = useApp();
   const tabs = ROLE_TABS[currentUser.role] || ROLE_TABS.Admin;
   const [activeTab, setActiveTab] = useState<ProfileTab>(tabs[0]?.id || 'overview');
 
@@ -107,11 +106,6 @@ export const ProfileView: React.FC = () => {
   const [nameError, setNameError] = useState<string | null>(null);
   const [nameSuccess, setNameSuccess] = useState<string | null>(null);
 
-  const [avatarLoading, setAvatarLoading] = useState(false);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  const [avatarSuccess, setAvatarSuccess] = useState<string | null>(null);
-  const [avatarImgError, setAvatarImgError] = useState(false);
-
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -119,6 +113,27 @@ export const ProfileView: React.FC = () => {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [passwordExpanded, setPasswordExpanded] = useState(false);
+
+  const [usernameInput, setUsernameInput] = useState(currentUser.username || '');
+  const [usernameLoading, setUsernameLoading] = useState(false);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [usernameSuccess, setUsernameSuccess] = useState<string | null>(null);
+
+  const [emailInput, setEmailInput] = useState(currentUser.email);
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+
+  const [requestExpanded, setRequestExpanded] = useState(false);
+  const [requestName, setRequestName] = useState('');
+  const [requestUsername, setRequestUsername] = useState('');
+  const [requestEmail, setRequestEmail] = useState('');
+  const [requestPassword, setRequestPassword] = useState('');
+  const [requestReason, setRequestReason] = useState('');
+  const [requestLoading, setRequestLoading] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [requestSuccess, setRequestSuccess] = useState<string | null>(null);
+
   const [profileAttendance, setProfileAttendance] = useState<any[]>([]);
   const [profileAttendanceLoading, setProfileAttendanceLoading] = useState(false);
   const [profileAttendanceError, setProfileAttendanceError] = useState<string | null>(null);
@@ -131,8 +146,12 @@ export const ProfileView: React.FC = () => {
   }, [currentUser.name]);
 
   useEffect(() => {
-    setAvatarImgError(false);
-  }, [currentUser.avatar]);
+    setUsernameInput(currentUser.username || '');
+  }, [currentUser.username]);
+
+  useEffect(() => {
+    setEmailInput(currentUser.email);
+  }, [currentUser.email]);
 
   const [dateRange, setDateRange] = useState<{ from: string; to: string }>(() => {
     const to = todayStr();
@@ -319,51 +338,6 @@ export const ProfileView: React.FC = () => {
     }
   };
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setAvatarError('Please select a valid image file.');
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      setAvatarError('Image must be smaller than 2 MB.');
-      return;
-    }
-
-    setAvatarLoading(true);
-    setAvatarError(null);
-    setAvatarSuccess(null);
-
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error('Failed to read file.'));
-        reader.readAsDataURL(file);
-      });
-
-      const res = await fetch('/api/auth/profile/avatar', {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ avatar: base64 }),
-      });
-      const data = await safeParseJSON(res);
-      if (!res.ok || !data.success) {
-        console.error('[Profile] Avatar update failed:', data.message || res.status);
-        throw new Error('Something went wrong.');
-      }
-      updateCurrentUser({ avatar: base64 });
-      setAvatarSuccess('Profile picture updated successfully.');
-    } catch (err: any) {
-      setAvatarError(err.message === 'Something went wrong.' ? err.message : 'Couldn\'t update your profile picture. Please try again.');
-    } finally {
-      setAvatarLoading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
   const handlePasswordChange = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       setPasswordError('All password fields are required.');
@@ -403,29 +377,134 @@ export const ProfileView: React.FC = () => {
     }
   };
 
+  const handleUsernameSave = async () => {
+    const sanitized = usernameInput.replace(/<[^>]*>/g, '').trim().toLowerCase();
+    if (!sanitized) {
+      setUsernameError('Username is required.');
+      return;
+    }
+    if (sanitized.length < 3) {
+      setUsernameError('Username must be at least 3 characters.');
+      return;
+    }
+    if (sanitized.length > 80) {
+      setUsernameError('Username must not exceed 80 characters.');
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(sanitized)) {
+      setUsernameError('Username can only contain letters, numbers, dots, hyphens, and underscores.');
+      return;
+    }
+    setUsernameLoading(true);
+    setUsernameError(null);
+    setUsernameSuccess(null);
+
+    try {
+      const res = await fetch('/api/auth/profile/username', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ username: sanitized }),
+      });
+      const data = await safeParseJSON(res);
+      if (!res.ok || !data.success) {
+        console.error('[Profile] Username update failed:', data.message || res.status);
+        throw new Error('Something went wrong.');
+      }
+      updateCurrentUser({ username: sanitized });
+      setUsernameSuccess('Username updated successfully.');
+    } catch (err: any) {
+      setUsernameError(err.message === 'Something went wrong.' ? err.message : 'Couldn\'t update your username. Please try again.');
+    } finally {
+      setUsernameLoading(false);
+    }
+  };
+
+  const handleEmailSave = async () => {
+    const sanitized = emailInput.replace(/<[^>]*>/g, '').trim().toLowerCase();
+    if (!sanitized) {
+      setEmailError('Email is required.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitized)) {
+      setEmailError('A valid email address is required.');
+      return;
+    }
+    setEmailLoading(true);
+    setEmailError(null);
+    setEmailSuccess(null);
+
+    try {
+      const res = await fetch('/api/auth/profile/email', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ email: sanitized }),
+      });
+      const data = await safeParseJSON(res);
+      if (!res.ok || !data.success) {
+        console.error('[Profile] Email update failed:', data.message || res.status);
+        throw new Error('Something went wrong.');
+      }
+      updateCurrentUser({ email: sanitized });
+      setEmailSuccess('Email updated successfully.');
+    } catch (err: any) {
+      setEmailError(err.message === 'Something went wrong.' ? err.message : 'Couldn\'t update your email. Please try again.');
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const handleRequestSubmit = async () => {
+    const requestedChanges: Record<string, string> = {};
+    const trimmedName = requestName.trim();
+    const trimmedUsername = requestUsername.trim();
+    const trimmedEmail = requestEmail.trim();
+    const trimmedPassword = requestPassword.trim();
+    const trimmedReason = requestReason.trim();
+
+    if (trimmedName) requestedChanges.name = trimmedName;
+    if (trimmedUsername) requestedChanges.username = trimmedUsername;
+    if (trimmedEmail) requestedChanges.email = trimmedEmail;
+    if (trimmedPassword) requestedChanges.password = trimmedPassword;
+
+    if (Object.keys(requestedChanges).length === 0) {
+      setRequestError('Please fill in at least one field to request a change.');
+      return;
+    }
+
+    if (!trimmedReason) {
+      setRequestError('Please provide a reason for the change request.');
+      return;
+    }
+
+    setRequestLoading(true);
+    setRequestError(null);
+    setRequestSuccess(null);
+
+    const result = await submitAccountChangeRequest(requestedChanges, trimmedReason);
+
+    if (result.success) {
+      setRequestName('');
+      setRequestUsername('');
+      setRequestEmail('');
+      setRequestPassword('');
+      setRequestReason('');
+      setRequestExpanded(false);
+      setRequestSuccess(result.message);
+    } else {
+      setRequestError(result.message);
+    }
+    setRequestLoading(false);
+  };
+
   /* ───────── Avatar Component ───────── */
   const AvatarImage = ({ size = 'lg' }: { size?: 'lg' | 'md' }) => {
     const dimensions = size === 'lg' ? 'w-28 h-28' : 'w-20 h-20';
     const initials = getInitials(currentUser.name);
     const containerClass = `${dimensions} rounded-full overflow-hidden ring-1 ring-slate-500/20 shrink-0`;
-
-    const showImage = currentUser.avatar && !currentUser.avatar.includes('unsplash') && !avatarImgError;
-    if (showImage) {
-      return (
-        <div className={containerClass}>
-          <img
-            src={currentUser.avatar}
-            alt={currentUser.name}
-            onError={() => setAvatarImgError(true)}
-            className="w-full h-full object-cover"
-          />
-        </div>
-      );
-    }
     return (
       <div className={`${containerClass} bg-slate-800/60 flex items-center justify-center`}>
         <span
-          className="text-2xl font-bold text-slate-400 select-none"
+          className="text-2xl font-bold text-cyan-400 select-none"
           style={size === 'md' ? { fontSize: '1.1rem' } : undefined}
         >
           {initials || '?'}
@@ -910,201 +989,378 @@ export const ProfileView: React.FC = () => {
   );
 
   /* ───────── Account & Security Tab ───────── */
-  const renderAccountSecurity = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  const renderAccountSecurity = () => {
+    const isAdmin = currentUser.role === 'Admin';
 
-      {/* ── Profile Customization ── */}
-      <div className="glass-panel p-6 border border-white/5">
-        <div className="flex items-center gap-2.5 mb-6">
-          <div className="p-2 rounded-lg bg-slate-800/80">
-            <Camera size={16} className="text-cyan-400" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-white">Profile Settings</h2>
-            <p className="text-[11px] text-slate-500">Update your display name and profile picture.</p>
-          </div>
-        </div>
-
-        {/* Change Display Name */}
-        <div>
-          <label className="text-[11px] text-slate-500 font-medium block mb-1">Display Name</label>
-          <p className="text-[10px] text-slate-600 mb-3">This changes how your name appears across the application.</p>
-          <input
-            type="text"
-            value={nameInput}
-            onChange={(e) => {
-              setNameInput(e.target.value);
-              setNameError(null);
-              setNameSuccess(null);
-            }}
-            className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
-            placeholder="Enter new display name"
-          />
-          <div className="mt-3 flex items-center gap-3">
-            <button
-              onClick={handleDisplayNameSave}
-              disabled={nameLoading || !nameInput.trim()}
-              className="px-4 py-2 rounded-lg glass-button-neon text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
-            >
-              {nameLoading ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-              {nameLoading ? 'Saving...' : 'Save Changes'}
-            </button>
-            {nameSuccess && (
-              <span className="text-[11px] text-emerald-400 flex items-center gap-1">
-                <CheckCircle2 size={12} /> {nameSuccess}
-              </span>
-            )}
-          </div>
-          {nameError && (
-            <p className="text-[11px] text-rose-400 mt-2 flex items-center gap-1">
-              <AlertCircle size={12} /> {nameError}
-            </p>
-          )}
-        </div>
-
-        {/* Divider */}
-        <div className="border-t border-white/5 my-6" />
-
-        {/* Change Profile Picture */}
-        <div>
-          <label className="text-[11px] text-slate-500 font-medium block mb-1">Profile Picture</label>
-          <p className="text-[10px] text-slate-600 mb-4">Upload a photo to personalise your profile.</p>
-          <div className="flex items-center gap-5">
-            <div
-              className="relative cursor-pointer group"
-              onClick={() => { if (!avatarLoading) fileInputRef.current?.click(); }}
-            >
-              <AvatarImage size="md" />
-              <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <Camera size={20} className="text-white" />
+    if (isAdmin) {
+      return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="glass-panel p-6 border border-white/5">
+            <div className="flex items-center gap-2.5 mb-6">
+              <div className="p-2 rounded-lg bg-slate-800/80">
+                <UserIcon size={16} className="text-cyan-400" />
               </div>
-              {avatarLoading && (
-                <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
-                  <Loader2 size={22} className="text-cyan-400 animate-spin" />
+              <div>
+                <h2 className="text-sm font-bold text-white">Profile Settings</h2>
+                <p className="text-[11px] text-slate-500">Manage your display name, username, and email.</p>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-slate-500 font-medium block mb-1">Display Name</label>
+              <p className="text-[10px] text-slate-600 mb-3">This changes how your name appears across the application.</p>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => {
+                  setNameInput(e.target.value);
+                  setNameError(null);
+                  setNameSuccess(null);
+                }}
+                className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
+                placeholder="Enter new display name"
+              />
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={handleDisplayNameSave}
+                  disabled={nameLoading || !nameInput.trim()}
+                  className="px-4 py-2 rounded-lg glass-button-neon text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
+                >
+                  {nameLoading ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                  {nameLoading ? 'Saving...' : 'Save Changes'}
+                </button>
+                {nameSuccess && (
+                  <span className="text-[11px] text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 size={12} /> {nameSuccess}
+                  </span>
+                )}
+              </div>
+              {nameError && (
+                <p className="text-[11px] text-rose-400 mt-2 flex items-center gap-1">
+                  <AlertCircle size={12} /> {nameError}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <label className="text-[11px] text-slate-500 font-medium block mb-1">Username</label>
+              <p className="text-[10px] text-slate-600 mb-3">This is your unique login identifier.</p>
+              <input
+                type="text"
+                value={usernameInput}
+                onChange={(e) => {
+                  setUsernameInput(e.target.value);
+                  setUsernameError(null);
+                  setUsernameSuccess(null);
+                }}
+                className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors font-mono"
+                placeholder="Enter new username"
+              />
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={handleUsernameSave}
+                  disabled={usernameLoading || !usernameInput.trim()}
+                  className="px-4 py-2 rounded-lg glass-button-neon text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
+                >
+                  {usernameLoading ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                  {usernameLoading ? 'Saving...' : 'Save Changes'}
+                </button>
+                {usernameSuccess && (
+                  <span className="text-[11px] text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 size={12} /> {usernameSuccess}
+                  </span>
+                )}
+              </div>
+              {usernameError && (
+                <p className="text-[11px] text-rose-400 mt-2 flex items-center gap-1">
+                  <AlertCircle size={12} /> {usernameError}
+                </p>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <label className="text-[11px] text-slate-500 font-medium block mb-1">Email</label>
+              <p className="text-[10px] text-slate-600 mb-3">This changes your account email address.</p>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => {
+                  setEmailInput(e.target.value);
+                  setEmailError(null);
+                  setEmailSuccess(null);
+                }}
+                className="w-full bg-slate-900/80 border border-white/10 rounded-lg px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500/50 transition-colors"
+                placeholder="Enter new email address"
+              />
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={handleEmailSave}
+                  disabled={emailLoading || !emailInput.trim()}
+                  className="px-4 py-2 rounded-lg glass-button-neon text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
+                >
+                  {emailLoading ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                  {emailLoading ? 'Saving...' : 'Save Changes'}
+                </button>
+                {emailSuccess && (
+                  <span className="text-[11px] text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 size={12} /> {emailSuccess}
+                  </span>
+                )}
+              </div>
+              {emailError && (
+                <p className="text-[11px] text-rose-400 mt-2 flex items-center gap-1">
+                  <AlertCircle size={12} /> {emailError}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="glass-panel p-6 border border-white/5">
+            <div className="flex items-center gap-2.5 mb-6">
+              <div className="p-2 rounded-lg bg-slate-800/80">
+                <Shield size={16} className="text-cyan-400" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white">Security</h2>
+                <p className="text-[11px] text-slate-500">Manage your password and account security.</p>
+              </div>
+            </div>
+
+            <div>
+              <button
+                onClick={() => { setPasswordExpanded(!passwordExpanded); setPasswordError(null); setPasswordSuccess(null); }}
+                className="w-full flex items-center justify-between py-2 text-left"
+              >
+                <div>
+                  <h3 className="text-sm font-bold text-white">Change Password</h3>
+                  <p className="text-[11px] text-slate-500">Update your account password.</p>
+                </div>
+                <ChevronRight size={16} className={`text-slate-400 transition-transform duration-200 ${passwordExpanded ? 'rotate-90' : ''}`} />
+              </button>
+
+              {passwordExpanded && (
+                <div className="space-y-4 pt-4 mt-3 border-t border-white/5">
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium block mb-1.5">Current Password</label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={e => setCurrentPassword(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                      placeholder="Enter current password"
+                      disabled={passwordLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Password</label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                      placeholder="Enter new password (min 6 characters)"
+                      disabled={passwordLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium block mb-1.5">Confirm New Password</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                      placeholder="Re-enter new password"
+                      disabled={passwordLoading}
+                    />
+                  </div>
+                  <button
+                    onClick={handlePasswordChange}
+                    disabled={passwordLoading}
+                    className="w-full py-2.5 rounded-lg glass-button-neon text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 transition-all"
+                  >
+                    {passwordLoading ? (
+                      <span className="flex items-center gap-2">
+                        <Loader2 size={14} className="animate-spin" /> Updating...
+                      </span>
+                    ) : (
+                      'Change Password'
+                    )}
+                  </button>
+                  {passwordSuccess && (
+                    <p className="text-[11px] text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 size={12} /> {passwordSuccess}
+                    </p>
+                  )}
+                  {passwordError && (
+                    <p className="text-[11px] text-rose-400 flex items-center gap-1">
+                      <AlertCircle size={12} /> {passwordError}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="glass-panel p-6 border border-white/5">
+          <div className="flex items-center gap-2.5 mb-6">
+            <div className="p-2 rounded-lg bg-slate-800/80">
+              <Lock size={16} className="text-amber-400" />
+            </div>
             <div>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={avatarLoading}
-                className="px-4 py-2 rounded-lg glass-button-neon text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
-              >
-                {avatarLoading ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
-                {avatarLoading ? 'Uploading...' : 'Change Photo'}
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleAvatarChange}
-              />
-              {avatarSuccess && (
-                <p className="text-[11px] text-emerald-400 mt-2 flex items-center gap-1">
-                  <CheckCircle2 size={12} /> {avatarSuccess}
-                </p>
-              )}
-              {avatarError && (
-                <p className="text-[11px] text-rose-400 mt-2 flex items-center gap-1">
-                  <AlertCircle size={12} /> {avatarError}
-                </p>
-              )}
+              <h2 className="text-sm font-bold text-white">Account Information</h2>
+              <p className="text-[11px] text-slate-500">Your account details are managed by administrators.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-[11px] text-slate-500 font-medium block mb-1">Display Name</label>
+              <div className="w-full bg-slate-900/60 border border-white/5 rounded-lg px-3.5 py-2 text-sm text-slate-300">
+                {currentUser.name}
+              </div>
+            </div>
+            {currentUser.username && (
+              <div>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1">Username</label>
+                <div className="w-full bg-slate-900/60 border border-white/5 rounded-lg px-3.5 py-2 text-sm text-slate-300 font-mono">
+                  {currentUser.username}
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="text-[11px] text-slate-500 font-medium block mb-1">Email</label>
+              <div className="w-full bg-slate-900/60 border border-white/5 rounded-lg px-3.5 py-2 text-sm text-slate-300">
+                {currentUser.email}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* ── Security ── */}
-      <div className="glass-panel p-6 border border-white/5">
-        <div className="flex items-center gap-2.5 mb-6">
-          <div className="p-2 rounded-lg bg-slate-800/80">
-            <Shield size={16} className="text-cyan-400" />
+        <div className="glass-panel p-6 border border-white/5">
+          <div className="flex items-center gap-2.5 mb-6">
+            <div className="p-2 rounded-lg bg-slate-800/80">
+              <Send size={16} className="text-cyan-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white">Request a Change</h2>
+              <p className="text-[11px] text-slate-500">Submit a request to update your account information.</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-sm font-bold text-white">Security</h2>
-            <p className="text-[11px] text-slate-500">Manage your password and account security.</p>
-          </div>
-        </div>
 
-        {/* Collapsible Change Password */}
-        <div>
+          {requestSuccess && (
+            <div className="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300">
+              <CheckCircle2 size={14} />
+              <span>{requestSuccess}</span>
+            </div>
+          )}
+
+          {requestError && (
+            <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-xs text-rose-300">
+              <AlertCircle size={14} />
+              <span>{requestError}</span>
+            </div>
+          )}
+
           <button
-            onClick={() => { setPasswordExpanded(!passwordExpanded); setPasswordError(null); setPasswordSuccess(null); }}
+            onClick={() => {
+              setRequestExpanded(!requestExpanded);
+              setRequestError(null);
+              setRequestSuccess(null);
+            }}
             className="w-full flex items-center justify-between py-2 text-left"
           >
             <div>
-              <h3 className="text-sm font-bold text-white">Change Password</h3>
-              <p className="text-[11px] text-slate-500">Update your account password.</p>
+              <h3 className="text-sm font-bold text-white">Request a Change</h3>
+              <p className="text-[11px] text-slate-500">Change your name, email, username, or password.</p>
             </div>
-            <ChevronRight size={16} className={`text-slate-400 transition-transform duration-200 ${passwordExpanded ? 'rotate-90' : ''}`} />
+            <ChevronRight size={16} className={`text-slate-400 transition-transform duration-200 ${requestExpanded ? 'rotate-90' : ''}`} />
           </button>
 
-          {passwordExpanded && (
+          {requestExpanded && (
             <div className="space-y-4 pt-4 mt-3 border-t border-white/5">
               <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">Current Password</label>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Display Name <span className="text-slate-600">(optional)</span></label>
                 <input
-                  type="password"
-                  value={currentPassword}
-                  onChange={e => setCurrentPassword(e.target.value)}
+                  type="text"
+                  value={requestName}
+                  onChange={e => setRequestName(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Enter current password"
-                  disabled={passwordLoading}
+                  placeholder="Request a new display name"
+                  disabled={requestLoading}
                 />
               </div>
               <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Password</label>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Email <span className="text-slate-600">(optional)</span></label>
                 <input
-                  type="password"
-                  value={newPassword}
-                  onChange={e => setNewPassword(e.target.value)}
+                  type="email"
+                  value={requestEmail}
+                  onChange={e => setRequestEmail(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Enter new password (min 6 characters)"
-                  disabled={passwordLoading}
+                  placeholder="Request a new email address"
+                  disabled={requestLoading}
                 />
               </div>
               <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">Confirm New Password</label>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Username <span className="text-slate-600">(optional)</span></label>
+                <input
+                  type="text"
+                  value={requestUsername}
+                  onChange={e => setRequestUsername(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                  placeholder="Request a new username"
+                  disabled={requestLoading}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Password <span className="text-slate-600">(optional)</span></label>
                 <input
                   type="password"
-                  value={confirmPassword}
-                  onChange={e => setConfirmPassword(e.target.value)}
+                  value={requestPassword}
+                  onChange={e => setRequestPassword(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Re-enter new password"
-                  disabled={passwordLoading}
+                  placeholder="Request a new password (min 6 characters)"
+                  disabled={requestLoading}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">
+                  Reason <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  value={requestReason}
+                  onChange={e => setRequestReason(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors resize-none"
+                  placeholder="Why do you need this change?"
+                  rows={3}
+                  disabled={requestLoading}
                 />
               </div>
               <button
-                onClick={handlePasswordChange}
-                disabled={passwordLoading}
+                onClick={handleRequestSubmit}
+                disabled={requestLoading}
                 className="w-full py-2.5 rounded-lg glass-button-neon text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 transition-all"
               >
-                {passwordLoading ? (
+                {requestLoading ? (
                   <span className="flex items-center gap-2">
-                    <Loader2 size={14} className="animate-spin" /> Updating...
+                    <Loader2 size={14} className="animate-spin" /> Submitting...
                   </span>
                 ) : (
-                  'Change Password'
+                  <>
+                    <Send size={13} /> Submit Request
+                  </>
                 )}
               </button>
-              {passwordSuccess && (
-                <p className="text-[11px] text-emerald-400 flex items-center gap-1">
-                  <CheckCircle2 size={12} /> {passwordSuccess}
-                </p>
-              )}
-              {passwordError && (
-                <p className="text-[11px] text-rose-400 flex items-center gap-1">
-                  <AlertCircle size={12} /> {passwordError}
-                </p>
-              )}
             </div>
           )}
         </div>
       </div>
-
-    </div>
-  );
+    );
+  };
 
   /* ───────── Render ───────── */
   const renderTabContent = () => {

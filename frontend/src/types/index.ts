@@ -225,6 +225,25 @@ export interface HRRequest {
   decisionReason?: string;
 }
 
+// Account Change Request — submitted from My Profile when HR/Lead/Member need to modify
+// their own account information (name, username, email, password). Routed to the appropriate
+// approver based on the requester's role and displayed in the existing Approval Inbox.
+export interface AccountChangeRequest {
+  id: string;
+  userId: string;
+  userName?: string;
+  requesterRole?: UserRole;
+  requestType: 'Account_Change';
+  requestedChanges: Record<string, string>;
+  passwordChangeRequested?: boolean;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  assignedApproverRole: 'Admin' | 'HR';
+  submittedAt: string;
+  decidedBy?: string;
+  decisionReason?: string;
+}
+
 // Project Management Approval Workflow (Team Lead -> Admin) -- deliberately separate from
 // SystemApproval below, which is frontend-only/ephemeral for Project_Creation & Project_Deletion
 // and never persisted for the latter. Backed by a real table (work.ProjectApprovalRequests,

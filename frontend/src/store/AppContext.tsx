@@ -7,6 +7,7 @@ import {
   TaskStatus,
   AttendanceRecord,
   HRRequest,
+  AccountChangeRequest,
   SystemApproval,
   ChatMessage,
   AIQueryLog,
@@ -134,6 +135,7 @@ interface AppState {
   tasks: Task[];
   attendanceRecords: AttendanceRecord[];
   hrRequests: HRRequest[];
+  accountChangeRequests: AccountChangeRequest[];
   systemApprovals: SystemApproval[];
   chatMessages: ChatMessage[];
   aiLogs: AIQueryLog[];
@@ -225,6 +227,7 @@ interface AppState {
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details'], requestDate?: string) => Promise<{ success: boolean; message: string }>;
   approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
+  submitAccountChangeRequest: (requestedChanges: Record<string, string>, reason: string) => Promise<{ success: boolean; message: string }>;
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
@@ -260,6 +263,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [accountChangeRequests, setAccountChangeRequests] = useState<AccountChangeRequest[]>([]);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
   const [projectApprovalRequests, setProjectApprovalRequests] = useState<ProjectApprovalRequest[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -332,6 +336,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setHrRequests([]);
   }
 });
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    if (!currentUser.id) return;
+
+    let isActive = true;
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) return;
+
+    fetch('/api/account-change-requests', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Failed to load account change requests.');
+        }
+        if (isActive && Array.isArray(data.requests)) {
+          setAccountChangeRequests(data.requests as AccountChangeRequest[]);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load account change requests from API.', error);
+        if (isActive) {
+          setAccountChangeRequests([]);
+        }
+      });
 
     return () => {
       isActive = false;
@@ -418,7 +453,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logoutUser = () => {
   localStorage.removeItem('worksync_auth_token');
   setHrRequests([]);
-  setCurrentUser({
+    setAccountChangeRequests([]);
+    setCurrentUser({
     id: '',
     name: '',
     email: '',
@@ -2382,6 +2418,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const submitAccountChangeRequest = async (
+      requestedChanges: Record<string, string>,
+      reason: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch('/api/account-change-requests', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ requestedChanges, reason })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || 'Failed to submit account change request.');
+        }
+
+        const newReq = data.request as AccountChangeRequest;
+        setAccountChangeRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
+
+        const hrRecipients = users.filter((u) => u.role === 'HR').map((u) => u.id);
+        const adminRecipients = resolveAdminRecipients(users, currentUser.id);
+        const allRecipientIds = currentRole === 'HR'
+          ? adminRecipients
+          : [...new Set([...hrRecipients, ...adminRecipients])];
+
+        dispatchNotifications({
+          recipientIds: allRecipientIds,
+          type: 'approval',
+          title: 'Account Change Request',
+          message: `${currentUser.name} (${currentRole}) requested an account change: "${reason}".`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'approvals'
+        });
+        confirmActionSuccess('Request Submitted', 'Your account change request was submitted for approval.');
+        pushActivity('Requested account/profile change', 'Approval', newReq.id, currentUser.name);
+        return { success: true, message: data.message || 'Account change request submitted successfully.' };
+      } catch (error: any) {
+        const message = error?.message || 'Failed to submit account change request.';
+        pushToast('error', 'Request Failed', message);
+        return { success: false, message };
+      }
+    };
+
     const approveHRRequest = async (
       requestId: string,
       decisionReason?: string
@@ -2721,6 +2800,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tasks,
       attendanceRecords,
       hrRequests,
+      accountChangeRequests,
       systemApprovals,
       chatMessages,
       aiLogs
@@ -2876,6 +2956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tasks,
         attendanceRecords,
         hrRequests,
+        accountChangeRequests,
         systemApprovals,
         chatMessages,
         aiLogs,
@@ -2925,6 +3006,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitHRRequest,
         approveHRRequest,
         rejectHRRequest,
+        submitAccountChangeRequest,
         sendChatMessage,
         togglePinMessage,
         addAIQueryLog,

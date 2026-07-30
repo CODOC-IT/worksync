@@ -141,10 +141,18 @@ router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Respons
 });
 
 // PUT /api/auth/profile/display-name
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct display name editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
     const { name } = req.body;
@@ -175,11 +183,107 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
   }
 });
 
+// PUT /api/auth/profile/username
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/username', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct username editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { username } = req.body;
+
+    if (!username || typeof username !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Username is required.' });
+    }
+
+    const normalizedUsername = username.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (normalizedUsername.length < 3) {
+      return void res.status(400).json({ success: false, message: 'Username must be at least 3 characters long.' });
+    }
+
+    if (normalizedUsername.length > 80) {
+      return void res.status(400).json({ success: false, message: 'Username must not exceed 80 characters.' });
+    }
+
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(normalizedUsername)) {
+      return void res.status(400).json({ success: false, message: 'Username can only contain letters, numbers, dots, hyphens, and underscores.' });
+    }
+
+    const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Username updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update username.';
+    return void res.status(message.includes('already in use') ? 409 : 500).json({ success: false, message });
+  }
+});
+
+// PUT /api/auth/profile/email
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct email editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const normalizedEmail = email.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return void res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Email updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update email.';
+    return void res.status(message.includes('already exists') ? 409 : 500).json({ success: false, message });
+  }
+});
+
 // PUT /api/auth/profile/avatar
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct profile picture editing is restricted to Administrators.'
+      });
     }
 
     const { avatar } = req.body;
@@ -211,10 +315,19 @@ router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest,
 });
 
 // PUT /api/auth/profile/password
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    if (req.user.role !== 'Admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Direct password changing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
       return;
     }
 
