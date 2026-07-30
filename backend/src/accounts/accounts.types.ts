@@ -5,7 +5,6 @@ export interface CreateAccountInput {
   username: string;
   email: string;
   baseRole: AccountBaseRole;
-  departmentId: number;
   designation?: string;
   teamLeadAssignment?: { projectId: string; endsAtUtc: string };
 }

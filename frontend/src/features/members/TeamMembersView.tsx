@@ -25,7 +25,7 @@ import {
 
 type SortOption = 'name' | 'role' | 'recent';
 type ViewMode = 'grid' | 'list';
-type SearchField = 'name' | 'email' | 'department' | 'title';
+type SearchField = 'name' | 'email' | 'title';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   Admin: 'Administrator',
@@ -113,9 +113,7 @@ export const TeamMembersView: React.FC = () => {
               ? member.name
               : searchField === 'email'
                 ? member.email
-                : searchField === 'department'
-                  ? member.department
-                  : member.title;
+                : member.title;
           const matchesQuery = !query || searchValue.toLowerCase().includes(query);
 
           const matchesRole = roleFilter === 'all' || member.role === roleFilter;
@@ -255,7 +253,6 @@ export const TeamMembersView: React.FC = () => {
                 >
                   <option value="name">Name</option>
                   <option value="email">Email</option>
-                  <option value="department">Department</option>
                   <option value="title">Title</option>
                 </select>
 
@@ -739,7 +736,7 @@ export const TeamMembersView: React.FC = () => {
 };
 
 const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onClose: () => void }> = ({ isAdmin, projects, onClose }) => {
-  const [form, setForm] = useState({ fullName: '', username: '', email: '', departmentId: '', designation: '', baseRole: 'Team_Member', projectId: '', endsAtUtc: '' });
+  const [form, setForm] = useState({ fullName: '', username: '', email: '', designation: '', baseRole: 'Team_Member', projectId: '', endsAtUtc: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const update = (field: string, value: string) => setForm((current) => ({ ...current, [field]: value }));
@@ -748,7 +745,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
     setBusy(true); setError('');
     try {
       const token = localStorage.getItem('worksync_auth_token');
-      const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fullName: form.fullName, username: form.username, email: form.email, departmentId: Number(form.departmentId), designation: form.designation || undefined, baseRole: form.baseRole, ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {}) }) });
+      const response = await fetch('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fullName: form.fullName, username: form.username, email: form.email, designation: form.designation || undefined, baseRole: form.baseRole, ...(form.projectId ? { teamLeadAssignment: { projectId: form.projectId, endsAtUtc: form.endsAtUtc } } : {}) }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.message || 'Could not create account.');
       window.location.reload();
@@ -762,7 +759,6 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
         <AccountField label="Full name *"><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} /></AccountField>
         <AccountField label="Username *"><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} /></AccountField>
         <AccountField label="Email *"><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Department ID *"><input required min="1" type="number" value={form.departmentId} onChange={(e) => update('departmentId', e.target.value)} className={accountInput} placeholder="e.g. 1" /></AccountField>
         <AccountField label="Designation"><input value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} /></AccountField>
         <AccountField label="Base role *"><select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>{isAdmin && <option value="HR">HR</option>}<option value="Team_Member">Team Member</option></select></AccountField>
         {isAdmin && <><AccountField label="Team Lead project (optional)"><select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}><option value="">No Team Lead assignment</option>{projects.filter((project) => project.status === 'Active').map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></AccountField><AccountField label="Team Lead expiry"> <input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} /></AccountField></>}
