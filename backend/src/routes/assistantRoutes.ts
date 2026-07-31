@@ -8,10 +8,20 @@ import * as notificationService from '../notifications/notification.service.js';
 import * as projectService from '../projects/project.service.js';
 import * as taskService from '../tasks/task.service.js';
 import type { TaskStatusHistoryDTO } from '../tasks/task.types.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 
 const router = Router();
 
 router.use(authenticateJWT);
+
+const auditAssistant = (req: AuthenticatedRequest, action: string, entityId: string, entityName: string, description: string, projectId?: string, taskId?: string) => {
+  if (!req.user) return;
+  recordActivitySafe({
+    actorId: req.user.id, actorName: userStore.findById(req.user.id)?.name, actorEmail: req.user.email,
+    actorRole: req.user.role, action, module: 'AI Assistant', entityType: 'Prompt', entityId,
+    entityName, description, projectId, taskId, source: 'API', linkRoute: '/ai-assistant',
+  });
+};
 
 router.get('/projects', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
@@ -191,6 +201,8 @@ router.post('/generate', async (req: AuthenticatedRequest, res: Response): Promi
       style: style || 'Default',
     });
 
+    auditAssistant(req, 'Created', `generated-${Date.now()}`, category, `Generated AI assistant content for ${category}.`, projectId, taskId);
+
     res.json({
       success: true,
       data: {
@@ -237,6 +249,7 @@ router.post('/prompts', async (req: AuthenticatedRequest, res: Response): Promis
       content,
       isAiGenerated: isAiGenerated !== false,
     });
+    auditAssistant(req, 'Created', prompt.id, prompt.title, `Saved assistant prompt “${prompt.title}”.`, projectId, taskId);
 
     const latestVersion = prompt.versions[prompt.versions.length - 1];
     if (latestVersion?.isAiGenerated && req.user) {
@@ -323,6 +336,7 @@ router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
   }
+  auditAssistant(req, 'Updated', updated.id, updated.title, `Updated assistant prompt “${updated.title}”.`, updated.projectId || undefined, updated.taskId || undefined);
 
   res.json({ success: true, data: updated });
 });
@@ -357,6 +371,7 @@ router.post('/prompts/:id/restore/:versionId', (req: AuthenticatedRequest, res: 
     res.status(404).json({ success: false, message: 'Prompt or version not found, or access denied.' });
     return;
   }
+  auditAssistant(req, 'Updated', updated.id, updated.title, `Restored a version of assistant prompt “${updated.title}”.`, updated.projectId || undefined, updated.taskId || undefined);
 
   res.json({ success: true, data: updated });
 });
@@ -369,6 +384,8 @@ router.delete('/prompts/:id', (req: AuthenticatedRequest, res: Response): void =
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
   }
+  const archivedPrompt = promptStore.getPromptById(req.params.id);
+  auditAssistant(req, 'Archived', req.params.id, archivedPrompt?.title || req.params.id, `Archived assistant prompt “${archivedPrompt?.title || req.params.id}”.`, archivedPrompt?.projectId || undefined, archivedPrompt?.taskId || undefined);
 
   res.json({ success: true, message: 'Prompt archived.' });
 });
@@ -381,6 +398,8 @@ router.patch('/prompts/:id/unarchive', (req: AuthenticatedRequest, res: Response
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
   }
+  const restoredPrompt = promptStore.getPromptById(req.params.id);
+  auditAssistant(req, 'Updated', req.params.id, restoredPrompt?.title || req.params.id, `Restored assistant prompt “${restoredPrompt?.title || req.params.id}”.`, restoredPrompt?.projectId || undefined, restoredPrompt?.taskId || undefined);
 
   res.json({ success: true, message: 'Prompt restored from archive.' });
 });
