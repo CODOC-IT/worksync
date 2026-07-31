@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
-import { query } from '../db/pool.js';
+import { query, withTransaction } from '../db/pool.js';
 import { userStore } from '../store/userStore.js';
 import { toUserPk } from '../utils/idMapping.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -89,8 +89,56 @@ const mapRow = (row: AccountChangeRequestRow) => {
     submittedAt: formatDateTime(row.submitted_at),
     decidedBy: row.decided_by || undefined,
     decisionReason: row.decision_reason || undefined,
+    decidedAt: row.decided_at ? formatDateTime(row.decided_at) : undefined,
   };
 };
+
+export const canReviewAccountChangeRequest = (
+  reviewerId: string,
+  reviewerRole: string,
+  request: Pick<AccountChangeRequestRow, 'user_id' | 'assigned_approver_role' | 'status'>
+): boolean =>
+  request.status === 'Pending' &&
+  request.user_id !== reviewerId &&
+  request.assigned_approver_role === reviewerRole &&
+  (reviewerRole === 'Admin' || reviewerRole === 'HR');
+
+export const cleanRejectionReason = (reason: unknown): string => {
+  if (typeof reason !== 'string' || !reason.trim()) {
+    throw new Error('A rejection reason is required.');
+  }
+  const cleaned = reason.trim();
+  if (cleaned.length > 1000) throw new Error('Rejection reason must not exceed 1000 characters.');
+  return cleaned;
+};
+
+export const getApprovedProfileChange = (
+  field: string | null,
+  changes: Record<string, string>
+): { field: 'name' | 'email' | 'username'; value: string } => {
+  if (field === 'password') {
+    throw new Error('Password approval requires the secure password completion flow. No password change was applied.');
+  }
+  if (field !== 'name' && field !== 'email' && field !== 'username') {
+    throw new Error('This request does not contain a supported profile change.');
+  }
+  const value = changes[field]?.trim();
+  if (!value) throw new Error('The requested profile value is missing.');
+  return { field, value };
+};
+
+export const buildAccountReviewMessages = (
+  action: ReviewAction,
+  reviewerName: string,
+  requesterName: string,
+  field: string,
+  rejectionReason?: string
+) => ({
+  notification: action === 'Rejected'
+    ? `Your account change request was rejected. Reason: ${rejectionReason}`
+    : 'Your account change request was approved.',
+  activity: `${reviewerName} ${action.toLowerCase()} ${requesterName}'s account ${field} change request.`,
+});
 
 const determineApproverRole = (requesterRole: string): string => {
   if (requesterRole === 'HR') return 'Admin';
@@ -345,5 +393,189 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     res.status(500).json({ success: false, message: 'Failed to submit account change request.' });
   }
 });
+
+type ReviewAction = 'Approved' | 'Rejected';
+
+class ReviewError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+  }
+}
+
+const reviewRequest = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  action: ReviewAction
+): Promise<void> => {
+  try {
+    if (!req.user) throw new ReviewError(401, 'Not authenticated.');
+
+    const decisionReason = action === 'Rejected'
+      ? cleanRejectionReason(req.body?.reason)
+      : undefined;
+
+    await ensureTable();
+    const reviewed = await withTransaction(async (runQuery) => {
+      const selected = await runQuery<AccountChangeRequestRow>(
+        `SELECT * FROM public.worksync_account_change_requests
+         WHERE id = $1
+         FOR UPDATE`,
+        [req.params.id]
+      );
+      const request = selected.rows[0];
+      if (!request) throw new ReviewError(404, 'Account change request not found.');
+      if (request.status !== 'Pending') {
+        throw new ReviewError(409, 'This account change request has already been reviewed.');
+      }
+      if (request.user_id === req.user!.id) {
+        throw new ReviewError(403, 'You cannot review your own account change request.');
+      }
+      if (!canReviewAccountChangeRequest(req.user!.id, req.user!.role, request)) {
+        throw new ReviewError(403, 'Only the assigned approver can review this account change request.');
+      }
+
+      if (action === 'Approved') {
+        const changes = parseChanges(request.requested_changes);
+        let approvedChange: ReturnType<typeof getApprovedProfileChange>;
+        try {
+          approvedChange = getApprovedProfileChange(request.requested_field, changes);
+        } catch (error: any) {
+          throw new ReviewError(request.requested_field === 'password' ? 409 : 400, error.message);
+        }
+        const { field, value } = approvedChange;
+        const userPk = toUserPk(request.user_id);
+
+        if (field === 'name') {
+          const sanitizedName = value.replace(/<[^>]*>/g, '').trim();
+          if (sanitizedName.length < 2 || sanitizedName.length > 170) {
+            throw new ReviewError(400, 'The requested display name is invalid.');
+          }
+          const [givenName, ...familyParts] = sanitizedName.split(/\s+/);
+          await runQuery(
+            `UPDATE iam.users
+             SET displayname = $1, givenname = $2, familyname = $3, updatedatutc = CURRENT_TIMESTAMP
+             WHERE userid = $4 AND organizationid = 1`,
+            [sanitizedName, givenName, familyParts.join(' ') || givenName, userPk]
+          );
+        } else if (field === 'email') {
+          const normalizedEmail = value.toLowerCase();
+          if (!emailPattern.test(normalizedEmail) || normalizedEmail.length > 254) {
+            throw new ReviewError(400, 'The requested email address is invalid.');
+          }
+          const duplicate = await runQuery<{ exists: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM iam.users
+               WHERE organizationid = 1 AND lower(email) = $1 AND userid <> $2
+             ) AS exists`,
+            [normalizedEmail, userPk]
+          );
+          if (duplicate.rows[0]?.exists) {
+            throw new ReviewError(409, 'An account already exists for the requested email.');
+          }
+          await runQuery(
+            `UPDATE iam.users SET email = $1, updatedatutc = CURRENT_TIMESTAMP
+             WHERE userid = $2 AND organizationid = 1`,
+            [normalizedEmail, userPk]
+          );
+        } else {
+          const normalizedUsername = value.toLowerCase();
+          if (!usernamePattern.test(normalizedUsername)) {
+            throw new ReviewError(400, 'The requested username is invalid.');
+          }
+          const duplicate = await runQuery<{ exists: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM iam.users
+               WHERE organizationid = 1 AND lower(username) = $1 AND userid <> $2
+             ) AS exists`,
+            [normalizedUsername, userPk]
+          );
+          if (duplicate.rows[0]?.exists) {
+            throw new ReviewError(409, 'The requested username is already in use.');
+          }
+          await runQuery(
+            `UPDATE iam.users SET username = $1, updatedatutc = CURRENT_TIMESTAMP
+             WHERE userid = $2 AND organizationid = 1`,
+            [normalizedUsername, userPk]
+          );
+        }
+      }
+
+      const updated = await runQuery<AccountChangeRequestRow>(
+        `UPDATE public.worksync_account_change_requests
+         SET status = $2, decided_by = $3, decision_reason = $4, decided_at = NOW()
+         WHERE id = $1 AND status = 'Pending'
+         RETURNING *`,
+        [request.id, action, req.user!.id, decisionReason || null]
+      );
+      if (!updated.rows[0]) {
+        throw new ReviewError(409, 'This account change request has already been reviewed.');
+      }
+      return updated.rows[0];
+    });
+
+    if (action === 'Approved') {
+      await userStore.refreshUserFromDb(reviewed.user_id);
+    }
+
+    const requesterName = reviewed.user_name || 'Requester';
+    const reviewer = userStore.findById(req.user.id);
+    const field = reviewed.requested_field || 'profile';
+    const reviewMessages = buildAccountReviewMessages(
+      action,
+      reviewer?.name || req.user.email,
+      requesterName,
+      field,
+      decisionReason
+    );
+
+    await notificationService.publishEvent({
+      type: 'approval',
+      title: `Account Change Request ${action}`,
+      message: reviewMessages.notification,
+      recipientIds: [reviewed.user_id],
+      actorId: req.user.id,
+    }).catch((error) => {
+      console.error('[accountChangeRequest] Failed to notify requester of review.', error);
+    });
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName: reviewer?.name || req.user.email,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: reviewed.user_id,
+      affectedUserName: requesterName,
+      action,
+      module: 'Profile',
+      entityType: 'Account Change Request',
+      entityId: reviewed.id,
+      entityName: requesterName,
+      description: reviewMessages.activity,
+      reason: decisionReason,
+      linkRoute: 'approvals',
+      metadata: { requestedField: field },
+    });
+
+    res.json({
+      success: true,
+      message: `Account change request ${action.toLowerCase()} successfully.`,
+      request: mapRow(reviewed),
+    });
+  } catch (error: any) {
+    if (error instanceof ReviewError) {
+      res.status(error.statusCode).json({ success: false, message: error.message });
+      return;
+    }
+    if (error?.code === '23505') {
+      res.status(409).json({ success: false, message: 'The requested account value is already in use.' });
+      return;
+    }
+    console.error('[Account Change Request Review Error]', error?.stack || error?.message || error);
+    res.status(500).json({ success: false, message: `Failed to review account change request.` });
+  }
+};
+
+router.patch('/:id/approve', authenticateJWT, (req, res) => reviewRequest(req, res, 'Approved'));
+router.patch('/:id/reject', authenticateJWT, (req, res) => reviewRequest(req, res, 'Rejected'));
 
 export default router;
