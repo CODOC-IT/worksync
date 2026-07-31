@@ -230,6 +230,19 @@ test('Team Member: can view their own activity', async () => {
   assert.ok(!descriptions.includes('Other activity'), 'Team Member must not see activity from an unrelated project');
 });
 
+test('activity DTO resolves actor names from IAM when snapshots are missing or stale', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents
+    (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, actornamesnapshot)
+    VALUES (1, 4, 'Created', 'Task', 'tsk-actor', '00000000-0000-0000-0000-000000000003', 'Tasks', 'Actor name', 'Team_Member', 'System')`);
+
+  const { listActivities } = await import('./activity.service.js');
+  const result = await listActivities({ page: 1, pageSize: 50 }, 'usr-4', 'Team_Member');
+
+  assert.equal(result.items[0]?.actor.id, 'usr-4');
+  assert.equal(result.items[0]?.actor.name, 'Team Member User');
+  assert.equal(result.items[0]?.actor.email, 'member@test.com');
+});
+
 test('Team Member: cannot view restricted modules', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
     VALUES (1, 1, 'Modified', 'Permission', 'perm-1', '00000000-0000-0000-0000-000000000010', 'Permissions', 'Permission change', 'Admin')`);

@@ -23,6 +23,8 @@ export interface ActivityRow {
   actornamesnapshot: string | null;
   actoremailsnapshot: string | null;
   actorrolesnapshot: string | null;
+  actordisplayname: string | null;
+  actoremail: string | null;
   affecteduseridtext: string | null;
   affectedusernamesnapshot: string | null;
   entitynamesnapshot: string | null;
@@ -236,7 +238,11 @@ const SELECT_COLUMNS = `a.auditeventid, a.actoruserid, a.actioncode, a.entitytyp
   a.occurredatutc, a.modulecode, a.description, a.resultcode, a.sourcecode,
   a.isimportant, a.actornamesnapshot, a.actoremailsnapshot, a.actorrolesnapshot,
   a.affecteduseridtext, a.affectedusernamesnapshot, a.entitynamesnapshot,
+  actor.displayname AS actordisplayname, actor.email AS actoremail,
   a.projectnamesnapshot, a.tasknamesnapshot, a.linkroute, a.metadatajson`;
+
+const ACTIVITY_FROM = `audit.auditevents a
+  LEFT JOIN iam.users actor ON actor.userid = a.actoruserid AND actor.organizationid = a.organizationid`;
 
 export const findActivities = async (
   filters: ActivityFilters,
@@ -248,7 +254,7 @@ export const findActivities = async (
   const values = [...built.values, filters.pageSize, (filters.page - 1) * filters.pageSize];
   const direction = filters.sort === 'oldest' ? 'ASC' : 'DESC';
   const rows = await query<ActivityRow>(
-    `SELECT ${SELECT_COLUMNS} FROM audit.auditevents a WHERE ${built.where}
+    `SELECT ${SELECT_COLUMNS} FROM ${ACTIVITY_FROM} WHERE ${built.where}
      ORDER BY a.occurredatutc ${direction}, a.auditeventid ${direction}
      LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values
@@ -257,7 +263,7 @@ export const findActivities = async (
 };
 
 export const findActivityById = async (id: string): Promise<ActivityRow | null> => {
-  const result = await query<ActivityRow>(`SELECT ${SELECT_COLUMNS} FROM audit.auditevents a WHERE a.auditeventid = $1`, [id]);
+  const result = await query<ActivityRow>(`SELECT ${SELECT_COLUMNS} FROM ${ACTIVITY_FROM} WHERE a.auditeventid = $1`, [id]);
   return result.rows[0] || null;
 };
 
@@ -269,7 +275,7 @@ export const findVisibleActivityById = async (
   const built = buildWhere({ page: 1, pageSize: 1 }, viewerId, effectiveRoles);
   const values = [...built.values, id];
   const result = await query<ActivityRow>(
-    `SELECT ${SELECT_COLUMNS} FROM audit.auditevents a
+    `SELECT ${SELECT_COLUMNS} FROM ${ACTIVITY_FROM}
      WHERE ${built.where} AND a.auditeventid = $${values.length}`,
     values
   );
