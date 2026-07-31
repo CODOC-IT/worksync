@@ -542,7 +542,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // and HR never create these, so skipping the call for them avoids a wasted round trip --
     // this is not authorization (the backend endpoints themselves already gate that).
     const hydrateProjectApprovalRequests = async () => {
-      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead') return;
+      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'Team_Member') return;
       try {
         const remote = currentRole === 'Admin'
           ? await fetchPendingProjectApprovals()
@@ -980,7 +980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  // A project member who creates a project becomes its project-scoped lead after approval.
   const eligibleProjectMemberIds = (ids: string[]): string[] =>
     ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
 
@@ -994,7 +994,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // project.types.ts's ProjectDTO comment), so they are preserved/merged locally on top of
   // whatever the server returns.
   const createProject = async (data: Partial<Project>): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
+    if (currentRole !== 'Team_Member' && currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
       return { success: false, message: 'You do not have permission to create a project.' };
     }
 
@@ -1484,7 +1484,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Team Members submit task creation requests to the selected project's Team Lead.
     // The task is only created in the backend after that Team Lead approves the request.
-    if (currentRole === 'Team_Member') {
+    if (currentRole === 'Team_Member' && projects.find((item) => item.id === input.projectId)?.teamLeadId !== currentUser.id) {
       const project = projects.find((item) => item.id === input.projectId);
 
       if (!project) {
@@ -1584,7 +1584,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       existingTask
       && (Boolean(existingTask.parentTaskId)
         || Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0)
-      && currentRole === 'Team_Member'
+        && currentRole === 'Team_Member'
+        && project?.teamLeadId !== currentUser.id
     );
 
     // Team Members may prepare changes to their assigned standalone tasks and subtasks, but
@@ -1891,7 +1892,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can approve the task request.'
@@ -1947,7 +1948,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         confirmActionSuccess('Task Request Approved', result.message);
       } else if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
         const relatedProject = item.projectId && projects.find((project) => project.id === item.projectId);
-        if (currentRole !== 'Team_Lead' || !relatedProject || relatedProject.teamLeadId !== currentUser.id) {
+        if (!relatedProject || relatedProject.teamLeadId !== currentUser.id) {
           return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
         }
         try {
@@ -2044,7 +2045,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can reject the task request.'
@@ -2054,7 +2055,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
         const project = item.projectId && projects.find((candidate) => candidate.id === item.projectId);
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
         }
         try {

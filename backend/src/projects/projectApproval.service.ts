@@ -82,8 +82,8 @@ export const createApprovalRequest = async (
   requesterId: string,
   requesterRole: string
 ): Promise<ProjectApprovalRequestDTO> => {
-  if (requesterRole !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Team Leads submit project approval requests.');
+  if (requesterRole !== 'Team_Lead' && requesterRole !== 'Team_Member') {
+    throw new ProjectAuthorizationError('Only project leads can submit project approval requests.');
   }
   if (!reason?.trim()) {
     throw new ProjectValidationError('A reason is required to submit this request for Admin approval.');

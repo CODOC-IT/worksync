@@ -139,15 +139,7 @@ export const canCreateTaskForProject = (
     return false;
   }
 
-  if (role === 'Team_Lead') {
-    return project.teamLeadId === userId;
-  }
-
-  if (role === 'Team_Member') {
-    return getProjectMemberIds(project).includes(userId);
-  }
-
-  return false;
+  return role !== 'HR' && project.teamLeadId === userId;
 };
 
 export const canEditTask = (
@@ -159,7 +151,7 @@ export const canEditTask = (
   if (!isActiveProject(project) || task.isArchived) return false;
   if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
 
-  const isProjectLead = role === 'Team_Lead' && project.teamLeadId === userId;
+  const isProjectLead = role !== 'HR' && project.teamLeadId === userId;
   if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
     return isProjectLead;
   }
@@ -175,7 +167,7 @@ export const canDeleteTask = (
 ): boolean => {
   if (!teamLeadCanDeleteTasks || !isActiveProject(project) || task.isArchived) return false;
   return getTaskAssigneeIds(task).includes(userId)
-    || (role === 'Team_Lead' && project.teamLeadId === userId);
+    || (role !== 'HR' && project.teamLeadId === userId);
 };
 
 export const validateTaskInput = (
