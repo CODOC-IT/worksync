@@ -5,6 +5,9 @@ import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { getSupabaseServiceClient } from '../db/supabase.js';
+import { query } from '../db/pool.js';
+import { toUserPk } from '../utils/idMapping.js';
 
 const router = Router();
 
@@ -69,6 +72,86 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
     });
   } catch {
     res.status(500).json({ success: false, message: 'Login failed. Please try again.' });
+  }
+});
+
+// POST /api/auth/migrate-legacy-credentials
+// Migrates a legacy user (bcrypt password in WorkSync DB, no Supabase Auth identity yet) into
+// Supabase Auth. Called by LoginView.tsx when the direct Supabase sign-in fails — this bridges
+// the gap for accounts created before the Supabase Auth cutover.
+router.post('/migrate-legacy-credentials', async (req, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.status(400).json({ success: false, message: 'Email and password are required.' });
+      return;
+    }
+
+    const user = await userStore.findByEmailAsync(email.trim().toLowerCase());
+    if (!user || !user.passwordHash) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return;
+    }
+
+    if (user.status !== 'active') {
+      res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
+      return;
+    }
+
+    // Check if user already has a Supabase Auth identity linked
+    const existing = await query<{ authuserid: string | null }>(
+      'SELECT authuserid FROM iam.users WHERE userid = $1',
+      [toUserPk(user.id)]
+    );
+    if (existing.rows[0]?.authuserid) {
+      res.status(409).json({ success: false, message: 'This account already has a linked Supabase identity. Try signing in directly.' });
+      return;
+    }
+
+    const supabase = getSupabaseServiceClient();
+    const created = await supabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: { username: user.username, full_name: user.name }
+    });
+
+    if (created.error) {
+      console.error('[Migrate Legacy] Supabase createUser failed:', created.error.message);
+      res.status(502).json({ success: false, message: 'Authentication service is temporarily unavailable. Please try again.' });
+      return;
+    }
+
+    const authUserId = created.data.user.id;
+
+    await query(
+      'UPDATE iam.users SET authuserid = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2',
+      [authUserId, toUserPk(user.id)]
+    );
+
+    recordActivitySafe({
+      actorId: user.id,
+      actorName: user.name,
+      actorEmail: user.email,
+      actorRole: user.role,
+      action: 'Migrated to Supabase Auth',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: user.id,
+      entityName: user.name,
+      description: `${user.name} migrated from legacy credentials to Supabase Auth.`,
+    });
+
+    res.status(200).json({ success: true, message: 'Credentials migrated to Supabase Auth. Please sign in again.' });
+  } catch (error: any) {
+    console.error('[Migrate Legacy] Error:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Migration failed. Please contact an administrator.' });
   }
 });
 
