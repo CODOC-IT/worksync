@@ -51,14 +51,20 @@ const memStore: StoredEvent[] = [];
 
 const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): ActivityDTO => {
   const knownUser = row.actoruserid ? userStore.findById(fromUserPk(row.actoruserid)) : undefined;
+  const actorId = row.actoruserid ? fromUserPk(row.actoruserid) : null;
+  // The audit snapshot is useful for historical records, but a current IAM display name is
+  // authoritative for live actors. This also fixes cold-starts where userStore has not warmed
+  // its in-memory cache yet. Only actorless events should be labelled System.
+  const actorName = row.actordisplayname || row.actornamesnapshot || knownUser?.name || (actorId ? actorId : 'System');
+  const actorEmail = row.actoremail || row.actoremailsnapshot || knownUser?.email || '';
   return {
     id: String(row.auditeventid), correlationId: row.correlationid,
     actor: {
-      id: row.actoruserid ? fromUserPk(row.actoruserid) : null,
-      name: row.actornamesnapshot || knownUser?.name || 'System',
-      email: row.actoremailsnapshot || knownUser?.email || '',
+      id: actorId,
+      name: actorName,
+      email: actorEmail,
       avatar: knownUser?.avatar,
-      role: row.actorrolesnapshot || knownUser?.role || 'System'
+      role: row.actorrolesnapshot || knownUser?.role || (actorId ? 'Unknown' : 'System')
     },
     affectedUser: row.affecteduseridtext || row.affectedusernamesnapshot ? {
       id: row.affecteduseridtext, name: row.affectedusernamesnapshot || row.affecteduseridtext || 'Unknown user'

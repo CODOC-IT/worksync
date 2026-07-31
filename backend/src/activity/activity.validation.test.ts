@@ -23,3 +23,15 @@ test('applies safe pagination bounds', () => {
   assert.equal(parseActivityFilters({ pageSize: '0' }).pageSize, 20);
 });
 
+test('treats blank select values as unset filters', () => {
+  const filters = parseActivityFilters({
+    module: '', action: '', entityType: '', result: '', source: '', userRole: '',
+    projectId: '', taskId: '', userId: '',
+  });
+  assert.equal(filters.module, undefined);
+  assert.equal(filters.action, undefined);
+  assert.equal(filters.result, undefined);
+  assert.equal(filters.source, undefined);
+  assert.equal(filters.userId, undefined);
+});
+
