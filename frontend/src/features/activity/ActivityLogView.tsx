@@ -714,7 +714,8 @@ const FilterSelect: React.FC<{
   options: Array<{ value: string; label: string } | string>;
   includeNoneOption?: boolean;
   noneValue?: string;
-}> = ({ label, value, onChange, options, includeNoneOption = true, noneValue = '' }) => (
+  emptyOptionLabel?: string;
+}> = ({ label, value, onChange, options, includeNoneOption = true, noneValue = '', emptyOptionLabel = 'None' }) => (
   <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
     {label}
     <select
@@ -722,7 +723,7 @@ const FilterSelect: React.FC<{
       onChange={(e) => onChange(e.target.value)}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none"
     >
-      {includeNoneOption && <option value={noneValue}>None</option>}
+      {includeNoneOption && <option value={noneValue}>{emptyOptionLabel}</option>}
       {options.map((option) => {
         const optValue = typeof option === 'string' ? option : option.value;
         const optLabel = typeof option === 'string' ? option.replaceAll('_', ' ') : option.label;

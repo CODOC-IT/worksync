@@ -63,7 +63,6 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
       id: actorId,
       name: actorName,
       email: actorEmail,
-      avatar: knownUser?.avatar,
       role: row.actorrolesnapshot || knownUser?.role || (actorId ? 'Unknown' : 'System')
     },
     affectedUser: row.affecteduseridtext || row.affectedusernamesnapshot ? {
