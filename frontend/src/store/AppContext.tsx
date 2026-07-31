@@ -166,7 +166,7 @@ interface AppState {
     maxChatPins: number;
   };
   // Actions
-  refreshUsers: () => void;
+  refreshUsers: () => Promise<void>;
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
   logoutUser: () => void;
@@ -228,6 +228,9 @@ interface AppState {
   approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   submitAccountChangeRequest: (requestedField: 'name' | 'email' | 'username' | 'password', requestedValue: string | undefined, reason: string, currentPassword?: string) => Promise<{ success: boolean; message: string }>;
+  approveAccountChangeRequest: (requestId: string) => Promise<{ success: boolean; message: string }>;
+  rejectAccountChangeRequest: (requestId: string, reason: string) => Promise<{ success: boolean; message: string }>;
+  refreshAccountChangeRequests: () => Promise<void>;
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
@@ -342,35 +345,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser.id]);
 
-  useEffect(() => {
+  const refreshAccountChangeRequests = async (): Promise<void> => {
     if (!currentUser.id) return;
-
-    let isActive = true;
     const token = localStorage.getItem('worksync_auth_token');
     if (!token) return;
 
-    fetch('/api/account-change-requests', {
+    const response = await fetch('/api/account-change-requests', {
       headers: { Authorization: `Bearer ${token}` }
-    })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.message || 'Failed to load account change requests.');
-        }
-        if (isActive && Array.isArray(data.requests)) {
-          setAccountChangeRequests(data.requests as AccountChangeRequest[]);
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load account change requests from API.', error);
-        if (isActive) {
-          setAccountChangeRequests([]);
-        }
-      });
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to load account change requests.');
+    }
+    if (Array.isArray(data.requests)) {
+      setAccountChangeRequests(data.requests as AccountChangeRequest[]);
+    }
+  };
 
-    return () => {
-      isActive = false;
-    };
+  useEffect(() => {
+    if (!currentUser.id) return;
+    void refreshAccountChangeRequests().catch((error) => {
+      console.error('Failed to load account change requests from API.', error);
+      setAccountChangeRequests([]);
+    });
   }, [currentUser.id]);
 
   const [settings] = useState({
@@ -394,11 +391,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const refreshUsers = () => {
+  const refreshUsers = async (): Promise<void> => {
     const token = localStorage.getItem('worksync_auth_token');
     if (!token) return;
 
-    fetch('/api/auth/users', {
+    await fetch('/api/auth/users', {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(async (res) => {
@@ -2457,6 +2454,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const reviewAccountChangeRequest = async (
+      requestId: string,
+      action: 'approve' | 'reject',
+      reason?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch(
+          `/api/account-change-requests/${encodeURIComponent(requestId)}/${action}`,
+          {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(action === 'reject' ? { reason } : {})
+          }
+        );
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || `Failed to ${action} account change request.`);
+        }
+        await Promise.all([refreshAccountChangeRequests(), refreshUsers()]);
+        return { success: true, message: data.message };
+      } catch (error: any) {
+        return {
+          success: false,
+          message: error?.message || `Failed to ${action} account change request.`
+        };
+      }
+    };
+
+    const approveAccountChangeRequest = (requestId: string) =>
+      reviewAccountChangeRequest(requestId, 'approve');
+
+    const rejectAccountChangeRequest = (requestId: string, reason: string) =>
+      reviewAccountChangeRequest(requestId, 'reject', reason);
+
     const approveHRRequest = async (
       requestId: string,
       decisionReason?: string
@@ -2998,6 +3029,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveHRRequest,
         rejectHRRequest,
         submitAccountChangeRequest,
+        approveAccountChangeRequest,
+        rejectAccountChangeRequest,
+        refreshAccountChangeRequests,
         sendChatMessage,
         togglePinMessage,
         addAIQueryLog,

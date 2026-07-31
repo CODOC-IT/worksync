@@ -171,7 +171,9 @@ export const ApprovalsInboxView: React.FC = () => {
     approveHRRequest,
     rejectHRRequest,
     approveProjectApprovalRequest,
-    rejectProjectApprovalRequest
+    rejectProjectApprovalRequest,
+    approveAccountChangeRequest,
+    rejectAccountChangeRequest
   } = useApp();
 
   const [statusFilter, setStatusFilter] =
@@ -184,6 +186,10 @@ export const ApprovalsInboxView: React.FC = () => {
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+  const [reviewingAccountRequestId, setReviewingAccountRequestId] = useState<string | null>(null);
+  const [rejectingAccountRequest, setRejectingAccountRequest] = useState<AccountChangeRequest | null>(null);
+  const [accountRejectionReason, setAccountRejectionReason] = useState('');
+  const [accountRejectionError, setAccountRejectionError] = useState('');
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
@@ -380,6 +386,120 @@ export const ApprovalsInboxView: React.FC = () => {
     }
     const result = await rejectProjectApprovalRequest(request.id, rejectionReason.trim());
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+  };
+
+  const handleAccountApprove = async (request: AccountChangeRequest) => {
+    setReviewingAccountRequestId(request.id);
+    const result = await approveAccountChangeRequest(request.id);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    setReviewingAccountRequestId(null);
+  };
+
+  const openAccountRejectModal = (request: AccountChangeRequest) => {
+    setRejectingAccountRequest(request);
+    setAccountRejectionReason('');
+    setAccountRejectionError('');
+  };
+
+  const closeAccountRejectModal = () => {
+    if (reviewingAccountRequestId) return;
+    setRejectingAccountRequest(null);
+    setAccountRejectionReason('');
+    setAccountRejectionError('');
+  };
+
+  const handleAccountReject = async () => {
+    if (!rejectingAccountRequest) return;
+    const reason = accountRejectionReason.trim();
+    if (!reason) {
+      setAccountRejectionError('A rejection reason is required.');
+      return;
+    }
+    setReviewingAccountRequestId(rejectingAccountRequest.id);
+    const result = await rejectAccountChangeRequest(rejectingAccountRequest.id, reason);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    setReviewingAccountRequestId(null);
+    if (result.success) closeAccountRejectModal();
+  };
+
+  const renderAccountActions = (request: AccountChangeRequest) => {
+    if (request.status !== 'Pending') return null;
+    const submitting = reviewingAccountRequestId === request.id;
+    return (
+      <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => openAccountRejectModal(request)}
+          className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => handleAccountApprove(request)}
+          className="glass-button-neon rounded-lg px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? 'Submitting…' : 'Approve'}
+        </button>
+      </div>
+    );
+  };
+
+  const renderAccountRejectModal = () => {
+    if (!rejectingAccountRequest) return null;
+    const submitting = reviewingAccountRequestId === rejectingAccountRequest.id;
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-rejection-title"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeAccountRejectModal();
+        }}
+      >
+        <div className="glass-panel w-full max-w-lg space-y-4 p-5">
+          <div>
+            <h2 id="account-rejection-title" className="text-lg font-bold text-white">
+              Reject account change request
+            </h2>
+            <p className="mt-1 text-xs text-slate-400">
+              The requester will receive this reason in their notification.
+            </p>
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-slate-300">Reason</span>
+            <textarea
+              required
+              autoFocus
+              maxLength={1000}
+              rows={5}
+              value={accountRejectionReason}
+              disabled={submitting}
+              onChange={(event) => {
+                setAccountRejectionReason(event.target.value);
+                if (event.target.value.trim()) setAccountRejectionError('');
+              }}
+              className="w-full resize-y rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/50 disabled:opacity-60"
+              placeholder="Explain why this request is being rejected"
+            />
+          </label>
+          {accountRejectionError && (
+            <p className="text-xs text-rose-300" role="alert">{accountRejectionError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={submitting} onClick={closeAccountRejectModal} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="button" disabled={submitting || !accountRejectionReason.trim()} onClick={handleAccountReject} className="rounded-lg border border-rose-500/30 bg-rose-500/15 px-3 py-2 text-xs font-bold text-rose-300 disabled:cursor-not-allowed disabled:opacity-50">
+              {submitting ? 'Rejecting…' : 'Reject request'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderNotice = () => {
@@ -704,11 +824,13 @@ export const ApprovalsInboxView: React.FC = () => {
                       </div>
                     </div>
                   )}
+                  {renderAccountActions(request)}
                 </div>
               );
             })}
           </div>
         )}
+        {renderAccountRejectModal()}
       </section>
     );
   }
@@ -1009,6 +1131,7 @@ export const ApprovalsInboxView: React.FC = () => {
                     </div>
                   </div>
                 )}
+                {renderAccountActions(request)}
               </div>
             );
           })}
@@ -1188,6 +1311,7 @@ export const ApprovalsInboxView: React.FC = () => {
           })}
         </div>
       )}
+      {renderAccountRejectModal()}
     </section>
   );
 };

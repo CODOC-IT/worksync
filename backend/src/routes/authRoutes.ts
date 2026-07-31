@@ -5,6 +5,7 @@ import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { sendAccountUpdateEmail } from '../services/emailService.js';
 import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
@@ -465,8 +466,44 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
       return;
     }
 
+    const nextPassword = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+    const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword.trim() : '';
+    if (nextPassword || confirmPassword) {
+      if (targetUser.role !== 'Team_Member') {
+        res.status(403).json({ success: false, message: 'Managed password changes are limited to Team Member accounts.' });
+        return;
+      }
+      if (nextPassword.length < 6) {
+        res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+        return;
+      }
+      if (nextPassword !== confirmPassword) {
+        res.status(400).json({ success: false, message: 'Password confirmation does not match.' });
+        return;
+      }
+    }
+
     const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
-    res.status(200).json({ success: true, message: 'Account updated successfully.', user: updatedUser });
+
+    if (nextPassword) {
+      const newHash = bcrypt.hashSync(nextPassword, 10);
+      await userStore.updatePassword(updatedUser.email, newHash);
+    }
+
+    let message = 'Account updated successfully.';
+    try {
+      await sendAccountUpdateEmail({
+        toEmail: updatedUser.email,
+        recipientName: updatedUser.name,
+        role: updatedUser.role === 'Team_Member' ? 'Team Member' : updatedUser.role.replace('_', ' '),
+        changedBy: req.user.email,
+        password: nextPassword || undefined,
+      });
+    } catch {
+      message = 'Account updated, but the notification email could not be sent.';
+    }
+
+    res.status(200).json({ success: true, message, user: updatedUser });
   } catch (error: any) {
     const message = error?.message || 'Failed to update account.';
     const status = message === 'User not found.' ? 404 : 400;
