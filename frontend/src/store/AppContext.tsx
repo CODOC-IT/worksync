@@ -806,11 +806,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setActivityLogs((prev) => [newAct, ...prev]);
 
-    fetch('/api/activity-log', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
-    }).catch(() => {});
+    // Backend workflows persist the authoritative audit event; keep this optimistic
+    // compatibility list local to avoid duplicate audit rows.
   };
 
   // --- Notification Module -----------------------------------------------------------

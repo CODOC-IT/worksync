@@ -12,7 +12,6 @@ const dateBounds = (filters: ActivityFilters): { from?: string; to?: string } =>
   const now = new Date();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
-  if (filters.datePreset === 'All') return {};
   if (filters.datePreset === 'Custom') return {
     from: filters.customFrom ? new Date(`${filters.customFrom}T00:00:00`).toISOString() : undefined,
     to: filters.customTo ? new Date(`${filters.customTo}T23:59:59.999`).toISOString() : undefined

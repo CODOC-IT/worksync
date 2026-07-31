@@ -93,8 +93,14 @@ export const getEffectiveRoles = async (userId: string): Promise<EffectiveRoles>
 
     const activeTemporaryRoles = [...temporaryMap.values()];
     const isAdmin = permanentRole === 'Admin';
-    const isActiveHR = !isAdmin && activeTemporaryRoles.some((role) => role.roleCode === 'HR');
-    const isActiveTeamLead = !isAdmin && activeTemporaryRoles.some((role) => role.roleCode === 'Team_Lead');
+    // Permanent HR/Team Lead assignments are elevated roles too. They must use the
+    // same visibility and capability paths as active temporary assignments.
+    const isActiveHR = !isAdmin && (
+      permanentRole === 'HR' || activeTemporaryRoles.some((role) => role.roleCode === 'HR')
+    );
+    const isActiveTeamLead = !isAdmin && (
+      permanentRole === 'Team_Lead' || activeTemporaryRoles.some((role) => role.roleCode === 'Team_Lead')
+    );
     return {
       permanentRole,
       activeTemporaryRoles,

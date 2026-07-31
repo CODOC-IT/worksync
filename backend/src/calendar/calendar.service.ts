@@ -2,6 +2,7 @@ import * as repo from './calendar.repository.js';
 import { userStore } from '../store/userStore.js';
 import { getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
 
 // Service Layer, matching the layering convention already used by backend/src/projects and
 // backend/src/notifications: no SQL here (that's calendar.repository.ts), no Express req/res
@@ -103,6 +104,11 @@ export const createHoliday = async (
     createdByUserId: toUserPk(actorId)
   });
   const row = await repo.findHolidayById(id);
+  recordActivitySafe({
+    actorId, action: 'Created', module: 'Calendar', entityType: 'Holiday', entityId: String(id),
+    entityName: name.trim(), description: `Created holiday “${name.trim()}” on ${date}.`,
+    source: 'API', linkRoute: '/calendar',
+  });
   return toHolidayDTO(row!);
 };
 
@@ -129,12 +135,23 @@ export const updateHoliday = async (
     isRecurringAnnual: updates.isRecurringAnnual
   });
   const updated = await repo.findHolidayById(id);
+  recordActivitySafe({
+    actorId, action: 'Updated', module: 'Calendar', entityType: 'Holiday', entityId: String(id),
+    entityName: updated?.holidayname || String(id), description: `Updated holiday “${updated?.holidayname || id}”.`,
+    source: 'API', linkRoute: '/calendar',
+  });
   return toHolidayDTO(updated!);
 };
 
 export const deleteHoliday = async (holidayId: string, actorId: string): Promise<void> => {
   await assertIsHR(actorId);
   const id = parseHolidayId(holidayId);
+  const existing = await repo.findHolidayById(id);
   const deleted = await repo.deleteHoliday(id);
   if (!deleted) throw new CalendarNotFoundError('Holiday not found.');
+  recordActivitySafe({
+    actorId, action: 'Deleted', module: 'Calendar', entityType: 'Holiday', entityId: String(id),
+    entityName: existing?.holidayname || String(id), description: `Deleted holiday “${existing?.holidayname || id}”.`,
+    source: 'API', linkRoute: '/calendar',
+  });
 };
