@@ -36,6 +36,14 @@ export interface CredentialEmailInput {
   role: string;
 }
 
+export interface AccountUpdateEmailInput {
+  toEmail: string;
+  recipientName: string;
+  role: string;
+  changedBy: string;
+  password?: string;
+}
+
 export const buildCredentialEmailContent = (
   input: CredentialEmailInput,
   organization: string,
@@ -86,6 +94,51 @@ export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<
     from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
     to: input.toEmail,
     ...buildCredentialEmailContent(input, organization, loginUrl)
+  });
+};
+
+export const sendAccountUpdateEmail = async (input: AccountUpdateEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+  const safe = {
+    organization: escapeHtml(organization),
+    name: escapeHtml(input.recipientName),
+    email: escapeHtml(input.toEmail),
+    role: escapeHtml(input.role),
+    changedBy: escapeHtml(input.changedBy),
+    password: input.password ? escapeHtml(input.password) : '',
+    loginUrl: escapeHtml(loginUrl)
+  };
+
+  const textLines = [
+    `Hello ${input.recipientName},`,
+    '',
+    `Your ${organization} account request has been fulfilled and your account details were updated by ${input.changedBy}.`,
+    `Email: ${input.toEmail}`,
+    `Role: ${input.role}`,
+    input.password ? `Password: ${input.password}` : '',
+    loginUrl ? `Sign in: ${loginUrl}` : '',
+    '',
+    'If you did not expect this change, contact your administrator immediately.'
+  ].filter(Boolean);
+
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    subject: `Your ${organization} account details were updated`,
+    text: textLines.join('\n'),
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+      <h1 style="font-size:22px">Your ${safe.organization} account was updated</h1>
+      <p>Hello ${safe.name},</p>
+      <p>Your account request has been fulfilled and your account details were updated by ${safe.changedBy}.</p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
+        <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
+        ${input.password ? `<tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>` : ''}
+      </table>
+      ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
+      <p>If you did not expect this change, contact your administrator immediately.</p>
+    </div>`
   });
 };
 

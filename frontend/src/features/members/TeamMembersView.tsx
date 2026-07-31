@@ -43,6 +43,7 @@ interface MemberFormState {
   department: string;
   title: string;
   password: string;
+  confirmPassword: string;
 }
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -117,6 +118,7 @@ const EMPTY_MEMBER_FORM: MemberFormState = {
   department: 'Engineering',
   title: '',
   password: TEMPORARY_ACCOUNT_PASSWORD,
+  confirmPassword: TEMPORARY_ACCOUNT_PASSWORD,
 };
 
 export const TeamMembersView: React.FC = () => {
@@ -250,6 +252,7 @@ export const TeamMembersView: React.FC = () => {
       department: member.department,
       title: member.title,
       password: '',
+      confirmPassword: '',
     });
     setShowTemporaryPassword(false);
     setManageModalOpen(true);
@@ -269,6 +272,14 @@ export const TeamMembersView: React.FC = () => {
     setManageSubmitting(true);
     try {
       const isCreate = manageMode === 'create';
+      if (manageMode === 'edit' && (memberForm.password || memberForm.confirmPassword)) {
+        if (memberForm.password.length < 6) {
+          throw new Error('New password must be at least 6 characters long.');
+        }
+        if (memberForm.password !== memberForm.confirmPassword) {
+          throw new Error('Password confirmation does not match.');
+        }
+      }
       const payload = {
         name: memberForm.name.trim(),
         username: memberForm.username.trim().toLowerCase(),
@@ -277,6 +288,7 @@ export const TeamMembersView: React.FC = () => {
         department: memberForm.department.trim(),
         title: memberForm.title.trim(),
         ...(isCreate ? { password: memberForm.password } : {}),
+        ...(manageMode === 'edit' && memberForm.password ? { password: memberForm.password, confirmPassword: memberForm.confirmPassword } : {}),
       };
 
       const response = await fetch(isCreate ? '/api/auth/users' : `/api/auth/users/${encodeURIComponent(manageTargetId || '')}`, {
@@ -1068,6 +1080,45 @@ export const TeamMembersView: React.FC = () => {
                 <span className="mb-1 block text-xs">Title</span>
                 <input value={memberForm.title} onChange={(event) => setMemberForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
               </label>
+              {manageMode === 'edit' && memberForm.role === 'Team_Member' && (
+                <>
+                  <label className="text-sm text-slate-300 md:col-span-2">
+                    <span className="mb-1 block text-xs">New password</span>
+                    <div className="relative">
+                      <input
+                        type={showTemporaryPassword ? 'text' : 'password'}
+                        value={memberForm.password}
+                        onChange={(event) => setMemberForm((prev) => ({ ...prev, password: event.target.value }))}
+                        className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 pr-12 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                        minLength={6}
+                        placeholder="Leave blank to keep the current password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowTemporaryPassword((visible) => !visible)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition hover:text-white"
+                        aria-label={showTemporaryPassword ? 'Hide new password' : 'Show new password'}
+                      >
+                        {showTemporaryPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </label>
+                  <label className="text-sm text-slate-300 md:col-span-2">
+                    <span className="mb-1 block text-xs">Confirm new password</span>
+                    <input
+                      type={showTemporaryPassword ? 'text' : 'password'}
+                      value={memberForm.confirmPassword}
+                      onChange={(event) => setMemberForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                      minLength={6}
+                      placeholder="Confirm the new password"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">
+                      When changed, the member will receive an email confirming the update and their new credentials.
+                    </p>
+                  </label>
+                </>
+              )}
               {manageMode === 'create' && (
                 <label className="text-sm text-slate-300 md:col-span-2">
                   <span className="mb-1 block text-xs">Temporary password</span>
