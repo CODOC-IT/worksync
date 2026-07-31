@@ -201,13 +201,14 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     }
     const requestedValueString = typeof requestedValue === 'string' ? requestedValue : '';
 
-    const user = userStore.findById(req.user.id);
+    const allUsers = await userStore.getAllUsers();
+    const user = allUsers.find((u) => u.id === req.user.id);
     if (!user) {
       res.status(404).json({ success: false, message: 'User profile not found.' });
       return;
     }
     const userPk = toUserPk(req.user.id);
-    const requesterName = user?.name || req.user.email;
+    const requesterName = user.name || req.user.email;
 
     const storedChanges: Record<string, string> = {};
 
