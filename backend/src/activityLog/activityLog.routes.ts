@@ -41,7 +41,6 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
       id: l.id,
       userId: l.userId,
       userName: l.userName,
-      userAvatar: l.userAvatar,
       action: l.action,
       targetType: l.targetType,
       targetId: l.targetId,

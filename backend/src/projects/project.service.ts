@@ -135,7 +135,6 @@ export const getProjectMemberDirectoryForUser = async (
       name: member.name,
       role: member.role,
       department: member.department,
-      avatar: member.avatar,
       title: member.title,
       status: member.status
     }));

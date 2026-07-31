@@ -3,10 +3,17 @@ import bcrypt from 'bcryptjs';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { query } from '../db/pool.js';
 import { userStore } from '../store/userStore.js';
+import { toUserPk } from '../utils/idMapping.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
+
+const REQUEST_FIELDS = ['name', 'email', 'username', 'password'] as const;
+type RequestField = typeof REQUEST_FIELDS[number];
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const usernamePattern = /^[a-z0-9][a-z0-9._-]{2,79}$/i;
 
 interface AccountChangeRequestRow {
   id: string;
@@ -14,6 +21,7 @@ interface AccountChangeRequestRow {
   user_name: string | null;
   requester_role: string | null;
   request_type: string;
+  requested_field: string | null;
   requested_changes: Record<string, string> | string | null;
   reason: string;
   status: RequestStatus;
@@ -34,6 +42,7 @@ const ensureTable = async (): Promise<void> => {
       user_name TEXT,
       requester_role TEXT,
       request_type TEXT NOT NULL DEFAULT 'Account_Change',
+      requested_field TEXT,
       requested_changes JSONB NOT NULL DEFAULT '{}'::jsonb,
       reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Approved', 'Rejected')),
@@ -44,6 +53,7 @@ const ensureTable = async (): Promise<void> => {
       decided_at TIMESTAMPTZ
     )
   `);
+  await query(`ALTER TABLE public.worksync_account_change_requests ADD COLUMN IF NOT EXISTS requested_field TEXT`);
   await query(`
     CREATE INDEX IF NOT EXISTS idx_worksync_acc_req_reviewer
     ON public.worksync_account_change_requests (assigned_approver_role, status, submitted_at DESC)
@@ -58,10 +68,10 @@ const parseChanges = (changes: AccountChangeRequestRow['requested_changes']): Re
 
 const mapRow = (row: AccountChangeRequestRow) => {
   const changes = parseChanges(row.requested_changes);
-  const passwordChangeRequested = 'password_hash' in changes;
+  const passwordChangeRequested = row.requested_field === 'password' || 'password_hash' in changes;
   const displayChanges: Record<string, string> = {};
   for (const [key, val] of Object.entries(changes)) {
-    if (key === 'password_hash') continue;
+    if (key === 'password_hash' || key === 'current_password_verified') continue;
     displayChanges[key] = val;
   }
   return {
@@ -70,6 +80,7 @@ const mapRow = (row: AccountChangeRequestRow) => {
     userName: row.user_name || undefined,
     requesterRole: row.requester_role || undefined,
     requestType: row.request_type,
+    requestedField: (row.requested_field as RequestField) || undefined,
     requestedChanges: displayChanges,
     passwordChangeRequested,
     reason: row.reason,
@@ -85,8 +96,6 @@ const determineApproverRole = (requesterRole: string): string => {
   if (requesterRole === 'HR') return 'Admin';
   return 'HR';
 };
-
-const VALID_CHANGE_FIELDS = ['name', 'username', 'email', 'password'];
 
 const ROUTING_NOTIFY_MAP: Record<string, string[]> = {
   HR: ['Admin'],
@@ -167,9 +176,11 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    const { requestedChanges, reason } = req.body as {
-      requestedChanges?: Record<string, string>;
-      reason?: string;
+    const { requestedField, requestedValue, currentPassword, reason } = req.body as {
+      requestedField?: unknown;
+      requestedValue?: unknown;
+      currentPassword?: unknown;
+      reason?: unknown;
     };
 
     const cleanReason = typeof reason === 'string' ? reason.trim() : '';
@@ -178,36 +189,107 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    if (!requestedChanges || typeof requestedChanges !== 'object' || Object.keys(requestedChanges).length === 0) {
-      res.status(400).json({ success: false, message: 'At least one change must be requested.' });
+    if (!REQUEST_FIELDS.includes(requestedField as RequestField)) {
+      res.status(400).json({ success: false, message: 'Select what you want to change.' });
       return;
     }
+    const field = requestedField as RequestField;
+
+    if (field !== 'password' && (typeof requestedValue !== 'string' || !requestedValue.trim())) {
+      res.status(400).json({ success: false, message: 'A value is required for the requested change.' });
+      return;
+    }
+    const requestedValueString = typeof requestedValue === 'string' ? requestedValue : '';
+
+    const user = userStore.findById(req.user.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User profile not found.' });
+      return;
+    }
+    const userPk = toUserPk(req.user.id);
+    const requesterName = user?.name || req.user.email;
 
     const storedChanges: Record<string, string> = {};
-    const changedFieldNames: string[] = [];
 
-    for (const [field, value] of Object.entries(requestedChanges)) {
-      if (!VALID_CHANGE_FIELDS.includes(field)) {
-        res.status(400).json({ success: false, message: `Field "${field}" is not a valid change field.` });
+    if (field === 'name') {
+      const sanitizedName = requestedValueString.replace(/<[^>]*>/g, '').trim();
+      if (sanitizedName.length < 2 || sanitizedName.length > 170) {
+        res.status(400).json({ success: false, message: 'Display name must be between 2 and 170 characters.' });
         return;
       }
-      if (typeof value !== 'string' || !value.trim()) {
-        res.status(400).json({ success: false, message: `Field "${field}" must have a non-empty value.` });
+      if (sanitizedName === (user.name || '').trim()) {
+        res.status(400).json({ success: false, message: 'New display name must be different from your current display name.' });
         return;
       }
-      changedFieldNames.push(field);
-      if (field === 'password') {
-        const hash = bcrypt.hashSync(value.trim(), 10);
-        storedChanges.password_hash = hash;
-      } else {
-        storedChanges[field] = value.trim();
+      storedChanges.name = sanitizedName;
+    }
+
+    if (field === 'email') {
+      const normalizedEmail = requestedValueString.replace(/<[^>]*>/g, '').trim().toLowerCase();
+      if (!emailPattern.test(normalizedEmail) || normalizedEmail.length > 254) {
+        res.status(400).json({ success: false, message: 'Enter a valid email address.' });
+        return;
       }
+      if (normalizedEmail === (user.email || '').trim().toLowerCase()) {
+        res.status(400).json({ success: false, message: 'New email must be different from your current email.' });
+        return;
+      }
+      const duplicate = await query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM iam.users
+           WHERE organizationid = 1 AND lower(email) = $1 AND userid <> $2
+         ) AS exists`,
+        [normalizedEmail, userPk]
+      );
+      if (duplicate.rows[0]?.exists) {
+        res.status(409).json({ success: false, message: 'An account already exists for this email.' });
+        return;
+      }
+      storedChanges.email = normalizedEmail;
+    }
+
+    if (field === 'username') {
+      const normalizedUsername = requestedValueString.replace(/<[^>]*>/g, '').trim().toLowerCase();
+      if (!usernamePattern.test(normalizedUsername)) {
+        res.status(400).json({ success: false, message: 'Username must be 3-80 letters, numbers, dots, hyphens, or underscores.' });
+        return;
+      }
+      if (normalizedUsername === (user.username || '').trim().toLowerCase()) {
+        res.status(400).json({ success: false, message: 'New username must be different from your current username.' });
+        return;
+      }
+      const duplicate = await query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM iam.users
+           WHERE organizationid = 1 AND lower(username) = $1 AND userid <> $2
+         ) AS exists`,
+        [normalizedUsername, userPk]
+      );
+      if (duplicate.rows[0]?.exists) {
+        res.status(409).json({ success: false, message: 'This username is already in use.' });
+        return;
+      }
+      storedChanges.username = normalizedUsername;
+    }
+
+    if (field === 'password') {
+      if (typeof currentPassword !== 'string' || !currentPassword) {
+        res.status(400).json({ success: false, message: 'Current password is required to request a password change.' });
+        return;
+      }
+      if (!user.passwordHash) {
+        res.status(400).json({ success: false, message: 'Current password could not be verified for this account.' });
+        return;
+      }
+      const isValidCurrent = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!isValidCurrent) {
+        res.status(403).json({ success: false, message: 'Current password is incorrect.' });
+        return;
+      }
+      storedChanges.current_password_verified = 'true';
     }
 
     await ensureTable();
-
-    const user = userStore.findById(req.user.id);
-    const requesterName = user?.name || req.user.email;
 
     const approverRole = determineApproverRole(role);
     const id = `acr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -215,14 +297,15 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     const result = await query<AccountChangeRequestRow>(
       `INSERT INTO public.worksync_account_change_requests (
          id, user_id, user_name, requester_role, request_type,
-         requested_changes, reason, status, assigned_approver_role, submitted_at
-       ) VALUES ($1, $2, $3, $4, 'Account_Change', $5::jsonb, $6, 'Pending', $7, NOW())
+         requested_field, requested_changes, reason, status, assigned_approver_role, submitted_at
+       ) VALUES ($1, $2, $3, $4, 'Account_Change', $5, $6::jsonb, $7, 'Pending', $8, NOW())
        RETURNING *`,
       [
         id,
         req.user.id,
         requesterName,
         role,
+        field,
         JSON.stringify(storedChanges),
         cleanReason,
         approverRole,
@@ -239,9 +322,9 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       entityType: 'User',
       entityId: req.user.id,
       entityName: requesterName,
-      description: `${requesterName} requested a change to their account/profile information.`,
+      description: `${requesterName} requested a change to their account ${field}.`,
       linkRoute: 'approvals',
-      metadata: { changedFields: changedFieldNames },
+      metadata: { requestedField: field },
     });
 
     notifyApprovers(role, {

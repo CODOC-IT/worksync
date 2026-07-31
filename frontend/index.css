@@ -1085,7 +1085,7 @@
   border-color: var(--pc-border-strong);
 }
 
-[data-project-chats] .project-chat-avatar {
+[data-project-chats] .project-chat-initials {
   background: var(--pc-selected);
   border: 1px solid var(--pc-border);
   color: var(--pc-text);

@@ -8,7 +8,6 @@ export interface UserRecord {
   passwordHash: string;
   role: UserRole;
   department: string;
-  avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';

@@ -38,7 +38,7 @@ const sanitizeMetadata = (metadata: Record<string, unknown>): Record<string, unk
 
 type StoredEvent = {
   id: string; correlationId: string; occurredAt: Date;
-  actor: { id: string | null; name: string; email: string; avatar?: string; role: string };
+  actor: { id: string | null; name: string; email: string; role: string };
   affectedUser?: { id: string | null; name: string }; action: string; module: string;
   entityType: string; entityId: string; entityName: string; description: string;
   project?: { id: string; name: string }; task?: { id: string; name: string };
@@ -57,7 +57,6 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
       id: row.actoruserid ? fromUserPk(row.actoruserid) : null,
       name: row.actornamesnapshot || knownUser?.name || 'System',
       email: row.actoremailsnapshot || knownUser?.email || '',
-      avatar: knownUser?.avatar,
       role: row.actorrolesnapshot || knownUser?.role || 'System'
     },
     affectedUser: row.affecteduseridtext || row.affectedusernamesnapshot ? {

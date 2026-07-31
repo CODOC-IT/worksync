@@ -354,49 +354,6 @@ router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, 
   }
 });
 
-// PUT /api/auth/profile/avatar
-// Admin-only direct edit. HR/Lead/Member must submit an account change request.
-router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    if (!req.user) {
-      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
-    }
-
-    if (req.user.role !== 'Admin') {
-      return void res.status(403).json({
-        success: false,
-        message: 'Direct profile picture editing is restricted to Administrators.'
-      });
-    }
-
-    const { avatar } = req.body;
-
-    if (!avatar || typeof avatar !== 'string') {
-      return void res.status(400).json({ success: false, message: 'Avatar data URL is required.' });
-    }
-
-    if (!avatar.startsWith('data:image/')) {
-      return void res.status(400).json({ success: false, message: 'Avatar must be a valid image data URL.' });
-    }
-
-    const maxSize = 2 * 1024 * 1024;
-    const base64Size = Math.ceil((avatar.length * 3) / 4);
-    if (base64Size > maxSize) {
-      return void res.status(400).json({ success: false, message: 'Avatar image must be smaller than 2 MB.' });
-    }
-
-    const updatedUser = await userStore.updateAvatar(req.user.id, avatar);
-
-    return void res.status(200).json({
-      success: true,
-      message: 'Profile picture updated successfully.',
-      user: updatedUser
-    });
-  } catch {
-    return void res.status(500).json({ success: false, message: 'Failed to update profile picture.' });
-  }
-});
-
 // PUT /api/auth/profile/password
 // Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
