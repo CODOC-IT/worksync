@@ -20,7 +20,29 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+import { AccountChangeRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+
+// Account Change Requests -- HR/Lead/Member request a single-field change to their own account
+// (name, email, username, password). Rendered with friendly labels; requested passwords are never
+// displayed -- only "Password change requested".
+const ACCOUNT_FIELD_LABELS: Record<string, string> = {
+  name: 'Display Name',
+  email: 'Email',
+  username: 'Username',
+  password: 'Password',
+};
+
+function getAccountRequestedChanges(request: AccountChangeRequest): { field: string; value?: string }[] {
+  const list: { field: string; value?: string }[] = [];
+  if (request.passwordChangeRequested) {
+    list.push({ field: 'password' });
+  }
+  for (const [field, value] of Object.entries(request.requestedChanges || {})) {
+    if (field === 'password_hash' || field === 'password' || field === 'current_password_verified') continue;
+    list.push({ field, value });
+  }
+  return list;
+}
 
 // Project Management Approval Workflow (Team Lead -> Admin) -- rendered as its own section
 // below, separate from the legacy SystemApproval cards. See AppContext's projectApprovalRequests
@@ -667,20 +689,16 @@ export const ApprovalsInboxView: React.FC = () => {
                     <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
                   </div>
 
-                  {Object.keys(request.requestedChanges).length > 0 && (
+                  {getAccountRequestedChanges(request).length > 0 && (
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Changes</span>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
                       <div className="space-y-1">
-                        {request.passwordChangeRequested && (
-                          <div className="flex items-baseline gap-2">
-                            <span className="text-slate-500 w-24 shrink-0">password:</span>
-                            <span className="text-amber-400">Password change requested</span>
-                          </div>
-                        )}
-                        {Object.entries(request.requestedChanges).map(([field, value]) => (
+                        {getAccountRequestedChanges(request).map(({ field, value }) => (
                           <div key={field} className="flex items-baseline gap-2">
-                            <span className="text-slate-500 w-24 shrink-0">{field}:</span>
-                            <span className="text-emerald-300">{value}</span>
+                            <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
+                            <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
+                              {field === 'password' ? 'Password change requested' : value}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -976,14 +994,16 @@ export const ApprovalsInboxView: React.FC = () => {
                   <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
                 </div>
 
-                {Object.keys(request.requestedChanges).length > 0 && (
+                {getAccountRequestedChanges(request).length > 0 && (
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Changes</span>
+                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
                     <div className="space-y-1">
-                      {Object.entries(request.requestedChanges).map(([field, value]) => (
+                      {getAccountRequestedChanges(request).map(({ field, value }) => (
                         <div key={field} className="flex items-baseline gap-2">
-                          <span className="text-slate-500 w-24 shrink-0">{field}:</span>
-                          <span className="text-emerald-300">{field === 'password' ? '••••••' : value}</span>
+                          <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
+                          <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
+                            {field === 'password' ? 'Password change requested' : value}
+                          </span>
                         </div>
                       ))}
                     </div>

@@ -144,7 +144,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             id: item.id,
             userId: item.actor.id || '',
             userName: item.actor.name,
-            userAvatar: item.actor.avatar || '',
             action: `${item.action} ${item.entityType}`,
             targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
             targetId: item.entityId,
@@ -314,7 +313,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               ) : (
                 filteredActivityLogs.map((log) => (
                   <div key={log.id} className="p-2.5 rounded-xl bg-slate-900/50 border border-white/5 flex items-start gap-3 text-[10px]">
-                    <img src={log.userAvatar} alt={log.userName} className="w-6 h-6 rounded-lg object-cover ring-1 ring-white/10 shrink-0 mt-0.5" />
+                    <span className="w-6 h-6 rounded-lg bg-cyan-500/15 text-[8px] font-bold text-cyan-300 flex items-center justify-center ring-1 ring-white/10 shrink-0 mt-0.5">{log.userName.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}</span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap mb-0.5"><span className="font-bold text-white text-[10px]">{log.userName}</span><span className="text-slate-400 text-[10px]">{log.action}</span></div>
                       <span className="text-[10px] text-cyan-300 font-mono block truncate">{log.targetTitle}</span>

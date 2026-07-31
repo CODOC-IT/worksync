@@ -125,10 +125,9 @@ export const ProfileView: React.FC = () => {
   const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
 
   const [requestExpanded, setRequestExpanded] = useState(false);
-  const [requestName, setRequestName] = useState('');
-  const [requestUsername, setRequestUsername] = useState('');
-  const [requestEmail, setRequestEmail] = useState('');
-  const [requestPassword, setRequestPassword] = useState('');
+  const [requestField, setRequestField] = useState<'name' | 'email' | 'username' | 'password' | ''>('');
+  const [requestValue, setRequestValue] = useState('');
+  const [requestCurrentPassword, setRequestCurrentPassword] = useState('');
   const [requestReason, setRequestReason] = useState('');
   const [requestLoading, setRequestLoading] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -372,6 +371,9 @@ export const ProfileView: React.FC = () => {
       setPasswordSuccess('Password changed successfully.');
     } catch (err: any) {
       setPasswordError(err.message);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
     } finally {
       setPasswordLoading(false);
     }
@@ -454,20 +456,17 @@ export const ProfileView: React.FC = () => {
   };
 
   const handleRequestSubmit = async () => {
-    const requestedChanges: Record<string, string> = {};
-    const trimmedName = requestName.trim();
-    const trimmedUsername = requestUsername.trim();
-    const trimmedEmail = requestEmail.trim();
-    const trimmedPassword = requestPassword.trim();
+    const field = requestField;
+    const trimmedValue = requestValue.trim();
     const trimmedReason = requestReason.trim();
 
-    if (trimmedName) requestedChanges.name = trimmedName;
-    if (trimmedUsername) requestedChanges.username = trimmedUsername;
-    if (trimmedEmail) requestedChanges.email = trimmedEmail;
-    if (trimmedPassword) requestedChanges.password = trimmedPassword;
+    if (!field) {
+      setRequestError('Select what you want to change.');
+      return;
+    }
 
-    if (Object.keys(requestedChanges).length === 0) {
-      setRequestError('Please fill in at least one field to request a change.');
+    if (!trimmedValue) {
+      setRequestError('Please enter the new value you want to request.');
       return;
     }
 
@@ -476,28 +475,55 @@ export const ProfileView: React.FC = () => {
       return;
     }
 
+    if (field === 'name' && (trimmedValue.length < 2 || trimmedValue.length > 170)) {
+      setRequestError('Display name must be between 2 and 170 characters.');
+      return;
+    }
+
+    if (field === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedValue)) {
+      setRequestError('Enter a valid email address.');
+      return;
+    }
+
+    if (field === 'username' && !/^[a-z0-9][a-z0-9._-]{2,79}$/i.test(trimmedValue)) {
+      setRequestError('Username must be 3-80 letters, numbers, dots, hyphens, or underscores.');
+      return;
+    }
+
+    if (field === 'password') {
+      if (!requestCurrentPassword) {
+        setRequestError('Enter your current password to verify the password change request.');
+        return;
+      }
+    }
+
     setRequestLoading(true);
     setRequestError(null);
     setRequestSuccess(null);
 
-    const result = await submitAccountChangeRequest(requestedChanges, trimmedReason);
+    const result = await submitAccountChangeRequest(
+      field,
+      field === 'password' ? undefined : trimmedValue,
+      trimmedReason,
+      field === 'password' ? requestCurrentPassword : undefined
+    );
 
     if (result.success) {
-      setRequestName('');
-      setRequestUsername('');
-      setRequestEmail('');
-      setRequestPassword('');
+      setRequestField('');
+      setRequestValue('');
+      setRequestCurrentPassword('');
       setRequestReason('');
       setRequestExpanded(false);
       setRequestSuccess(result.message);
     } else {
       setRequestError(result.message);
+      setRequestCurrentPassword('');
     }
     setRequestLoading(false);
   };
 
-  /* ───────── Avatar Component ───────── */
-  const AvatarImage = ({ size = 'lg' }: { size?: 'lg' | 'md' }) => {
+  /* ───────── Initials Badge Component ───────── */
+  const InitialsBadge = ({ size = 'lg' }: { size?: 'lg' | 'md' }) => {
     const dimensions = size === 'lg' ? 'w-28 h-28' : 'w-20 h-20';
     const initials = getInitials(currentUser.name);
     const containerClass = `${dimensions} rounded-full overflow-hidden ring-1 ring-slate-500/20 shrink-0`;
@@ -1128,7 +1154,14 @@ export const ProfileView: React.FC = () => {
 
             <div>
               <button
-                onClick={() => { setPasswordExpanded(!passwordExpanded); setPasswordError(null); setPasswordSuccess(null); }}
+                onClick={() => {
+                  setCurrentPassword('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                  setPasswordExpanded(!passwordExpanded);
+                  setPasswordError(null);
+                  setPasswordSuccess(null);
+                }}
                 className="w-full flex items-center justify-between py-2 text-left"
               >
                 <div>
@@ -1146,6 +1179,7 @@ export const ProfileView: React.FC = () => {
                       type="password"
                       value={currentPassword}
                       onChange={e => setCurrentPassword(e.target.value)}
+                      autoComplete="off"
                       className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
                       placeholder="Enter current password"
                       disabled={passwordLoading}
@@ -1157,6 +1191,7 @@ export const ProfileView: React.FC = () => {
                       type="password"
                       value={newPassword}
                       onChange={e => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
                       className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
                       placeholder="Enter new password (min 6 characters)"
                       disabled={passwordLoading}
@@ -1168,6 +1203,7 @@ export const ProfileView: React.FC = () => {
                       type="password"
                       value={confirmPassword}
                       onChange={e => setConfirmPassword(e.target.value)}
+                      autoComplete="new-password"
                       className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
                       placeholder="Re-enter new password"
                       disabled={passwordLoading}
@@ -1284,49 +1320,54 @@ export const ProfileView: React.FC = () => {
           {requestExpanded && (
             <div className="space-y-4 pt-4 mt-3 border-t border-white/5">
               <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Display Name <span className="text-slate-600">(optional)</span></label>
-                <input
-                  type="text"
-                  value={requestName}
-                  onChange={e => setRequestName(e.target.value)}
+                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">What do you want to change? <span className="text-rose-400">*</span></label>
+                <select
+                  value={requestField}
+                  onChange={(e) => {
+                    setRequestField(e.target.value as typeof requestField);
+                    setRequestValue('');
+                    setRequestCurrentPassword('');
+                  }}
                   className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Request a new display name"
                   disabled={requestLoading}
-                />
+                >
+                  <option value="">Select a field...</option>
+                  <option value="name">Display Name</option>
+                  <option value="email">Email</option>
+                  <option value="username">Username</option>
+                  <option value="password">Password</option>
+                </select>
               </div>
-              <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Email <span className="text-slate-600">(optional)</span></label>
-                <input
-                  type="email"
-                  value={requestEmail}
-                  onChange={e => setRequestEmail(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Request a new email address"
-                  disabled={requestLoading}
-                />
-              </div>
-              <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Username <span className="text-slate-600">(optional)</span></label>
-                <input
-                  type="text"
-                  value={requestUsername}
-                  onChange={e => setRequestUsername(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Request a new username"
-                  disabled={requestLoading}
-                />
-              </div>
-              <div>
-                <label className="text-[11px] text-slate-500 font-medium block mb-1.5">New Password <span className="text-slate-600">(optional)</span></label>
-                <input
-                  type="password"
-                  value={requestPassword}
-                  onChange={e => setRequestPassword(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
-                  placeholder="Request a new password (min 6 characters)"
-                  disabled={requestLoading}
-                />
-              </div>
+              {requestField && requestField !== 'password' && (
+                <div>
+                  <label className="text-[11px] text-slate-500 font-medium block mb-1.5">
+                    New {requestField === 'name' ? 'Display Name' : requestField === 'email' ? 'Email' : 'Username'} <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type={requestField === 'email' ? 'email' : 'text'}
+                    value={requestValue}
+                    onChange={e => setRequestValue(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                    placeholder={requestField === 'email' ? 'Enter the new email address' : requestField === 'username' ? 'Enter the new username' : 'Enter the new display name'}
+                    disabled={requestLoading}
+                  />
+                </div>
+              )}
+              {requestField === 'password' && (
+                <div>
+                  <label className="text-[11px] text-slate-500 font-medium block mb-1.5">Current Password <span className="text-rose-400">*</span></label>
+                  <input
+                    type="password"
+                    value={requestCurrentPassword}
+                    onChange={e => setRequestCurrentPassword(e.target.value)}
+                    autoComplete="off"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-white/10 text-slate-200 text-xs placeholder-slate-600 focus:outline-none focus:border-cyan-400/50 transition-colors"
+                    placeholder="Enter current password"
+                    disabled={requestLoading}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Your current password is used only to verify your identity. The approved administrator will set your new password later.</p>
+                </div>
+              )}
               <div>
                 <label className="text-[11px] text-slate-500 font-medium block mb-1.5">
                   Reason <span className="text-rose-400">*</span>
@@ -1382,7 +1423,7 @@ export const ProfileView: React.FC = () => {
       {/* Hero Section */}
       <div className="glass-panel-glow p-6 sm:p-8 border-cyan-500/30">
         <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
-          <AvatarImage size="lg" />
+          <InitialsBadge size="lg" />
           <div className="min-w-0 text-center sm:text-left">
             <div className="flex items-center justify-center sm:justify-start gap-2.5 mb-2 flex-wrap">
               <h1 className="text-2xl font-extrabold text-white">{currentUser.name}</h1>

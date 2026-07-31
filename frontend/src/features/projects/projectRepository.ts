@@ -54,7 +54,7 @@ export const fetchProject = async (id: string): Promise<Project> => {
 
 export type ProjectMemberSummary = Pick<
   User,
-  'id' | 'name' | 'role' | 'department' | 'avatar' | 'title' | 'status'
+  'id' | 'name' | 'role' | 'department' | 'title' | 'status'
 >;
 
 export interface ProjectMemberDirectory {

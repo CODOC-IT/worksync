@@ -500,7 +500,6 @@ export const ReportsView: React.FC = () => {
         role: u?.role || '',
         department: u?.department || '',
         title: u?.title || '',
-        avatar: u?.avatar || '',
         status: u?.status || 'active',
         active: w?.active || 0,
         completed: w?.completed || 0,
@@ -2301,8 +2300,8 @@ ${bodyHtml}
                         >
                           <td className="py-2 pr-2">
                             <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 rounded-full bg-slate-700 overflow-hidden shrink-0">
-                                {m.avatar ? <img src={m.avatar} alt="" className="w-full h-full object-cover" /> : <User size={12} className="text-slate-400 m-auto" />}
+                              <div className="w-6 h-6 rounded-full bg-cyan-500/15 text-[8px] font-bold text-cyan-300 flex items-center justify-center shrink-0">
+                                {m.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
                               </div>
                               <span className="text-slate-200 font-medium group-hover:text-cyan-300 transition-colors">{m.name}</span>
                             </div>
@@ -2352,8 +2351,8 @@ ${bodyHtml}
                         className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/30 hover:bg-slate-700/30 hover:border-cyan-500/30 cursor-pointer transition-all group"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="w-8 h-8 rounded-full bg-slate-700 overflow-hidden shrink-0">
-                            {m.avatar ? <img src={m.avatar} alt="" className="w-full h-full object-cover" /> : <User size={14} className="text-slate-400 m-auto" />}
+                          <div className="w-8 h-8 rounded-full bg-cyan-500/15 text-[10px] font-bold text-cyan-300 flex items-center justify-center shrink-0">
+                            {m.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
                           </div>
                           <div className="min-w-0">
                             <div className="text-xs text-slate-200 font-medium truncate group-hover:text-cyan-300 transition-colors">{m.name}</div>
@@ -3062,8 +3061,8 @@ ${bodyHtml}
         <GlassCard>
           <div className="p-5 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-slate-700 overflow-hidden shrink-0">
-                {m.avatar ? <img src={m.avatar} alt="" className="w-full h-full object-cover" /> : <User size={18} className="text-slate-400 m-auto" />}
+              <div className="w-10 h-10 rounded-full bg-cyan-500/15 text-xs font-bold text-cyan-300 flex items-center justify-center shrink-0">
+                {m.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
               </div>
               <div className="min-w-0">
                 <h2 className="text-lg font-bold text-slate-100">{m.name}</h2>

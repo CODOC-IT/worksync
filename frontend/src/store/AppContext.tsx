@@ -227,7 +227,7 @@ interface AppState {
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details'], requestDate?: string) => Promise<{ success: boolean; message: string }>;
   approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
-  submitAccountChangeRequest: (requestedChanges: Record<string, string>, reason: string) => Promise<{ success: boolean; message: string }>;
+  submitAccountChangeRequest: (requestedField: 'name' | 'email' | 'username' | 'password', requestedValue: string | undefined, reason: string, currentPassword?: string) => Promise<{ success: boolean; message: string }>;
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
@@ -253,7 +253,7 @@ const AppContext = createContext<AppState | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User>({
-    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
+    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', title: '', status: 'inactive', createdAt: ''
   });
   const currentRole: UserRole = currentUser.role;
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -460,7 +460,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     email: '',
     role: 'Team_Member',
     department: '',
-    avatar: '',
     title: '',
     status: 'inactive'
   });
@@ -608,7 +607,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: item.id,
             userId: item.actor.id || '',
             userName: item.actor.name,
-            userAvatar: item.actor.avatar || '',
             action: `${item.action} ${item.entityType}`,
             targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
             targetId: item.entityId,
@@ -802,7 +800,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `act-${Date.now()}`,
       userId: currentUser.id,
       userName: currentUser.name,
-      userAvatar: currentUser.avatar,
       action,
       targetType,
       targetId,
@@ -2419,14 +2416,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const submitAccountChangeRequest = async (
-      requestedChanges: Record<string, string>,
-      reason: string
+      requestedField: 'name' | 'email' | 'username' | 'password',
+      requestedValue: string | undefined,
+      reason: string,
+      currentPassword?: string
     ): Promise<{ success: boolean; message: string }> => {
       try {
         const response = await fetch('/api/account-change-requests', {
           method: 'POST',
           headers: getAuthHeaders(),
-          body: JSON.stringify({ requestedChanges, reason })
+          body: JSON.stringify({ requestedField, requestedValue, reason, currentPassword })
         });
         const data = await response.json();
         if (!response.ok || !data.success || !data.request) {
@@ -2846,7 +2845,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Reassigned ${assignedTasks.length} task(s) from ${sourceUser?.name || sourceUserId} to ${targetUser?.name || targetUserId}`,
         targetType: 'Task',
         targetId: sourceUserId,
@@ -2867,7 +2865,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: data.email,
       role: data.role || 'Team_Member',
       department: data.department || 'Engineering',
-      avatar: data.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name)}`,
       title: data.title || 'Team Specialist',
       status: data.status || 'active',
       lastActive: 'Just now',
@@ -2880,7 +2877,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Added new team member ${newUser.name} (${newUser.role})`,
         targetType: 'Settings',
         targetId: newUserId,
@@ -2900,7 +2896,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Updated profile details for member ${data.name || userId}`,
         targetType: 'Settings',
         targetId: userId,
@@ -2933,7 +2928,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Deleted team member ${targetUser.name}`,
         targetType: 'Settings',
         targetId: userId,

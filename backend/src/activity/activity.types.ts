@@ -66,7 +66,7 @@ export interface ActivityFilters {
 export interface ActivityDTO {
   id: string;
   correlationId: string;
-  actor: { id: string | null; name: string; email: string; avatar?: string; role: string };
+  actor: { id: string | null; name: string; email: string; role: string };
   affectedUser?: { id: string | null; name: string };
   action: string;
   module: string;
