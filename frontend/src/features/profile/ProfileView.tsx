@@ -465,7 +465,7 @@ export const ProfileView: React.FC = () => {
       return;
     }
 
-    if (!trimmedValue) {
+    if (field !== 'password' && !trimmedValue) {
       setRequestError('Please enter the new value you want to request.');
       return;
     }
