@@ -277,6 +277,27 @@ class UserStore {
     await this.ensureInit();
   }
 
+  public async refreshUserFromDb(userId: string): Promise<Omit<UserRecord, 'passwordHash'> | undefined> {
+    await this.ensureInit();
+    if (!this.dbAvailable) {
+      const existing = this.findById(userId);
+      return existing ? this.sanitizeUser(existing) : undefined;
+    }
+
+    const result = await query<DbUserRow>(
+      USER_QUERY + ' WHERE u.userid = $1 AND u.organizationid = 1',
+      [toUserPk(userId)]
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+
+    const refreshed = rowToUserRecord(row);
+    const previous = this.findById(userId);
+    if (previous) this.fallbackUsers.delete(previous.email.toLowerCase());
+    this.fallbackUsers.set(refreshed.email.toLowerCase(), refreshed);
+    return this.sanitizeUser(refreshed);
+  }
+
   public findByEmail(email: string): UserRecord | undefined {
     return this.fallbackUsers.get(email.toLowerCase());
   }

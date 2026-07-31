@@ -243,6 +243,7 @@ export interface AccountChangeRequest {
   submittedAt: string;
   decidedBy?: string;
   decisionReason?: string;
+  decidedAt?: string;
 }
 
 // Project Management Approval Workflow (Team Lead -> Admin) -- deliberately separate from
