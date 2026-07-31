@@ -84,12 +84,12 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
   }
 
   if (Number(row.subtaskcount || 0) > 0) {
-    if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+    if (await isProjectLead(projectFrontendId(row), userId, role)) return;
     throw new TaskAuthorizationError('Only this project\'s Team Lead can edit a task that has subtasks.');
   }
 
   const projectId = projectFrontendId(row);
-  if (role === 'Team_Lead' && await isProjectLead(projectId, userId, role)) return;
+  if (await isProjectLead(projectId, userId, role)) return;
   if (isAssignee && role !== 'Team_Member') return;
   if (isAssignee) {
     throw new TaskAuthorizationError('Submit this task edit for your Team Lead\'s approval.');
@@ -101,7 +101,7 @@ const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): 
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot delete tasks.');
   const assignees = await repo.findAssigneesForTask(row.taskid);
   if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
-  if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+  if (await isProjectLead(projectFrontendId(row), userId, role)) return;
   throw new TaskAuthorizationError('You can only delete tasks assigned to you or in projects you lead.');
 };
 
@@ -111,7 +111,7 @@ const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): 
 const assertCanChangeTaskStatus = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot change task status.');
   if (role === 'Admin') return;
-  if (role === 'Team_Lead' && await isProjectLead(projectFrontendId(row), userId, role)) return;
+  if (await isProjectLead(projectFrontendId(row), userId, role)) return;
 
   const assignees = await repo.findAssigneesForTask(row.taskid);
   if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
@@ -233,19 +233,16 @@ export const getTaskForUser = async (taskId: string, userId: string, role: strin
 };
 
 export const createTask = async (input: CreateTaskInput, actorId: string, actorRole: string): Promise<TaskDTO> => {
-  if (actorRole !== 'Admin' && actorRole !== 'Team_Lead') {
+  if (!input.projectId) throw new TaskValidationError('projectId is required.');
+  if (actorRole !== 'Admin' && !(await isProjectLead(input.projectId, actorId, actorRole))) {
     throw new TaskAuthorizationError('You do not have permission to create tasks in this project.');
   }
-  if (!input.projectId) throw new TaskValidationError('projectId is required.');
 
   const projectPk = toProjectPkOrNull(input.projectId);
   const projectRow = projectPk ? await projectRepo.findProjectById(projectPk) : null;
   if (!projectRow) throw new TaskValidationError('The selected project no longer exists.');
   if (projectRow.statuscode !== 'Active') {
     throw new TaskValidationError('Tasks can only be created in active projects.');
-  }
-  if (actorRole === 'Team_Lead' && !(await isProjectLead(input.projectId, actorId, actorRole))) {
-    throw new TaskAuthorizationError('You do not have permission to create tasks in this project.');
   }
 
   if (!input.title?.trim()) throw new TaskValidationError('Task title is required.');
@@ -539,7 +536,6 @@ export const listTaskEditApprovals = async (
   actorId: string,
   actorRole: string
 ): Promise<TaskEditApprovalDTO[]> => {
-  if (actorRole !== 'Team_Lead') return [];
   const rows = await repo.findPendingTaskEditApprovalsForReviewer(toUserPk(actorId));
   const grouped = new Map<number, typeof rows>();
   for (const row of rows) grouped.set(row.changerequestid, [...(grouped.get(row.changerequestid) || []), row]);
@@ -580,9 +576,6 @@ export const decideTaskEditApproval = async (
   actorId: string,
   actorRole: string
 ): Promise<TaskDTO | null> => {
-  if (actorRole !== 'Team_Lead') {
-    throw new TaskAuthorizationError('Only this project\'s Team Lead can decide the task update.');
-  }
   const requestPk = Number(approvalId.replace(/^task-edit-/, ''));
   if (!Number.isInteger(requestPk) || requestPk <= 0) {
     throw new TaskValidationError('Invalid task edit approval id.');
@@ -897,9 +890,6 @@ export const reopenTask = async (
 
   // Admin is intentionally excluded here, unlike everywhere else in this service: reopening is a
   // delivery decision owned by whoever leads the project, not a system-administration action.
-  if (actorRole !== 'Team_Lead') {
-    throw new TaskAuthorizationError('Only the project\'s Team Lead can reopen a completed task.');
-  }
   if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
     throw new TaskAuthorizationError('You can only reopen tasks in projects you lead.');
   }

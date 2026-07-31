@@ -45,15 +45,15 @@ const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Pro
 };
 
 const assertCanCreate = (role: string) => {
-  if (role !== 'Admin' && role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can create projects.');
+  if (role !== 'Admin' && role !== 'Team_Lead' && role !== 'Team_Member') {
+    throw new ProjectAuthorizationError('Only Admins and project members can create projects.');
   }
 };
 
 const assertCanManage = async (projectRow: ProjectRow, userId: string, role: string) => {
   if (role === 'Admin') return;
-  if (role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can manage projects.');
+  if (role === 'HR') {
+    throw new ProjectAuthorizationError('HR users cannot manage projects.');
   }
   const members = await repo.findMembersForProject(projectRow.projectid);
   if (resolveTeamLeadUserId(projectRow, members) !== userId) {
@@ -106,7 +106,7 @@ export const isProjectAccessible = async (projectId: string, userId: string, rol
 // to gate task status-change review Approve/Reject the same way Project updates are gated.
 export const isProjectLead = async (projectId: string, userId: string, role: string): Promise<boolean> => {
   if (role === 'Admin') return true;
-  if (role !== 'Team_Lead') return false;
+  if (role === 'HR') return false;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
@@ -173,7 +173,7 @@ export const createProject = async (
   const statusId = await repo.getProjectStatusId(statusCode);
 
   const ownerPk = toUserPk(actorId);
-  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole === 'Team_Lead' ? ownerPk : undefined;
+  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole !== 'Admin' ? ownerPk : undefined;
   const memberPks = (input.memberIds || []).map(toUserPk);
 
   const projectId = await repo.insertProject({

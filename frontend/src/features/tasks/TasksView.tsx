@@ -552,7 +552,7 @@ export const TasksView: React.FC = () => {
           </p>
         </div>
 
-        {currentRole === 'Team_Lead' && (
+        {availableProjects.length > 0 && (
           <button
             type="button"
             onClick={openCreateForm}

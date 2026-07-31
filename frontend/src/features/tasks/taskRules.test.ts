@@ -230,6 +230,7 @@ test('enforces task creation roles and Team Lead project scope', () => {
   assert.equal(canCreateTaskForProject('Team_Lead', 'lead', project), true);
   assert.equal(canCreateTaskForProject('Team_Lead', 'outsider', project), false);
   assert.equal(canCreateTaskForProject('Team_Member', 'member', project), false);
+  assert.equal(canCreateTaskForProject('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }), true);
   assert.equal(canCreateTaskForProject('HR', 'outsider', project), false);
 });
 
@@ -251,6 +252,7 @@ test('filters task lists and sorts by due date', () => {
 test('enforces edit and delete permission checks', () => {
   assert.equal(canEditTask('Admin', 'admin', project, task), false);
   assert.equal(canEditTask('Team_Lead', 'lead', project, task), true);
+  assert.equal(canEditTask('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }, task), true);
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
   assert.equal(canEditTask('Team_Member', 'outsider', project, task), false);
   assert.equal(canEditTask('Team_Member', 'member', project, { ...task, subtaskCount: 2 }), false);
@@ -262,6 +264,7 @@ test('enforces edit and delete permission checks', () => {
   }), true);
   assert.equal(canDeleteTask('Admin', 'admin', project, task), false);
   assert.equal(canDeleteTask('Team_Lead', 'lead', project, task), true);
+  assert.equal(canDeleteTask('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }, task), true);
   assert.equal(canDeleteTask('Team_Lead', 'lead', project, task, true), true);
 
   const deniedEdit = prepareTaskUpdate(task.id, { status: 'Done' }, {
