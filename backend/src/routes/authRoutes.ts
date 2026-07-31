@@ -5,6 +5,9 @@ import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { getSupabaseServiceClient } from '../db/supabase.js';
+import { query } from '../db/pool.js';
+import { toUserPk } from '../utils/idMapping.js';
 
 const router = Router();
 
@@ -69,6 +72,86 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
     });
   } catch {
     res.status(500).json({ success: false, message: 'Login failed. Please try again.' });
+  }
+});
+
+// POST /api/auth/migrate-legacy-credentials
+// Migrates a legacy user (bcrypt password in WorkSync DB, no Supabase Auth identity yet) into
+// Supabase Auth. Called by LoginView.tsx when the direct Supabase sign-in fails — this bridges
+// the gap for accounts created before the Supabase Auth cutover.
+router.post('/migrate-legacy-credentials', async (req, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.status(400).json({ success: false, message: 'Email and password are required.' });
+      return;
+    }
+
+    const user = await userStore.findByEmailAsync(email.trim().toLowerCase());
+    if (!user || !user.passwordHash) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      return;
+    }
+
+    if (user.status !== 'active') {
+      res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
+      return;
+    }
+
+    // Check if user already has a Supabase Auth identity linked
+    const existing = await query<{ authuserid: string | null }>(
+      'SELECT authuserid FROM iam.users WHERE userid = $1',
+      [toUserPk(user.id)]
+    );
+    if (existing.rows[0]?.authuserid) {
+      res.status(409).json({ success: false, message: 'This account already has a linked Supabase identity. Try signing in directly.' });
+      return;
+    }
+
+    const supabase = getSupabaseServiceClient();
+    const created = await supabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: { username: user.username, full_name: user.name }
+    });
+
+    if (created.error) {
+      console.error('[Migrate Legacy] Supabase createUser failed:', created.error.message);
+      res.status(502).json({ success: false, message: 'Authentication service is temporarily unavailable. Please try again.' });
+      return;
+    }
+
+    const authUserId = created.data.user.id;
+
+    await query(
+      'UPDATE iam.users SET authuserid = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2',
+      [authUserId, toUserPk(user.id)]
+    );
+
+    recordActivitySafe({
+      actorId: user.id,
+      actorName: user.name,
+      actorEmail: user.email,
+      actorRole: user.role,
+      action: 'Migrated to Supabase Auth',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: user.id,
+      entityName: user.name,
+      description: `${user.name} migrated from legacy credentials to Supabase Auth.`,
+    });
+
+    res.status(200).json({ success: true, message: 'Credentials migrated to Supabase Auth. Please sign in again.' });
+  } catch (error: any) {
+    console.error('[Migrate Legacy] Error:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Migration failed. Please contact an administrator.' });
   }
 });
 
@@ -141,10 +224,18 @@ router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Respons
 });
 
 // PUT /api/auth/profile/display-name
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct display name editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
     const { name } = req.body;
@@ -175,46 +266,108 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
   }
 });
 
-// PUT /api/auth/profile/avatar
-router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+// PUT /api/auth/profile/username
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/username', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
     }
 
-    const { avatar } = req.body;
-
-    if (!avatar || typeof avatar !== 'string') {
-      return void res.status(400).json({ success: false, message: 'Avatar data URL is required.' });
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct username editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
-    if (!avatar.startsWith('data:image/')) {
-      return void res.status(400).json({ success: false, message: 'Avatar must be a valid image data URL.' });
+    const { username } = req.body;
+
+    if (!username || typeof username !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Username is required.' });
     }
 
-    const maxSize = 2 * 1024 * 1024;
-    const base64Size = Math.ceil((avatar.length * 3) / 4);
-    if (base64Size > maxSize) {
-      return void res.status(400).json({ success: false, message: 'Avatar image must be smaller than 2 MB.' });
+    const normalizedUsername = username.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (normalizedUsername.length < 3) {
+      return void res.status(400).json({ success: false, message: 'Username must be at least 3 characters long.' });
     }
 
-    const updatedUser = await userStore.updateAvatar(req.user.id, avatar);
+    if (normalizedUsername.length > 80) {
+      return void res.status(400).json({ success: false, message: 'Username must not exceed 80 characters.' });
+    }
+
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(normalizedUsername)) {
+      return void res.status(400).json({ success: false, message: 'Username can only contain letters, numbers, dots, hyphens, and underscores.' });
+    }
+
+    const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
 
     return void res.status(200).json({
       success: true,
-      message: 'Profile picture updated successfully.',
+      message: 'Username updated successfully.',
       user: updatedUser
     });
-  } catch {
-    return void res.status(500).json({ success: false, message: 'Failed to update profile picture.' });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update username.';
+    return void res.status(message.includes('already in use') ? 409 : 500).json({ success: false, message });
+  }
+});
+
+// PUT /api/auth/profile/email
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct email editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const normalizedEmail = email.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return void res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Email updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update email.';
+    return void res.status(message.includes('already exists') ? 409 : 500).json({ success: false, message });
   }
 });
 
 // PUT /api/auth/profile/password
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    if (req.user.role !== 'Admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Direct password changing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
       return;
     }
 

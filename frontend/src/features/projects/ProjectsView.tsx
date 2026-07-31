@@ -785,8 +785,8 @@ export const ProjectsView: React.FC = () => {
                 <div className="space-y-2 text-xs">
                   <p className="text-amber-300 font-semibold">
                     This project has {relatedTasks.length} task{relatedTasks.length !== 1 ? 's' : ''} linked to it.
-                    The project and these tasks will be archived. They will become read-only and can be found under
-                    Archived Tasks until the project is restored.
+                    The project and linked tasks are archived. They become read-only. They appear under Archived
+                    Tasks until the project is restored.
                   </p>
                   <ul className="max-h-32 overflow-y-auto space-y-1 pl-1">
                     {relatedTasks.map((t) => (

@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Project, User } from '../../types';
 import {
@@ -24,7 +24,6 @@ const users: User[] = [
     email: 'admin@example.com',
     role: 'Admin',
     department: 'Operations',
-    avatar: '',
     title: 'Administrator',
     status: 'active'
   },
@@ -34,7 +33,6 @@ const users: User[] = [
     email: 'lead@example.com',
     role: 'Team_Lead',
     department: 'Engineering',
-    avatar: '',
     title: 'Team Lead',
     status: 'active'
   },
@@ -44,7 +42,6 @@ const users: User[] = [
     email: 'member@example.com',
     role: 'Team_Member',
     department: 'Engineering',
-    avatar: '',
     title: 'Developer',
     status: 'active'
   },
@@ -54,7 +51,6 @@ const users: User[] = [
     email: 'outsider@example.com',
     role: 'Team_Member',
     department: 'Finance',
-    avatar: '',
     title: 'Analyst',
     status: 'active'
   }
@@ -323,3 +319,4 @@ test('makes every related task read-only while its project is archived', () => {
   });
   assert.equal(deniedUpdate.success, false);
 });
+

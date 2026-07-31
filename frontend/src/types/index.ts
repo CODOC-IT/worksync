@@ -7,7 +7,6 @@ export interface User {
   username?: string;
   role: UserRole;
   department: string;
-  avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
@@ -220,6 +219,27 @@ export interface HRRequest {
     leaveDays?: number;
     extraBreakMinutes?: number;
   };
+  submittedAt: string;
+  decidedBy?: string;
+  decisionReason?: string;
+}
+
+// Account Change Request — submitted from My Profile when HR/Lead/Member need to modify
+// their own account information (name, username, email, password). Exactly one field is
+// requested per request. Routed to the appropriate approver based on the requester's role
+// and displayed in the existing Approval Inbox.
+export interface AccountChangeRequest {
+  id: string;
+  userId: string;
+  userName?: string;
+  requesterRole?: UserRole;
+  requestType: 'Account_Change';
+  requestedField?: 'name' | 'email' | 'username' | 'password';
+  requestedChanges: Record<string, string>;
+  passwordChangeRequested?: boolean;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  assignedApproverRole: 'Admin' | 'HR';
   submittedAt: string;
   decidedBy?: string;
   decisionReason?: string;
@@ -555,7 +575,6 @@ export interface ActivityLogItem {
   id: string;
   userId: string;
   userName: string;
-  userAvatar: string;
   action: string;
   targetType: 'Project' | 'Task' | 'Attendance' | 'Approval' | 'Settings';
   targetId: string;

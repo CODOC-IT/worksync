@@ -364,12 +364,10 @@ const ListState: React.FC<{ label: string }> = ({ label }) => (
   <div className="project-chat-secondary flex min-h-52 flex-1 items-center justify-center px-8 text-center text-sm leading-6">{label}</div>
 );
 
-const UserAvatar: React.FC<{ user?: ProjectMemberSummary; size?: 'sm' | 'md' }> = ({ user, size = 'md' }) => {
+const MemberInitials: React.FC<{ user?: ProjectMemberSummary; size?: 'sm' | 'md' }> = ({ user, size = 'md' }) => {
   const dimensions = size === 'sm' ? 'h-6 w-6 text-[8px]' : 'h-10 w-10 text-[10px]';
-  return user?.avatar ? (
-    <img src={user.avatar} alt="" className={`${dimensions} project-chat-avatar shrink-0 rounded-full object-cover`} />
-  ) : (
-    <span aria-hidden="true" className={`${dimensions} project-chat-avatar flex shrink-0 items-center justify-center rounded-full font-bold`}>{initials(user?.name)}</span>
+  return (
+    <span aria-hidden="true" className={`${dimensions} project-chat-initials flex shrink-0 items-center justify-center rounded-full font-bold`}>{initials(user?.name)}</span>
   );
 };
 
@@ -389,7 +387,7 @@ const ThreadPreview: React.FC<any> = ({ thread, active, projectName, taskName, u
       <p className="project-chat-secondary mt-2 line-clamp-2 text-xs leading-5">{last?.deletedAt ? 'This message was deleted.' : last?.body || 'No messages yet.'}</p>
       <div className="project-chat-secondary mt-3 flex items-center justify-between gap-3 text-[10px]">
         <div className="flex min-w-0 items-center gap-2">
-          <div className="flex -space-x-1.5">{participants.slice(0, 3).map((user: ProjectMemberSummary) => <UserAvatar key={user.id} user={user} size="sm" />)}</div>
+          <div className="flex -space-x-1.5">{participants.slice(0, 3).map((user: ProjectMemberSummary) => <MemberInitials key={user.id} user={user} size="sm" />)}</div>
           <span>{replyCount} {replyCount === 1 ? 'reply' : 'replies'}</span>
           {mentioned && <AtSign size={12} className="project-chat-context" aria-label="You were mentioned" />}
         </div>
@@ -480,7 +478,7 @@ const DiscussionPanel: React.FC<any> = ({
           return (
             <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
               <div className="flex gap-3">
-                <UserAvatar user={author} />
+                <MemberInitials user={author} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center justify-between gap-x-2 text-xs">
                     <div className="flex flex-wrap items-center gap-x-2">
@@ -566,7 +564,7 @@ const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: Proj
   <div role="listbox" aria-label="Project members" className="project-chat-mention-list absolute bottom-full left-0 z-30 mb-2 max-h-52 w-full overflow-y-auto rounded-xl p-1.5">
     {users.length ? users.map((user) => (
       <button key={user.id} type="button" role="option" onMouseDown={(event) => event.preventDefault()} onClick={() => onPick(user)} className="project-chat-mention-option flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs">
-        <UserAvatar user={user} size="sm" />
+        <MemberInitials user={user} size="sm" />
         <span className="min-w-0"><span className="project-chat-heading block truncate font-semibold">@{user.name}</span><span className="project-chat-secondary block truncate text-[10px]">{user.title || user.department || user.role}</span></span>
       </button>
     )) : <p className="project-chat-secondary px-3 py-2 text-xs">No matching eligible project member.</p>}

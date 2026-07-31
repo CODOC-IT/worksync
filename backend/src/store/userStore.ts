@@ -97,7 +97,6 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     passwordHash: row.passwordhash?.toString('utf-8') || '',
     role: row.rolecode ? (DB_TO_ROLE[row.rolecode] || 'Team_Member') : 'Team_Member',
     department: row.departmentname || 'Engineering',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     title: row.designation || 'Team Member',
     status: STATUS_MAP[row.accountstatus] || 'active',
     accountStatus: row.accountstatus as UserRecord['accountStatus'],
@@ -418,7 +417,6 @@ class UserStore {
           passwordHash,
           role: userData.role,
           department: userData.department,
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
           title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
           status: 'active',
           createdAt: new Date().toISOString()
@@ -455,7 +453,6 @@ class UserStore {
       passwordHash,
       role: userData.role,
       department: userData.department,
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
       title: userData.title || `${userData.role.replace('_', ' ')} Specialist`,
       status: 'active',
       createdAt: new Date().toISOString()
@@ -736,33 +733,73 @@ class UserStore {
     return this.sanitizeUser(user);
   }
 
-  public async updateAvatar(userId: string, avatarUrl: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async updateUsername(userId: string, username: string): Promise<Omit<UserRecord, 'passwordHash'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
+
+    const normalizedUsername = username.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{2,79}$/i.test(normalizedUsername)) {
+      throw new Error('Username must be 3-80 characters, letters, numbers, dots, hyphens, or underscores.');
+    }
+
+    const duplicate = Array.from(this.fallbackUsers.values()).find(
+      (entry) => entry.id !== userId && entry.username?.toLowerCase() === normalizedUsername
+    );
+    if (duplicate) throw new Error('This username is already in use.');
 
     if (this.dbAvailable) {
       try {
         const uid = toUserPk(userId);
         await query(
-          `UPDATE iam.userprofiles SET updatedatutc = CURRENT_TIMESTAMP WHERE userid = $1`,
-          [uid]
-        );
-        await query(
-          `INSERT INTO iam.userprofiles (userid, updatedatutc)
-           VALUES ($1, CURRENT_TIMESTAMP)
-           ON CONFLICT (userid) DO NOTHING`,
-          [uid]
+          `UPDATE iam.users SET username = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
+          [normalizedUsername, uid]
         );
       } catch (err: any) {
-        console.warn(`[UserStore] DB updateAvatar failed: ${err.message}`);
+        console.warn(`[UserStore] DB updateUsername failed: ${err.message}`);
       }
     }
 
-    user.avatar = avatarUrl;
+    user.username = normalizedUsername;
     this.persistFile(this.getFileStorePath());
     return this.sanitizeUser(user);
   }
+
+  public async updateEmail(userId: string, email: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+    await this.ensureInit();
+    const user = this.findById(userId);
+    if (!user) throw new Error('User not found.');
+
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      throw new Error('A valid email is required.');
+    }
+
+    const duplicate = Array.from(this.fallbackUsers.values()).find(
+      (existing) => existing.id !== userId && existing.email.toLowerCase() === normalizedEmail
+    );
+    if (duplicate) throw new Error('A user with this email already exists.');
+
+    if (this.dbAvailable) {
+      try {
+        const uid = toUserPk(userId);
+        await query(
+          `UPDATE iam.users SET email = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
+          [normalizedEmail, uid]
+        );
+      } catch (err: any) {
+        console.warn(`[UserStore] DB updateEmail failed: ${err.message}`);
+      }
+    }
+
+    const oldEmail = user.email.toLowerCase();
+    this.fallbackUsers.delete(oldEmail);
+    user.email = normalizedEmail;
+    this.fallbackUsers.set(user.email.toLowerCase(), user);
+    this.persistFile(this.getFileStorePath());
+    return this.sanitizeUser(user);
+  }
+
 }
 
 export const userStore = new UserStore();

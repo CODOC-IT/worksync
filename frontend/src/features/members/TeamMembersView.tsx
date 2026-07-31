@@ -346,11 +346,9 @@ export const TeamMembersView: React.FC = () => {
             <div className="flex h-full flex-col gap-4 rounded-[1.15rem] bg-gradient-to-b from-white/[0.02] to-transparent">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3">
-                  <img
-                    src={member.avatar}
-                    alt={member.name}
-                    className="h-13 w-13 rounded-2xl border border-white/10 object-cover bg-white/5 md:h-14 md:w-14"
-                  />
+                  <span className="flex h-13 w-13 items-center justify-center rounded-2xl border border-white/10 bg-cyan-500/15 text-xs font-bold text-cyan-300 md:h-14 md:w-14 md:text-sm">
+                    {member.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="truncate text-[15px] font-semibold text-white md:text-base">{member.name}</h3>
@@ -438,11 +436,9 @@ export const TeamMembersView: React.FC = () => {
           >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex min-w-0 items-center gap-4">
-                <img
-                  src={member.avatar}
-                  alt={member.name}
-                  className="h-12 w-12 rounded-2xl border border-white/10 object-cover bg-white/5"
-                />
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-cyan-500/15 text-xs font-bold text-cyan-300">
+                  {member.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
+                </span>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="truncate text-sm font-semibold text-white md:text-base">{member.name}</h3>
@@ -734,11 +730,9 @@ export const TeamMembersView: React.FC = () => {
             <div className="border-b border-white/10 bg-gradient-to-r from-cyan-500/8 via-transparent to-purple-500/8 px-6 py-5">
               <div className="flex items-start justify-between gap-4">
               <div className="flex min-w-0 items-start gap-4">
-                <img
-                  src={selectedMember.avatar}
-                  alt={selectedMember.name}
-                  className="h-16 w-16 rounded-2xl border border-white/10 object-cover bg-white/5"
-                />
+                <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-cyan-500/15 text-sm font-bold text-cyan-300">
+                  {selectedMember.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
+                </span>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-xl font-bold text-white">{selectedMember.name}</h2>
@@ -1141,6 +1135,14 @@ export const TeamMembersView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {createAccountOpen && (
+        <CreateAccountDialog
+          isAdmin={currentRole === 'Admin'}
+          projects={projects}
+          onClose={() => setCreateAccountOpen(false)}
+        />
       )}
     </>
   );

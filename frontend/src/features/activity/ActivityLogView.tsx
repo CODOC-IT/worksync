@@ -607,7 +607,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         ) : isHRTab ? (
           <FilterSelect label="Employee" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
         ) : isLeadTab ? (
-          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
+          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} emptyOptionLabel="None" />
         ) : null /* Team Member (my-work tab) — always own-only, no member selector needed */}
 
         {/* Project filter — shown for project-scoped tabs, not HR-only tab */}
@@ -755,9 +755,9 @@ const ActivityRow: React.FC<{ item: ActivityItem; onClick: () => void }> = ({ it
   return (
     <button onClick={onClick} className="group flex w-full items-start gap-3 px-3 py-3 text-left transition hover:bg-white/[0.035] sm:px-4">
       <div className="relative shrink-0">
-        {item.actor.avatar
-          ? <img src={item.actor.avatar} alt="" className="h-9 w-9 rounded-xl object-cover ring-1 ring-white/10" />
-          : <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-300"><UserRound size={16} /></span>}
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 text-[10px] font-bold text-cyan-300">
+          {item.actor.name.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}
+        </span>
         {item.isNew && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-slate-950 bg-cyan-400" />}
       </div>
       <div className="min-w-0 flex-1">
