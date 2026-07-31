@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { query } from '../db/pool.js';
-import { getSupabaseServiceClient, isSupabaseServiceConfigured } from '../db/supabase.js';
+import { getSupabaseServiceClient, getSupabaseAnonClient, isSupabaseServiceConfigured } from '../db/supabase.js';
 import { fromUserPk } from '../utils/idMapping.js';
 
 export interface AuthenticatedRequest extends Request {
@@ -31,36 +31,71 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
     res.status(401).json({ success: false, message: 'Authorization header with Bearer token required.' });
     return false;
   }
+  const token = header.slice(7);
+  const diag: Record<string, unknown> = {};
+  let supabaseUserId: string | undefined;
+
+  // Primary path: service-role client (intended server-side token validation).
   try {
-    const { data, error } = await getSupabaseServiceClient().auth.getUser(header.slice(7));
+    const { data, error } = await getSupabaseServiceClient().auth.getUser(token);
     if (error || !data.user) {
-      res.status(401).json({ success: false, message: 'Invalid or expired session.' });
-      return false;
+      diag.supabaseStatus = error?.status;
+      diag.supabaseCode = error?.code;
+      diag.supabaseMessage = error?.message;
+    } else {
+      supabaseUserId = data.user.id;
     }
-    const result = await query<{ userid: number; email: string; accountstatus: string; departmentid: number | null; rolecode: string | null }>(`
-      SELECT u.userid, u.email, u.accountstatus, u.departmentid,
-        COALESCE(MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'TeamLead'), 'TeamMember') AS rolecode
-      FROM iam.users u LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
-        AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-      LEFT JOIN iam.roles r ON r.roleid = ur.roleid WHERE u.authuserid = $1 GROUP BY u.userid`, [data.user.id]);
-    const account = result.rows[0];
-    if (!account) {
-      res.status(403).json({ success: false, message: 'This Supabase account is not provisioned for WorkSync.' });
-      return false;
+  } catch (err) {
+    diag.serviceClientError = err instanceof Error ? err.message : String(err);
+  }
+
+  // Fallback: validate via the project's public anon/publishable key. This performs the exact same
+  // Supabase JWT verification the browser client already uses, so a token can never pass without
+  // being fully validated by Supabase -- it only rescues validation when the server-side
+  // service-role key is misconfigured on the deployment.
+  if (!supabaseUserId) {
+    const anonClient = getSupabaseAnonClient();
+    if (anonClient) {
+      try {
+        const { data, error } = await anonClient.auth.getUser(token);
+        if (error || !data.user) {
+          diag.anonStatus = error?.status;
+          diag.anonCode = error?.code;
+          diag.anonMessage = error?.message;
+        } else {
+          supabaseUserId = data.user.id;
+        }
+      } catch (err) {
+        diag.anonClientError = err instanceof Error ? err.message : String(err);
+      }
     }
-    req.user = {
-      id: fromUserPk(account.userid),
-      email: account.email,
-      authUserId: data.user.id,
-      departmentId: account.departmentid,
-      role: account.rolecode === 'Administrator' ? 'Admin' : account.rolecode === 'HRRepresentative' ? 'HR' : account.rolecode === 'TeamLead' ? 'Team_Lead' : 'Team_Member',
-      accountStatus: account.accountstatus
-    };
-    return true;
-  } catch {
-    res.status(503).json({ success: false, message: 'Authentication service is unavailable.' });
+  }
+
+  if (!supabaseUserId) {
+    try { console.log('[AuthDIAG] getUser failed:', JSON.stringify(diag)); } catch { /* diagnostic only */ }
+    res.status(401).json({ success: false, message: 'Invalid or expired session.', diag });
     return false;
   }
+  const result = await query<{ userid: number; email: string; accountstatus: string; departmentid: number | null; rolecode: string | null }>(`
+    SELECT u.userid, u.email, u.accountstatus, u.departmentid,
+      COALESCE(MAX(r.rolecode) FILTER (WHERE r.rolecode = 'Administrator'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'HRRepresentative'), MAX(r.rolecode) FILTER (WHERE r.rolecode = 'TeamLead'), 'TeamMember') AS rolecode
+    FROM iam.users u LEFT JOIN iam.userroles ur ON ur.userid = u.userid AND ur.revokedatutc IS NULL
+      AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
+    LEFT JOIN iam.roles r ON r.roleid = ur.roleid WHERE u.authuserid = $1 GROUP BY u.userid`, [supabaseUserId]);
+  const account = result.rows[0];
+  if (!account) {
+    res.status(403).json({ success: false, message: 'This Supabase account is not provisioned for WorkSync.' });
+    return false;
+  }
+  req.user = {
+    id: fromUserPk(account.userid),
+    email: account.email,
+    authUserId: supabaseUserId,
+    departmentId: account.departmentid,
+    role: account.rolecode === 'Administrator' ? 'Admin' : account.rolecode === 'HRRepresentative' ? 'HR' : account.rolecode === 'TeamLead' ? 'Team_Lead' : 'Team_Member',
+    accountStatus: account.accountstatus
+  };
+  return true;
 };
 
 export const authenticateJWT = async (
