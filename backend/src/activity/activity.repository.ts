@@ -213,7 +213,15 @@ const buildWhere = (
   if (filters.projectId) add('a.projectid = ?', toProjectPkOrNull(filters.projectId));
   if (filters.taskId) add('a.taskid = ?', toTaskPkOrNull(filters.taskId));
   if (filters.module) add('a.modulecode = ?', filters.module);
-  if (filters.action) add('a.actioncode = ?', filters.action);
+  if (filters.action === 'Priority Changed') {
+    clauses.push("(a.actioncode = 'Priority Changed' OR a.auditeventid IN (SELECT pc.auditeventid FROM audit.auditeventchanges pc WHERE lower(pc.fieldname) = 'priority'))");
+  } else if (filters.action === 'Status Changed') {
+    clauses.push("(a.actioncode = 'Status Changed' OR a.auditeventid IN (SELECT sc.auditeventid FROM audit.auditeventchanges sc WHERE lower(sc.fieldname) = 'status'))");
+  } else if (filters.action === 'Attendance Corrected') {
+    clauses.push("(a.actioncode = 'Attendance Corrected' OR a.actioncode = 'Corrected')");
+  } else if (filters.action) {
+    add('a.actioncode = ?', filters.action);
+  }
   if (filters.entityType) add('a.entitytypecode = ?', filters.entityType);
   if (filters.result) add('a.resultcode = ?', filters.result);
   if (filters.source) add('a.sourcecode = ?', filters.source);

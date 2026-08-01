@@ -32,7 +32,7 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS, 'Permission Granted', 'Permission Revoked', 'Permission Expired'];
 // Admin sees all actions including HR attendance and auth events
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
 
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];
@@ -607,8 +607,8 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
-            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} />
-            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} />
+            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} max={filters.customTo} />
+            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} min={filters.customFrom} />
           </div>
         )}
 
@@ -767,11 +767,11 @@ const FilterSelect: React.FC<{
 );
 
 const FilterInput: React.FC<{
-  label: string; value: string; onChange: (value: string) => void; type: string;
-}> = ({ label, value, onChange, type }) => (
+  label: string; value: string; onChange: (value: string) => void; type: string; min?: string; max?: string;
+}> = ({ label, value, onChange, type, min, max }) => (
   <label className="text-[10px] font-semibold uppercase text-slate-500">
     {label}
-    <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
+    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} min={min} max={max}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-2 text-xs text-slate-200" />
   </label>
 );

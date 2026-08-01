@@ -424,10 +424,12 @@ export const updateTask = async (
     input.dueDate !== undefined && input.dueDate !== row.duedate ? { field: 'Due date', previousValue: row.duedate, newValue: dto.dueDate } : null,
     input.assigneeIds !== undefined ? { field: 'Assignee', previousValue: previousAssigneeIds.join(', '), newValue: dto.assigneeIds.join(', ') } : null
   ].filter((change): change is { field: string; previousValue: string; newValue: string } => Boolean(change));
+  const hasPriorityChange = taskChanges.some((c) => c.field === 'Priority');
+  const hasAssigneeChange = taskChanges.some((c) => c.field === 'Assignee');
   const project = await projectRepo.findProjectById(row.projectid);
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    action: input.assigneeIds ? 'Assigned/Reassigned' : input.priority ? 'Priority Changed' : 'Updated',
+    action: hasAssigneeChange ? 'Assigned/Reassigned' : hasPriorityChange ? 'Priority Changed' : 'Updated',
     module: 'Tasks', entityType: 'Task', entityId: dto.id, entityName: dto.title,
     projectId: dto.projectId, projectName: project?.projectname, taskId: dto.id, taskName: dto.title,
     description: `${actorName} updated task “${dto.title}”.`, linkRoute: 'tasks', changes: taskChanges
