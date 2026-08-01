@@ -23,6 +23,18 @@ import {
 } from 'lucide-react';
 import { fetchActivities } from '../activity/activityApi';
 import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
+import {
+  ALL_CALENDAR_KINDS,
+  buildCalendarEntries,
+  entryToneClasses,
+  filterCalendarEntries,
+  isMyDeadlineEntry,
+  todayDateKey,
+  CalendarEntry,
+  CalendarEntryKind,
+  CalendarEntryOrigin,
+} from '../calendar/calendarRules';
+import { CalendarFilterBar } from '../calendar/CalendarFilterBar';
 
 interface DashboardViewProps {
   onNavigate: (tab: string, filterId?: string) => void;
@@ -53,10 +65,10 @@ const PROJECT_STATUS_DOT: Record<string, string> = {
 };
 
 interface MiniCalendarProps {
-  deadlines: { date: string; label: string }[];
+  entries: CalendarEntry[];
 }
 
-const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
+const MiniCalendar: React.FC<MiniCalendarProps> = ({ entries }) => {
   const [viewDate, setViewDate] = React.useState(new Date());
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -65,17 +77,17 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
   const lastDay = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0);
   const startPad = firstDay.getDay();
 
-  const deadlineMap = useMemo(() => {
-    const map = new Map<string, { labels: string[]; types: Set<string> }>();
-    deadlines.forEach((d) => {
-      const key = d.date;
-      if (!map.has(key)) map.set(key, { labels: [], types: new Set() });
-      const entry = map.get(key)!;
-      entry.labels.push(d.label);
-      entry.types.add(d.label.startsWith('Project') ? 'project' : 'task');
+  const entriesByDate = useMemo(() => {
+    const map = new Map<string, { titles: string[]; kinds: Set<CalendarEntryKind> }>();
+    entries.forEach((entry) => {
+      const key = entry.date;
+      if (!map.has(key)) map.set(key, { titles: [], kinds: new Set() });
+      const bucket = map.get(key)!;
+      bucket.titles.push(entry.title);
+      bucket.kinds.add(entry.kind);
     });
     return map;
-  }, [deadlines]);
+  }, [entries]);
 
   const days: (number | null)[] = [];
   for (let i = 0; i < startPad; i++) days.push(null);
@@ -93,15 +105,20 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
         {days.map((day, i) => {
           if (day === null) return <div key={`pad-${i}`} />;
           const dateStr = `${viewDate.getFullYear()}-${String(viewDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-          const entry = deadlineMap.get(dateStr);
+          const bucket = entriesByDate.get(dateStr);
+          const kinds = bucket ? Array.from(bucket.kinds) : [];
           const isToday = day === today.getDate() && viewDate.getMonth() === today.getMonth() && viewDate.getFullYear() === today.getFullYear();
-          const hasProject = entry?.types.has('project');
-          const hasTask = entry?.types.has('task');
           return (
-            <div key={day} title={entry ? entry.labels.join('\n') : undefined}
-              className={`text-[10px] text-center py-0.5 rounded cursor-default relative ${isToday ? 'bg-cyan-500/30 text-cyan-200 font-bold ring-1 ring-cyan-500/50' : entry ? 'text-slate-200 font-semibold' : 'text-slate-500'}`}>
+            <div key={day} title={bucket ? bucket.titles.join('\n') : undefined}
+              className={`text-[10px] text-center py-0.5 rounded cursor-default relative ${isToday ? 'bg-cyan-500/30 text-cyan-200 font-bold ring-1 ring-cyan-500/50' : bucket ? 'text-slate-200 font-semibold' : 'text-slate-500'}`}>
               {day}
-              {hasProject && hasTask ? (<><span className="absolute bottom-0.5 left-[30%] -translate-x-1/2 w-1 h-1 rounded-full bg-cyan-400" /><span className="absolute bottom-0.5 left-[70%] -translate-x-1/2 w-1 h-1 rounded-full bg-amber-400" /></>) : hasProject ? (<span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-cyan-400" />) : hasTask ? (<span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-amber-400" />) : null}
+              {kinds.length > 0 && (
+                <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 flex items-center gap-[2px]">
+                  {kinds.slice(0, 3).map((kind) => (
+                    <span key={kind} className={`w-1 h-1 rounded-full ${entryToneClasses(kind).dotClass}`} />
+                  ))}
+                </span>
+              )}
             </div>
           );
         })}
@@ -122,7 +139,7 @@ const toLocalDateString = (date: Date): string => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users } = useApp();
+  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users, calendarEvents } = useApp();
 
   // ── Activity Log Filter State ──
   type ActivityFilterOption = 'Today' | 'Last Day' | 'Last 3 Days';
@@ -182,7 +199,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilterOption>('Due Today');
 
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
   const todayEnd = new Date(today);
   todayEnd.setHours(23, 59, 59, 999);
   const oneDayFromNow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
@@ -213,12 +229,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
 
-  const deadlines = useMemo(() => [
-    ...projects.filter((p) => p.status !== 'Archived' && p.status !== 'Completed' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
-    ...tasks.filter((t) => !t.isArchived && t.dueDate && t.status !== 'Done').map((t) => ({ date: t.dueDate, label: `Task: ${t.title}` })),
-  ], [projects, tasks]);
+  // ── Mini Calendar filter state (mirrors the Calendar module's CalendarFilterBar) ──
+  const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
+  const [activeKinds, setActiveKinds] = useState<Set<CalendarEntryKind>>(new Set(ALL_CALENDAR_KINDS));
+  const [myDeadlinesOnly, setMyDeadlinesOnly] = useState(false);
 
-  const upcomingDeadlines = useMemo(() => deadlines.filter((d) => d.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date)), [deadlines, todayStr]);
+  const calendarEntries = useMemo(
+    () => buildCalendarEntries(projects, tasks, calendarEvents),
+    [projects, tasks, calendarEvents]
+  );
+
+  const filteredCalendarEntries = useMemo(() => {
+    const filtered = filterCalendarEntries(calendarEntries, originFilter, activeKinds);
+    return myDeadlinesOnly
+      ? filtered.filter((entry) => isMyDeadlineEntry(entry, projects, tasks, currentUser.id))
+      : filtered;
+  }, [calendarEntries, originFilter, activeKinds, myDeadlinesOnly, projects, tasks, currentUser.id]);
+
+  const todayKey = todayDateKey();
+  const upcomingCalendarEntries = useMemo(
+    () => filteredCalendarEntries.filter((d) => d.date >= todayKey).sort((a, b) => a.date.localeCompare(b.date)),
+    [filteredCalendarEntries, todayKey]
+  );
 
   return (
     <div className="space-y-3">
@@ -272,15 +304,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 <div className="flex items-center gap-2"><Calendar size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Calendar</h3></div>
                 <button onClick={() => onNavigate('calendar')} className="text-[10px] text-cyan-400 hover:underline font-mono">Open</button>
               </div>
-              <MiniCalendar deadlines={deadlines} />
-              {upcomingDeadlines.length > 0 ? (
+              <div className="mb-2">
+                <CalendarFilterBar
+                  originFilter={originFilter}
+                  onOriginFilterChange={setOriginFilter}
+                  activeKinds={activeKinds}
+                  onActiveKindsChange={setActiveKinds}
+                  myDeadlinesOnly={myDeadlinesOnly}
+                  onMyDeadlinesOnlyChange={setMyDeadlinesOnly}
+                />
+              </div>
+              <MiniCalendar entries={filteredCalendarEntries} />
+              {upcomingCalendarEntries.length > 0 ? (
                 <div className="mt-3 space-y-1.5 max-h-[100px] overflow-y-auto pr-1">
                   <span className="text-[9px] font-mono text-slate-500 uppercase">Upcoming</span>
-                  {upcomingDeadlines.slice(0, 5).map((d, i) => (
+                  {upcomingCalendarEntries.slice(0, 5).map((d, i) => (
                     <div key={i} className="flex items-center gap-2 text-[10px] p-1 rounded hover:bg-white/5">
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${d.label.startsWith('Project') ? 'bg-cyan-400' : 'bg-amber-400'}`} />
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${entryToneClasses(d.kind).dotClass}`} />
                       <span className="text-slate-400 font-mono w-20 shrink-0">{d.date}</span>
-                      <span className="text-slate-300 truncate">{d.label.replace(/^(Project|Task): /, '')}</span>
+                      <span className="text-slate-300 truncate">{d.title}</span>
                     </div>
                   ))}
                 </div>
