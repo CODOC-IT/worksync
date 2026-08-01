@@ -108,6 +108,17 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
   );
 };
 
+// Formats a Date as a local calendar date string (YYYY-MM-DD). The activity API's
+// `dateBounds()` Custom preset parses customFrom/customTo as LOCAL dates, so we must
+// supply local date strings here — using UTC date strings (toISOString) shifts the
+// range by the timezone offset and silently drops recent activity on non-UTC systems.
+const toLocalDateString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users, projectApprovalRequests, accountChangeRequests, activityLogs } = useApp();
 
@@ -130,14 +141,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       cutoff = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
     }
 
-    const cutoffMs = cutoff.getTime();
-    return activityLogs.filter((log) => {
-      // Parse the timestamp — try ISO first, then the locale time string format
-      const ts = new Date(log.timestamp).getTime();
-      if (isNaN(ts)) return false;
-      return ts >= cutoffMs;
-    });
-  }, [activityLogs, activityFilter]);
+        const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: toLocalDateString(fromDate), customTo: toLocalDateString(toDate) };
+        const result = await fetchActivities(filters, 1, 50);
+        if (!cancelled && Array.isArray(result.items)) {
+          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
+            id: item.id,
+            userId: item.actor.id || '',
+            userName: item.actor.name,
+            action: `${item.action} ${item.entityType}`,
+            targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+            targetId: item.entityId,
+            targetTitle: item.entityName || item.description,
+            timestamp: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+          }));
+          if (!cancelled) setFilteredActivityLogs(mapped);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('Failed to load filtered activities.', err);
+          setFilteredActivityLogs([]);
+        }
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    };
+    loadFilteredActivities();
+    return () => { cancelled = true; };
+  }, [activityFilter]);
 
   // ── Deadline Filter State ──
   type DeadlineFilterOption = 'Due Today' | 'Due in 1 Day' | 'Due in 3 Days';

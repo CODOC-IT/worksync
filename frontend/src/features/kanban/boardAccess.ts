@@ -24,7 +24,7 @@ export const canDecideReview = (
   userId: string,
   project: Project
 ): boolean =>
-  role === 'Admin' || (role === 'Team_Lead' && project.teamLeadId === userId);
+  role === 'Admin' || (role !== 'HR' && project.teamLeadId === userId);
 
 // Who may reopen a Done task. Deliberately stricter than canDecideReview: an Admin can approve
 // a review but may NOT reopen a completed task — reversing a delivered outcome belongs to the
@@ -34,7 +34,7 @@ export const canReopenTask = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean => role === 'Team_Lead' && project.teamLeadId === userId;
+): boolean => role !== 'HR' && project.teamLeadId === userId;
 
 // Where a reopened task may land. Never 'Done' (that's where it is) and never 'Blocked'
 // (Task Module territory) — matches REOPEN_TARGETS in backend/src/tasks/task.service.ts.

@@ -1,6 +1,7 @@
 ﻿import * as repo from './project.repository.js';
 import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
@@ -45,15 +46,15 @@ const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Pro
 };
 
 const assertCanCreate = (role: string) => {
-  if (role !== 'Admin' && role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can create projects.');
+  if (role !== 'Admin' && role !== 'Team_Lead' && role !== 'Team_Member') {
+    throw new ProjectAuthorizationError('Only Admins and project members can create projects.');
   }
 };
 
 const assertCanManage = async (projectRow: ProjectRow, userId: string, role: string) => {
   if (role === 'Admin') return;
-  if (role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can manage projects.');
+  if (role === 'HR') {
+    throw new ProjectAuthorizationError('HR users cannot manage projects.');
   }
   const members = await repo.findMembersForProject(projectRow.projectid);
   if (resolveTeamLeadUserId(projectRow, members) !== userId) {
@@ -106,7 +107,7 @@ export const isProjectAccessible = async (projectId: string, userId: string, rol
 // to gate task status-change review Approve/Reject the same way Project updates are gated.
 export const isProjectLead = async (projectId: string, userId: string, role: string): Promise<boolean> => {
   if (role === 'Admin') return true;
-  if (role !== 'Team_Lead') return false;
+  if (role === 'HR') return false;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
@@ -173,7 +174,7 @@ export const createProject = async (
   const statusId = await repo.getProjectStatusId(statusCode);
 
   const ownerPk = toUserPk(actorId);
-  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole === 'Team_Lead' ? ownerPk : undefined;
+  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole !== 'Admin' ? ownerPk : undefined;
   const memberPks = (input.memberIds || []).map(toUserPk);
 
   const projectId = await repo.insertProject({
@@ -193,7 +194,7 @@ export const createProject = async (
   const row = await repo.findProjectById(projectId);
   const members = await repo.findMembersForProject(projectId);
   const dto = await buildDTO(row!, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   if (statusCode === 'Active') {
     notifyRecipients(members, actorId, {
@@ -315,7 +316,7 @@ export const updateProject = async (
   const updatedRow = await repo.findProjectById(row.projectid);
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(updatedRow!, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notifyRecipients(members, actorId, {
     type: 'project_updated',
@@ -359,7 +360,7 @@ export const archiveProject = async (
   const archived = await repo.archiveProject(row.projectid, toUserPk(actorId), reason.trim());
   if (!archived) throw new ProjectValidationError('Project is already archived.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   notifyRecipients(members, actorId, {
     type: 'project_archived',
     title: 'Project Archived',
@@ -405,7 +406,7 @@ export const permanentlyDeleteProject = async (
   }
   if (!deleted) throw new ProjectValidationError('Project could not be permanently deleted.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   // No projectId here -- the row is gone, so a real FK reference would itself violate the
   // AuditEvents FK. projectName is a plain snapshot column, safe to keep for readability.
   recordActivitySafe({
@@ -440,7 +441,7 @@ export const restoreProject = async (
   const restored = await repo.restoreProject(row.projectid);
   if (!restored) throw new ProjectValidationError('Project could not be restored.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   notifyRecipients(members, actorId, {
     type: 'project_restored',
     title: 'Project Restored',
@@ -473,7 +474,7 @@ export const addMember = async (
 
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(row, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notificationService
     .publishEvent({
@@ -519,7 +520,7 @@ export const removeMember = async (
 
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(row, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notificationService
     .publishEvent({
