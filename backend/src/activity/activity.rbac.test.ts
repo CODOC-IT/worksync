@@ -625,6 +625,8 @@ test('Comment deletion activity is visible only to HR and Admin', async () => {
   const adminRoles = await getEffectiveRoles('usr-1');
   const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
   assert.ok(adminResult.rows.some((r: any) => r.entityidtext === 'cmt-member-delete'), 'Admin should see comment deletion activity');
+});
+
 test('PDF export paginates long activity rows without producing an invalid document', async () => {
   for (let index = 0; index < 40; index++) {
     const suffix = String(index + 200).padStart(12, '0');
