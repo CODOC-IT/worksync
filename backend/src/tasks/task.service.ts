@@ -13,6 +13,7 @@ import {
   ChangeStatusInput,
   CreateTaskInput,
   DB_TO_API_TASK_STATUS,
+  SubtaskReviewDecisionInput,
   TaskDTO,
   TaskEditApprovalInput,
   TaskRow,
@@ -959,7 +960,8 @@ const decideReview = async (
   decision: 'Approve' | 'Reject',
   note: string,
   actorId: string,
-  actorRole: string
+  actorRole: string,
+  subtaskDecisions?: SubtaskReviewDecisionInput[]
 ): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
@@ -967,10 +969,56 @@ const decideReview = async (
   if (row.statuscode !== 'Review') {
     throw new TaskValidationError('Only a task currently in Review can be approved or rejected.');
   }
-  if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
-    throw new TaskAuthorizationError('Only the project\'s Team Lead or an Admin may decide a review.');
+  // Unlike most authorization checks in this file, Admin gets NO bypass here: only the project's
+  // own per-project Team Lead (ProjectMembers.MemberRoleCode = 'TeamLead', resolved by
+  // isProjectLead — never the actor's account role) may decide a review. Reviewing delivered
+  // work is that project's responsibility, not a system-administration action.
+  if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole, { allowAdmin: false }))) {
+    throw new TaskAuthorizationError('Only this project\'s Team Lead may decide a review.');
   }
   if (!note?.trim()) throw new TaskValidationError('A reason is required.');
+
+  const actorName = actorDisplayName(actorId);
+
+  // Rejecting a task with completed subtasks requires a per-subtask verdict: accepted subtasks
+  // stay Done, rejected ones return to InProgress with their own comment persisted on
+  // work.TaskStatusHistory (see notifySubtaskStatusChange below). Only subtasks currently Done
+  // are in scope — anything not yet completed was never part of what's being reviewed.
+  const rejectedSubtaskRows: TaskRow[] = [];
+  if (decision === 'Reject') {
+    const children = row.parenttaskid ? [] : await repo.findChildTasks(row.taskid);
+    const doneChildren = children.filter((child) => child.statuscode === 'Done');
+    if (doneChildren.length > 0) {
+      const decisionByTaskId = new Map((subtaskDecisions || []).map((entry) => [toTaskPk(entry.subtaskId), entry]));
+      for (const child of doneChildren) {
+        const childDecision = decisionByTaskId.get(child.taskid);
+        if (!childDecision) {
+          throw new TaskValidationError(
+            `A decision (Accept or Reject) is required for every completed subtask, including "${child.title}".`
+          );
+        }
+        if (childDecision.decision === 'Reject' && !childDecision.comment?.trim()) {
+          throw new TaskValidationError(`A comment is required for the rejected subtask "${child.title}".`);
+        }
+      }
+
+      const doneMeta = await repo.getTaskStatusMeta('Done');
+      const inProgressMeta = await repo.getTaskStatusMeta('InProgress');
+      for (const child of doneChildren) {
+        const childDecision = decisionByTaskId.get(child.taskid)!;
+        if (childDecision.decision !== 'Reject') continue; // Accepted -- remains Done, untouched.
+        await repo.changeTaskStatus({
+          taskId: child.taskid,
+          fromStatusId: doneMeta!.taskStatusId,
+          toStatusId: inProgressMeta!.taskStatusId,
+          changedByUserId: toUserPk(actorId),
+          note: childDecision.comment!.trim(),
+          isCompletedState: false
+        });
+        rejectedSubtaskRows.push((await repo.findTaskById(child.taskid))!);
+      }
+    }
+  }
 
   const toStatusCode = decision === 'Approve' ? 'Done' : 'InProgress';
   const fromMeta = await repo.getTaskStatusMeta('Review');
@@ -987,21 +1035,28 @@ const decideReview = async (
 
   const updatedRow = await repo.findTaskById(row.taskid);
   const dto = await buildDTO(updatedRow!);
-  const actorName = actorDisplayName(actorId);
 
   notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: decision === 'Approve' ? 'task_review_approved' : 'task_review_rejected',
     title: decision === 'Approve' ? 'Review Approved' : 'Review Rejected',
     message: withNote(
       decision === 'Approve'
-        ? `${actorName} approved "${dto.title}" and marked it Done.`
-        : `${actorName} rejected "${dto.title}" and returned it to In Progress.`,
+        ? `${actorName} approved your review request for "${dto.title}" and marked it Done.`
+        : `${actorName} rejected your review request for "${dto.title}" and returned it to In Progress.`,
       note
     ),
     actorId,
     projectId: dto.projectId,
     taskId: dto.id
   });
+
+  // Each rejected subtask's own assignees additionally hear about that specific checklist item
+  // reopening, with the Project Lead's comment for that subtask — reuses the exact notification
+  // (and recipient set) the ordinary subtask-status-change path already sends, see changeTaskStatus.
+  for (const childRow of rejectedSubtaskRows) {
+    const childDecision = subtaskDecisions!.find((entry) => toTaskPk(entry.subtaskId) === childRow.taskid)!;
+    await notifySubtaskStatusChange(childRow, 'Done', 'In Progress', actorId, actorName, childDecision.comment);
+  }
 
   const projectRow = await projectRepo.findProjectById(row.projectid);
   recordActivitySafe({
@@ -1023,8 +1078,13 @@ const decideReview = async (
 export const approveTask = (taskId: string, note: string, actorId: string, actorRole: string): Promise<TaskDTO> =>
   decideReview(taskId, 'Approve', note, actorId, actorRole);
 
-export const rejectTask = (taskId: string, note: string, actorId: string, actorRole: string): Promise<TaskDTO> =>
-  decideReview(taskId, 'Reject', note, actorId, actorRole);
+export const rejectTask = (
+  taskId: string,
+  note: string,
+  actorId: string,
+  actorRole: string,
+  subtaskDecisions?: SubtaskReviewDecisionInput[]
+): Promise<TaskDTO> => decideReview(taskId, 'Reject', note, actorId, actorRole, subtaskDecisions);
 
 export const getTaskHistory = async (taskId: string, userId: string, role: string): Promise<TaskStatusHistoryDTO[]> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
