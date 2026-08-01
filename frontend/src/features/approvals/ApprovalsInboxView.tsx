@@ -51,7 +51,6 @@ function getAccountRequestedChanges(request: AccountChangeRequest): { field: str
 const PROJECT_REQUEST_TYPE_META: Record<ProjectApprovalRequestType, { label: string; icon: React.ReactNode }> = {
   PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
   PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
-  PROJECT_DELETE: { label: 'Project Delete', icon: <Trash2 size={13} /> },
   PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
   PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
 };

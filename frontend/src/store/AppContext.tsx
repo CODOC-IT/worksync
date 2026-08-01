@@ -543,9 +543,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
-    // Team Lead sees their own submitted requests (any status), to check outcomes. Team Member
-    // and HR never create these, so skipping the call for them avoids a wasted round trip --
-    // this is not authorization (the backend endpoints themselves already gate that).
+    // a project's lead sees their own submitted requests (any status), to check outcomes. Team
+    // Lead is not a separate account role -- a Team_Member becomes a project's lead only by
+    // per-project assignment, so this fetches for Team_Lead and Team_Member alike (HR never
+    // creates these, so skipping the call for HR avoids a wasted round trip) -- this is not
+    // authorization (the backend endpoints themselves already gate that via isProjectLead).
     const hydrateProjectApprovalRequests = async () => {
       if (currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'Team_Member') return;
       try {
@@ -1066,7 +1068,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const result = await updateProjectApi(projectId, { status: 'Active' });
       const updated = result.project!;
-      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      // `updated` is a fresh server DTO -- milestones/files/pinnedMessagesCount have no backend
+      // representation, so the server always reports them empty. Preserve whatever the Team Lead
+      // set locally when they created this project instead of letting activation wipe it out.
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, ...updated, milestones: p.milestones, files: p.files, pinnedMessagesCount: p.pinnedMessagesCount }
+            : p
+        )
+      );
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Approved' } : sa
@@ -1173,7 +1184,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
-        const removed = project.memberIds.filter((id) => !afterIds.includes(id));
+        const removed = Array.from(beforeIds).filter((id) => !afterIds.includes(id));
         const memberErrors: string[] = [];
 
         for (const userId of added) {
@@ -1193,7 +1204,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (added.length > 0 || removed.length > 0) {
           const refreshed = await fetchProjectApi(projectId);
-          setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...refreshed } : p)));
+          // `refreshed` is a fresh server DTO -- milestones/files/pinnedMessagesCount have no
+          // backend representation (see the Project Module comment above), so the server always
+          // reports them empty. Keep the locally-held values instead of letting this refresh wipe
+          // them out, same as the merge just above for the non-membership edit path.
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? { ...p, ...refreshed, milestones: p.milestones, files: p.files, pinnedMessagesCount: p.pinnedMessagesCount }
+                : p
+            )
+          );
         }
 
         if (memberErrors.length > 0) {
@@ -1218,7 +1239,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Soft-deletes an Active project by archiving it (or, for an already-Archived one, is the first
   // half of the two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead
-  // this creates a Pending PROJECT_DELETE approval request instead of archiving immediately (see
+  // this creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
   // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
   // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
   // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
@@ -1358,14 +1379,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
       try {
         const remoteProjects = await fetchProjectsApi();
-        setProjects(
-          remoteProjects.map((p) => ({
-            ...p,
-            milestones: p.milestones || [],
-            files: p.files || [],
-            pinnedMessagesCount: p.pinnedMessagesCount ?? 0
-          }))
-        );
+        // remoteProjects is a fresh server list -- milestones/files/pinnedMessagesCount have no
+        // backend representation, so every entry reports them empty regardless of what was set
+        // locally. Look each project up in the previous state (not the fresh `p` itself) to carry
+        // those fields forward instead of wiping them out for every project in the list.
+        setProjects((prev) => {
+          const prevById = new Map(prev.map((p) => [p.id, p]));
+          return remoteProjects.map((p) => {
+            const existing = prevById.get(p.id);
+            return {
+              ...p,
+              milestones: existing?.milestones || [],
+              files: existing?.files || [],
+              pinnedMessagesCount: existing?.pinnedMessagesCount ?? 0
+            };
+          });
+        });
       } catch (refreshError) {
         console.warn('Failed to refresh projects after approving a request.', refreshError);
       }

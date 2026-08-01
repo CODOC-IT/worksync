@@ -6,7 +6,6 @@
 export type ProjectApprovalRequestType =
   | 'PROJECT_EDIT'
   | 'PROJECT_ARCHIVE'
-  | 'PROJECT_DELETE'
   | 'PROJECT_RESTORE'
   | 'PROJECT_PERMANENT_DELETE';
 

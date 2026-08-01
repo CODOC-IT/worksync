@@ -309,14 +309,20 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
       [projectId]
     );
 
-    // Task/change-request discussions cannot survive without their sole parent. Delete their
-    // comments first; mention/file links cascade from comments through their existing FKs.
+    // Project-level (Project Chat, ThreadType='Project', DiscussionThreads.ProjectId set directly
+    // -- see discussion.repository.ts) discussions cannot survive without their project either,
+    // same as task/change-request discussions below -- FK_DiscussionThreads_Project has no ON
+    // DELETE CASCADE, so leaving these out made the final DELETE FROM work.projects below fail
+    // with a 23503 for any project that had ever had a Project Chat message, which is the
+    // ordinary case, not an edge case. Delete comments first; mention/file links cascade from
+    // comments through their existing FKs.
     await runQuery(
       `DELETE FROM collab.comments
        WHERE threadid IN (
          SELECT dt.threadid
          FROM collab.discussionthreads dt
-         WHERE dt.taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+         WHERE dt.projectid = $1
+            OR dt.taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
             OR dt.changerequestid IN (
               SELECT cr.changerequestid
               FROM work.taskchangerequests cr
@@ -328,7 +334,8 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
     );
     await runQuery(
       `DELETE FROM collab.discussionthreads
-       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+       WHERE projectid = $1
+          OR taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
           OR changerequestid IN (
             SELECT cr.changerequestid
             FROM work.taskchangerequests cr
