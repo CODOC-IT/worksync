@@ -607,8 +607,8 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
-            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} />
-            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} />
+            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} max={filters.customTo} />
+            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} min={filters.customFrom} />
           </div>
         )}
 
@@ -767,11 +767,11 @@ const FilterSelect: React.FC<{
 );
 
 const FilterInput: React.FC<{
-  label: string; value: string; onChange: (value: string) => void; type: string;
-}> = ({ label, value, onChange, type }) => (
+  label: string; value: string; onChange: (value: string) => void; type: string; min?: string; max?: string;
+}> = ({ label, value, onChange, type, min, max }) => (
   <label className="text-[10px] font-semibold uppercase text-slate-500">
     {label}
-    <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
+    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} min={min} max={max}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-2 text-xs text-slate-200" />
   </label>
 );
