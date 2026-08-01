@@ -129,6 +129,14 @@ const isSuppressedForRecipient = async (recipientUserId: number, typeCode: strin
   return false;
 };
 
+// When an event of `type` was last published for a project, or null if never. Lets a producer
+// make an event idempotent per real-world occurrence instead of per triggering action, without
+// needing its own state or reaching into notify.* itself (this module owns that SQL).
+export const getLatestEventTimeForProject = async (
+  projectId: string,
+  type: NotificationEvent['type']
+): Promise<Date | null> => repo.findLatestNotificationTimeForProject(projectId, type);
+
 // The single entry point every module (existing or new) calls to raise an event. Resolves the
 // NotificationType's category/default priority, evaluates each recipient's preferences to
 // decide delivered-vs-suppressed, persists via the repository, and returns the created rows as

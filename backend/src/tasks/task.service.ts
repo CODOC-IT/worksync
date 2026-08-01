@@ -22,6 +22,7 @@ import {
   UpdateTaskInput
 } from './task.types.js';
 import { getTaskEditDenialReason } from './task.authorization.js';
+import { shouldAnnounceProjectCompletion } from './task.projectCompletion.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 
 // Service Layer — business logic, authorization, and notification publishing (matching
@@ -981,6 +982,79 @@ export const reopenTask = async (
   return dto;
 };
 
+// --- Project completion announcement -------------------------------------------------------
+// Raised when the last outstanding task in a project reaches a completed state. Recipients are
+// every Admin, the project's Team Lead, and every project member (PRD §6.6: project-level
+// outcomes are exactly what an Admin does track, unlike routine task chatter).
+//
+// Fires once per completion, not once per Done task. The guard compares the last time this
+// project was announced complete against the last time any of its tasks LEFT a completed state
+// (repo.findLastProjectReopenTime): if the announcement is the more recent of the two, this
+// project's current finished streak has already been announced and nothing is sent. A project
+// that is reopened and finished again does announce again — that is a genuinely new completion,
+// and the thing being prevented is a *repeat* announcement of the same one. Both facts are read
+// from durable tables (notify.Notifications, work.TaskStatusHistory) rather than in-process
+// state, so it holds across restarts, concurrent requests, and serverless cold starts.
+const PROJECT_COMPLETION_TYPE = 'report_project_completion' as const;
+
+const announceProjectCompletionIfFinished = async (
+  projectPk: number,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const { total, completed } = await repo.getProjectTaskCompletion(projectPk);
+  if (total === 0 || completed < total) return; // cheap exit before spending two more queries
+
+  const projectId = fromProjectPk(projectPk);
+  const [lastAnnouncedAt, lastReopenedAt] = await Promise.all([
+    notificationService.getLatestEventTimeForProject(projectId, PROJECT_COMPLETION_TYPE),
+    repo.findLastProjectReopenTime(projectPk)
+  ]);
+  if (!shouldAnnounceProjectCompletion({ total, completed, lastAnnouncedAt, lastReopenedAt })) return;
+
+  const projectRow = await projectRepo.findProjectById(projectPk);
+  if (!projectRow) return;
+  const members = await projectRepo.findMembersForProject(projectPk);
+  const leadId = resolveTeamLeadUserId(projectRow, members);
+  const adminIds = (await userStore.getAllUsers())
+    .filter((user) => user.role === 'Admin')
+    .map((user) => user.id);
+  // Everyone with a stake hears it, including whoever approved the final task. The usual
+  // "exclude the actor from their own event" rule (publishSafely) is deliberately not applied:
+  // this is a project milestone rather than a receipt for an action, and the Team Lead who
+  // approved the last task is an explicitly required recipient. Same reasoning as exportBackup's
+  // self-notification to the acting Admin.
+  const recipientIds = Array.from(
+    new Set([...adminIds, leadId, ...members.map((member) => fromUserPk(member.userid))])
+  ).filter(Boolean);
+  if (recipientIds.length === 0) return;
+
+  await notificationService.publishEvent({
+    type: PROJECT_COMPLETION_TYPE,
+    title: 'Project Completed',
+    message: `All ${total} task${total === 1 ? '' : 's'} in "${projectRow.projectname}" are now complete.`,
+    actorId,
+    projectId,
+    recipientIds
+  });
+
+  recordActivitySafe({
+    actorId, actorName: actorDisplayName(actorId), actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Completed', module: 'Projects', entityType: 'Project', entityId: projectId,
+    entityName: projectRow.projectname, projectId, projectName: projectRow.projectname,
+    description: `All ${total} task${total === 1 ? '' : 's'} in “${projectRow.projectname}” are complete.`,
+    linkRoute: 'projects', important: true
+  });
+};
+
+// Never allowed to break the status change that triggered it: by the time this runs the task is
+// already committed as Done, so a failure here must surface as a log line, not a failed request.
+const announceProjectCompletionSafe = (projectPk: number, actorId: string, actorRole: string): void => {
+  announceProjectCompletionIfFinished(projectPk, actorId, actorRole).catch((error) => {
+    console.error('[task.service] Failed to announce project completion.', error);
+  });
+};
+
 const decideReview = async (
   taskId: string,
   decision: 'Approve' | 'Reject',
@@ -1129,6 +1203,13 @@ const decideReview = async (
     changes: [{ field: 'Status', previousValue: 'Review', newValue: decision === 'Approve' ? 'Done' : 'In Progress' }],
     metadata: { relatedApproval: true }
   });
+
+  // Approving a review is the only way a top-level task reaches Done (changeTaskStatus rejects a
+  // direct move to Done for any task that requires review), so this is the one place a project
+  // can become fully complete.
+  if (decision === 'Approve') {
+    announceProjectCompletionSafe(row.projectid, actorId, actorRole);
+  }
 
   return dto;
 };
