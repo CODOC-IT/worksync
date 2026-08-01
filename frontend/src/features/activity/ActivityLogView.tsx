@@ -440,13 +440,14 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           filters={filters}
           setFilters={setFilters}
           users={accessibleUsers}
-          projects={accessibleProjects}
+          projects={scopeIsAdmin || !!(scope?.isActiveHR) ? projects : accessibleProjects}
           tasks={accessibleTasks}
           ledProjects={ledProjects}
           availableModules={availableModules}
           availableActions={availableActions}
           activeTab={activeTab}
           isAdmin={scopeIsAdmin || !!(scope?.isActiveHR)}
+          isHR={!!(scope?.isActiveHR) && !scopeIsAdmin}
           showLeadTab={showLeadTab}
           onClose={() => setFiltersOpen(false)}
           onClear={clearAllFilters}
@@ -563,6 +564,7 @@ interface FilterPanelProps {
   availableActions: string[];
   activeTab: ActivityTab;
   isAdmin: boolean;
+  isHR?: boolean;
   showLeadTab: boolean;
   onClose: () => void;
   onClear: () => void;
@@ -570,7 +572,7 @@ interface FilterPanelProps {
 
 const FilterPanel: React.FC<FilterPanelProps> = ({
   open, filters, setFilters, users, projects, tasks, ledProjects,
-  availableModules, availableActions, activeTab, isAdmin,
+  availableModules, availableActions, activeTab, isAdmin, isHR = false,
   showLeadTab, onClose, onClear,
 }) => {
   const update = (key: keyof ActivityFilters, value: string | boolean) =>
@@ -626,7 +628,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
                   userId: v ? (curr.userId && users.find((u) => u.id === curr.userId)?.role === v ? curr.userId : '') : '',
                 }));
               }}
-              options={['Admin', 'HR', 'Team_Member']}
+              options={isHR ? ['HR', 'Team_Member'] : ['Admin', 'HR', 'Team_Member']}
             />
             {filters.userRole && (
               <FilterSelect
