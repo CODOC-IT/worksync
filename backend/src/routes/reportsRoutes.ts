@@ -138,11 +138,16 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     }));
 
     // ── Deadlines ───────────────────────────────────────────
+    // Upcoming Deadlines has its own project scope: Admin / HR keep every visible project; for a
+    // member it's "projects I'm a member of" and for a lead it's "projects I lead" plus any
+    // additional projects I only belong to — each project flagged with the user's lead status so
+    // the task population can differ per project (led -> all tasks; member-only -> own tasks).
+    const deadlineProjects = await repo.getDeadlineProjectsForRole(userPk, role, from, to);
     const [dueToday, dueTomorrow, upcoming, overdue] = await Promise.all([
-      repo.getDeadlineBucketTasks(projectIds, 'today'),
-      repo.getDeadlineBucketTasks(projectIds, 'tomorrow'),
-      repo.getDeadlineBucketTasks(projectIds, 'upcoming'),
-      repo.getDeadlineBucketTasks(projectIds, 'overdue'),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'today'),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'tomorrow'),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'upcoming'),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'overdue'),
     ]);
 
     // ── Team stats ──────────────────────────────────────────

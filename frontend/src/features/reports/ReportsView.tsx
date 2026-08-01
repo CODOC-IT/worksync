@@ -671,8 +671,30 @@ export const ReportsView: React.FC = () => {
     setDetailMemberLoading(false);
   }, [selectedMemberId, workloadData]);
 
+  // Deadline task scope mirroring the backend rule: member-only projects contribute only the
+  // user's own assigned tasks; led projects contribute every task (assignee irrelevant). Used for
+  // the offline/fallback path and for building the deadline filter options.
+  const deadlineScopedTasks = useMemo(() => {
+    const { validProjects, validTasks } = filteredData;
+    const userId = currentUser.id;
+    if (currentRole === 'Admin') return validTasks;
+    if (currentRole === 'HR') {
+      const hrProjectIds = validProjects.filter(
+        (p) => p.memberIds?.includes(userId) || p.teamLeadId === userId
+      ).map((p) => p.id);
+      return validTasks.filter((t) => t.projectId && hrProjectIds.includes(t.projectId));
+    }
+    const ledIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+    const memberOnlyIds = validProjects.filter(
+      (p) => p.memberIds?.includes(userId) && p.teamLeadId !== userId
+    ).map((p) => p.id);
+    return validTasks.filter((t) =>
+      t.projectId && (ledIds.includes(t.projectId) || (memberOnlyIds.includes(t.projectId) && isTaskAssignee(t, userId)))
+    );
+  }, [filteredData, currentRole, currentUser.id]);
+
   const deadlineBaseTasks = useMemo(() => {
-    let tasks = roleFiltered.tasks as any[];
+    let tasks = deadlineScopedTasks as any[];
     if (deadlineSearchQuery) {
       const q = deadlineSearchQuery.toLowerCase();
       tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
@@ -687,7 +709,7 @@ export const ReportsView: React.FC = () => {
       tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
     }
     return tasks;
-  }, [roleFiltered.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+  }, [deadlineScopedTasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineData = useMemo(() => {
     const today = todayStr();
@@ -702,9 +724,12 @@ export const ReportsView: React.FC = () => {
           const task = tasksMap.get(d.id);
           return {
             ...d,
-            projectId: task?.projectId || '',
+            projectId: d.projectId || task?.projectId || '',
+            projectName: d.projectName || task?.projectName || '',
             taskNumber: task?.taskNumber || '',
-            assigneeIds: task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : []),
+            assigneeIds: d.assigneeIds && d.assigneeIds.length
+              ? d.assigneeIds
+              : (task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : [])),
           };
         }).filter((t: any) => {
           if (deadlineSearchQuery && t.title && !t.title.toLowerCase().includes(deadlineSearchQuery.toLowerCase())) return false;
@@ -776,12 +801,32 @@ export const ReportsView: React.FC = () => {
   }), [deadlineData]);
 
   const deadlineProjectOptions = useMemo(() => {
-    const projectIds = new Set((deadlineBaseTasks as any[]).map((t: any) => t.projectId).filter(Boolean));
-    return [...projectIds].map((pid) => {
-      const p = roleFiltered.projects.find((p: any) => p.id === pid);
-      return { id: pid, name: p?.title || pid };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [deadlineBaseTasks, roleFiltered.projects]);
+    const apiRows = apiAvailable && reportData?.deadlines
+      ? [
+          ...(reportData.deadlines.dueToday || []),
+          ...(reportData.deadlines.dueTomorrow || []),
+          ...(reportData.deadlines.upcoming || []),
+          ...(reportData.deadlines.overdue || []),
+        ]
+      : [];
+    const nameByPid: Record<string, string> = {};
+    const addRow = (t: any) => {
+      if (!t.projectId) return;
+      if (t.projectName) nameByPid[t.projectId] = t.projectName;
+    };
+    apiRows.forEach(addRow);
+    (deadlineBaseTasks as any[]).forEach(addRow);
+    (roleFiltered.projects as any[]).forEach((p: any) => { if (p.id) nameByPid[p.id] = p.title || p.id; });
+
+    const projectIds = new Set<string>([
+      ...apiRows.map((t: any) => t.projectId).filter(Boolean),
+      ...(deadlineBaseTasks as any[]).map((t: any) => t.projectId).filter(Boolean),
+    ]);
+    return [...projectIds].map((pid) => ({
+      id: pid,
+      name: nameByPid[pid] || pid,
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [apiAvailable, reportData, deadlineBaseTasks, roleFiltered.projects]);
 
   const deadlineAssigneeOptions = useMemo(() => {
     const ids = new Set<string>();
@@ -2526,6 +2571,7 @@ ${bodyHtml}
   const renderDeadlineRow = (t: any) => {
     const taskAssIds = getTaskAssigneeIds(t);
     const project = roleFiltered.projects.find((p: any) => p.id === t.projectId);
+    const projectTitle = project?.title || t.projectName || '';
     return (
       <div
         key={t.id}
@@ -2536,7 +2582,7 @@ ${bodyHtml}
           <div className="flex items-center gap-2">
             <StatusBadge status={t.priority} size="sm" />
             <span className="text-slate-200 truncate group-hover:text-cyan-300 transition-colors">{t.title}</span>
-            <span className="text-[10px] text-slate-500 shrink-0 hidden sm:inline">{project?.title || ''}</span>
+            <span className="text-[10px] text-slate-500 shrink-0 hidden sm:inline">{projectTitle}</span>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
