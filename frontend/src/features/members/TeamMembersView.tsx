@@ -1280,7 +1280,6 @@ export const TeamMembersView: React.FC = () => {
       {createAccountOpen && (
         <CreateAccountDialog
           isAdmin={currentRole === 'Admin'}
-          projects={projects}
           onClose={() => setCreateAccountOpen(false)}
         />
       )}
@@ -1300,12 +1299,10 @@ const emptyAccountForm: AccountFormValues = {
   confirmPassword: '',
   designation: '',
   baseRole: 'Team_Member',
-  departmentId: '',
-  projectId: '',
-  endsAtUtc: ''
+  departmentId: ''
 };
 
-const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onClose: () => void }> = ({ isAdmin, projects, onClose }) => {
+const CreateAccountDialog: React.FC<{ isAdmin: boolean; onClose: () => void }> = ({ isAdmin, onClose }) => {
   const { refreshUsers, showToast } = useApp();
   const [form, setForm] = useState<AccountFormValues>(emptyAccountForm);
   const [errors, setErrors] = useState<AccountFieldErrors>({});
@@ -1316,10 +1313,6 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const passwordChecks = getPasswordChecks(form.password);
-  const eligibleLeadProjects = useMemo(
-    () => projects.filter((project) => project.status === 'Active' && project.approvalStatus === 'Approved'),
-    [projects]
-  );
 
   useEffect(() => {
     let active = true;
@@ -1346,14 +1339,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   }, []);
 
   const update = (field: keyof AccountFormValues, value: string) => {
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === 'baseRole' && value !== 'Team_Member') {
-        next.projectId = '';
-        next.endsAtUtc = '';
-      }
-      return next;
-    });
+    setForm((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: undefined }));
     setServerError('');
   };
@@ -1471,7 +1457,7 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
               <Building2 size={16} className="text-amber-300" />
               <div>
                 <h3 className="text-sm font-semibold text-white">Workspace access</h3>
-                <p className="mt-0.5 text-[11px] text-slate-500">Assign the member's role, department, and optional project leadership.</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">Assign the member's base role and department. Team Lead access is appointed automatically.</p>
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
@@ -1488,19 +1474,6 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
                   {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
                 </select>
               </AccountField>
-              {isAdmin && form.baseRole === 'Team_Member' && (
-                <>
-                  <AccountField label="Team Lead project (optional)" error={errors.projectId}>
-                    <select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}>
-                      <option value="">No Team Lead assignment</option>
-                      {eligibleLeadProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-                    </select>
-                  </AccountField>
-                  <AccountField label="Team Lead expiry" required={Boolean(form.projectId)} error={errors.endsAtUtc}>
-                    <input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} />
-                  </AccountField>
-                </>
-              )}
             </div>
           </section>
 

@@ -10,9 +10,7 @@ const valid = {
   confirmPassword: 'Strong#123',
   designation: 'Engineer',
   baseRole: 'Team_Member',
-  departmentId: '2',
-  projectId: '',
-  endsAtUtc: ''
+  departmentId: '2'
 };
 
 test('account form accepts a complete strong-password payload', () => {
@@ -40,15 +38,4 @@ test('account form reports independent required, password, matching, and hierarc
   assert.ok(errors.password);
   assert.ok(errors.confirmPassword);
   assert.ok(errors.departmentId);
-});
-
-test('Team Lead details require a Member base role and future expiry', () => {
-  const errors = validateAccountForm({
-    ...valid,
-    baseRole: 'HR',
-    projectId: 'prj-2',
-    endsAtUtc: '2020-01-01T00:00'
-  });
-  assert.ok(errors.projectId);
-  assert.ok(errors.endsAtUtc);
 });
