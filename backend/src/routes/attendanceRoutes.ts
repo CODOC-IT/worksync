@@ -6,6 +6,8 @@ import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
 import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
+import { userStore } from '../store/userStore.js';
 
 const router = Router();
 
@@ -296,6 +298,20 @@ router.post('/check-in', authenticateJWT, async (req: AuthenticatedRequest, res:
     const recordId = await attendanceRepo.upsertAttendanceRecord(userPk, workDate, checkInUtc, 'In Session');
     if (recordId) {
       await attendanceRepo.insertAttendancePunch(recordId, 'CheckIn', checkInUtc, userPk);
+      const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Checked In',
+        module: 'Attendance',
+        entityType: 'Attendance',
+        entityId: String(recordId),
+        entityName: `Attendance ${workDate}`,
+        description: `${actorName} checked in.`,
+        source: 'Web',
+      });
     }
 
     res.json({ success: true, data: { attendancerecordid: recordId } });
@@ -427,6 +443,22 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
       outcome.lateMinutes
     );
     await attendanceRepo.insertAttendancePunch(recordId, 'CheckOut', checkOutUtc, userPk);
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      action: 'Checked Out',
+      module: 'Attendance',
+      entityType: 'Attendance',
+      entityId: String(recordId),
+      entityName: `Attendance ${workDate}`,
+      description: `${actorName} checked out.`,
+      source: 'Web',
+    });
 
     res.json({
       success: true,

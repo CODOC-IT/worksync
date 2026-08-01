@@ -402,6 +402,22 @@ test('HR: can view auth/security events and deleted comments', async () => {
   assert.ok(descriptions.includes('User deleted a comment on Discussion'), 'HR should see deleted comments');
 });
 
+test('Action Filter: Priority Changed matches both actioncode and Priority field changes', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (99, 1, 1, 'Priority Changed', 'Task', 'tsk-p1', '00000000-0000-0000-0000-000000000099', 'Tasks', 'Direct priority change action', 'Admin'),
+    (98, 1, 1, 'Updated', 'Task', 'tsk-p2', '00000000-0000-0000-0000-000000000098', 'Tasks', 'Updated task priority via field', 'Admin')`);
+  memDb.public.none(`INSERT INTO audit.auditeventchanges (auditeventid, fieldname, oldvalue, newvalue)
+    VALUES (98, 'Priority', 'Low', 'High')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Priority Changed', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Direct priority change action'), 'Should match explicit Priority Changed actioncode');
+  assert.ok(descriptions.includes('Updated task priority via field'), 'Should match Priority field changes');
+});
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);

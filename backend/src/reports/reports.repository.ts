@@ -14,6 +14,43 @@ export interface ProjectSummaryRow {
   owneruserid: number;
 }
 
+// A project's functional lead is per-project (work.ProjectMembers 'TeamLead' membership, with the
+// Owner as fallback when no TeamLead row exists) — mirroring resolveTeamLeadUserId. The global
+// account role never decides lead-ness: a user who holds a TeamLead iam.role but leads no project
+// is treated as a plain member, and a Team_Member who leads a specific project sees lead scope.
+const LEAD_SCOPE_CLAUSE = `(EXISTS (SELECT 1 FROM work.projectmembers pm
+                                    WHERE pm.projectid = p.projectid AND pm.userid = $3
+                                      AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL)
+                            OR (p.owneruserid = $3
+                                AND NOT EXISTS (SELECT 1 FROM work.projectmembers pm
+                                                WHERE pm.projectid = p.projectid
+                                                  AND pm.memberrolecode = 'TeamLead'
+                                                  AND pm.leftatutc IS NULL)))`;
+
+const MEMBER_SCOPE_CLAUSE = `EXISTS (SELECT 1 FROM work.projectmembers pm
+                                     WHERE pm.projectid = p.projectid AND pm.userid = $3
+                                       AND pm.leftatutc IS NULL)`;
+
+const isUserProjectLead = async (userPk: number, archived: boolean): Promise<boolean> => {
+  const result = await query<{ islead: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM work.projects p
+       WHERE p.archivedatutc ${archived ? 'IS NOT NULL' : 'IS NULL'}
+         AND (EXISTS (SELECT 1 FROM work.projectmembers pm
+                      WHERE pm.projectid = p.projectid AND pm.userid = $1
+                        AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL)
+              OR (p.owneruserid = $1
+                  AND NOT EXISTS (SELECT 1 FROM work.projectmembers pm
+                                  WHERE pm.projectid = p.projectid
+                                    AND pm.memberrolecode = 'TeamLead'
+                                    AND pm.leftatutc IS NULL)))
+     ) AS "islead"`,
+    [userPk]
+  );
+  return result.rows[0]?.islead ?? false;
+};
+
 export const findProjectsForRole = async (
   userPk: number,
   role: string,
@@ -36,36 +73,17 @@ export const findProjectsForRole = async (
     return result.rows;
   }
 
-  // Team_Lead: projects where user is TeamLead or Owner
-  if (role === 'Team_Lead') {
-    const result = await query<ProjectSummaryRow>(
-      `SELECT p.projectid, p.projectcode, p.projectname, ps.statuscode,
-              p.startdate::text, p.enddate::text, p.owneruserid
-       FROM work.projects p
-       JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
-       WHERE p.archivedatutc IS NULL
-         AND (p.owneruserid = $3
-              OR EXISTS (SELECT 1 FROM work.projectmembers pm
-                         WHERE pm.projectid = p.projectid AND pm.userid = $3
-                         AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL))
-         AND (ps.statuscode = 'Active'
-              OR p.startdate >= $1::date AND p.startdate <= $2::date
-              OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
-      [from, to, userPk]
-    );
-    return result.rows;
-  }
+  // Either/or: leads ≥1 project → only led projects; otherwise → member projects.
+  const isLead = await isUserProjectLead(userPk, false);
+  const scopeClause = isLead ? LEAD_SCOPE_CLAUSE : MEMBER_SCOPE_CLAUSE;
 
-  // Team_Member: projects where user is a member
   const result = await query<ProjectSummaryRow>(
     `SELECT p.projectid, p.projectcode, p.projectname, ps.statuscode,
             p.startdate::text, p.enddate::text, p.owneruserid
      FROM work.projects p
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
      WHERE p.archivedatutc IS NULL
-       AND EXISTS (SELECT 1 FROM work.projectmembers pm
-                   WHERE pm.projectid = p.projectid AND pm.userid = $3
-                   AND pm.leftatutc IS NULL)
+       AND ${scopeClause}
        AND (ps.statuscode = 'Active'
             OR p.startdate >= $1::date AND p.startdate <= $2::date
             OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
@@ -208,26 +226,14 @@ export const getArchivedProjects = async (
     return result.rows;
   }
 
-  if (role === 'Team_Lead') {
-    const result = await query<ArchivedProjectRow>(
-      `${base}
-       AND (p.owneruserid = $3
-            OR EXISTS (SELECT 1 FROM work.projectmembers pm
-                       WHERE pm.projectid = p.projectid AND pm.userid = $3
-                       AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL))
-       AND (ps.statuscode = 'Active'
-            OR p.startdate >= $1::date AND p.startdate <= $2::date
-            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
-      [from, to, userPk]
-    );
-    return result.rows;
-  }
+  // Same per-project either/or as findProjectsForRole: led projects if the user leads any,
+  // otherwise member projects.
+  const isLead = await isUserProjectLead(userPk, true);
+  const scopeClause = isLead ? LEAD_SCOPE_CLAUSE : MEMBER_SCOPE_CLAUSE;
 
   const result = await query<ArchivedProjectRow>(
     `${base}
-     AND EXISTS (SELECT 1 FROM work.projectmembers pm
-                 WHERE pm.projectid = p.projectid AND pm.userid = $3
-                 AND pm.leftatutc IS NULL)
+     AND ${scopeClause}
      AND (ps.statuscode = 'Active'
           OR p.startdate >= $1::date AND p.startdate <= $2::date
           OR p.enddate >= $1::date AND p.enddate <= $2::date)`,

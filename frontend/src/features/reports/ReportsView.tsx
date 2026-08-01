@@ -300,10 +300,17 @@ export const ReportsView: React.FC = () => {
         hrRequests: validHrRequests
       };
     }
-    if (currentRole === 'Team_Lead') {
-      const leadProjectIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+    // Lead-ness is per-project (p.teamLeadId = ProjectMembers 'TeamLead' membership, with the
+    // Owner as fallback — see project.mapper.ts's resolveTeamLeadUserId), never the global role.
+    const leadProjectIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+    const memberProjectIds = validProjects.filter(
+      (p) => p.memberIds?.includes(userId)
+    ).map((p) => p.id);
+
+    if (leadProjectIds.length > 0) {
+      // Leads ≥1 project → only led projects + ALL their tasks (incl. teammates' tasks).
       return {
-        projects: validProjects.filter((p) => p.teamLeadId === userId),
+        projects: validProjects.filter((p) => leadProjectIds.includes(p.id)),
         tasks: validTasks.filter((t) => leadProjectIds.includes(t.projectId)),
         attendance: validAttendance.filter((a) => leadProjectIds.some((_pid) => {
           const proj = validProjects.find((p) => p.id === _pid);
@@ -312,13 +319,13 @@ export const ReportsView: React.FC = () => {
         hrRequests: []
       };
     }
-    // Team_Member: tasks from member projects (not just assigned)
-    const memberProjectIds = validProjects.filter(
-      (p) => p.memberIds?.includes(userId)
-    ).map((p) => p.id);
+
+    // Leads no project → member projects + own assigned tasks (excludes teammates' tasks).
     return {
-      projects: validProjects.filter((p) => p.memberIds?.includes(userId)),
-      tasks: validTasks.filter((t) => t.projectId && memberProjectIds.includes(t.projectId)),
+      projects: validProjects.filter((p) => memberProjectIds.includes(p.id)),
+      tasks: validTasks.filter(
+        (t) => t.projectId && memberProjectIds.includes(t.projectId) && isTaskAssignee(t, userId)
+      ),
       attendance: validAttendance.filter((a) => a.userId === userId),
       hrRequests: validHrRequests.filter((r) => r.userId === userId)
     };
@@ -436,19 +443,42 @@ export const ReportsView: React.FC = () => {
     return { total, completed, inProgress, overdue, todo, review, blocked };
   }, [roleFiltered.tasks]);
 
+  // Tasks-tab distribution cards must reflect the SAME population as the task list and KPIs
+  // (roleFiltered.tasks) — for a member that is "all tasks where they are ANY assignee", for a
+  // lead "all tasks in projects they lead". The server's project-wide distributions are over a
+  // different population (all tasks in the visible projects), so they'd leak teammates' tasks
+  // into a member's Tasks tab; aggregating client-side keeps list + cards consistent.
   const taskStatusDistData = useMemo(() => {
-    if (apiAvailable) {
-      return (reportData.tasks || {}).statusDistribution || [];
-    }
-    return [];
-  }, [apiAvailable, reportData]);
+    const order = ['Todo', 'In Progress', 'Review', 'Blocked', 'Done'];
+    const counts = new Map<string, number>();
+    (roleFiltered.tasks as any[]).forEach((t: any) => {
+      const key = t.status || 'Unknown';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => {
+        const ia = order.indexOf(a.name);
+        const ib = order.indexOf(b.name);
+        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+      });
+  }, [roleFiltered.tasks]);
 
   const taskPriorityDistData = useMemo(() => {
-    if (apiAvailable) {
-      return (reportData.tasks || {}).priorityDistribution || [];
-    }
-    return [];
-  }, [apiAvailable, reportData]);
+    const order = ['Urgent', 'High', 'Medium', 'Low'];
+    const counts = new Map<string, number>();
+    (roleFiltered.tasks as any[]).forEach((t: any) => {
+      const key = t.priority || 'Medium';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => {
+        const ia = order.indexOf(a.name);
+        const ib = order.indexOf(b.name);
+        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+      });
+  }, [roleFiltered.tasks]);
 
   const taskProjectOptions = useMemo(() => {
     const projectIds = new Set((roleFiltered.tasks as any[]).map((t: any) => t.projectId));
