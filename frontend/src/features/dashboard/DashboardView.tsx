@@ -225,6 +225,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   const isMyTask = useCallback((t: Task) => t.assigneeId === currentUser.id || (t.assigneeIds ?? []).includes(currentUser.id), [currentUser.id]);
   const myTasks = useMemo(() => tasks.filter((t) => !t.isArchived && isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
+  // Admin and HR see organization-wide totals in the task card, not just their own assignments.
+  const isOrgWideTaskView = currentRole === 'Admin' || currentRole === 'HR';
+  const totalTasks = useMemo(() => tasks.filter((t) => !t.isArchived).length, [tasks]);
+  const totalInProgressTasks = useMemo(() => tasks.filter((t) => !t.isArchived && t.status === 'In Progress').length, [tasks]);
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
@@ -284,9 +288,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <span className="text-[10px] text-slate-400">{pendingProjects.length} pending approval</span>
         </GlassCard>
         <GlassCard onClick={() => onNavigate('tasks')} glowColor="violet">
-          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">My Tasks</span><div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><CheckSquare size={14} /></div></div>
-          <div className="text-2xl font-bold text-white mb-1">{myTasks.length}</div>
-          <span className="text-[10px] text-slate-400">{myTasks.filter((t) => t.status === 'In Progress').length} in progress</span>
+          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">{isOrgWideTaskView ? 'Tasks' : 'My Tasks'}</span><div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><CheckSquare size={14} /></div></div>
+          <div className="text-2xl font-bold text-white mb-1">{isOrgWideTaskView ? totalTasks : myTasks.length}</div>
+          <span className="text-[10px] text-slate-400">{isOrgWideTaskView ? totalInProgressTasks : myTasks.filter((t) => t.status === 'In Progress').length} in progress</span>
         </GlassCard>
         <GlassCard onClick={() => onNavigate('approvals')} glowColor="amber">
           <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Approvals</span><div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400"><AlertCircle size={14} /></div></div>
