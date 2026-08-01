@@ -385,6 +385,23 @@ test('HR: cannot see activity performed by Admins', async () => {
   assert.ok(!descriptions.includes('Admin action hidden from HR'), 'HR must not see events performed by Admins');
 });
 
+test('HR: can view auth/security events and deleted comments', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (1, NULL, 'Login', 'User', 'failed-user@example.com', '00000000-0000-0000-0000-000000000087', 'Authentication', 'Failed login attempt for failed-user@example.com', NULL),
+    (1, 5, 'Deleted', 'Comment', 'cmt-101', '00000000-0000-0000-0000-000000000088', 'Project Chats', 'User deleted a comment on Discussion', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Failed login attempt for failed-user@example.com'), 'HR should see auth/security events');
+  assert.ok(descriptions.includes('User deleted a comment on Discussion'), 'HR should see deleted comments');
+});
+
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
