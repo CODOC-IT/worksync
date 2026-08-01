@@ -69,6 +69,7 @@ const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
   PROJECT_EDIT: 'edit',
   PROJECT_ARCHIVE: 'archive',
   PROJECT_RESTORE: 'restore',
+  PROJECT_DELETE: 'delete',
   PROJECT_PERMANENT_DELETE: 'permanently delete'
 };
 
@@ -187,6 +188,9 @@ export const decideApprovalRequest = async (
         );
         break;
       case 'PROJECT_ARCHIVE':
+        await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
+        break;
+      case 'PROJECT_DELETE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
       case 'PROJECT_RESTORE':

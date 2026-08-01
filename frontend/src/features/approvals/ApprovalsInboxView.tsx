@@ -48,11 +48,19 @@ function getAccountRequestedChanges(request: AccountChangeRequest): { field: str
 // below, separate from the legacy SystemApproval cards. See AppContext's projectApprovalRequests
 // / approveProjectApprovalRequest / rejectProjectApprovalRequest, backed by
 // backend/src/projects/projectApproval.*.
-const PROJECT_REQUEST_TYPE_META: Record<ProjectApprovalRequestType, { label: string; icon: React.ReactNode }> = {
+const PROJECT_REQUEST_TYPE_META: Record<
+  ProjectApprovalRequestType,
+  { label: string; icon: React.ReactNode; description?: string }
+> = {
   PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
   PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
   PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
   PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
+  PROJECT_DELETE: {
+    label: 'Project Delete',
+    icon: <Trash2 size={13} />,
+    description: 'Remove this project from active work while keeping it recoverable.'
+  },
   PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
 };
 
@@ -982,6 +990,11 @@ export const ApprovalsInboxView: React.FC = () => {
                     <StatusBadge status={request.status} size="sm" />
                   </div>
                   <h3 className="truncate font-semibold text-slate-100">{request.projectTitle}</h3>
+                  {PROJECT_REQUEST_TYPE_META[request.requestType].description && (
+                    <p className="text-xs text-slate-500">
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].description}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-400">
                     Requested by {request.requestedByName} · {new Date(request.createdAt).toLocaleString()}
                   </p>

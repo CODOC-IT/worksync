@@ -16,8 +16,9 @@ test('routes a Team Lead status archive to Project Archive approval', () => {
 });
 
 test('routes a Team Lead delete action to Project Delete approval', () => {
-  assert.equal(PROJECT_DELETE_APPROVAL_TYPE, 'PROJECT_DELETE');
-  assert.notEqual(PROJECT_DELETE_APPROVAL_TYPE, 'PROJECT_ARCHIVE');
+  const requestType: ProjectApprovalRequestType = 'PROJECT_DELETE';
+  assert.equal(requestType, 'PROJECT_DELETE');
+  assert.notEqual(requestType, 'PROJECT_ARCHIVE');
 });
 
 test('authoritative project approval type supports every distinct workflow', () => {
@@ -30,6 +31,8 @@ test('authoritative project approval type supports every distinct workflow', () 
     'PROJECT_PERMANENT_DELETE'
   ];
   assert.equal(new Set(requestTypes).size, 6);
+});
+
 test('routes a Team Lead archive action to Project Archive approval', () => {
   assert.equal(PROJECT_ARCHIVE_APPROVAL_TYPE, 'PROJECT_ARCHIVE');
 });
