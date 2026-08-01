@@ -128,9 +128,9 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   }, [users, currentRole, currentUser.id, isAdmin, isHR, isTeamLead, ledProjects]);
 
   const accessibleTasks = useMemo(() => {
-    if (isAdmin) return tasks;
+    if (isAdmin || isHR) return tasks;
     return tasks.filter((t) => userProjectIds.includes(t.projectId));
-  }, [tasks, userProjectIds, isAdmin]);
+  }, [tasks, userProjectIds, isAdmin, isHR]);
 
   // ── Fetch authoritative scope from the backend on mount / role change ────
   useEffect(() => {
