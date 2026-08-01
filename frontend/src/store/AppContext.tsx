@@ -1157,7 +1157,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // changes are never approval-gated (not one of this workflow's five integration points),
       // so they apply immediately regardless of whether the rest of this edit is pending.
       if (data.memberIds) {
-        const beforeIds = new Set(project.memberIds);
+        // Both sides of this diff must go through the same eligibility filter. project.memberIds
+        // (the "before" set) includes the project's Team Lead, whose account role is virtually
+        // never 'Team_Member' -- comparing it unfiltered against the filtered `afterIds` made the
+        // lead look "removed" on every single save (the edit form's member checkboxes never
+        // touch the lead's own membership, see ProjectsView.tsx's assignableMembers), silently
+        // firing a real removeProjectMemberApi call and a false "removed from project"
+        // notification. Filtering both sides identically fixes the root cause instead of
+        // special-casing the lead's id.
+        const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
         const removed = project.memberIds.filter((id) => !afterIds.includes(id));
