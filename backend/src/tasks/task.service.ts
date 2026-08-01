@@ -286,6 +286,14 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     }
   }
 
+  // Subtasks stay within the parent task's selected work group.
+  const parentAssigneeIds = new Set(input.assigneeIds);
+  for (const subtask of input.subtasks || []) {
+    if (subtask.assigneeIds.some((assigneeId) => !parentAssigneeIds.has(assigneeId))) {
+      throw new TaskValidationError('Subtask assignees must be selected on the parent task.');
+    }
+  }
+
   const parentPk = input.parentTaskId ? toTaskPk(input.parentTaskId) : undefined;
 
   const toInsertRow = async (taskInput: CreateTaskInput | NonNullable<CreateTaskInput['subtasks']>[number]) => ({

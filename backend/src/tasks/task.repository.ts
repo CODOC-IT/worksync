@@ -26,7 +26,7 @@ const TASK_COLUMNS = `
    WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount,
   EXISTS (
     SELECT 1
-    FROM work.changerequests cr
+    FROM work.taskchangerequests cr
     JOIN work.changerequesttypes crt ON crt.changerequesttypeid = cr.changerequesttypeid
     WHERE cr.taskid = t.taskid
       AND cr.requeststatus = 'Pending'
