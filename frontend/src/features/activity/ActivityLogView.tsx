@@ -394,8 +394,8 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </header>
 
-      {/* ── Role-based tabs (only shown when user is also a Team Lead, not for plain HR) ── */}
-      {showLeadTab && !scopeIsAdmin && (
+      {/* ── Role-based tabs (for all Team Members / Team Leads) ── */}
+      {!scopeIsAdmin && (
         <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1 shrink-0">
           <button
             onClick={() => changeTab('my-work')}
@@ -403,27 +403,34 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           >
             <UserRound size={14} /> My Work Activity
           </button>
-          {showLeadTab && (
-            <button
-              onClick={() => changeTab('lead')}
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${activeTab === 'lead' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <Eye size={14} /> Led Project Activity
-            </button>
-          )}
+          <button
+            onClick={() => changeTab('lead')}
+            className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${activeTab === 'lead' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            <Eye size={14} /> Led Project Activity
+          </button>
         </div>
       )}
 
       {/* ── Scope banner ── */}
-      {(isTeamLead || showLeadTab) && activeTab !== 'hr' && ledProjects.length > 0 && (
-        <div className="flex items-center gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-2 shrink-0">
-          <Eye size={14} className="text-cyan-400 shrink-0" />
-          <p className="text-xs text-cyan-200">
-            {activeTab === 'lead'
-              ? `Showing activity for ${ledProjects.length} project${ledProjects.length > 1 ? 's' : ''} you lead.`
-              : `Includes events from ${ledProjects.length} project${ledProjects.length > 1 ? 's' : ''} you lead.`}
-          </p>
-        </div>
+      {!scopeIsAdmin && (
+        activeTab === 'lead' && ledProjects.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-2 shrink-0">
+            <AlertCircle size={14} className="text-amber-400 shrink-0" />
+            <p className="text-xs text-amber-200 font-medium">
+              You do not lead any project yet.
+            </p>
+          </div>
+        ) : ledProjects.length > 0 ? (
+          <div className="flex items-center gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-2 shrink-0">
+            <Eye size={14} className="text-cyan-400 shrink-0" />
+            <p className="text-xs text-cyan-200">
+              {activeTab === 'lead'
+                ? `Showing activity for ${ledProjects.length} project${ledProjects.length > 1 ? 's' : ''} you lead.`
+                : `Includes events from ${ledProjects.length} project${ledProjects.length > 1 ? 's' : ''} you lead.`}
+            </p>
+          </div>
+        ) : null
       )}
 
       {/* ── Main layout: filter panel + feed ── */}
@@ -490,6 +497,12 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
               <FeedState icon={<RefreshCw className="animate-spin" />} title="Loading activity" message="Fetching the latest scoped audit events..." />
             ) : error ? (
               <FeedState icon={<AlertCircle />} title="Activity unavailable" message={error} action={() => setRefreshKey((k) => k + 1)} />
+            ) : activeTab === 'lead' && ledProjects.length === 0 ? (
+              <FeedState
+                icon={<Building className="text-cyan-400" size={28} />}
+                title="You do not lead any project"
+                message="Activity for projects you lead will appear here once you create a project or are assigned as a Team Lead."
+              />
             ) : items.length === 0 ? (
               <FeedState icon={<Filter />} title="No matching activity" message={activeChips.length === 0 ? 'No activity recorded in this scope yet.' : 'Try widening the date range or clearing some filters.'} />
             ) : (
@@ -633,21 +646,32 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         ) : null}
 
         {/* 3. Project — cascading parent for Task filter below */}
-        <FilterSelect
-          label={isLeadTab ? 'Led project' : 'Project'}
-          value={filters.projectId}
-          onChange={(v) => { update('projectId', v); update('taskId', ''); }}
-          options={
-            isLeadTab
-              ? ledProjects.map((p) => ({ value: p.id, label: p.title }))
-              : projects.map((p) => ({
-                  value: p.id,
-                  label: ledProjects.some((lp) => lp.id === p.id) ? `${p.title} ★` : p.title,
-                }))
-          }
-        />
+        {isLeadTab ? (
+          ledProjects.length === 0 ? (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 text-xs font-medium text-amber-200">
+              You do not lead any project.
+            </div>
+          ) : (
+            <FilterSelect
+              label="Led project"
+              value={filters.projectId}
+              onChange={(v) => { update('projectId', v); update('taskId', ''); }}
+              options={ledProjects.map((p) => ({ value: p.id, label: p.title }))}
+            />
+          )
+        ) : (
+          <FilterSelect
+            label="Project"
+            value={filters.projectId}
+            onChange={(v) => { update('projectId', v); update('taskId', ''); }}
+            options={projects.map((p) => ({
+              value: p.id,
+              label: ledProjects.some((lp) => lp.id === p.id) ? `${p.title} ★` : p.title,
+            }))}
+          />
+        )}
 
-        {/* 4. Task — only shown once a project is selected (cascading) */}
+        {/* 4. Task — ONLY shown after a project is selected (cascading UX) */}
         {filters.projectId && (
           <FilterSelect
             label="Task"
