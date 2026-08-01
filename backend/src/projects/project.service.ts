@@ -62,6 +62,31 @@ const assertCanManage = async (projectRow: ProjectRow, userId: string, role: str
   }
 };
 
+const PROJECT_LEAD_ELIGIBLE_ROLES = new Set(['Team_Lead', 'Team_Member']);
+const PROJECT_MEMBER_ELIGIBLE_ROLES = new Set(['Team_Member']);
+
+// Mirrors the eligibility already enforced client-side (frontend/.../ProjectsView.tsx's
+// teamLeads/assignableMembers filters: Admins and HR never appear in either selector, and
+// inactive accounts are excluded) -- enforced here too so a direct API call (bypassing the UI
+// entirely) can't assign an Admin, an HR account, a deactivated account, or a nonexistent id as a
+// project's Team Lead or Member. Uses userStore.getAllUsers() rather than the synchronous
+// findById(), which only reflects whichever users have already been cached on this process since
+// its last cold start (see userStore.ts's own comment on that method).
+const assertEligibleAssignee = async (
+  userId: string,
+  eligibleRoles: Set<string>,
+  label: string
+): Promise<void> => {
+  const target = (await userStore.getAllUsers()).find((user) => user.id === userId);
+  if (!target) throw new ProjectValidationError(`Selected ${label} could not be found.`);
+  if (target.status === 'inactive') {
+    throw new ProjectValidationError(`${target.name} is a deactivated account and cannot be assigned to a project.`);
+  }
+  if (!eligibleRoles.has(target.role)) {
+    throw new ProjectValidationError(`${target.name} is not eligible to be assigned to a project as ${label}.`);
+  }
+};
+
 const notifyRecipients = (
   members: ProjectMemberRow[],
   actorId: string,
@@ -77,11 +102,13 @@ const notifyRecipients = (
 };
 
 export const listProjectsForUser = async (userId: string, role: string): Promise<ProjectDTO[]> => {
-  // HR gets the same "see every project" query Admin does -- read-only visibility only; nothing
-  // else in this file (assertCanCreate/assertCanManage) grants HR any write/manage capability, so
-  // this alone can't let HR do anything beyond viewing.
-  const rows =
-    role === 'Admin' || role === 'HR' ? await repo.findAllProjects() : await repo.findProjectsForUser(toUserPk(userId));
+  // Every role sees every project -- read-only visibility only; nothing else in this file
+  // (assertCanCreate/assertCanManage) grants HR or a non-lead Team_Member any write/manage
+  // capability, so this alone can't let anyone do more than view. Team Lead is not a separate
+  // account role here (see isProjectLead/resolveTeamLeadUserId): whether a Team_Member happens to
+  // lead any given project only changes how the frontend categorizes/labels it for display
+  // (Led/Assigned/Unassigned in ProjectsView.tsx), never whether it's returned here.
+  const rows = await repo.findAllProjects();
   if (rows.length === 0) return [];
   const membersByProject = await repo.findMembersForProjects(rows.map((row) => row.projectid));
   return Promise.all(
@@ -175,6 +202,13 @@ export const createProject = async (
   if (!input.description?.trim()) throw new ProjectValidationError('Project description is required.');
   if (!input.startDate || !input.targetDate) throw new ProjectValidationError('Start and target dates are required.');
   if (input.targetDate < input.startDate) throw new ProjectValidationError('Target date cannot be before the start date.');
+
+  if (input.teamLeadId) {
+    await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+  }
+  for (const memberId of input.memberIds || []) {
+    await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
+  }
 
   const priorityCode = API_TO_DB_PRIORITY[input.priority] || 'Medium';
   const priorityId = await repo.getPriorityId(priorityCode);
@@ -337,6 +371,7 @@ export const updateProject = async (
   // comment), so it's handled as its own step rather than through the updates object above.
   let previousLeadId: string | undefined;
   if (input.teamLeadId !== undefined) {
+    await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
     previousLeadId = resolveTeamLeadUserId(row, await repo.findMembersForProject(row.projectid));
     await repo.reassignTeamLead(row.projectid, toUserPk(input.teamLeadId), row.owneruserid, toUserPk(actorId));
   }
@@ -512,6 +547,12 @@ export const addMember = async (
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
   await assertCanManage(row, actorId, actorRole);
+
+  await assertEligibleAssignee(
+    memberUserId,
+    roleCode === 'TeamLead' ? PROJECT_LEAD_ELIGIBLE_ROLES : PROJECT_MEMBER_ELIGIBLE_ROLES,
+    roleCode === 'TeamLead' ? 'Team Lead' : 'a member'
+  );
 
   await repo.addProjectMember(row.projectid, toUserPk(memberUserId), roleCode || 'Member', toUserPk(actorId));
 

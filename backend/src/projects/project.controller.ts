@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
 import * as approvalService from './projectApproval.service.js';
-import { getProjectUpdateApprovalType, PROJECT_DELETE_APPROVAL_TYPE } from './projectApproval.routing.js';
+import { getProjectUpdateApprovalType, PROJECT_ARCHIVE_APPROVAL_TYPE } from './projectApproval.routing.js';
 import { validateCreateProjectBody, validateMemberBody, validateUpdateProjectBody } from './project.validation.js';
 import { CreateProjectInput, UpdateProjectInput } from './project.types.js';
 
@@ -91,7 +91,13 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
   }
 
   try {
-    if (user.role === 'Team_Lead' || user.role === 'Team_Member') {
+    // Team Lead is not a separate account role -- a Team_Member becomes a project's lead only by
+    // per-project assignment (see project.service.ts's isProjectLead/resolveTeamLeadUserId). The
+    // gate here must reflect that: ask "is this caller the lead of *this* project", not "does
+    // their account role happen to be Team_Lead or Team_Member" -- the latter routed every
+    // Team_Member's call through the approval-request path even when they weren't the project's
+    // lead at all.
+    if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
       const requestType = getProjectUpdateApprovalType(changes.status);
       const data = await approvalService.createApprovalRequest(
@@ -117,12 +123,13 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
 
   const { reason } = (req.body || {}) as { reason?: string };
   try {
-    if (user.role === 'Team_Lead' || user.role === 'Team_Member') {
+    // See updateProject's comment above -- the gate is per-project leadership, not account role.
+    if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const data = await approvalService.createApprovalRequest(
-        req.params.id, PROJECT_DELETE_APPROVAL_TYPE, null, reason || '', user.id, user.role
+        req.params.id, PROJECT_ARCHIVE_APPROVAL_TYPE, null, reason || '', user.id, user.role
       );
       res.json({
-        success: true, message: 'Your delete request was submitted for Admin approval.',
+        success: true, message: 'Your archive request was submitted for Admin approval.',
         pendingApproval: true, data
       });
       return;
@@ -139,7 +146,8 @@ export const permanentlyDeleteProject = async (req: AuthenticatedRequest, res: R
   if (!user) return;
 
   try {
-    if (user.role === 'Team_Lead' || user.role === 'Team_Member') {
+    // See updateProject's comment above -- the gate is per-project leadership, not account role.
+    if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
       const data = await approvalService.createApprovalRequest(
         req.params.id, 'PROJECT_PERMANENT_DELETE', null, reason || '', user.id, user.role
@@ -162,7 +170,8 @@ export const restoreProject = async (req: AuthenticatedRequest, res: Response): 
   if (!user) return;
 
   try {
-    if (user.role === 'Team_Lead' || user.role === 'Team_Member') {
+    // See updateProject's comment above -- the gate is per-project leadership, not account role.
+    if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
       const data = await approvalService.createApprovalRequest(
         req.params.id, 'PROJECT_RESTORE', null, reason || '', user.id, user.role
