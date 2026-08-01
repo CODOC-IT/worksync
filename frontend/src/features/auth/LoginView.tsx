@@ -52,6 +52,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       const data = await parseAuthResponse(response);
       if (!response.ok || !data.success || !data.user) throw new Error(data.message || 'Your account is not provisioned for WorkSync.');
       loginUser(data.user);
+      fetch('/api/auth/audit-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionData.session.access_token}` }
+      }).catch(() => {});
       onLoginSuccess();
     } catch (error: any) {
       setErrorMsg(error.message || 'Cannot reach the authentication service.');

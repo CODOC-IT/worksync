@@ -467,6 +467,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
   const logoutUser = () => {
+    fetch('/api/auth/logout', { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
   localStorage.removeItem('worksync_auth_token');
   setHrRequests([]);
     setAccountChangeRequests([]);

@@ -225,6 +225,19 @@ router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Res
   }
 });
 
+// POST /api/auth/audit-login
+// The browser signs in directly against Supabase (signInWithPassword), so the Express /login
+// route never runs for successful logins. The frontend reports a successful sign-in here once
+// per login so Login events reach the audit log with the caller's authoritative role.
+router.post('/audit-login', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
+  const user = req.user ? userStore.findById(req.user.id) : undefined;
+  if (req.user) recordActivitySafe({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+    actorRole: req.user.role, action: 'Login', module: 'Authentication', entityType: 'User',
+    entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed in.`,
+    result: 'Successful', source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+  res.status(200).json({ success: true, message: 'Login activity recorded.' });
+});
+
 // POST /api/auth/logout
 router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
   const user = req.user ? userStore.findById(req.user.id) : undefined;
