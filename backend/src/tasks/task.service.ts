@@ -21,6 +21,7 @@ import {
   UpdateTaskInput
 } from './task.types.js';
 import { getTaskEditDenialReason } from './task.authorization.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 
 // Service Layer — business logic, authorization, and notification publishing (matching
 // backend/src/notifications and backend/src/projects). No SQL here (task.repository.ts); no
@@ -304,7 +305,7 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
 
   const row = await repo.findTaskById(taskId);
   const dto = await buildDTO(row!);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notifyTaskRecipients(row!, dto.assigneeIds, actorId, {
     type: 'task_assigned',
@@ -395,7 +396,7 @@ export const updateTask = async (
 
   const updatedRow = await repo.findTaskById(row.taskid);
   const dto = await buildDTO(updatedRow!);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: 'task_updated',
@@ -611,7 +612,7 @@ export const deleteTask = async (taskId: string, actorId: string, actorRole: str
   const archived = await repo.archiveTask(row.taskid);
   if (!archived) throw new TaskValidationError('Task is already deleted.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   notifyTaskRecipients(row, dto.assigneeIds, actorId, {
     type: 'task_deleted',
     title: 'Task Deleted',
@@ -685,7 +686,7 @@ export const changeTaskStatus = async (
 
   const updatedRow = await repo.findTaskById(row.taskid);
   const dto = await buildDTO(updatedRow!);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
   // notifyTaskRecipients now always includes the project's Team Lead alongside the assignees,
@@ -809,7 +810,7 @@ const syncParentFromSubtasks = async (
     isCompletedState: toMeta.isCompletedState
   });
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   const teamLeadId = await resolveProjectTeamLead(parent.projectid);
   const assignees = (await repo.findAssigneesForTask(parent.taskid)).map((a) => fromUserPk(a.userid));
   const projectId = fromProjectPk(parent.projectid);
@@ -922,7 +923,7 @@ export const reopenTask = async (
 
   const updatedRow = await repo.findTaskById(row.taskid);
   const dto = await buildDTO(updatedRow!);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
   // Assignees must know their finished work is live again; Admins are told too because
@@ -986,7 +987,7 @@ const decideReview = async (
 
   const updatedRow = await repo.findTaskById(row.taskid);
   const dto = await buildDTO(updatedRow!);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
     type: decision === 'Approve' ? 'task_review_approved' : 'task_review_rejected',
