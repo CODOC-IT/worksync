@@ -22,12 +22,14 @@ before(async () => {
     CREATE TABLE iam.users (
       userid serial PRIMARY KEY,
       organizationid integer NOT NULL,
-      departmentid integer,
-      email text NOT NULL UNIQUE,
-      displayname text NOT NULL,
-      designation text,
-      accountstatus text NOT NULL,
-      createdatutc timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       departmentid integer,
+       email text NOT NULL UNIQUE,
+       username text,
+       displayname text NOT NULL,
+       designation text,
+       accountstatus text NOT NULL,
+       invitationsentatutc timestamptz,
+       createdatutc timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deactivatedatutc timestamptz
     );
 
@@ -86,4 +88,23 @@ test('configured database replaces fallback users without backfilling them', asy
 
   const result = await pool.query<{ count: number }>('SELECT COUNT(*)::int AS count FROM iam.users');
   assert.equal(result.rows[0].count, 1);
+});
+
+test('syncUsersToDb reloads users created after the initial cache warmup', async () => {
+  const { userStore } = await import('./userStore.js');
+
+  await pool.query(
+    `INSERT INTO iam.users
+       (userid, organizationid, departmentid, email, username, displayname, designation, accountstatus)
+     VALUES (102, 1, 1, 'new.supabase.user@example.com', 'new.user', 'New Supabase User', 'Designer', 'Active')`
+  );
+  await pool.query('INSERT INTO iam.userroles (userid, roleid) VALUES (102, 1)');
+
+  await userStore.syncUsersToDb();
+
+  const loadedUsers = await userStore.getAllUsers();
+  assert.deepEqual(
+    loadedUsers.map((user) => user.email),
+    ['database.user@example.com', 'new.supabase.user@example.com']
+  );
 });

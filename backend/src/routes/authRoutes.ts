@@ -174,9 +174,9 @@ router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    // Serverless instances may receive this request before any login has hydrated the cache.
-    await userStore.syncUsersToDb();
-    const user = userStore.findById(req.user.id);
+    // Supabase/Postgres is authoritative. A newly provisioned account may not exist in this
+    // process's in-memory roster yet, so resolve the authenticated profile directly from the DB.
+    const user = await userStore.refreshUserFromDb(req.user.id);
     if (!user) {
       res.status(404).json({ success: false, message: 'User profile not found.' });
       return;
@@ -184,7 +184,7 @@ router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Respon
 
     res.status(200).json({
       success: true,
-      user: userStore.sanitizeUser(user)
+      user
     });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to restore authenticated session.' });
@@ -204,8 +204,8 @@ router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Res
   }
 
   try {
-    // Re-sync before responding so the roster reflects the current database state instead of
-    // any stale in-memory subset from an earlier request lifecycle.
+    // Always reload the authoritative Supabase roster. Account provisioning writes directly to
+    // iam.users and must be visible immediately on every process/serverless instance.
     await userStore.syncUsersToDb();
     const users = (await userStore.getAllUsers()).map((u) => userStore.sanitizeUser(u));
     res.status(200).json({ success: true, users });
