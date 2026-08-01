@@ -26,6 +26,7 @@ import {
   BreakType,
   WorkBreak,
   ControlledEditRequest,
+  SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
 
@@ -194,6 +195,10 @@ interface AppState {
       // -- Review -> Done must always go through an explicit reviewer decision).
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
+      // Only meaningful alongside reviewDecision: 'Reject' -- one Accept/Reject verdict per
+      // completed subtask, required whenever the task being rejected has any (see
+      // task.service.ts's decideReview).
+      subtaskDecisions?: SubtaskReviewDecision[];
     }
   ) => Promise<{ success: boolean; message: string }>;
   // Team-Lead-only reopen of a Done task. `reason` is mandatory and is persisted to
@@ -1157,7 +1162,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // changes are never approval-gated (not one of this workflow's five integration points),
       // so they apply immediately regardless of whether the rest of this edit is pending.
       if (data.memberIds) {
-        const beforeIds = new Set(project.memberIds);
+        // Both sides of this diff must go through the same eligibility filter. project.memberIds
+        // (the "before" set) includes the project's Team Lead, whose account role is virtually
+        // never 'Team_Member' -- comparing it unfiltered against the filtered `afterIds` made the
+        // lead look "removed" on every single save (the edit form's member checkboxes never
+        // touch the lead's own membership, see ProjectsView.tsx's assignableMembers), silently
+        // firing a real removeProjectMemberApi call and a false "removed from project"
+        // notification. Filtering both sides identically fixes the root cause instead of
+        // special-casing the lead's id.
+        const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
         const removed = project.memberIds.filter((id) => !afterIds.includes(id));
@@ -1700,6 +1713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       extraInfo?: {
         note?: string;
         reviewDecision?: 'Approve' | 'Reject';
+        subtaskDecisions?: SubtaskReviewDecision[];
       }
     ): Promise<{ success: boolean; message: string }> => {
       const task = tasks.find((t) => t.id === taskId);
@@ -1712,7 +1726,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           extraInfo?.reviewDecision === 'Approve'
             ? await approveTaskViaApi(taskId, note)
             : extraInfo?.reviewDecision === 'Reject'
-              ? await rejectTaskViaApi(taskId, note)
+              ? await rejectTaskViaApi(taskId, note, extraInfo?.subtaskDecisions)
               : await changeTaskStatusViaApi(taskId, newStatus, note);
 
         setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));

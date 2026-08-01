@@ -18,6 +18,31 @@ back to.
 > Reports/Chat/AI hooks, all still frontend `dispatchNotifications` calls) is unchanged. See
 > `docs/ProjectBoardNotification_Implementation_Notes.md` for the full detail.
 
+> **Update (`feature/project-lead-workflow-fixes`)**: Three fixes, all scoped to Project/Task
+> notification triggers:
+> 1. **Project Lead assignment wording** — `project_created`/`project_member_added` now send the
+>    project's Team Lead a distinct "...added you to it **as the Project Lead**." message
+>    (`recipientMessages`, §7's per-recipient-message mechanism) instead of the generic member
+>    wording every other recipient gets; reassigning a project's lead via `PUT /api/projects/:id`
+>    sends the new lead a dedicated notice too. See `project.service.ts`'s `createProject`/
+>    `addMember`/`updateProject`.
+> 2. **Task review notifications** now read "`<actor>` approved/rejected your review request for
+>    `<task>`..." (previously "...approved `<task>` and marked it Done."), and a rejected task's
+>    individual subtasks each notify their own assignees via the existing `subtask_reopened`
+>    event — see `docs/BoardModuleGuide.md`'s §11a.
+> 3. **False-positive `project_member_removed` fixed** — this was never actually a notification
+>    bug (§9's `project_member_added`/`removed` triggers were always correctly scoped); the root
+>    cause was in `frontend/src/store/AppContext.tsx`'s `updateProject`, which diffed the
+>    project's *unfiltered* previous member list (which includes the Team Lead) against a
+>    *filtered* new list (Team-Member-role accounts only), making the lead look "removed" on
+>    every project edit and firing a real `removeProjectMemberApi` call. Fixed by filtering both
+>    sides of the diff identically.
+>
+> Actor display names (raw `usr-<n>` ids never appearing in notification text) and full
+> DB-backed notification history (§10/§11) were already correct on `main` before this branch —
+> see `backend/src/utils/actorDisplay.ts` and `notification.repository.ts`'s
+> `insertNotificationWithFanout`/`findByUser` — and needed no changes here.
+
 ## 1. Purpose
 
 Deliver role-scoped, in-app notifications (plus bottom-right toasts) whenever a tracked event

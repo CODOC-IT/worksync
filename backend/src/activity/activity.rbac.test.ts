@@ -615,7 +615,10 @@ test('Comment deletion activity is visible only to HR and Admin', async () => {
   const leadRoles = await getEffectiveRoles('usr-5');
   const leadResult = await findActivities({ page: 1, pageSize: 50 }, leadRoles, 'usr-5');
   assert.ok(!leadResult.rows.some((r: any) => r.entityidtext === 'cmt-lead-delete'), 'Team Lead must not see their own comment deletion');
-  const leadDirect = await findVisibleActivityById('2', 'usr-5', leadRoles);
+  const leadDeletionId = memDb.public.one(
+    "SELECT auditeventid::text AS id FROM audit.auditevents WHERE entityidtext = 'cmt-lead-delete'"
+  ).id;
+  const leadDirect = await findVisibleActivityById(leadDeletionId, 'usr-5', leadRoles);
   assert.equal(leadDirect, null, 'Team Lead must not retrieve a comment deletion by direct activity ID');
 
   const hrRoles = await getEffectiveRoles('usr-3');

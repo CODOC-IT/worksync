@@ -4,6 +4,7 @@ import * as service from './task.service.js';
 import {
   validateChangeStatusBody,
   validateCreateTaskBody,
+  validateRejectDecisionBody,
   validateReopenBody,
   validateReviewDecisionBody,
   validateUpdateTaskBody
@@ -12,6 +13,7 @@ import {
   ApiTaskStatus,
   ChangeStatusInput,
   CreateTaskInput,
+  SubtaskReviewDecisionInput,
   TaskEditApprovalInput,
   UpdateTaskInput
 } from './task.types.js';
@@ -171,15 +173,15 @@ export const rejectTask = async (req: AuthenticatedRequest, res: Response): Prom
   const user = requireUser(req, res);
   if (!user) return;
 
-  const validation = validateReviewDecisionBody(req.body);
+  const validation = validateRejectDecisionBody(req.body);
   if (!validation.valid) {
     res.status(400).json({ success: false, message: validation.message });
     return;
   }
 
   try {
-    const { note } = req.body as { note: string };
-    const data = await service.rejectTask(req.params.id, note, user.id, user.role);
+    const { note, subtaskDecisions } = req.body as { note: string; subtaskDecisions?: SubtaskReviewDecisionInput[] };
+    const data = await service.rejectTask(req.params.id, note, user.id, user.role, subtaskDecisions);
     res.json({ success: true, message: 'Task rejected and returned to In Progress.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to reject task.');

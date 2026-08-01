@@ -1,5 +1,6 @@
 import {
   ProposedTaskUpdate,
+  SubtaskReviewDecision,
   SystemApproval,
   Task,
   TaskStatus,
@@ -249,8 +250,12 @@ export const changeTaskStatusViaApi = (taskId: string, status: TaskStatus, note:
 export const approveTaskViaApi = (taskId: string, note: string): Promise<Task> =>
   patchTaskStatus(taskId, '/approve', { note });
 
-export const rejectTaskViaApi = (taskId: string, note: string): Promise<Task> =>
-  patchTaskStatus(taskId, '/reject', { note });
+export const rejectTaskViaApi = (
+  taskId: string,
+  note: string,
+  subtaskDecisions?: SubtaskReviewDecision[]
+): Promise<Task> =>
+  patchTaskStatus(taskId, '/reject', subtaskDecisions ? { note, subtaskDecisions } : { note });
 
 // Team-Lead-only route out of Done. Sends `reason` (not `note`) to match the endpoint's own
 // contract — see backend/src/tasks/task.validation.ts's validateReopenBody for why they differ.
