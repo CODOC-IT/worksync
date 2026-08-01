@@ -64,6 +64,7 @@ const notifyRequester = (
 };
 
 const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
+  PROJECT_CREATE: 'create',
   PROJECT_EDIT: 'edit',
   PROJECT_ARCHIVE: 'archive',
   PROJECT_DELETE: 'delete',
@@ -174,6 +175,9 @@ export const decideApprovalRequest = async (
 
   if (decision === 'Approved') {
     switch (row.requesttype) {
+      case 'PROJECT_CREATE':
+        await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
+        break;
       case 'PROJECT_EDIT':
         await projectService.updateProject(
           projectIdStr,

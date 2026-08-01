@@ -49,6 +49,7 @@ function getAccountRequestedChanges(request: AccountChangeRequest): { field: str
 // / approveProjectApprovalRequest / rejectProjectApprovalRequest, backed by
 // backend/src/projects/projectApproval.*.
 const PROJECT_REQUEST_TYPE_META: Record<ProjectApprovalRequestType, { label: string; icon: React.ReactNode }> = {
+  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
   PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
   PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
   PROJECT_DELETE: { label: 'Project Delete', icon: <Trash2 size={13} /> },
@@ -287,6 +288,7 @@ export const ApprovalsInboxView: React.FC = () => {
     (request) =>
       (statusFilter === 'All' || request.status === statusFilter) &&
       (typeFilter === 'All' ||
+        (typeFilter === 'Project_Creation' && request.requestType === 'PROJECT_CREATE') ||
         (typeFilter === 'Project_Deletion' &&
           (request.requestType === 'PROJECT_DELETE' ||
             request.requestType === 'PROJECT_PERMANENT_DELETE')))

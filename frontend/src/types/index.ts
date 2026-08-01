@@ -254,15 +254,15 @@ export interface AccountChangeRequest {
   decidedAt?: string;
 }
 
-// Project Management Approval Workflow (Team Lead -> Admin) -- deliberately separate from
-// SystemApproval below, which is frontend-only/ephemeral for Project_Creation & Project_Deletion
-// and never persisted for the latter. Backed by a real table (work.ProjectApprovalRequests,
-// database/25_project_approvals.sql) via backend/src/projects/projectApproval.*.
+// Persisted Project Management Approval Workflow (Team Lead -> Admin). SystemApproval below
+// remains the legacy UI shape; these six discriminators are the authoritative API/database
+// request types backed by work.ProjectApprovalRequests.
 export type ProjectApprovalRequestType =
+  | 'PROJECT_CREATE'
   | 'PROJECT_EDIT'
   | 'PROJECT_ARCHIVE'
-  | 'PROJECT_DELETE'
   | 'PROJECT_RESTORE'
+  | 'PROJECT_DELETE'
   | 'PROJECT_PERMANENT_DELETE';
 
 export interface ProjectApprovalRequest {
