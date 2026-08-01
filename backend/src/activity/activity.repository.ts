@@ -118,7 +118,7 @@ const visibilitySql = (
   // Administrator. This applies whether the HR role is permanent or temporary.
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: `a.actorrolesnapshot <> 'Admin'`,
+      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
       extraParams: params.slice(1),
     };
   }
@@ -128,7 +128,7 @@ const visibilitySql = (
   // need to enumerate project membership predicates on top.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: `a.actorrolesnapshot <> 'Admin'`,
+      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
       extraParams: params.slice(1),
     };
   }

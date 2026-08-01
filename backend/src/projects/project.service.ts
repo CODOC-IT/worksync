@@ -1,5 +1,5 @@
 ﻿import * as repo from './project.repository.js';
-import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
+import { resolveTeamLeadUserId, rowToMilestoneDTO, rowToProjectDTO, rowToProjectFileDTO } from './project.mapper.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
@@ -9,11 +9,16 @@ import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
   ApiProjectStatus,
+  CreateMilestoneInput,
+  CreateProjectFileInput,
   CreateProjectInput,
+  MilestoneDTO,
   ProjectDTO,
+  ProjectFileDTO,
   ProjectMemberRoleCode,
   ProjectMemberRow,
   ProjectRow,
+  UpdateMilestoneInput,
   UpdateProjectInput
 } from './project.types.js';
 
@@ -123,7 +128,9 @@ const isMemberOfRow = (row: ProjectRow, members: ProjectMemberRow[], userId: str
 // there's no separate task-level ACL in the schema) so Task Module authorization stays
 // consistent with Project Module authorization without duplicating the membership query.
 export const isProjectAccessible = async (projectId: string, userId: string, role: string): Promise<boolean> => {
-  if (role === 'Admin') return true;
+  // HR has organization-wide, read-only project/task visibility.  Mutations use the
+  // separate lead/manage guards below, so this read bypass cannot grant write access.
+  if (role === 'Admin' || role === 'HR') return true;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
@@ -456,9 +463,13 @@ export const archiveProject = async (
   });
 };
 
-// Step two of the two-step delete: only an already-Archived project may be hard-deleted, and
-// only once. Related tasks/subtasks are deleted transactionally by the repository. A remaining
-// project-level Calendar/Discussion/AI FK still surfaces as a clear validation error.
+// Step two of the two-step delete: only an already-Archived project may be hard-deleted, and only
+// once. Every project-owned dependent (tasks/subtasks, task history, assignments, dependencies,
+// comments, discussion threads, milestones, members, reviewer designations, files, and calendar
+// events) is deleted transactionally by the repository before the project row itself; Notifications
+// and AI activity are historical logs so they're detached (their Project/Task reference nulled)
+// rather than deleted; audit.AuditEvents/AuditEventChanges are never touched. The 23503 catch below
+// is a defensive fallback for any FK the repository's cleanup doesn't yet know about.
 export const permanentlyDeleteProject = async (
   projectId: string,
   actorId: string,
@@ -477,7 +488,7 @@ export const permanentlyDeleteProject = async (
   } catch (error) {
     if ((error as { code?: string } | null)?.code === '23503') {
       throw new ProjectValidationError(
-        'This project still has calendar events, project discussions, or AI activity linked to it. Remove those first.'
+        'This project still has linked records that could not be automatically removed. Please contact support.'
       );
     }
     throw error;
@@ -632,4 +643,203 @@ export const removeMember = async (
   });
 
   return dto;
+};
+
+const MILESTONE_TITLE_MAX_LENGTH = 150; // matches work.ProjectMilestones.MilestoneName varchar(150)
+
+const assertMilestoneDatesWithinProject = (row: ProjectRow, dueDate: string) => {
+  if (dueDate < row.startdate || dueDate > row.enddate) {
+    throw new ProjectValidationError(
+      `Milestone due date must fall between the project's start date (${row.startdate}) and end date (${row.enddate}).`
+    );
+  }
+};
+
+export const addMilestone = async (
+  projectId: string,
+  input: CreateMilestoneInput,
+  actorId: string,
+  actorRole: string
+): Promise<MilestoneDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  if (!input.title?.trim()) throw new ProjectValidationError('Milestone title is required.');
+  if (input.title.trim().length > MILESTONE_TITLE_MAX_LENGTH) {
+    throw new ProjectValidationError(`Milestone title cannot exceed ${MILESTONE_TITLE_MAX_LENGTH} characters.`);
+  }
+  if (!input.dueDate) throw new ProjectValidationError('Milestone due date is required.');
+  assertMilestoneDatesWithinProject(row, input.dueDate);
+
+  let milestoneId: number;
+  try {
+    milestoneId = await repo.insertMilestone({
+      projectId: row.projectid,
+      title: input.title.trim(),
+      description: input.description?.trim() || null,
+      dueDate: input.dueDate,
+      createdByUserId: toUserPk(actorId)
+    });
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === '23505') {
+      throw new ProjectValidationError('A milestone with this name already exists for this project.');
+    }
+    throw error;
+  }
+
+  const dto = rowToMilestoneDTO((await repo.findMilestoneById(milestoneId))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Projects', entityType: 'Milestone', entityId: dto.id,
+    entityName: dto.title, projectId, projectName: row.projectname,
+    description: `${actorName} added milestone “${dto.title}” to “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const updateMilestone = async (
+  projectId: string,
+  milestoneId: string,
+  input: UpdateMilestoneInput,
+  actorId: string,
+  actorRole: string
+): Promise<MilestoneDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const milestonePk = Number(milestoneId);
+  if (!Number.isInteger(milestonePk)) throw new ProjectValidationError('Invalid milestone id.');
+
+  if (input.title !== undefined) {
+    if (!input.title.trim()) throw new ProjectValidationError('Milestone title cannot be empty.');
+    if (input.title.trim().length > MILESTONE_TITLE_MAX_LENGTH) {
+      throw new ProjectValidationError(`Milestone title cannot exceed ${MILESTONE_TITLE_MAX_LENGTH} characters.`);
+    }
+  }
+  if (input.dueDate !== undefined) assertMilestoneDatesWithinProject(row, input.dueDate);
+
+  let updated: boolean;
+  try {
+    updated = await repo.updateMilestone(milestonePk, row.projectid, {
+      title: input.title?.trim(),
+      description: input.description !== undefined ? (input.description.trim() || null) : undefined,
+      dueDate: input.dueDate
+    });
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === '23505') {
+      throw new ProjectValidationError('A milestone with this name already exists for this project.');
+    }
+    throw error;
+  }
+  if (!updated) throw new ProjectValidationError('Milestone not found for this project.');
+
+  const dto = rowToMilestoneDTO((await repo.findMilestoneById(milestonePk))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Updated', module: 'Projects', entityType: 'Milestone', entityId: dto.id,
+    entityName: dto.title, projectId, projectName: row.projectname,
+    description: `${actorName} updated milestone “${dto.title}” on “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const deleteMilestone = async (
+  projectId: string,
+  milestoneId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const milestonePk = Number(milestoneId);
+  if (!Number.isInteger(milestonePk)) throw new ProjectValidationError('Invalid milestone id.');
+
+  const milestoneRow = await repo.findMilestoneById(milestonePk);
+  const deleted = await repo.deleteMilestone(milestonePk, row.projectid);
+  if (!deleted) throw new ProjectValidationError('Milestone not found for this project.');
+
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'Milestone', entityId: milestoneId,
+    entityName: milestoneRow?.milestonename || milestoneId, projectId, projectName: row.projectname,
+    description: `${actorName} removed milestone “${milestoneRow?.milestonename || milestoneId}” from “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+};
+
+export const addProjectFile = async (
+  projectId: string,
+  input: CreateProjectFileInput,
+  actorId: string,
+  actorRole: string
+): Promise<ProjectFileDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  if (!input.name?.trim()) throw new ProjectValidationError('File name is required.');
+  if (!input.url?.trim()) throw new ProjectValidationError('File content is required.');
+
+  let fileId: number;
+  try {
+    fileId = await repo.insertProjectFile({
+      projectId: row.projectid,
+      uploadedByUserId: toUserPk(actorId),
+      originalFileName: input.name.trim(),
+      mimeType: input.mimeType?.trim() || 'application/octet-stream',
+      dataUrl: input.url
+    });
+  } catch (error) {
+    throw new ProjectValidationError((error as Error)?.message || 'Failed to store the attachment.');
+  }
+
+  const dto = rowToProjectFileDTO((await repo.findProjectFileById(row.projectid, fileId))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Projects', entityType: 'ProjectFile', entityId: dto.id,
+    entityName: dto.name, projectId, projectName: row.projectname,
+    description: `${actorName} attached “${dto.name}” to “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const removeProjectFile = async (
+  projectId: string,
+  fileId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const filePk = Number(fileId);
+  if (!Number.isInteger(filePk)) throw new ProjectValidationError('Invalid file id.');
+
+  const fileRow = await repo.findProjectFileById(row.projectid, filePk);
+  const removed = await repo.removeProjectFile(row.projectid, filePk);
+  if (!removed) throw new ProjectValidationError('File not found for this project.');
+
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'ProjectFile', entityId: fileId,
+    entityName: fileRow?.originalfilename || fileId, projectId, projectName: row.projectname,
+    description: `${actorName} removed attachment “${fileRow?.originalfilename || fileId}” from “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
 };

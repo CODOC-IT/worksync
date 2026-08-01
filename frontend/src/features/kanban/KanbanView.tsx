@@ -663,6 +663,7 @@ const BoardCard: React.FC<{
       </div>
 
       {isInReview && <StatusBadge status="Pending Approval" size="sm" />}
+      {task.hasPendingApproval && !isInReview && <StatusBadge status="Pending Approval" size="sm" />}
 
       <SubtaskProgress task={task} />
 

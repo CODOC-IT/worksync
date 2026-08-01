@@ -32,11 +32,14 @@ export interface Milestone {
 export interface ProjectFile {
   id: string;
   name: string;
-  size: string;
-  type: string;
+  size: number;
+  mimeType: string;
   uploadedBy: string;
   uploadedAt: string;
-  url: string;
+  // Only ever set locally, for a file just selected in the create/edit form and not yet uploaded
+  // -- the base64 data URL read via FileReader (see ProjectsView.tsx's handleFileSelect). A file
+  // already persisted (returned from the backend) never has this.
+  dataUrl?: string;
 }
 
 export interface Project {
@@ -167,6 +170,8 @@ export interface Task {
   tags: string[];
   attachments: TaskAttachment[];
   approvalStatus: 'Approved' | 'Pending Approval' | 'Rejected';
+  /** Server-derived unresolved task-edit approval state. */
+  hasPendingApproval?: boolean;
   pendingEdit?: ControlledEditRequest;
   blockerReason?: string;
   workSummary?: string;
