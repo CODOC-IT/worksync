@@ -315,7 +315,7 @@ export const ProjectsView: React.FC = () => {
     if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
-    } else if (data.startDate < todayStr) {
+    } else if (formMode === 'create' && data.startDate < todayStr) {
       errors.startDate = "Start date cannot be before today's date.";
     }
 
