@@ -166,6 +166,7 @@ interface AppState {
     breakType: BreakType;
     startTime: string; // HH:mm
     elapsedSeconds: number;
+    startedAtUtc: string;
   } | null;
   settings: {
     workingHours: { start: string; end: string };
@@ -313,6 +314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     breakType: BreakType;
     startTime: string;
     elapsedSeconds: number;
+    startedAtUtc: string;
   } | null>(null);
 
 
@@ -2324,40 +2326,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const resolveHRRecipients = () =>
       users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
 
-    const checkIn = () => {
+    const checkIn = async () => {
       if (currentRole === 'Admin') {
         pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
         return;
       }
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = todayDateKey();
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const isLate = nowTime > settings.workingHours.start;
-
-      setAttendanceRecords((prev) => {
-        const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
-        if (existing) return prev; // block duplicate checkin
-        const newRec: AttendanceRecord = {
-          id: `att-${Date.now()}`,
-          userId: currentUser.id,
-          date: todayStr,
-          checkIn: nowTime,
-          status: 'Present',
-          totalHours: 0,
-          breaks: []
-        };
-        return [newRec, ...prev];
-      });
 
       // Persist check-in to backend
       const checkInUtc = new Date().toISOString();
       const token = localStorage.getItem('worksync_auth_token');
-      if (token) {
-        fetch('/api/attendance/check-in', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ workDate: todayStr, checkInUtc, isLate }),
-        }).catch((err) => console.error('[Attendance] Failed to persist check-in:', err));
+      if (!token) {
+        pushToast('error', 'Check-in Failed', 'Your session has expired. Please sign in again.');
+        return;
       }
+      const response = await fetch('/api/attendance/check-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workDate: todayStr, checkInUtc }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        pushToast('error', 'Check-in Failed', data?.message || 'Failed to save check-in.');
+        return;
+      }
+      setAttendanceRecords((prev) => {
+        const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
+        if (existing) return prev;
+        return [{
+          id: `att-${data.data.attendancerecordid}`,
+          userId: currentUser.id,
+          date: todayStr,
+          checkIn: nowTime,
+          status: 'In Session',
+          totalHours: 0,
+          breaks: []
+        }, ...prev];
+      });
 
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -2374,9 +2381,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Checked in for work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const checkOut = () => {
+    const checkOut = async () => {
       if (currentRole === 'Admin') return;
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = todayDateKey();
       const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const hasOpenAttendance = attendanceRecords.some(
         (record) =>
@@ -2386,33 +2393,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (!hasOpenAttendance) return;
 
-      setAttendanceRecords((prev) =>
-        prev.map((a) => {
-          if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
-            return {
-              ...a,
-              checkOut: nowTime,
-              totalHours: 8.0
-            };
-          }
-          return a;
-        })
-      );
-
       if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
-        endBreak();
+        await endBreak();
       }
 
       // Persist check-out to backend
       const checkOutUtc = new Date().toISOString();
       const token = localStorage.getItem('worksync_auth_token');
-      if (token) {
-        fetch('/api/attendance/check-out', {
+      if (!token) {
+        pushToast('error', 'Checkout Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      let persistedStatus: AttendanceRecord['status'] = 'Half Day';
+      let persistedWorkingMinutes = 0;
+      {
+        const response = await fetch('/api/attendance/check-out', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ workDate: todayStr, checkOutUtc }),
-        }).catch((err) => console.error('[Attendance] Failed to persist check-out:', err));
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          pushToast('error', 'Checkout Failed', data?.message || 'Failed to save checkout.');
+          return;
+        }
+        persistedStatus = data.data.status;
+        persistedWorkingMinutes = data.data.workingMinutes;
       }
+      setAttendanceRecords((prev) =>
+        prev.map((a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOut
+          ? { ...a, checkOut: nowTime, totalHours: persistedWorkingMinutes / 60, status: persistedStatus }
+          : a)
+      );
 
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -2431,7 +2443,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = todayDateKey();
       const openAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -2446,7 +2458,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userId: currentUser.id,
         breakType,
         startTime: nowTime,
-        elapsedSeconds: 0
+        elapsedSeconds: 0,
+        startedAtUtc: new Date().toISOString()
       });
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -2460,12 +2473,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity(`Started ${breakType}`, 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const endBreak = () => {
+    const endBreak = async () => {
       if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = todayDateKey();
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-      const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
+      const endedAtUtc = new Date().toISOString();
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((new Date(endedAtUtc).getTime() - new Date(activeBreak.startedAtUtc).getTime()) / 1000)
+      );
+      const durationMin = durationSeconds / 60;
       const exceeded = durationMin > settings.breakLimitMinutes;
 
       const newBreak: WorkBreak = {
@@ -2473,7 +2491,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: activeBreak.breakType,
         startTime: activeBreak.startTime,
         endTime: endTimeStr,
-        durationMinutes: durationMin
+        durationMinutes: durationMin,
+        durationSeconds,
+        startedAtUtc: activeBreak.startedAtUtc,
+        endedAtUtc
       };
 
       setAttendanceRecords((prev) =>
@@ -2489,6 +2510,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       setActiveBreak(null);
+      const token = localStorage.getItem('worksync_auth_token');
+      if (token) {
+        await fetch('/api/attendance/breaks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            workDate: todayStr,
+            id: newBreak.id,
+            type: newBreak.type,
+            startedAtUtc: activeBreak.startedAtUtc,
+            endedAtUtc
+          })
+        }).catch((err) => console.error('[Attendance] Failed to persist break:', err));
+      }
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
         type: exceeded ? 'break_exceeded' : 'break_ended',
@@ -2511,6 +2546,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const record = attendanceRecords.find((item) => item.id === recordId);
       if (!record) {
         return { success: false, message: 'Attendance record not found.' };
+      }
+      if (!record.checkOut) {
+        return { success: false, message: 'Active attendance sessions cannot be edited. Check out first.' };
       }
 
       const isAdmin = currentRole === 'Admin';

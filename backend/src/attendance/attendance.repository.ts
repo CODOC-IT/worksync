@@ -26,15 +26,20 @@ export const upsertAttendanceRecord = async (
 
 export const updateAttendanceCheckOut = async (
   attendanceRecordId: number,
-  checkOutUtc: string
+  checkOutUtc: string,
+  statusCode: 'Present' | 'Late' | 'Half Day' | 'Absent' | 'Leave',
+  workingMinutes: number,
+  lateMinutes: number
 ): Promise<void> => {
   await query(
     `UPDATE hr.attendancerecords
      SET actualcheckoutatutc = $2::timestamptz,
-         workingminutes = GREATEST(0, EXTRACT(EPOCH FROM ($2::timestamptz - actualcheckinatutc)) / 60)::int,
+         workingminutes = $4,
+         lateminutes = $5,
+         attendancestatusid = (SELECT attendancestatusid FROM hr.attendancestatuses WHERE statuscode = $3),
          updatedatutc = CURRENT_TIMESTAMP
      WHERE attendancerecordid = $1`,
-    [attendanceRecordId, checkOutUtc]
+    [attendanceRecordId, checkOutUtc, statusCode, workingMinutes, lateMinutes]
   );
 };
 

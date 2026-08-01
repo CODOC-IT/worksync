@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { GlassCard } from '../../components/common/GlassCard';
+import { getOwnAccountChangeRequests, getSafeRequestedChangeLabel } from './accountChangeRequestHistory';
 import {
   Mail, Briefcase, Shield, Save, AlertCircle,
   CheckCircle2, Calendar, Flag, Trophy, Loader2,
@@ -97,7 +98,15 @@ const ROLE_TABS: Record<string, TabDef[]> = {
 };
 
 export const ProfileView: React.FC = () => {
-  const { currentUser, tasks, projects, notifications, updateCurrentUser, submitAccountChangeRequest } = useApp();
+  const {
+    currentUser,
+    tasks,
+    projects,
+    notifications,
+    accountChangeRequests,
+    updateCurrentUser,
+    submitAccountChangeRequest
+  } = useApp();
   const tabs = ROLE_TABS[currentUser.role] || ROLE_TABS.Admin;
   const [activeTab, setActiveTab] = useState<ProfileTab>(tabs[0]?.id || 'overview');
 
@@ -1035,6 +1044,10 @@ export const ProfileView: React.FC = () => {
   /* ───────── Account & Security Tab ───────── */
   const renderAccountSecurity = () => {
     const isAdmin = currentUser.role === 'Admin';
+    const ownAccountChangeRequests = getOwnAccountChangeRequests(
+      accountChangeRequests,
+      currentUser.id
+    );
 
     if (isAdmin) {
       return (
@@ -1414,6 +1427,55 @@ export const ProfileView: React.FC = () => {
                   </>
                 )}
               </button>
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel border border-white/5 p-6 lg:col-span-2">
+          <div className="mb-5 flex items-center gap-2.5">
+            <div className="rounded-lg bg-slate-800/80 p-2">
+              <Inbox size={16} className="text-cyan-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white">My Change Requests</h2>
+              <p className="text-[11px] text-slate-500">Track your submitted account change requests.</p>
+            </div>
+          </div>
+
+          {ownAccountChangeRequests.length === 0 ? (
+            <p className="rounded-lg border border-white/5 bg-slate-950/30 p-4 text-xs text-slate-500">
+              You have not submitted any account change requests.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {ownAccountChangeRequests.map((request) => (
+                <div key={request.id} className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-200">
+                        {getSafeRequestedChangeLabel(request)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Submitted: {request.submittedAt}
+                      </p>
+                    </div>
+                    <StatusBadge status={request.status} size="sm" />
+                  </div>
+                  {request.status === 'Rejected' && (
+                    <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/5 p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-300">
+                        Rejection reason
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-300">
+                        {request.decisionReason || 'No reason provided.'}
+                      </p>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Decided: {request.decidedAt || 'Not available'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

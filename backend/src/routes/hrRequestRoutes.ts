@@ -19,6 +19,7 @@ interface HRRequestDetails {
   requestedBreaks?: unknown[];
   attendanceChangeReason?: string;
   leaveType?: 'Full Day Leave' | 'Half Day Leave';
+  leavePeriod?: 'First Half' | 'Second Half';
   leaveDays?: number;
   extraBreakMinutes?: number;
 }
@@ -212,6 +213,12 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       res.status(400).json({ success: false, message: 'A valid leave type is required.' });
       return;
     }
+    if (type === 'Leave' && details?.leaveType === 'Half Day Leave' &&
+        details.leavePeriod !== undefined &&
+        !['First Half', 'Second Half'].includes(details.leavePeriod)) {
+      res.status(400).json({ success: false, message: 'A valid half-day leave period is required.' });
+      return;
+    }
     const requestDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
     if (!requestDate) {
       res.status(400).json({ success: false, message: 'A valid request date is required.' });
@@ -229,7 +236,23 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     }
 
     const cleanDetails: HRRequestDetails = { ...(details || {}) };
+    if (type === 'Leave' && cleanDetails.leaveType === 'Half Day Leave' && !cleanDetails.leavePeriod) {
+      cleanDetails.leavePeriod = 'Second Half';
+    }
     if (type === 'Correction') {
+      const activeSession = await query(
+        `SELECT 1 FROM hr.attendancerecords
+          WHERE userid = $1 AND workdate = $2::date
+            AND actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL`,
+        [toUserPk(req.user.id), requestDate]
+      );
+      if (activeSession.rowCount) {
+        res.status(409).json({
+          success: false,
+          message: 'Active attendance sessions cannot be corrected. Check out first.'
+        });
+        return;
+      }
       const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
       if (!cleanDetails.requestedCheckIn || !timePattern.test(cleanDetails.requestedCheckIn) ||
           (cleanDetails.requestedCheckOut && !timePattern.test(cleanDetails.requestedCheckOut))) {
@@ -328,10 +351,16 @@ const applyCorrection = async (
             sourcecode = 'HRCorrection',
             updatedatutc = CURRENT_TIMESTAMP
       WHERE userid = $1 AND workdate = $2::date
+        AND actualcheckoutatutc IS NOT NULL
       RETURNING attendancerecordid`,
     [toUserPk(row.user_id), formatDate(row.request_date), details.requestedCheckIn, details.requestedCheckOut || '']
   );
-  if (!result.rows[0]) throw new Error('Attendance record no longer exists.');
+  if (!result.rows[0]) {
+    throw Object.assign(
+      new Error('Active attendance sessions cannot be corrected. The employee must check out first.'),
+      { statusCode: 409 }
+    );
+  }
   await runQuery(
     `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
      VALUES ($1, $2::date, $3::jsonb, NOW())

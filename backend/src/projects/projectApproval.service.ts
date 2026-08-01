@@ -65,9 +65,11 @@ const notifyRequester = (
 };
 
 const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
+  PROJECT_CREATE: 'create',
   PROJECT_EDIT: 'edit',
   PROJECT_ARCHIVE: 'archive',
   PROJECT_RESTORE: 'restore',
+  PROJECT_DELETE: 'delete',
   PROJECT_PERMANENT_DELETE: 'permanently delete'
 };
 
@@ -174,6 +176,9 @@ export const decideApprovalRequest = async (
 
   if (decision === 'Approved') {
     switch (row.requesttype) {
+      case 'PROJECT_CREATE':
+        await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
+        break;
       case 'PROJECT_EDIT':
         await projectService.updateProject(
           projectIdStr,
@@ -183,6 +188,9 @@ export const decideApprovalRequest = async (
         );
         break;
       case 'PROJECT_ARCHIVE':
+        await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
+        break;
+      case 'PROJECT_DELETE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
       case 'PROJECT_RESTORE':

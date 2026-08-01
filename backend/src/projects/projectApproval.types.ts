@@ -4,9 +4,11 @@
 // the frontend.
 
 export type ProjectApprovalRequestType =
+  | 'PROJECT_CREATE'
   | 'PROJECT_EDIT'
   | 'PROJECT_ARCHIVE'
   | 'PROJECT_RESTORE'
+  | 'PROJECT_DELETE'
   | 'PROJECT_PERMANENT_DELETE';
 
 export type ProjectApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected';

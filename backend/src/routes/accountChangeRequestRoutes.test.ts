@@ -4,7 +4,9 @@ import {
   buildAccountReviewMessages,
   canReviewAccountChangeRequest,
   cleanRejectionReason,
-  getApprovedProfileChange
+  getApprovedProfileChange,
+  sanitizeAccountRequestedChanges,
+  shouldApplyAccountProfileChange
 } from './accountChangeRequestRoutes.js';
 
 const pendingRequest = {
@@ -15,6 +17,17 @@ const pendingRequest = {
 
 test('assigned HR approver can review a pending account change request', () => {
   assert.equal(canReviewAccountChangeRequest('usr-20', 'HR', pendingRequest), true);
+});
+
+test('Admin can reject an HR request assigned to Admin', () => {
+  assert.equal(
+    canReviewAccountChangeRequest('usr-1', 'Admin', {
+      user_id: 'usr-30',
+      assigned_approver_role: 'Admin',
+      status: 'Pending'
+    }),
+    true
+  );
 });
 
 test('wrong role cannot review an account change request', () => {
@@ -91,4 +104,33 @@ test('rejection notification includes the required reason and activity records r
   );
   assert.match(messages.notification, /Reason: Username conflicts with policy\./);
   assert.match(messages.activity, /rejected Taylor Member's account username change request/);
+});
+
+test('password and credential values are removed from API-visible requested changes', () => {
+  const safe = sanitizeAccountRequestedChanges({
+    name: 'Visible name',
+    password: 'NeverExpose#123',
+    password_hash: 'hashed-secret',
+    current_password_verified: 'true',
+    resetToken: 'secret-token',
+  });
+  assert.deepEqual(safe, { name: 'Visible name' });
+  assert.doesNotMatch(JSON.stringify(safe), /NeverExpose|hashed-secret|secret-token/);
+});
+
+test('rejection messages do not include requested profile values', () => {
+  const requestedValue = 'private.requested@example.com';
+  const messages = buildAccountReviewMessages(
+    'Rejected',
+    'Helen HR',
+    'Taylor Member',
+    'email',
+    'Please contact HR to verify this request.'
+  );
+  assert.doesNotMatch(JSON.stringify(messages), new RegExp(requestedValue));
+});
+
+test('a rejected request never enters profile update logic', () => {
+  assert.equal(shouldApplyAccountProfileChange('Rejected'), false);
+  assert.equal(shouldApplyAccountProfileChange('Approved'), true);
 });
