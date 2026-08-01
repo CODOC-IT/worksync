@@ -9,6 +9,7 @@ import { sendAccountUpdateEmail } from '../services/emailService.js';
 import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
+import { getEffectiveRoles } from '../auth/effectiveRoles.js';
 
 const router = Router();
 
@@ -207,7 +208,17 @@ router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Res
     // Re-sync before responding so the roster reflects the current database state instead of
     // any stale in-memory subset from an earlier request lifecycle.
     await userStore.syncUsersToDb();
-    const users = (await userStore.getAllUsers()).map((u) => userStore.sanitizeUser(u));
+    const users = await Promise.all((await userStore.getAllUsers()).map(async (u) => {
+      const safe = userStore.sanitizeUser(u);
+      const effective = await getEffectiveRoles(u.id);
+      return {
+        ...safe,
+        activePermissions: {
+          teamLead: effective.isActiveTeamLead,
+          hr: effective.isActiveHR
+        }
+      };
+    }));
     res.status(200).json({ success: true, users });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to load users.' });

@@ -15,6 +15,10 @@ export interface User {
   githubUsername?: string;
   passwordHash?: string;
   createdAt?: string;
+  activePermissions?: {
+    teamLead: boolean;
+    hr: boolean;
+  };
 }
 
 // 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that
@@ -182,6 +186,9 @@ export interface WorkBreak {
   startTime: string;
   endTime?: string;
   durationMinutes: number;
+  durationSeconds?: number;
+  startedAtUtc?: string;
+  endedAtUtc?: string;
 }
 
 export interface AttendanceRecord {
@@ -191,7 +198,7 @@ export interface AttendanceRecord {
   checkIn: string; // HH:mm
   checkOut?: string; // HH:mm
   totalHours: number;
-  status: 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
+  status: 'In Session' | 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
   breaks: WorkBreak[];
 }
 
@@ -216,6 +223,7 @@ export interface HRRequest {
     requestedBreaks?: WorkBreak[];
     attendanceChangeReason?: string;
     leaveType?: 'Full Day Leave' | 'Half Day Leave';
+    leavePeriod?: 'First Half' | 'Second Half';
     leaveDays?: number;
     extraBreakMinutes?: number;
   };

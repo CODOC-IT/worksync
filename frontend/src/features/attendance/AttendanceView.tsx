@@ -55,12 +55,15 @@ const formatDuration = (totalMinutes: number): string => {
 };
 
 const getTotalBreakMinutes = (record: AttendanceRecord): number =>
-  (record.breaks || []).reduce((total, workBreak) => {
+  (record.breaks || []).reduce((totalSeconds, workBreak) => {
+    const seconds = Number(workBreak.durationSeconds);
     const duration = Number(workBreak.durationMinutes);
-    return workBreak.endTime && Number.isFinite(duration) && duration >= 0
-      ? total + duration
-      : total;
-  }, 0);
+    return workBreak.endTime && Number.isFinite(seconds) && seconds >= 0
+      ? totalSeconds + seconds
+      : workBreak.endTime && Number.isFinite(duration) && duration >= 0
+        ? totalSeconds + duration * 60
+        : totalSeconds;
+  }, 0) / 60;
 
 interface AttendanceRowProps {
   record: AttendanceRecord;
@@ -446,6 +449,7 @@ interface LeaveApplicationFormProps {
   onClose: () => void;
   onSubmit: (
     leaveType: 'Full Day Leave' | 'Half Day Leave',
+    leavePeriod: 'First Half' | 'Second Half' | undefined,
     date: string,
     reason: string
   ) => Promise<{ success: boolean; message: string }>;
@@ -457,6 +461,7 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
   onSubmit
 }) => {
   const [leaveType, setLeaveType] = useState<'Full Day Leave' | 'Half Day Leave'>('Full Day Leave');
+  const [leavePeriod, setLeavePeriod] = useState<'First Half' | 'Second Half'>('Second Half');
   const [date, setDate] = useState('');
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
@@ -466,7 +471,12 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
       setMessage('Leave type, leave date, and reason are required.');
       return;
     }
-    const result = await onSubmit(leaveType, date, reason.trim());
+    const result = await onSubmit(
+      leaveType,
+      leaveType === 'Half Day Leave' ? leavePeriod : undefined,
+      date,
+      reason.trim()
+    );
     setMessage(result.message);
     if (result.success) onClose();
   };
@@ -496,6 +506,20 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
               <option value="Half Day Leave">Half Day Leave</option>
             </select>
           </label>
+          {leaveType === 'Half Day Leave' && (
+            <label className="block text-xs text-slate-300">
+              Leave Period
+              <select
+                value={leavePeriod}
+                onChange={(event) => setLeavePeriod(event.target.value as typeof leavePeriod)}
+                className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
+                required
+              >
+                <option value="First Half">First Half (work from 12:00 PM)</option>
+                <option value="Second Half">Second Half (work until 12:00 PM)</option>
+              </select>
+            </label>
+          )}
           <label className="block text-xs text-slate-300">
             Leave Date
             <input
@@ -669,7 +693,7 @@ export const AttendanceView: React.FC = () => {
   const isOwnRecord = (record: AttendanceRecord) =>
     record.userId === currentUser.id;
   const canEditRecord = (record: AttendanceRecord) =>
-    !isAdmin && isOwnRecord(record);
+    !isAdmin && isOwnRecord(record) && Boolean(record.checkOut);
   const filterByDate = (record: AttendanceRecord) => {
     if (dateFilter === 'today') return record.date === todayStr;
     if (dateFilter === 'custom') {
@@ -679,8 +703,14 @@ export const AttendanceView: React.FC = () => {
     start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
     return record.date >= toDateKey(start) && record.date <= todayStr;
   };
-  const filterByRole = (record: AttendanceRecord) =>
-    roleFilter === 'all' || users.find((user) => user.id === record.userId)?.role === roleFilter;
+  const filterByRole = (record: AttendanceRecord) => {
+    if (roleFilter === 'all') return true;
+    const user = users.find((candidate) => candidate.id === record.userId);
+    if (!user) return false;
+    if (roleFilter === 'Team_Lead') return user.activePermissions?.teamLead === true;
+    if (roleFilter === 'HR') return user.activePermissions?.hr === true || user.role === 'HR';
+    return user.role === roleFilter && user.activePermissions?.teamLead !== true;
+  };
   const myAttendanceRecords = attendanceRecords.filter(
     (record) => record.userId === currentUser.id && filterByDate(record)
   );
@@ -738,11 +768,17 @@ export const AttendanceView: React.FC = () => {
 
   const submitLeave = async (
     leaveType: 'Full Day Leave' | 'Half Day Leave',
+    leavePeriod: 'First Half' | 'Second Half' | undefined,
     date: string,
     reason: string
   ) => {
     setLeaveSubmitting(true);
-    const result = await submitHRRequest('Leave', reason, { leaveType, leaveDays: 1 }, date);
+    const result = await submitHRRequest(
+      'Leave',
+      reason,
+      { leaveType, leavePeriod, leaveDays: 1 },
+      date
+    );
     setLeaveSubmitting(false);
     return result;
   };

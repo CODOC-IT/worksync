@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { AccountChangeRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
 
 // Account Change Requests -- HR/Lead/Member request a single-field change to their own account
 // (name, email, username, password). Rendered with friendly labels; requested passwords are never
@@ -58,6 +58,10 @@ const PROJECT_REQUEST_TYPE_META: Record<ProjectApprovalRequestType, { label: str
 
 type StatusFilter = 'Pending' | 'Approved' | 'Rejected' | 'All';
 type TypeFilter = 'All' | SystemApproval['type'];
+type ReviewTarget =
+  | { kind: 'system'; action: 'approve' | 'reject'; item: SystemApproval }
+  | { kind: 'hr'; action: 'approve' | 'reject'; item: HRRequest }
+  | { kind: 'project'; action: 'approve' | 'reject'; item: ProjectApprovalRequest };
 
 const TYPE_META: Record<
   SystemApproval['type'],
@@ -190,6 +194,10 @@ export const ApprovalsInboxView: React.FC = () => {
   const [rejectingAccountRequest, setRejectingAccountRequest] = useState<AccountChangeRequest | null>(null);
   const [accountRejectionReason, setAccountRejectionReason] = useState('');
   const [accountRejectionError, setAccountRejectionError] = useState('');
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewError, setReviewError] = useState('');
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
@@ -260,8 +268,8 @@ export const ApprovalsInboxView: React.FC = () => {
 
   const filteredHRRequests = reviewableHRRequests.filter(
     (request) =>
-      statusFilter === 'All' ||
-      request.status === statusFilter
+      typeFilter === 'All' &&
+      (statusFilter === 'All' || request.status === statusFilter)
   );
 
   const pendingSystemCount = visibleApprovals.filter(
@@ -276,7 +284,12 @@ export const ApprovalsInboxView: React.FC = () => {
   // sees only their own submitted requests (any status), fetched the same way -- so no further
   // client-side visibility filtering is needed here, unlike systemApprovals above.
   const filteredProjectApprovalRequests = projectApprovalRequests.filter(
-    (request) => statusFilter === 'All' || request.status === statusFilter
+    (request) =>
+      (statusFilter === 'All' || request.status === statusFilter) &&
+      (typeFilter === 'All' ||
+        (typeFilter === 'Project_Deletion' &&
+          (request.requestType === 'PROJECT_DELETE' ||
+            request.requestType === 'PROJECT_PERMANENT_DELETE')))
   );
   const pendingProjectApprovalCount = projectApprovalRequests.filter(
     (request) => request.status === 'Pending'
@@ -294,7 +307,7 @@ export const ApprovalsInboxView: React.FC = () => {
   });
 
   const filteredAccountChangeRequests = reviewableAccountChangeRequests.filter(
-    (request) => statusFilter === 'All' || request.status === statusFilter
+    (request) => typeFilter === 'All' && (statusFilter === 'All' || request.status === statusFilter)
   );
 
   const pendingAccountChangeCount = reviewableAccountChangeRequests.filter(
@@ -304,89 +317,101 @@ export const ApprovalsInboxView: React.FC = () => {
   const handleApprove = async (
     approval: SystemApproval
   ) => {
-    const result = await approveApprovalItem(approval.id);
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    setReviewTarget({ kind: 'system', action: 'approve', item: approval });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleReject = async (
     approval: SystemApproval
   ) => {
-    const confirmed = window.confirm(
-      `Reject "${approval.targetTitle}"? This cannot be undone.`
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const result = await rejectApprovalItem(approval.id);
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    setReviewTarget({ kind: 'system', action: 'reject', item: approval });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleHRApprove = async (requestId: string) => {
-    const approvalNote = window.prompt(
-      'Enter an optional approval note:'
-    );
-
-    const result = await approveHRRequest(
-      requestId,
-      approvalNote?.trim() || undefined
-    );
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    const item = hrRequests.find((request) => request.id === requestId);
+    if (item) setReviewTarget({ kind: 'hr', action: 'approve', item });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleHRReject = async (requestId: string) => {
-    const rejectionReason = window.prompt(
-      'Enter a reason for rejecting this request:'
-    );
-
-    if (!rejectionReason?.trim()) {
-      setNotice({
-        type: 'error',
-        message: 'A rejection reason is required.'
-      });
-
-      return;
-    }
-
-    const result = await rejectHRRequest(
-      requestId,
-      rejectionReason.trim()
-    );
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    const item = hrRequests.find((request) => request.id === requestId);
+    if (item) setReviewTarget({ kind: 'hr', action: 'reject', item });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleProjectRequestApprove = async (request: ProjectApprovalRequest) => {
-    const approvalNote = window.prompt('Enter an optional approval note:');
-    const result = await approveProjectApprovalRequest(request.id, approvalNote?.trim() || undefined);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    setReviewTarget({ kind: 'project', action: 'approve', item: request });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleProjectRequestReject = async (request: ProjectApprovalRequest) => {
-    const rejectionReason = window.prompt(`Reason for rejecting this ${PROJECT_REQUEST_TYPE_META[request.requestType].label} request:`);
-    if (!rejectionReason?.trim()) {
-      setNotice({ type: 'error', message: 'A rejection reason is required.' });
+    setReviewTarget({ kind: 'project', action: 'reject', item: request });
+    setReviewReason('');
+    setReviewError('');
+  };
+
+  const confirmReview = async () => {
+    if (!reviewTarget) return;
+    const reason = reviewReason.trim();
+    if (reviewTarget.action === 'reject' && !reason) {
+      setReviewError('A rejection reason is required.');
       return;
     }
-    const result = await rejectProjectApprovalRequest(request.id, rejectionReason.trim());
+    setReviewLoading(true);
+    let result: { success: boolean; message: string };
+    if (reviewTarget.kind === 'system') {
+      result = reviewTarget.action === 'approve'
+        ? await approveApprovalItem(reviewTarget.item.id)
+        : await rejectApprovalItem(reviewTarget.item.id);
+    } else if (reviewTarget.kind === 'hr') {
+      result = reviewTarget.action === 'approve'
+        ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
+        : await rejectHRRequest(reviewTarget.item.id, reason);
+    } else {
+      result = reviewTarget.action === 'approve'
+        ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
+        : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+    }
+    setReviewLoading(false);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) setReviewTarget(null);
   };
+
+  const renderReviewModal = () => reviewTarget && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div role="dialog" aria-modal="true" className="glass-panel w-full max-w-lg space-y-4 p-5">
+        <div>
+          <h2 className="text-lg font-bold text-white">
+            {reviewTarget.action === 'approve' ? 'Approve Request' : 'Reject Request'}
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            {reviewTarget.kind === 'system'
+              ? `${TYPE_META[reviewTarget.item.type].label}: ${reviewTarget.item.targetTitle}`
+              : reviewTarget.kind === 'project'
+                ? `${PROJECT_REQUEST_TYPE_META[reviewTarget.item.requestType].label}: ${reviewTarget.item.projectTitle}`
+                : `${reviewTarget.item.type.replace('_', ' ')} for ${reviewTarget.item.date}`}
+          </p>
+        </div>
+        <label className="block text-xs font-semibold text-slate-300">
+          Reason {reviewTarget.action === 'reject' ? '(required)' : '(optional)'}
+          <textarea value={reviewReason} onChange={(event) => { setReviewReason(event.target.value); setReviewError(''); }} rows={4} disabled={reviewLoading} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 p-3 text-sm text-white outline-none focus:border-cyan-500/50" />
+        </label>
+        {reviewError && <p className="text-xs text-rose-300">{reviewError}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" disabled={reviewLoading} onClick={() => setReviewTarget(null)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-slate-300 disabled:opacity-50">Cancel</button>
+          <button type="button" disabled={reviewLoading} onClick={confirmReview} className="glass-button-neon rounded-lg px-4 py-2 text-xs font-bold disabled:opacity-50">
+            {reviewLoading ? 'Processing…' : reviewTarget.action === 'approve' ? 'Confirm Approval' : 'Confirm Rejection'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleAccountApprove = async (request: AccountChangeRequest) => {
     setReviewingAccountRequestId(request.id);
@@ -566,7 +591,7 @@ export const ApprovalsInboxView: React.FC = () => {
 
   if (isHR) {
     return (
-      <section className="mx-auto max-w-[1200px] space-y-5">
+      <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
         <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -831,6 +856,7 @@ export const ApprovalsInboxView: React.FC = () => {
           </div>
         )}
         {renderAccountRejectModal()}
+        {renderReviewModal()}
       </section>
     );
   }
@@ -858,7 +884,7 @@ export const ApprovalsInboxView: React.FC = () => {
   }
 
   return (
-    <section className="mx-auto max-w-[1200px] space-y-5">
+    <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -1312,6 +1338,7 @@ export const ApprovalsInboxView: React.FC = () => {
         </div>
       )}
       {renderAccountRejectModal()}
+      {renderReviewModal()}
     </section>
   );
 };

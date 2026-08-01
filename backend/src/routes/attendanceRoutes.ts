@@ -5,10 +5,16 @@ import { query } from '../db/pool.js';
 import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
 import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 
 const router = Router();
 
 const ensureBreakStorage = async (): Promise<void> => {
+  await query(`
+    INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
+    VALUES ('In Session', 'In Session', FALSE)
+    ON CONFLICT (statuscode) DO NOTHING
+  `);
   await query(`
     CREATE TABLE IF NOT EXISTS public.worksync_attendance_breaks (
       user_id TEXT NOT NULL,
@@ -18,6 +24,59 @@ const ensureBreakStorage = async (): Promise<void> => {
       PRIMARY KEY (user_id, work_date)
     )
   `);
+};
+
+const materializeAbsences = async (from: string, to: string): Promise<void> => {
+  await query(
+    `INSERT INTO hr.attendancerecords
+       (userid, workdate, workscheduleid, attendancestatusid, scheduledstarttime,
+        scheduledendtime, workingminutes, sourcecode, updatedatutc)
+     SELECT u.userid, day.workdate, schedule.workscheduleid,
+            (SELECT attendancestatusid FROM hr.attendancestatuses WHERE statuscode = 'Absent'),
+            wsd.starttime, wsd.endtime, 0, 'System', CURRENT_TIMESTAMP
+       FROM iam.users u
+       CROSS JOIN generate_series($1::date, LEAST($2::date, CURRENT_DATE - 1), interval '1 day')
+         AS day(workdate)
+       LEFT JOIN LATERAL (
+         SELECT ws.workscheduleid
+           FROM hr.workschedules ws
+           LEFT JOIN hr.userworkscheduleassignments uwa
+             ON uwa.workscheduleid = ws.workscheduleid AND uwa.userid = u.userid
+            AND uwa.effectivefrom <= day.workdate
+            AND (uwa.effectiveto IS NULL OR uwa.effectiveto >= day.workdate)
+          WHERE ws.organizationid = u.organizationid
+            AND ws.effectivefrom <= day.workdate
+            AND (ws.effectiveto IS NULL OR ws.effectiveto >= day.workdate)
+            AND (uwa.userid IS NOT NULL OR ws.isdefault)
+          ORDER BY (uwa.userid IS NOT NULL) DESC, ws.effectivefrom DESC
+          LIMIT 1
+       ) schedule ON TRUE
+       LEFT JOIN hr.workscheduledays wsd
+         ON wsd.workscheduleid = schedule.workscheduleid
+        AND wsd.isoweekday = EXTRACT(ISODOW FROM day.workdate)
+      WHERE u.accountstatus = 'Active'
+        AND COALESCE(wsd.isworkingday, EXTRACT(ISODOW FROM day.workdate) < 6)
+        AND NOT EXISTS (
+          SELECT 1 FROM iam.userroles ur JOIN iam.roles r ON r.roleid = ur.roleid
+           WHERE ur.userid = u.userid AND r.rolecode = 'Administrator'
+             AND ur.revokedatutc IS NULL AND ur.startsatutc <= day.workdate + interval '1 day'
+             AND (ur.endsatutc IS NULL OR ur.endsatutc > day.workdate)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM hr.holidays h
+           WHERE h.organizationid = u.organizationid
+             AND (h.departmentid IS NULL OR h.departmentid = u.departmentid)
+             AND (h.holidaydate = day.workdate OR
+                  (h.isrecurringannual AND to_char(h.holidaydate, 'MM-DD') = to_char(day.workdate, 'MM-DD')))
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM public.worksync_hr_requests wr
+           WHERE wr.user_id = 'usr-' || u.userid AND wr.request_date = day.workdate
+             AND wr.request_type = 'Leave' AND wr.status = 'Approved'
+        )
+     ON CONFLICT (userid, workdate) DO NOTHING`,
+    [from, to]
+  );
 };
 
 function validateDateRange(from: string, to: string): string | null {
@@ -48,6 +107,7 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
 
     const userPk = toUserPk(req.user.id);
     const role = attendanceRole(await getEffectiveRoles(req.user.id));
+    if (role !== 'Member') await materializeAbsences(from, to);
     let visibleUserPks: number[];
     if (role === 'Member') {
       visibleUserPks = [userPk];
@@ -221,10 +281,9 @@ router.post('/check-in', authenticateJWT, async (req: AuthenticatedRequest, res:
       return;
     }
 
-    const { workDate, checkInUtc, isLate } = req.body as {
+    const { workDate, checkInUtc } = req.body as {
       workDate?: string;
       checkInUtc?: string;
-      isLate?: boolean;
     };
 
     if (!workDate || !checkInUtc) {
@@ -233,9 +292,8 @@ router.post('/check-in', authenticateJWT, async (req: AuthenticatedRequest, res:
     }
 
     const userPk = toUserPk(req.user.id);
-    const statusCode = isLate ? 'Late' : 'Present';
-
-    const recordId = await attendanceRepo.upsertAttendanceRecord(userPk, workDate, checkInUtc, statusCode);
+    await ensureBreakStorage();
+    const recordId = await attendanceRepo.upsertAttendanceRecord(userPk, workDate, checkInUtc, 'In Session');
     if (recordId) {
       await attendanceRepo.insertAttendancePunch(recordId, 'CheckIn', checkInUtc, userPk);
     }
@@ -293,13 +351,140 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
       return;
     }
 
-    await attendanceRepo.updateAttendanceCheckOut(recordId, checkOutUtc);
+    const policy = await query<{
+      actualcheckinatutc: Date;
+      scheduledstartatutc: Date | null;
+      scheduledminutes: number;
+      graceminutes: number;
+      breakseconds: number;
+      approvedleavetype: 'Full Day Leave' | 'Half Day Leave' | null;
+      approvedleaveperiod: 'First Half' | 'Second Half' | null;
+      halfdayboundaryatutc: Date;
+    }>(
+      `SELECT ar.actualcheckinatutc,
+              CASE WHEN wsd.starttime IS NULL THEN NULL
+                   ELSE (ar.workdate + wsd.starttime) AT TIME ZONE 'UTC' END AS scheduledstartatutc,
+              GREATEST(1, COALESCE(
+                EXTRACT(EPOCH FROM (wsd.endtime - wsd.starttime)) / 60 - wsd.breakminutes,
+                480
+              ))::int AS scheduledminutes,
+              COALESCE(ws.graceminutes, 0)::int AS graceminutes,
+              COALESCE((
+                SELECT SUM(GREATEST(0, (item->>'durationSeconds')::numeric))
+                  FROM public.worksync_attendance_breaks wab,
+                       jsonb_array_elements(wab.breaks) item
+                 WHERE wab.user_id = $3 AND wab.work_date = $2::date
+              ), 0)::int AS breakseconds,
+              (
+                SELECT wr.details->>'leaveType' FROM public.worksync_hr_requests wr
+                 WHERE wr.user_id = $3 AND wr.request_date = $2::date
+                   AND wr.request_type = 'Leave' AND wr.status = 'Approved'
+                 ORDER BY wr.decided_at DESC NULLS LAST LIMIT 1
+              ) AS approvedleavetype,
+              COALESCE((
+                SELECT wr.details->>'leavePeriod' FROM public.worksync_hr_requests wr
+                 WHERE wr.user_id = $3 AND wr.request_date = $2::date
+                   AND wr.request_type = 'Leave' AND wr.status = 'Approved'
+                   AND wr.details->>'leaveType' = 'Half Day Leave'
+                 ORDER BY wr.decided_at DESC NULLS LAST LIMIT 1
+              ), 'Second Half') AS approvedleaveperiod,
+              (ar.workdate + TIME '12:00') AT TIME ZONE 'UTC' AS halfdayboundaryatutc
+         FROM hr.attendancerecords ar
+         LEFT JOIN hr.userworkscheduleassignments uwa ON uwa.userid = ar.userid
+          AND uwa.effectivefrom <= ar.workdate
+          AND (uwa.effectiveto IS NULL OR uwa.effectiveto >= ar.workdate)
+         LEFT JOIN hr.workschedules ws ON ws.workscheduleid = COALESCE(ar.workscheduleid, uwa.workscheduleid)
+         LEFT JOIN hr.workscheduledays wsd ON wsd.workscheduleid = ws.workscheduleid
+          AND wsd.isoweekday = EXTRACT(ISODOW FROM ar.workdate)
+        WHERE ar.attendancerecordid = $1`,
+      [recordId, workDate, req.user.id]
+    );
+    const row = policy.rows[0];
+    if (!row?.actualcheckinatutc) {
+      res.status(409).json({ success: false, message: 'This attendance session is not active.' });
+      return;
+    }
+    const outcome = calculateAttendanceOutcome({
+      checkInUtc: new Date(row.actualcheckinatutc),
+      checkOutUtc: new Date(checkOutUtc),
+      scheduledStartUtc: row.scheduledstartatutc ? new Date(row.scheduledstartatutc) : null,
+      scheduledMinutes: row.scheduledminutes,
+      graceMinutes: row.graceminutes,
+      breakSeconds: row.breakseconds,
+      approvedLeave: row.approvedleavetype
+        ? {
+            type: row.approvedleavetype,
+            period: row.approvedleaveperiod || undefined,
+            halfDayBoundaryUtc: new Date(row.halfdayboundaryatutc)
+          }
+        : null
+    });
+    await attendanceRepo.updateAttendanceCheckOut(
+      recordId,
+      checkOutUtc,
+      outcome.status === 'On Leave' ? 'Leave' : outcome.status,
+      outcome.workingMinutes,
+      outcome.lateMinutes
+    );
     await attendanceRepo.insertAttendancePunch(recordId, 'CheckOut', checkOutUtc, userPk);
 
-    res.json({ success: true, data: { attendancerecordid: recordId } });
+    res.json({
+      success: true,
+      data: {
+        attendancerecordid: recordId,
+        status: outcome.status,
+        workingMinutes: outcome.workingMinutes
+      }
+    });
   } catch (err: any) {
     console.error('[Attendance CheckOut Error]', err);
     res.status(500).json({ success: false, message: 'Failed to persist check-out.', details: err.message });
+  }
+});
+
+router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
+      res.status(403).json({ success: false, message: 'Personal attendance is unavailable.' });
+      return;
+    }
+    const { workDate, id, type, startedAtUtc, endedAtUtc } = req.body as Record<string, string>;
+    const started = new Date(startedAtUtc);
+    const ended = new Date(endedAtUtc);
+    if (!workDate || !id || !Number.isFinite(started.getTime()) || !Number.isFinite(ended.getTime()) || ended <= started) {
+      res.status(400).json({ success: false, message: 'Valid break timestamps are required.' });
+      return;
+    }
+    const active = await query(
+      `SELECT 1 FROM hr.attendancerecords
+        WHERE userid = $1 AND workdate = $2::date
+          AND actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL`,
+      [toUserPk(req.user.id), workDate]
+    );
+    if (!active.rowCount) {
+      res.status(409).json({ success: false, message: 'Breaks can only be saved during an active session.' });
+      return;
+    }
+    await ensureBreakStorage();
+    const durationSeconds = Math.max(0, Math.floor((ended.getTime() - started.getTime()) / 1000));
+    const savedBreak = {
+      id, type: type || 'Other',
+      startTime: started.toISOString().slice(11, 16),
+      endTime: ended.toISOString().slice(11, 16),
+      startedAtUtc: started.toISOString(), endedAtUtc: ended.toISOString(),
+      durationSeconds, durationMinutes: durationSeconds / 60
+    };
+    await query(
+      `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
+       VALUES ($1, $2::date, jsonb_build_array($3::jsonb), NOW())
+       ON CONFLICT (user_id, work_date) DO UPDATE
+       SET breaks = public.worksync_attendance_breaks.breaks || EXCLUDED.breaks, updated_at = NOW()`,
+      [req.user.id, workDate, JSON.stringify(savedBreak)]
+    );
+    res.json({ success: true, data: savedBreak });
+  } catch (err: any) {
+    console.error('[Attendance Break Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to persist break.' });
   }
 });
 
