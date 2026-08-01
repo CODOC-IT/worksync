@@ -15,13 +15,17 @@ interface CalendarFilterBarProps {
   onOriginFilterChange: (value: OriginFilter) => void;
   activeKinds: Set<CalendarEntryKind>;
   onActiveKindsChange: (kinds: Set<CalendarEntryKind>) => void;
+  myDeadlinesOnly: boolean;
+  onMyDeadlinesOnlyChange: (value: boolean) => void;
 }
 
 export const CalendarFilterBar: React.FC<CalendarFilterBarProps> = ({
   originFilter,
   onOriginFilterChange,
   activeKinds,
-  onActiveKindsChange
+  onActiveKindsChange,
+  myDeadlinesOnly,
+  onMyDeadlinesOnlyChange
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -81,6 +85,20 @@ export const CalendarFilterBar: React.FC<CalendarFilterBarProps> = ({
           </button>
         ))}
       </div>
+
+      {/* My Deadlines toggle -- reuses the same active/inactive treatment as the origin toggle
+          buttons above, no new colors. */}
+      <button
+        type="button"
+        onClick={() => onMyDeadlinesOnlyChange(!myDeadlinesOnly)}
+        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[10px] sm:text-xs font-semibold border transition ${
+          myDeadlinesOnly
+            ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border-white/10 bg-slate-900/50'
+        }`}
+      >
+        My Deadlines
+      </button>
 
       {/* Kind multi-select dropdown */}
       <div ref={containerRef} className="relative">

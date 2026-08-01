@@ -105,7 +105,7 @@ export const DayEntriesDrawer: React.FC<DayEntriesDrawerProps> = ({
                     <button
                       type="button"
                       onClick={() => onToggleEntry(entry.id)}
-                      className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left ${entry.completed ? 'opacity-50' : ''}`}
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <span
@@ -115,7 +115,7 @@ export const DayEntriesDrawer: React.FC<DayEntriesDrawerProps> = ({
                           {entry.kind}
                         </span>
                         <OriginIcon entry={entry} />
-                        <span className="truncate text-xs font-semibold text-slate-200">{entry.title}</span>
+                        <span className={`truncate text-xs font-semibold text-slate-200 ${entry.completed ? 'line-through' : ''}`}>{entry.title}</span>
                       </div>
                       {entry.time && <span className="shrink-0 font-mono text-[10px] text-slate-400">{entry.time}</span>}
                     </button>

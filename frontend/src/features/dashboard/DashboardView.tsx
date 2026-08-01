@@ -214,7 +214,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
 
   const deadlines = useMemo(() => [
-    ...projects.filter((p) => p.status !== 'Archived' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
+    ...projects.filter((p) => p.status !== 'Archived' && p.status !== 'Completed' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
     ...tasks.filter((t) => !t.isArchived && t.dueDate && t.status !== 'Done').map((t) => ({ date: t.dueDate, label: `Task: ${t.title}` })),
   ], [projects, tasks]);
 

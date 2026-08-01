@@ -614,7 +614,7 @@ export interface CalendarEvent {
   title: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  type: 'Deadline' | 'Milestone' | 'Leave' | 'Meeting' | 'Review';
+  type: 'Deadline' | 'Milestone' | 'Leave';
   projectId?: string;
   taskId?: string;
 }
