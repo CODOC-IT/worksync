@@ -29,8 +29,6 @@ export interface AccountFormValues {
   designation: string;
   baseRole: string;
   departmentId: string;
-  projectId: string;
-  endsAtUtc: string;
 }
 
 export type AccountFieldErrors = Partial<Record<keyof AccountFormValues, string>>;
@@ -50,9 +48,5 @@ export const validateAccountForm = (form: AccountFormValues): AccountFieldErrors
   if (!/^\d+$/.test(form.departmentId) || Number(form.departmentId) < 1) errors.departmentId = 'Select a department.';
   if (!['Admin', 'HR', 'Team_Member'].includes(form.baseRole)) errors.baseRole = 'Select a permitted role.';
   if (form.designation.trim().length > 120) errors.designation = 'Use 120 characters or fewer.';
-  if (form.projectId) {
-    if (form.baseRole !== 'Team_Member') errors.projectId = 'Only Members can be assigned as Team Lead.';
-    if (!form.endsAtUtc || Date.parse(form.endsAtUtc) <= Date.now()) errors.endsAtUtc = 'Choose a future expiry.';
-  }
   return errors;
 };
