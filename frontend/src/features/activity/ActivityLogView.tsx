@@ -189,7 +189,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     if (showLeadTab && activeTab === 'lead') {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
-    // Admin or HR: org-wide, Admin-equivalent visibility (no actor exclusion)
+    // Admin or HR: org-wide (backend enforces the Admin-actor exclusion for HR)
     if (scope?.permanentRole === 'Admin' || scope?.isActiveHR) {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
