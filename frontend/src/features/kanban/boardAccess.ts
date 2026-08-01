@@ -5,15 +5,20 @@ import { Project, TaskStatus, UserRole } from '../../types';
 // (see docs/BoardModuleGuide.md §8/§12).
 export const BOARD_COLUMNS: TaskStatus[] = ['Todo', 'In Progress', 'Review', 'Done'];
 
-// Admin: every project ("workspace"). Team Lead: only projects they lead, so they can
-// switch between the ones they manage. Team Member: only projects they belong to.
+// Admin: every project ("workspace"). HR: every project too, but strictly read-only — every
+// mutating helper below (canDecideReview/canReopenTask) and taskRules.ts's canEditTask
+// independently return false for HR, and the backend rejects HR on every write path
+// (assertCanEditTask/assertCanChangeTaskStatus/assertCanDeleteTask/isProjectLead), so widening
+// visibility here cannot widen what HR may change. Without this HR fell through to the
+// membership filter below and — never being a project member — saw an empty board.
+// Team Lead: only projects they lead. Team Member: only projects they belong to.
 export const getAccessibleProjects = (
   role: UserRole,
   userId: string,
   projects: Project[]
 ): Project[] => {
   const activeProjects = projects.filter((project) => project.status !== 'Archived');
-  if (role === 'Admin') return activeProjects;
+  if (role === 'Admin' || role === 'HR') return activeProjects;
   if (role === 'Team_Lead') return activeProjects.filter((project) => project.teamLeadId === userId);
   return activeProjects.filter((project) => project.memberIds.includes(userId));
 };

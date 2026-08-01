@@ -27,6 +27,13 @@ export const API_TO_DB_TASK_STATUS: Record<ApiTaskStatus, TaskStatusCode> = {
 };
 
 export interface TaskRow {
+  // CAUTION: `taskid`/`parenttaskid` map to Postgres `bigint` columns, and node-postgres returns
+  // bigint as a JavaScript *string* ('49'), not a number — these annotations describe intent, not
+  // the runtime type. Interpolation (`fromTaskPk`), SQL parameters, and row-to-row comparisons all
+  // work regardless, but never compare one of these against a `toTaskPk()` result directly
+  // (`row.taskid === toTaskPk(id)` is always false) or use one as a Map key opposite a numeric
+  // one — normalize both sides first (see task.service.ts's taskPkKey). `projectid` and every
+  // *userid are plain `INT`, which the driver does return as numbers.
   taskid: number;
   projectid: number;
   parenttaskid: number | null;
