@@ -48,6 +48,7 @@ export interface TaskRow {
   projectcode: string;
   subtaskcount?: number;
   completedsubtaskcount?: number;
+  haspendingeditapproval?: boolean;
 }
 
 export interface TaskAssigneeRow {
@@ -97,6 +98,8 @@ export interface TaskDTO {
   tags: string[];
   attachments: [];
   approvalStatus: 'Approved';
+  /** Derived from unresolved persisted task-edit approval records. */
+  hasPendingApproval: boolean;
   completionSummary?: string;
   createdAt: string;
   reviewApproval?: 'Pending';

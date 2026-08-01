@@ -708,7 +708,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [projects, tasks]);
 
   useEffect(() => {
-    if (!currentUser.id || currentRole !== 'Team_Lead' || projects.length === 0 || tasks.length === 0) return;
+    // Team Lead is a project assignment, not an account role.  Team Members always
+    // load this endpoint; the API returns only requests for projects they actively lead.
+    // HR must not retain a previous lead's restricted approval data after a role change.
+    if (!currentUser.id || currentRole !== 'Team_Member' || projects.length === 0) {
+      setSystemApprovals((prev) => prev.filter((approval) =>
+        !(approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate)
+      ));
+      return;
+    }
     let isActive = true;
 
     void loadTaskEditApprovalsViaApi()
@@ -734,7 +742,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             )
           ];
         });
-        if (validApprovals.length === 0) return;
         setTasks((prev) => prev.map((task) => {
           const directApproval = validApprovals.find((approval) => approval.targetId === task.id);
           if (directApproval) {
@@ -756,6 +763,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           return {
             ...task,
+            approvalStatus: task.hasPendingApproval ? 'Pending Approval' : 'Approved',
+            pendingEdit: undefined,
             subtasks: task.subtasks.map((subtask) => {
               const approval = validApprovals.find((candidate) => candidate.targetId === subtask.id);
               return approval
@@ -774,7 +783,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       createdAt: approval.createdAt
                     }
                   }
-                : subtask;
+                : {
+                    ...subtask,
+                    approvalStatus: (subtask as Partial<Task>).hasPendingApproval ? 'Pending Approval' : 'Approved',
+                    pendingEdit: undefined
+                  };
             })
           };
         }));
