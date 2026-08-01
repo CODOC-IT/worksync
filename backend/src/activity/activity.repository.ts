@@ -219,6 +219,19 @@ const buildWhere = (
     clauses.push("(a.actioncode = 'Status Changed' OR a.auditeventid IN (SELECT sc.auditeventid FROM audit.auditeventchanges sc WHERE lower(sc.fieldname) = 'status'))");
   } else if (filters.action === 'Attendance Corrected') {
     clauses.push("(a.actioncode = 'Attendance Corrected' OR a.actioncode = 'Corrected')");
+  } else if (filters.action === 'Assigned/Reassigned') {
+    // Tasks record 'Assigned/Reassigned' directly; project member changes are split
+    // into separate 'Assigned' and 'Reassigned' codes. Match all three.
+    clauses.push("(a.actioncode = 'Assigned/Reassigned' OR a.actioncode = 'Assigned' OR a.actioncode = 'Reassigned')");
+  } else if (filters.action === 'Uploaded Attachment') {
+    // No code records 'Uploaded Attachment' as an actioncode. Uploads are captured as
+    // 'Commented' events with metadatajson.hasAttachments=true (project chats) and as
+    // 'Created' events for ProjectFile entities. Match all three representations.
+    clauses.push("(a.actioncode = 'Uploaded Attachment' OR COALESCE(a.metadatajson->>'hasAttachments', 'false') = 'true' OR (a.actioncode = 'Created' AND a.entitytypecode = 'ProjectFile'))");
+  } else if (filters.action === 'Deleted Attachment') {
+    // Same representation mismatch as 'Uploaded Attachment': deletions are captured as
+    // 'Deleted' events for ProjectFile entities (plus legacy attachment codes).
+    clauses.push("(a.actioncode IN ('Deleted Attachment', 'Attachment Deleted') OR (a.actioncode = 'Deleted' AND a.entitytypecode = 'ProjectFile'))");
   } else if (filters.action) {
     add('a.actioncode = ?', filters.action);
   }
