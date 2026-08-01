@@ -35,7 +35,7 @@ const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned',
 const ENTITY_TYPES   = ['Project', 'Task', 'Comment', 'Thread', 'Message', 'User', 'Attendance Record', 'Approval', 'Permission', 'Audit Export', 'Notification Preference'];
 const STATUSES       = ['Todo', 'In Progress', 'Review', 'Pending Approval', 'Blocked', 'Done', 'Approved', 'Rejected', 'Archived'];
 const PRIORITIES     = ['Low', 'Medium', 'High', 'Urgent'];
-const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom', 'All'];
+const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const REQUEST_STATUSES = ['Approved', 'Rejected', 'Pending'];
 
 // ─── Scope banner descriptions ───────────────────────────────────────────────
@@ -252,13 +252,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   // ── Chip helpers ─────────────────────────────────────────────────────────
   const activeChips = useMemo(() => {
     const chips: Array<{ key: keyof ActivityFilters; label: string }> = [];
-    if (filters.datePreset !== 'All') {
-      const customRange = [filters.customFrom, filters.customTo].filter(Boolean).join(' → ');
-      chips.push({
-        key: 'datePreset',
-        label: filters.datePreset === 'Custom' && customRange ? `Custom: ${customRange}` : filters.datePreset,
-      });
-    }
+    const customRange = [filters.customFrom, filters.customTo].filter(Boolean).join(' → ');
+    chips.push({
+      key: 'datePreset',
+      label: filters.datePreset === 'Custom' && customRange ? `Custom: ${customRange}` : filters.datePreset,
+    });
     const labels: Array<[keyof ActivityFilters, string]> = [
       ['search',       filters.search       ? `Search: ${filters.search}` : ''],
       ['userId',       users.find((u) => u.id === filters.userId)?.name || ''],
@@ -287,7 +285,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const clearChip = (key: keyof ActivityFilters) => {
     if (key === 'search') setSearchInput('');
     setFilters((prev) => {
-      if (key === 'datePreset') return { ...prev, datePreset: 'All', customFrom: '', customTo: '' };
+      if (key === 'datePreset') return { ...prev, datePreset: 'Last 30 Days', customFrom: '', customTo: '' };
       return { ...prev, [key]: typeof prev[key] === 'boolean' ? false : '' };
     });
   };
@@ -587,9 +585,9 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         <FilterSelect
           label="Date range"
           value={filters.datePreset}
-          onChange={(v) => update('datePreset', v || 'All')}
-          options={DATE_PRESETS.filter((preset) => preset !== 'All')}
-          noneValue="All"
+          onChange={(v) => update('datePreset', v || 'Last 30 Days')}
+          options={DATE_PRESETS}
+          includeNoneOption={false}
         />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
@@ -607,7 +605,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         ) : isHRTab ? (
           <FilterSelect label="Employee" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
         ) : isLeadTab ? (
-          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} emptyOptionLabel="None" />
+          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
         ) : null /* Team Member (my-work tab) — always own-only, no member selector needed */}
 
         {/* Project filter — shown for project-scoped tabs, not HR-only tab */}
@@ -713,9 +711,8 @@ const FilterSelect: React.FC<{
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string } | string>;
   includeNoneOption?: boolean;
-  noneValue?: string;
   emptyOptionLabel?: string;
-}> = ({ label, value, onChange, options, includeNoneOption = true, noneValue = '', emptyOptionLabel = 'None' }) => (
+}> = ({ label, value, onChange, options, includeNoneOption = true, emptyOptionLabel = 'All' }) => (
   <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
     {label}
     <select
@@ -723,7 +720,7 @@ const FilterSelect: React.FC<{
       onChange={(e) => onChange(e.target.value)}
       className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none"
     >
-      {includeNoneOption && <option value={noneValue}>{emptyOptionLabel}</option>}
+      {includeNoneOption && <option value="">{emptyOptionLabel}</option>}
       {options.map((option) => {
         const optValue = typeof option === 'string' ? option : option.value;
         const optLabel = typeof option === 'string' ? option.replaceAll('_', ' ') : option.label;

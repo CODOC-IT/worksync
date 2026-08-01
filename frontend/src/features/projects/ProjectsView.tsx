@@ -94,9 +94,9 @@ export const ProjectsView: React.FC = () => {
   // positive-offset timezone. See calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
 
-  const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
+  const canCreate = currentRole === 'Team_Member' || currentRole === 'Team_Lead' || currentRole === 'Admin';
   const canManage = (project: Project) =>
-    currentRole === 'Admin' || (currentRole === 'Team_Lead' && project.teamLeadId === currentUser.id);
+    currentRole === 'Admin' || (currentRole !== 'HR' && project.teamLeadId === currentUser.id);
 
   // Team members only see projects they've been assigned to; other roles see everything.
   const visibleProjects =
@@ -116,8 +116,8 @@ export const ProjectsView: React.FC = () => {
     setEditingProjectId(null);
     setForm({
       ...EMPTY_FORM,
-      // Team Lead creation defaults to themselves as lead, unless they reassign to another eligible lead
-      teamLeadId: currentRole === 'Team_Lead' ? currentUser.id : ''
+      // A member creating a project becomes its project-scoped lead once it is approved.
+      teamLeadId: currentRole !== 'Admin' ? currentUser.id : ''
     });
     setFormErrors({});
     setFileError('');

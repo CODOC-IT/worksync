@@ -625,4 +625,20 @@ test('Comment deletion activity is visible only to HR and Admin', async () => {
   const adminRoles = await getEffectiveRoles('usr-1');
   const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
   assert.ok(adminResult.rows.some((r: any) => r.entityidtext === 'cmt-member-delete'), 'Admin should see comment deletion activity');
+test('PDF export paginates long activity rows without producing an invalid document', async () => {
+  for (let index = 0; index < 40; index++) {
+    const suffix = String(index + 200).padStart(12, '0');
+    memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+      VALUES (1, 1, 'Updated', 'Task', 'tsk-pdf-${index}', 1, '00000000-0000-0000-0000-${suffix}', 'Tasks', 'A detailed audit record that must wrap cleanly inside the PDF table cell without overlapping the footer or creating an orphaned row on the next page.', 'Admin')`);
+  }
+
+  const { exportPdf } = await import('./activity.service.js');
+  const exported = await exportPdf({ page: 1, pageSize: 100, sort: 'newest' }, 'usr-1', 'Admin');
+  const pdfText = exported.content.toString('latin1');
+  const pageCount = (pdfText.match(/\/Type \/Page\b/g) || []).length;
+
+  assert.ok(exported.content.subarray(0, 4).equals(Buffer.from('%PDF')), 'Export must be a valid PDF document');
+  assert.equal(exported.exportedCount, 40);
+  assert.ok(pageCount >= 2, 'Long rows should continue onto a subsequent page');
+  assert.ok(pageCount <= 4, `Rows should use each page efficiently without excessive page breaks (generated ${pageCount} pages)`);
 });

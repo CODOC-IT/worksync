@@ -201,14 +201,32 @@ export const ProfileView: React.FC = () => {
     setProfileActivityLoading(true);
     setProfileActivityError(null);
     try {
-      const res = await fetch(`/api/activity-log?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {
+      const params = new URLSearchParams({
+        from: new Date(`${from}T00:00:00`).toISOString(),
+        to: new Date(`${to}T23:59:59.999`).toISOString(),
+        myActivityOnly: 'true',
+        page: '1',
+        pageSize: '200',
+        sort: 'newest',
+      });
+      const res = await fetch(`/api/activity?${params.toString()}`, {
         headers: getAuthHeaders(),
       });
       const data = await safeParseJSON(res);
       if (!res.ok || !data.success) {
         throw new Error(data.message || 'Failed to load activity logs.');
       }
-      setProfileActivity(data.data || []);
+      setProfileActivity((data.items || []).map((item: any) => ({
+        id: `act-${item.id}`,
+        userId: item.actor?.id || '',
+        userName: item.actor?.name || 'System',
+        action: item.action,
+        targetType: item.entityType,
+        targetId: item.entityId,
+        targetTitle: item.entityName || item.description,
+        timestamp: new Date(item.timestamp).toLocaleString(),
+        ...(item.changes?.[0] ? { diff: { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } } : {}),
+      })));
     } catch (err: any) {
       setProfileActivityError(err.message);
       setProfileActivity([]);
