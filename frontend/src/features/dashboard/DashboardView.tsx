@@ -2,7 +2,7 @@ import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { TaskPriority, TaskStatus, Task, ActivityLogItem, ProjectApprovalRequest, AccountChangeRequest } from '../../types';
+import { TaskPriority, TaskStatus, Task, ActivityLogItem } from '../../types';
 import {
   FolderKanban,
   CheckSquare,
@@ -21,6 +21,8 @@ import {
   Inbox,
   Filter,
 } from 'lucide-react';
+import { fetchActivities } from '../activity/activityApi';
+import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
 
 interface DashboardViewProps {
   onNavigate: (tab: string, filterId?: string) => void;
@@ -120,26 +122,31 @@ const toLocalDateString = (date: Date): string => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users, projectApprovalRequests, accountChangeRequests, activityLogs } = useApp();
+  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users } = useApp();
 
   // ── Activity Log Filter State ──
-  // Instead of making separate API calls, filter the already-hydrated activityLogs
-  // from AppContext locally. This is more reliable and avoids redundant API requests.
   type ActivityFilterOption = 'Today' | 'Last Day' | 'Last 3 Days';
   const [activityFilter, setActivityFilter] = useState<ActivityFilterOption>('Today');
+  const [filteredActivityLogs, setFilteredActivityLogs] = useState<ActivityLogItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
 
-  const filteredActivityLogs = useMemo((): ActivityLogItem[] => {
-    const now = new Date();
-    let cutoff: Date;
+  useEffect(() => {
+    let cancelled = false;
+    const loadFilteredActivities = async () => {
+      setActivityLoading(true);
+      try {
+        const now = new Date();
+        let fromDate: Date;
+        const toDate = now;
 
-    if (activityFilter === 'Today') {
-      cutoff = new Date(now);
-      cutoff.setHours(0, 0, 0, 0);
-    } else if (activityFilter === 'Last Day') {
-      cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    } else {
-      cutoff = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    }
+        if (activityFilter === 'Today') {
+          fromDate = new Date(now);
+          fromDate.setHours(0, 0, 0, 0);
+        } else if (activityFilter === 'Last Day') {
+          fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        } else {
+          fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        }
 
         const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: toLocalDateString(fromDate), customTo: toLocalDateString(toDate) };
         const result = await fetchActivities(filters, 1, 50);
@@ -204,31 +211,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const myTasks = useMemo(() => tasks.filter((t) => !t.isArchived && isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
-
-  // Project Management Approval Workflow requests (Project edit/archive/delete/restore) and
-  // account change requests — surfaced in the same Approvals Inbox module but not part of
-  // systemApprovals. Include them so the dashboard counts and lists match the module.
-  const pendingProjectApprovals = useMemo(
-    () => projectApprovalRequests.filter((r) => r.status === 'Pending'),
-    [projectApprovalRequests]
-  );
-  const pendingAccountChangeRequests = useMemo(() => {
-    if (currentRole !== 'Admin' && currentRole !== 'HR') return [];
-    return accountChangeRequests.filter((r) => r.status === 'Pending');
-  }, [accountChangeRequests, currentRole]);
-
-  // HR-visible pending requests: mirror the Approvals module — HR reviews requests at
-  // approvalStage 'HR', Admin reviews those at 'Admin'. Exclude the viewer's own requests
-  // (backend prevents self-approval). Falls back to all pending requests for other roles.
-  const pendingHrRequests = useMemo(() => {
-    const pending = hrRequests.filter((r) => r.status === 'Pending');
-    if (currentRole === 'HR' || currentRole === 'Admin') {
-      return pending.filter(
-        (r) => r.userId !== currentUser.id && r.approvalStage === (currentRole === 'HR' ? 'HR' : 'Admin')
-      );
-    }
-    return pending;
-  }, [hrRequests, currentRole, currentUser.id]);
+  const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
 
   const deadlines = useMemo(() => [
     ...projects.filter((p) => p.status !== 'Archived' && p.targetDate).map((p) => ({ date: p.targetDate, label: `Project: ${p.title}` })),
@@ -275,8 +258,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </GlassCard>
         <GlassCard onClick={() => onNavigate('approvals')} glowColor="amber">
           <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Approvals</span><div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400"><AlertCircle size={14} /></div></div>
-          <div className="text-2xl font-bold text-white mb-1">{pendingApprovals.length + pendingProjectApprovals.length + pendingAccountChangeRequests.length + pendingHrRequests.length}</div>
-          <span className="text-[10px] text-slate-400">{pendingApprovals.length} edits + {pendingProjectApprovals.length} projects + {pendingAccountChangeRequests.length} accounts + {pendingHrRequests.length} HR</span>
+          <div className="text-2xl font-bold text-white mb-1">{pendingApprovals.length + pendingHrRequests.length}</div>
+          <span className="text-[10px] text-slate-400">{pendingApprovals.length} edits + {pendingHrRequests.length} HR</span>
         </GlassCard>
       </div>
 
@@ -332,7 +315,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               </div>
             </div>
             <div className="overflow-y-auto pr-1 space-y-2 flex-1 min-h-0">
-              {filteredActivityLogs.length === 0 ? (
+              {activityLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-4 h-4 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
+                </div>
+              ) : filteredActivityLogs.length === 0 ? (
                 <p className="text-[11px] text-slate-500 text-center py-12">No activity found for the selected period.</p>
               ) : (
                 filteredActivityLogs.map((log) => (
@@ -360,10 +347,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (
             <div className="glass-panel p-3 border border-amber-500/30 h-90 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-                <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-amber-400" /><h3 className="font-bold text-xs text-white">Approvals Inbox</h3><span className="text-[10px] text-amber-400 font-mono">({pendingApprovals.length + pendingProjectApprovals.length + pendingAccountChangeRequests.length})</span></div>
+                <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-amber-400" /><h3 className="font-bold text-xs text-white">Approvals Inbox</h3><span className="text-[10px] text-amber-400 font-mono">({pendingApprovals.length})</span></div>
                 <button onClick={() => onNavigate('approvals')} className="text-[10px] text-amber-400 hover:underline font-mono flex items-center gap-1">All <ChevronRight size={10} /></button>
               </div>
-              {pendingApprovals.length === 0 && pendingProjectApprovals.length === 0 && pendingAccountChangeRequests.length === 0 ? (
+              {pendingApprovals.length === 0 ? (
                 <div className="flex flex-col items-center h-full justify-center py-10 text-center">
                   <CheckCircle2 size={28} className="text-slate-600 mb-2" />
                   <p className="text-[11px] text-slate-500">All caught up!</p>
@@ -374,18 +361,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                     <div key={app.id} onClick={() => onNavigate('approvals', app.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
                       <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">{app.type.replace('_', ' ')}</span><span className="text-[10px] font-bold text-white truncate">{app.targetTitle}</span></div>
                       <p className="text-[10px] text-slate-300 line-clamp-1">{app.details}</p>
-                    </div>
-                  ))}
-                  {pendingProjectApprovals.map((req) => (
-                    <div key={req.id} onClick={() => onNavigate('approvals', req.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">{req.requestType.replace(/_/g, ' ')}</span><span className="text-[10px] font-bold text-white truncate">{req.projectTitle}</span></div>
-                      <p className="text-[10px] text-slate-300 line-clamp-1">{req.reason}</p>
-                    </div>
-                  ))}
-                  {pendingAccountChangeRequests.map((req) => (
-                    <div key={req.id} onClick={() => onNavigate('approvals', req.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">Account Change</span><span className="text-[10px] font-bold text-white truncate">{users.find((u) => u.id === req.userId)?.name || 'Member'}</span></div>
-                      <p className="text-[10px] text-slate-300 line-clamp-1">{req.reason}</p>
                     </div>
                   ))}
                 </div>
