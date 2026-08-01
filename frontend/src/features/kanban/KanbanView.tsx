@@ -936,10 +936,18 @@ const StatusChangeModal: React.FC<{
       setError('A description is required before changing status.');
       return;
     }
-    if (isRejectWithSubtasks) {
+    if (isRejectWithSubtasks && doneSubtasks.length > 0) {
       const missing = doneSubtasks.find((subtask) => decisions[subtask.id]?.decision === 'Reject' && !decisions[subtask.id]?.comment.trim());
       if (missing) {
         setSubtaskValidationError(`A comment is required for the rejected subtask "${missing.title}".`);
+        return;
+      }
+      // Rejecting the whole review while accepting every subtask is contradictory -- if the
+      // checklist was genuinely fine, Approve is the right action instead. Mirrors the same rule
+      // task.service.ts's decideReview enforces server-side.
+      const anyRejected = doneSubtasks.some((subtask) => decisions[subtask.id]?.decision === 'Reject');
+      if (!anyRejected) {
+        setSubtaskValidationError('Reject at least one subtask to reject this review, or approve it instead.');
         return;
       }
     }
