@@ -577,6 +577,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
     setFilters((current) => ({ ...current, [key]: value }));
 
   const isLeadTab = activeTab === 'lead';
+  const today = new Date().toISOString().split('T')[0];
 
   // Filter users by selected role for clean cascading UX
   const filteredUsers = useMemo(() => {
@@ -607,8 +608,8 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         />
         {filters.datePreset === 'Custom' && (
           <div className="grid grid-cols-2 gap-2">
-            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} max={filters.customTo} />
-            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} min={filters.customFrom} />
+            <FilterInput type="date" label="From" value={filters.customFrom} onChange={(v) => update('customFrom', v)} max={filters.customTo && filters.customTo < today ? filters.customTo : today} />
+            <FilterInput type="date" label="To"   value={filters.customTo}   onChange={(v) => update('customTo', v)} min={filters.customFrom} max={today} />
           </div>
         )}
 
