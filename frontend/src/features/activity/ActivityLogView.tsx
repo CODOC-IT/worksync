@@ -395,7 +395,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       </header>
 
       {/* ── Role-based tabs (for all Team Members / Team Leads) ── */}
-      {!scopeIsAdmin && (
+      {!scopeIsAdmin && !showHRTab && (
         <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1 shrink-0">
           <button
             onClick={() => changeTab('my-work')}
@@ -413,7 +413,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       )}
 
       {/* ── Scope banner ── */}
-      {!scopeIsAdmin && (
+      {!scopeIsAdmin && !showHRTab && (
         activeTab === 'lead' && ledProjects.length === 0 ? (
           <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-2 shrink-0">
             <AlertCircle size={14} className="text-amber-400 shrink-0" />
