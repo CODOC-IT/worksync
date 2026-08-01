@@ -21,22 +21,21 @@ import {
   ViewerScope,
 } from './activityTypes';
 
-// ─── Per-role module whitelists ──────────────────────────────────────────────
+// ─── Per-role module whitelists ─────────────────────────────────────────────
+// 'Settings' and 'HR' removed from module filter: Settings is internal admin-only
+// and HR is attendance-scoped; neither is a useful filter option for end users.
 const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications'];
 const LEAD_MODULES   = [...MEMBER_MODULES, 'Permissions'];
-const HR_MODULES     = ['Attendance', 'HR'];
-const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'HR', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Permissions', 'Authentication', 'Activity Log', 'Settings', 'System'];
+const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Permissions', 'Authentication', 'Activity Log', 'System'];
 
+// Action lists. 'Rejected' is an actioncode (not a status field-change), so it lives here.
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS, 'Permission Granted', 'Permission Revoked', 'Permission Expired'];
-const HR_ACTIONS     = ['Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected'];
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
+// Admin sees all actions including HR attendance and auth events
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
 
-const ENTITY_TYPES   = ['Project', 'Task', 'Comment', 'Thread', 'Message', 'User', 'Attendance Record', 'Approval', 'Permission', 'Audit Export', 'Notification Preference'];
-const STATUSES       = ['Todo', 'In Progress', 'Review', 'Pending Approval', 'Blocked', 'Done', 'Approved', 'Rejected', 'Archived'];
-const PRIORITIES     = ['Low', 'Medium', 'High', 'Urgent'];
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
-const REQUEST_STATUSES = ['Approved', 'Rejected', 'Pending'];
+const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];
 
 // ─── Scope banner descriptions ───────────────────────────────────────────────
 const getScopeDescription = (
@@ -69,9 +68,12 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const [scopeLoading, setScopeLoading] = useState(true);
   const [scopeError, setScopeError] = useState('');
 
-  const isAdmin    = currentRole === 'Admin';
-  const isTeamLead = currentRole === 'Team_Lead';
-  const isHR       = currentRole === 'HR';
+  const isAdmin = currentRole === 'Admin';
+  // In this system a user's permanent DB role is Team_Member even when they lead a project.
+  // The backend grants isActiveTeamLead via project-membership rows (memberrolecode='TeamLead').
+  // We fall back to currentRole === 'Team_Lead' for legacy compatibility.
+  const isTeamLead = !!(scope?.isActiveTeamLead) || currentRole === 'Team_Lead';
+  const isHR = currentRole === 'HR';
 
   // ── Active tab state ─────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActivityTab>('my-work');
@@ -253,32 +255,26 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const activeChips = useMemo(() => {
     const chips: Array<{ key: keyof ActivityFilters; label: string }> = [];
     const customRange = [filters.customFrom, filters.customTo].filter(Boolean).join(' → ');
-    chips.push({
-      key: 'datePreset',
-      label: filters.datePreset === 'Custom' && customRange ? `Custom: ${customRange}` : filters.datePreset,
-    });
+    // Only show date chip when it differs from the default — avoids persistent noise.
+    if (filters.datePreset !== 'Last 30 Days') {
+      chips.push({
+        key: 'datePreset',
+        label: filters.datePreset === 'Custom' && customRange ? `Custom: ${customRange}` : filters.datePreset,
+      });
+    }
     const labels: Array<[keyof ActivityFilters, string]> = [
-      ['search',       filters.search       ? `Search: ${filters.search}` : ''],
-      ['userId',       users.find((u) => u.id === filters.userId)?.name || ''],
-      ['userRole',     filters.userRole],
-      ['projectId',    accessibleProjects.find((p) => p.id === filters.projectId)?.title || ''],
-      ['taskId',       accessibleTasks.find((t) => t.id === filters.taskId)?.title || ''],
-      ['module',       filters.module],
-      ['action',       filters.action],
-      ['entityType',   filters.entityType],
-      ['status',       filters.status],
-      ['priority',     filters.priority],
-      ['result',       filters.result],
-      ['source',       filters.source],
-      ['changedField', filters.changedField ? `Changed: ${filters.changedField}` : ''],
+      ['search',    filters.search    ? `"${filters.search}"` : ''],
+      ['userId',    users.find((u) => u.id === filters.userId)?.name || ''],
+      ['userRole',  filters.userRole  ? `Role: ${filters.userRole.replace('_', ' ')}` : ''],
+      ['projectId', accessibleProjects.find((p) => p.id === filters.projectId)?.title || ''],
+      ['taskId',    accessibleTasks.find((t) => t.id === filters.taskId)?.title || ''],
+      ['module',    filters.module    ? `Module: ${filters.module}` : ''],
+      ['action',    filters.action    ? `Action: ${filters.action}` : ''],
+      ['result',    filters.result    ? `Outcome: ${filters.result}` : ''],
     ];
     labels.forEach(([key, label]) => { if (label) chips.push({ key, label }); });
-    if (filters.myActivityOnly)    chips.push({ key: 'myActivityOnly',    label: 'My activity' });
-    if (filters.importantOnly)     chips.push({ key: 'importantOnly',     label: 'Important only' });
-    if (filters.hasAttachments)    chips.push({ key: 'hasAttachments',    label: 'Has attachments' });
-    if (filters.hasMentions)       chips.push({ key: 'hasMentions',       label: 'Has mentions' });
-    if (filters.deletedOnly)       chips.push({ key: 'deletedOnly',       label: 'Deleted or archived' });
-    if (filters.failedOrBlockedOnly) chips.push({ key: 'failedOrBlockedOnly', label: 'Failed or blocked' });
+    if (filters.myActivityOnly) chips.push({ key: 'myActivityOnly', label: 'My activity only' });
+    if (filters.importantOnly)  chips.push({ key: 'importantOnly',  label: 'Important only' });
     return chips;
   }, [filters, users, accessibleProjects, accessibleTasks]);
 
@@ -444,7 +440,6 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
           availableActions={availableActions}
           activeTab={activeTab}
           isAdmin={scopeIsAdmin || !!(scope?.isActiveHR)}
-          showHRTab={false}
           showLeadTab={showLeadTab}
           onClose={() => setFiltersOpen(false)}
           onClear={clearAllFilters}
@@ -539,6 +534,10 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
 };
 
 // ─── Filter Panel ─────────────────────────────────────────────────────────────
+// Simplified to the filters that actually matter. Removed: entity type, source,
+// changed-field, has-attachments, has-mentions, failed/blocked toggle, status
+// (status was broken — it matched field-change records, not the action code),
+// priority. 'Rejected'/'Approved' are action codes — use Action type filter.
 interface FilterPanelProps {
   open: boolean;
   filters: ActivityFilters;
@@ -551,7 +550,6 @@ interface FilterPanelProps {
   availableActions: string[];
   activeTab: ActivityTab;
   isAdmin: boolean;
-  showHRTab: boolean;
   showLeadTab: boolean;
   onClose: () => void;
   onClear: () => void;
@@ -559,18 +557,17 @@ interface FilterPanelProps {
 
 const FilterPanel: React.FC<FilterPanelProps> = ({
   open, filters, setFilters, users, projects, tasks, ledProjects,
-  availableModules, availableActions, activeTab, isAdmin, showHRTab,
+  availableModules, availableActions, activeTab, isAdmin,
   showLeadTab, onClose, onClear,
 }) => {
   const update = (key: keyof ActivityFilters, value: string | boolean) =>
     setFilters((current) => ({ ...current, [key]: value }));
 
-  const isHRTab   = activeTab === 'hr';
   const isLeadTab = activeTab === 'lead';
 
   return (
     <aside
-      className={`${open ? 'absolute inset-0 z-30 flex' : 'hidden'} glass-panel-glow w-full shrink-0 flex-col overflow-hidden border border-white/10 lg:static lg:flex lg:w-72`}
+      className={`${open ? 'absolute inset-0 z-30 flex' : 'hidden'} glass-panel-glow w-full shrink-0 flex-col overflow-hidden border border-white/10 lg:static lg:flex lg:w-64`}
     >
       <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
         <span className="flex items-center gap-2 text-sm font-bold text-white">
@@ -581,7 +578,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
 
-        {/* Date range — always present */}
+        {/* 1. Date range — always present */}
         <FilterSelect
           label="Date range"
           value={filters.datePreset}
@@ -596,103 +593,106 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           </div>
         )}
 
-        {/* User/member filter — only visible when the current tab actually surfaces other users' activity */}
+        {/* 2. User / role — admin sees all + role filter; lead tab sees project members */}
         {isAdmin ? (
           <>
-            <FilterSelect label="User/member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
-            <FilterSelect label="User role"   value={filters.userRole} onChange={(v) => update('userRole', v)} options={['Admin', 'Team_Member', 'Team_Lead', 'HR']} />
+            <FilterSelect
+              label="User"
+              value={filters.userId}
+              onChange={(v) => update('userId', v)}
+              options={users.map((u) => ({ value: u.id, label: u.name }))}
+            />
+            {/* Team_Lead is a project-level role, not a permanent DB role. Filter by
+                actorrolesnapshot: Admin, HR, or Team_Member (permanent roles only). */}
+            <FilterSelect
+              label="User role"
+              value={filters.userRole}
+              onChange={(v) => update('userRole', v)}
+              options={['Admin', 'HR', 'Team_Member']}
+            />
           </>
-        ) : isHRTab ? (
-          <FilterSelect label="Employee" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
         ) : isLeadTab ? (
-          <FilterSelect label="Project member" value={filters.userId} onChange={(v) => update('userId', v)} options={users.map((u) => ({ value: u.id, label: u.name }))} />
-        ) : null /* Team Member (my-work tab) — always own-only, no member selector needed */}
-
-        {/* Project filter — shown for project-scoped tabs, not HR-only tab */}
-        {!isHRTab && (
           <FilterSelect
-            label={isLeadTab ? 'Led project' : 'Project'}
-            value={filters.projectId}
-            onChange={(v) => { update('projectId', v); update('taskId', ''); }}
-            options={
-              isLeadTab
-                ? ledProjects.map((p) => ({ value: p.id, label: p.title }))
-                : (isAdmin ? projects : projects).map((p) => ({
-                    value: p.id,
-                    label: ledProjects.some((lp) => lp.id === p.id) ? `${p.title} (Lead)` : p.title,
-                  }))
-            }
+            label="Project member"
+            value={filters.userId}
+            onChange={(v) => update('userId', v)}
+            options={users.map((u) => ({ value: u.id, label: u.name }))}
           />
-        )}
+        ) : null}
 
-        {/* Task filter — not on HR-only tab */}
-        {!isHRTab && (
+        {/* 3. Project — cascading parent for Task filter below */}
+        <FilterSelect
+          label={isLeadTab ? 'Led project' : 'Project'}
+          value={filters.projectId}
+          onChange={(v) => { update('projectId', v); update('taskId', ''); }}
+          options={
+            isLeadTab
+              ? ledProjects.map((p) => ({ value: p.id, label: p.title }))
+              : projects.map((p) => ({
+                  value: p.id,
+                  label: ledProjects.some((lp) => lp.id === p.id) ? `${p.title} ★` : p.title,
+                }))
+          }
+        />
+
+        {/* 4. Task — only shown once a project is selected (cascading) */}
+        {filters.projectId && (
           <FilterSelect
             label="Task"
             value={filters.taskId}
             onChange={(v) => update('taskId', v)}
             options={tasks
-              .filter((t) => !filters.projectId || t.projectId === filters.projectId)
+              .filter((t) => t.projectId === filters.projectId)
               .map((t) => ({ value: t.id, label: t.title }))}
           />
         )}
 
-        {/* HR-specific filters */}
-        {isHRTab && (
-          <>
-            <FilterSelect label="Attendance action" value={filters.action} onChange={(v) => update('action', v)} options={availableActions} />
-            <FilterSelect label="Request status"    value={filters.status} onChange={(v) => update('status', v)} options={REQUEST_STATUSES} />
-          </>
-        )}
+        {/* 5. Action type — most important filter. 'Rejected', 'Approved', 'Archived'
+            are actioncodes stored in audit.auditevents.actioncode. Selecting
+            'Rejected' here correctly filters a.actioncode = 'Rejected'. */}
+        <FilterSelect
+          label="Action type"
+          value={filters.action}
+          onChange={(v) => update('action', v)}
+          options={availableActions}
+        />
 
-        {/* Module + action type */}
-        {!isHRTab && (
-          <>
-            <FilterSelect label="Module"      value={filters.module} onChange={(v) => update('module', v)} options={availableModules} />
-            <FilterSelect label="Action type" value={filters.action} onChange={(v) => update('action', v)} options={availableActions} />
-          </>
-        )}
-
-        {/* Entity type — admin only */}
+        {/* 6. Module — admin/HR only (Settings and HR removed per UX request) */}
         {isAdmin && (
-          <FilterSelect label="Entity type" value={filters.entityType} onChange={(v) => update('entityType', v)} options={ENTITY_TYPES} />
+          <FilterSelect
+            label="Module"
+            value={filters.module}
+            onChange={(v) => update('module', v)}
+            options={availableModules}
+          />
         )}
 
-        {/* Status + priority — not HR-only */}
-        {!isHRTab && (
-          <div className="grid grid-cols-2 gap-2">
-            <FilterSelect label="Status"   value={filters.status}   onChange={(v) => update('status', v)}   options={STATUSES} />
-            <FilterSelect label="Priority" value={filters.priority} onChange={(v) => update('priority', v)} options={PRIORITIES} />
-          </div>
-        )}
-
-        {/* Result + source — admin only */}
+        {/* 7. Outcome — admin/HR only */}
         {isAdmin && (
-          <div className="grid grid-cols-2 gap-2">
-            <FilterSelect label="Result" value={filters.result} onChange={(v) => update('result', v)} options={['Successful', 'Failed', 'Blocked']} />
-            <FilterSelect label="Source" value={filters.source} onChange={(v) => update('source', v)} options={['Web', 'API', 'System']} />
-          </div>
+          <FilterSelect
+            label="Outcome"
+            value={filters.result}
+            onChange={(v) => update('result', v)}
+            options={RESULT_OPTIONS}
+          />
         )}
 
-        {/* My activity only — not on HR tab */}
-        {!isHRTab && <Toggle checked={filters.myActivityOnly} onChange={(v) => update('myActivityOnly', v)} label="My activity only" />}
-
-        {/* Important — admin only */}
-        {isAdmin && <Toggle checked={filters.importantOnly} onChange={(v) => update('importantOnly', v)} label="Important activity only" />}
-
-        {/* Advanced section */}
-        <div className="border-t border-white/5 pt-3">
-          <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">Advanced</p>
-          <div className="space-y-2">
-            <FilterInput type="text" label="Changed field" value={filters.changedField} onChange={(v) => update('changedField', v)} />
-            <Toggle checked={filters.hasAttachments}    onChange={(v) => update('hasAttachments', v)}    label="Has attachments" />
-            <Toggle checked={filters.hasMentions}       onChange={(v) => update('hasMentions', v)}       label="Has mentions" />
-            <Toggle checked={filters.deletedOnly}       onChange={(v) => update('deletedOnly', v)}       label="Deleted or archived only" />
-            {(isAdmin || showHRTab) && (
-              <Toggle checked={filters.failedOrBlockedOnly} onChange={(v) => update('failedOrBlockedOnly', v)} label="Failed or blocked only" />
-            )}
-          </div>
+        {/* 8. Quick toggles */}
+        <div className="border-t border-white/5 pt-2 space-y-2">
+          <Toggle
+            checked={filters.myActivityOnly}
+            onChange={(v) => update('myActivityOnly', v)}
+            label="My activity only"
+          />
+          {isAdmin && (
+            <Toggle
+              checked={filters.importantOnly}
+              onChange={(v) => update('importantOnly', v)}
+              label="Important activity only"
+            />
+          )}
         </div>
+
       </div>
 
       <div className="shrink-0 border-t border-white/10 p-3">
