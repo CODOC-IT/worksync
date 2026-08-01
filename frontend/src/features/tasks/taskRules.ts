@@ -139,15 +139,7 @@ export const canCreateTaskForProject = (
     return false;
   }
 
-  if (role === 'Team_Lead') {
-    return project.teamLeadId === userId;
-  }
-
-  if (role === 'Team_Member') {
-    return getProjectMemberIds(project).includes(userId);
-  }
-
-  return false;
+  return role !== 'HR' && project.teamLeadId === userId;
 };
 
 export const canEditTask = (
@@ -159,7 +151,7 @@ export const canEditTask = (
   if (!isActiveProject(project) || task.isArchived) return false;
   if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
 
-  const isProjectLead = role === 'Team_Lead' && project.teamLeadId === userId;
+  const isProjectLead = role !== 'HR' && project.teamLeadId === userId;
   if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
     return isProjectLead;
   }
@@ -174,8 +166,9 @@ export const canDeleteTask = (
   teamLeadCanDeleteTasks = true
 ): boolean => {
   if (!teamLeadCanDeleteTasks || !isActiveProject(project) || task.isArchived) return false;
-  return getTaskAssigneeIds(task).includes(userId)
-    || (role === 'Team_Lead' && project.teamLeadId === userId);
+  // Assignment grants work/edit access, not deletion.  Deleting a task remains a
+  // project-lead operation (with the server enforcing the same rule).
+  return role !== 'HR' && project.teamLeadId === userId;
 };
 
 export const validateTaskInput = (
@@ -230,6 +223,14 @@ export const validateTaskInput = (
 
   return errors;
 };
+
+// Editing deliberately has no "today" minimum.  Historical tasks must retain their
+// recorded dates when an unrelated field changes; the form confirms a changed past date.
+export const validateTaskEditInput = (
+  input: TaskFormInput,
+  project: Project | undefined,
+  users: User[]
+): Record<string, string> => validateTaskInput(input, project, users, false);
 
 export const filterAndSortTasks = (
   tasks: Task[],

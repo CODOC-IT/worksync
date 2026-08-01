@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db/pool.js';
 import { MilestoneRow, ProjectFileRow, ProjectMemberRoleCode, ProjectMemberRow, ProjectRow } from './project.types.js';
+import { parseAttachmentDataUrl, writeAttachmentToDisk } from '../collab/fileStorage.js';
 
 // Repository = data access only (Repository Pattern, matching backend/src/notifications'
 // layering). No recipient resolution, no authorization decisions here — those belong to
@@ -68,10 +69,14 @@ export const findMembersForProject = async (projectId: number): Promise<ProjectM
   return result.rows;
 };
 
+const MILESTONE_COLUMNS = `
+  milestoneid, projectid, milestonename, description, duedate::text, completedatutc,
+  createdbyuserid, createdatutc
+`;
+
 export const findMilestonesForProject = async (projectId: number): Promise<MilestoneRow[]> => {
   const result = await query<MilestoneRow>(
-    `SELECT milestoneid, projectid, milestonename, description,
-            duedate::text, completedatutc, createdbyuserid, createdatutc
+    `SELECT ${MILESTONE_COLUMNS}
      FROM work.projectmilestones
      WHERE projectid = $1
      ORDER BY duedate, milestoneid`,
@@ -80,10 +85,86 @@ export const findMilestonesForProject = async (projectId: number): Promise<Miles
   return result.rows;
 };
 
+export const findMilestoneById = async (milestoneId: number): Promise<MilestoneRow | null> => {
+  const result = await query<MilestoneRow>(
+    `SELECT ${MILESTONE_COLUMNS} FROM work.projectmilestones WHERE milestoneid = $1`,
+    [milestoneId]
+  );
+  return result.rows[0] || null;
+};
+
+export interface InsertMilestoneRow {
+  projectId: number;
+  title: string;
+  description: string | null;
+  dueDate: string;
+  createdByUserId: number;
+}
+
+export const insertMilestone = async (input: InsertMilestoneRow): Promise<number> => {
+  const result = await query<{ milestoneid: number }>(
+    `INSERT INTO work.projectmilestones (projectid, milestonename, description, duedate, createdbyuserid)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING milestoneid`,
+    [input.projectId, input.title, input.description, input.dueDate, input.createdByUserId]
+  );
+  return result.rows[0].milestoneid;
+};
+
+export interface UpdateMilestoneRow {
+  title?: string;
+  description?: string | null;
+  dueDate?: string;
+}
+
+// Scoped to (milestoneId, projectId) together -- like updateProject's own field-updater below --
+// so an id belonging to a different project can never be updated through this project's endpoint.
+export const updateMilestone = async (
+  milestoneId: number,
+  projectId: number,
+  updates: UpdateMilestoneRow
+): Promise<boolean> => {
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+
+  const addSet = (column: string, value: unknown) => {
+    params.push(value);
+    setClauses.push(`${column} = $${params.length}`);
+  };
+
+  if (updates.title !== undefined) addSet('milestonename', updates.title);
+  if (updates.description !== undefined) addSet('description', updates.description);
+  if (updates.dueDate !== undefined) addSet('duedate', updates.dueDate);
+
+  if (setClauses.length === 0) return true;
+
+  setClauses.push('updatedatutc = CURRENT_TIMESTAMP');
+  setClauses.push('rowversion = rowversion + 1');
+  params.push(milestoneId, projectId);
+
+  const result = await query(
+    `UPDATE work.projectmilestones SET ${setClauses.join(', ')}
+     WHERE milestoneid = $${params.length - 1} AND projectid = $${params.length}`,
+    params
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
+export const deleteMilestone = async (milestoneId: number, projectId: number): Promise<boolean> => {
+  const result = await query(
+    'DELETE FROM work.projectmilestones WHERE milestoneid = $1 AND projectid = $2',
+    [milestoneId, projectId]
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
+const PROJECT_FILE_COLUMNS = `
+  sf.fileid, sf.originalfilename, sf.mimetype, sf.sizebytes, sf.uploadedbyuserid, sf.uploadedatutc
+`;
+
 export const findProjectFiles = async (projectId: number): Promise<ProjectFileRow[]> => {
   const result = await query<ProjectFileRow>(
-    `SELECT sf.fileid, sf.originalfilename, sf.mimetype, sf.sizebytes,
-            sf.uploadedbyuserid, sf.uploadedatutc
+    `SELECT ${PROJECT_FILE_COLUMNS}
      FROM collab.projectfiles pf
      JOIN collab.storedfiles sf ON sf.fileid = pf.fileid
      WHERE pf.projectid = $1 AND sf.isdeleted = FALSE
@@ -91,6 +172,80 @@ export const findProjectFiles = async (projectId: number): Promise<ProjectFileRo
     [projectId]
   );
   return result.rows;
+};
+
+export const findProjectFileById = async (projectId: number, fileId: number): Promise<ProjectFileRow | null> => {
+  const result = await query<ProjectFileRow>(
+    `SELECT ${PROJECT_FILE_COLUMNS}
+     FROM collab.projectfiles pf
+     JOIN collab.storedfiles sf ON sf.fileid = pf.fileid
+     WHERE pf.projectid = $1 AND pf.fileid = $2 AND sf.isdeleted = FALSE`,
+    [projectId, fileId]
+  );
+  return result.rows[0] || null;
+};
+
+export interface InsertProjectFileInput {
+  projectId: number;
+  uploadedByUserId: number;
+  originalFileName: string;
+  mimeType: string;
+  dataUrl: string;
+}
+
+// Mirrors discussion.repository.ts's upsertStoredFile/linkCommentFiles exactly (same
+// content-addressed storage, same ON CONFLICT upsert-and-return trick) -- collab.StoredFiles is
+// shared storage, not project-owned, so this reuses it rather than inventing a second copy.
+export const insertProjectFile = async (input: InsertProjectFileInput): Promise<number> =>
+  withTransaction(async (runQuery) => {
+    const parsed = parseAttachmentDataUrl(input.dataUrl);
+    if (!parsed) {
+      throw new Error(`Attachment "${input.originalFileName}" has no readable content to store.`);
+    }
+    const written = await writeAttachmentToDisk(parsed.buffer);
+    const extension = input.originalFileName.includes('.') ? input.originalFileName.split('.').pop()! : null;
+
+    // ScanStatus stays 'Pending' -- this app has no virus-scanning pipeline (same rationale as
+    // discussion.repository.ts's upsertStoredFile).
+    const stored = await runQuery<{ fileid: number }>(
+      `INSERT INTO collab.storedfiles
+         (organizationid, uploadedbyuserid, originalfilename, storageobjectkey, mimetype, fileextension,
+          sizebytes, sha256hash, scanstatus)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending')
+       ON CONFLICT (storageobjectkey) DO UPDATE SET storageobjectkey = EXCLUDED.storageobjectkey
+       RETURNING fileid`,
+      [
+        ORGANIZATION_ID,
+        input.uploadedByUserId,
+        input.originalFileName,
+        written.storageObjectKey,
+        input.mimeType,
+        extension,
+        written.sizeBytes,
+        Buffer.from(written.sha256Hex, 'hex')
+      ]
+    );
+    const fileId = stored.rows[0].fileid;
+
+    await runQuery(
+      `INSERT INTO collab.projectfiles (projectid, fileid, addedbyuserid)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (projectid, fileid) DO NOTHING`,
+      [input.projectId, fileId, input.uploadedByUserId]
+    );
+
+    return fileId;
+  });
+
+// Unlinks the file from this project only -- collab.StoredFiles itself is left alone (same as
+// permanentlyDeleteProject's own cascade below), since the same content-addressed row could still
+// be referenced by a Project Chat comment or another project.
+export const removeProjectFile = async (projectId: number, fileId: number): Promise<boolean> => {
+  const result = await query(
+    'DELETE FROM collab.projectfiles WHERE projectid = $1 AND fileid = $2',
+    [projectId, fileId]
+  );
+  return (result.rowCount ?? 0) > 0;
 };
 
 export const findMembersForProjects = async (projectIds: number[]): Promise<ProjectMemberRow[]> => {
@@ -273,10 +428,14 @@ export const archiveProject = async (
   });
 };
 
-// Hard delete for an already-archived project. Its tasks and the task-owned operational rows are
-// deleted in the same transaction. Notifications/AI generations keep their historical content
-// but lose the nullable live task link. Immutable audit rows retain historical ids; the task and
-// project audit FKs are intentionally relaxed by database/24 and database/25.
+// Hard delete for an already-archived project. Its tasks, calendar events, and every other
+// project-owned operational row are removed in the same transaction; the project record itself
+// is deleted last. Notifications/AI generations keep their historical content but lose the
+// nullable live project/task link, rather than being deleted outright -- both tables are activity
+// logs of things that happened, not project-owned working data, so their rows outlive the project
+// the same way an audit trail would (see the AuditEvents note just below). Immutable audit rows
+// retain historical ids; the task and project audit FKs are intentionally relaxed by database/24
+// and database/25.
 //
 // AuditEvents rows are never touched, deleted, or modified -- audit.AuditEvents has a
 // BEFORE UPDATE OR DELETE trigger (database/22_audit_enhancements.sql) that rejects any mutation
@@ -284,10 +443,6 @@ export const archiveProject = async (
 // not possible without violating audit immutability. Instead, FK_AuditEvents_Project was dropped
 // (database/24_audit_project_fk_relax.sql) -- a permanently-deleted project's audit history simply
 // keeps its now-historical ProjectId value forever, exactly as it was written.
-//
-// Project-level Calendar Events/Discussion Threads/AI PromptGenerations remain protected. If one
-// still references the project, the final DELETE fails and this whole transaction (including
-// task deletion) rolls back.
 export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
   withTransaction(async (runQuery) => {
     await runQuery(
@@ -302,21 +457,36 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
           )`,
       [projectId]
     );
+    // Project-level AI activity is a historical usage log (same treatment as Notifications just
+    // above), not project-owned working data, so it's detached (ProjectId/TaskId nulled) rather
+    // than deleted -- unlike Calendar Events below, which the project genuinely owns.
     await runQuery(
       `UPDATE ai.promptgenerations
-       SET taskid = NULL
-       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)`,
+       SET taskid = NULL, projectid = NULL
+       WHERE projectid = $1
+          OR taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)`,
       [projectId]
     );
 
-    // Task/change-request discussions cannot survive without their sole parent. Delete their
-    // comments first; mention/file links cascade from comments through their existing FKs.
+    // Calendar Events are project-owned data (unlike Notifications/AI activity, which are
+    // historical logs) -- FK_EventAttendees_Event cascades from calendar.Events, so deleting the
+    // events here also removes their attendee rows automatically.
+    await runQuery('DELETE FROM calendar.events WHERE projectid = $1', [projectId]);
+
+    // Project-level (Project Chat, ThreadType='Project', DiscussionThreads.ProjectId set directly
+    // -- see discussion.repository.ts) discussions cannot survive without their project either,
+    // same as task/change-request discussions below -- FK_DiscussionThreads_Project has no ON
+    // DELETE CASCADE, so leaving these out made the final DELETE FROM work.projects below fail
+    // with a 23503 for any project that had ever had a Project Chat message, which is the
+    // ordinary case, not an edge case. Delete comments first; mention/file links cascade from
+    // comments through their existing FKs.
     await runQuery(
       `DELETE FROM collab.comments
        WHERE threadid IN (
          SELECT dt.threadid
          FROM collab.discussionthreads dt
-         WHERE dt.taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+         WHERE dt.projectid = $1
+            OR dt.taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
             OR dt.changerequestid IN (
               SELECT cr.changerequestid
               FROM work.taskchangerequests cr
@@ -328,7 +498,8 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
     );
     await runQuery(
       `DELETE FROM collab.discussionthreads
-       WHERE taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
+       WHERE projectid = $1
+          OR taskid IN (SELECT taskid FROM work.tasks WHERE projectid = $1)
           OR changerequestid IN (
             SELECT cr.changerequestid
             FROM work.taskchangerequests cr

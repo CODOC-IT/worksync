@@ -55,6 +55,13 @@ const formatFullDate = (iso: string): string => {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+// project.files[].size is raw bytes (matches the backend's ProjectFileDTO) -- mirrors
+// ProjectsView.tsx's own formatBytes for the same display convention.
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const SectionLabel: React.FC<{ icon?: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
   <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
     {icon}
@@ -242,7 +249,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                         >
                           <span className="min-w-0 truncate text-slate-200">{f.name}</span>
                           <span className="shrink-0 pl-2 text-[11px] text-slate-500">
-                            {f.size} · {uploader?.name || 'Unknown'}
+                            {formatBytes(f.size)} · {uploader?.name || 'Unknown'}
                           </span>
                         </div>
                       );

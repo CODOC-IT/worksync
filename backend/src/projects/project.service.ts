@@ -1,6 +1,7 @@
 ﻿import * as repo from './project.repository.js';
-import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
+import { resolveTeamLeadUserId, rowToMilestoneDTO, rowToProjectDTO, rowToProjectFileDTO } from './project.mapper.js';
 import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
@@ -8,11 +9,16 @@ import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
   ApiProjectStatus,
+  CreateMilestoneInput,
+  CreateProjectFileInput,
   CreateProjectInput,
+  MilestoneDTO,
   ProjectDTO,
+  ProjectFileDTO,
   ProjectMemberRoleCode,
   ProjectMemberRow,
   ProjectRow,
+  UpdateMilestoneInput,
   UpdateProjectInput
 } from './project.types.js';
 
@@ -45,19 +51,44 @@ const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Pro
 };
 
 const assertCanCreate = (role: string) => {
-  if (role !== 'Admin' && role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can create projects.');
+  if (role !== 'Admin' && role !== 'Team_Lead' && role !== 'Team_Member') {
+    throw new ProjectAuthorizationError('Only Admins and project members can create projects.');
   }
 };
 
 const assertCanManage = async (projectRow: ProjectRow, userId: string, role: string) => {
   if (role === 'Admin') return;
-  if (role !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Admins and Team Leads can manage projects.');
+  if (role === 'HR') {
+    throw new ProjectAuthorizationError('HR users cannot manage projects.');
   }
   const members = await repo.findMembersForProject(projectRow.projectid);
   if (resolveTeamLeadUserId(projectRow, members) !== userId) {
     throw new ProjectAuthorizationError('You can only manage projects you lead.');
+  }
+};
+
+const PROJECT_LEAD_ELIGIBLE_ROLES = new Set(['Team_Lead', 'Team_Member']);
+const PROJECT_MEMBER_ELIGIBLE_ROLES = new Set(['Team_Member']);
+
+// Mirrors the eligibility already enforced client-side (frontend/.../ProjectsView.tsx's
+// teamLeads/assignableMembers filters: Admins and HR never appear in either selector, and
+// inactive accounts are excluded) -- enforced here too so a direct API call (bypassing the UI
+// entirely) can't assign an Admin, an HR account, a deactivated account, or a nonexistent id as a
+// project's Team Lead or Member. Uses userStore.getAllUsers() rather than the synchronous
+// findById(), which only reflects whichever users have already been cached on this process since
+// its last cold start (see userStore.ts's own comment on that method).
+const assertEligibleAssignee = async (
+  userId: string,
+  eligibleRoles: Set<string>,
+  label: string
+): Promise<void> => {
+  const target = (await userStore.getAllUsers()).find((user) => user.id === userId);
+  if (!target) throw new ProjectValidationError(`Selected ${label} could not be found.`);
+  if (target.status === 'inactive') {
+    throw new ProjectValidationError(`${target.name} is a deactivated account and cannot be assigned to a project.`);
+  }
+  if (!eligibleRoles.has(target.role)) {
+    throw new ProjectValidationError(`${target.name} is not eligible to be assigned to a project as ${label}.`);
   }
 };
 
@@ -76,11 +107,13 @@ const notifyRecipients = (
 };
 
 export const listProjectsForUser = async (userId: string, role: string): Promise<ProjectDTO[]> => {
-  // HR gets the same "see every project" query Admin does -- read-only visibility only; nothing
-  // else in this file (assertCanCreate/assertCanManage) grants HR any write/manage capability, so
-  // this alone can't let HR do anything beyond viewing.
-  const rows =
-    role === 'Admin' || role === 'HR' ? await repo.findAllProjects() : await repo.findProjectsForUser(toUserPk(userId));
+  // Every role sees every project -- read-only visibility only; nothing else in this file
+  // (assertCanCreate/assertCanManage) grants HR or a non-lead Team_Member any write/manage
+  // capability, so this alone can't let anyone do more than view. Team Lead is not a separate
+  // account role here (see isProjectLead/resolveTeamLeadUserId): whether a Team_Member happens to
+  // lead any given project only changes how the frontend categorizes/labels it for display
+  // (Led/Assigned/Unassigned in ProjectsView.tsx), never whether it's returned here.
+  const rows = await repo.findAllProjects();
   if (rows.length === 0) return [];
   const membersByProject = await repo.findMembersForProjects(rows.map((row) => row.projectid));
   return Promise.all(
@@ -95,7 +128,9 @@ const isMemberOfRow = (row: ProjectRow, members: ProjectMemberRow[], userId: str
 // there's no separate task-level ACL in the schema) so Task Module authorization stays
 // consistent with Project Module authorization without duplicating the membership query.
 export const isProjectAccessible = async (projectId: string, userId: string, role: string): Promise<boolean> => {
-  if (role === 'Admin') return true;
+  // HR has organization-wide, read-only project/task visibility.  Mutations use the
+  // separate lead/manage guards below, so this read bypass cannot grant write access.
+  if (role === 'Admin' || role === 'HR') return true;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
@@ -103,10 +138,21 @@ export const isProjectAccessible = async (projectId: string, userId: string, rol
 };
 
 // Whether `userId` leads (or, as Admin, may act on) the given project — used by task.service.ts
-// to gate task status-change review Approve/Reject the same way Project updates are gated.
-export const isProjectLead = async (projectId: string, userId: string, role: string): Promise<boolean> => {
-  if (role === 'Admin') return true;
-  if (role !== 'Team_Lead') return false;
+// to gate task creation/reopen the same way Project updates are gated. Pass
+// `{ allowAdmin: false }` for checks where Admin must NOT get a blanket bypass (e.g. task review
+// decisions, which are a per-project Team Lead responsibility, not a system-administration one —
+// see task.service.ts's decideReview) — the per-project `MemberRoleCode = 'TeamLead'` check
+// itself is unchanged either way, so a Team Member holding that membership row is always treated
+// as the project's lead regardless of their account role.
+export const isProjectLead = async (
+  projectId: string,
+  userId: string,
+  role: string,
+  options: { allowAdmin?: boolean } = {}
+): Promise<boolean> => {
+  const { allowAdmin = true } = options;
+  if (allowAdmin && role === 'Admin') return true;
+  if (role === 'HR') return false;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);
@@ -164,6 +210,13 @@ export const createProject = async (
   if (!input.startDate || !input.targetDate) throw new ProjectValidationError('Start and target dates are required.');
   if (input.targetDate < input.startDate) throw new ProjectValidationError('Target date cannot be before the start date.');
 
+  if (input.teamLeadId) {
+    await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+  }
+  for (const memberId of input.memberIds || []) {
+    await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
+  }
+
   const priorityCode = API_TO_DB_PRIORITY[input.priority] || 'Medium';
   const priorityId = await repo.getPriorityId(priorityCode);
   // Admin-created projects go live immediately; a Team Lead's submission needs Admin activation
@@ -173,7 +226,7 @@ export const createProject = async (
   const statusId = await repo.getProjectStatusId(statusCode);
 
   const ownerPk = toUserPk(actorId);
-  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole === 'Team_Lead' ? ownerPk : undefined;
+  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole !== 'Admin' ? ownerPk : undefined;
   const memberPks = (input.memberIds || []).map(toUserPk);
 
   const projectId = await repo.insertProject({
@@ -193,13 +246,22 @@ export const createProject = async (
   const row = await repo.findProjectById(projectId);
   const members = await repo.findMembersForProject(projectId);
   const dto = await buildDTO(row!, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
+
+  // The project's Team Lead reads a distinct "...as the Project Lead" message; every other
+  // recipient gets the plain "added you to it" wording — never the reverse (see
+  // docs/Notification_Module_Guide.md's Project Lead assignment section). `recipientMessages`
+  // is per-recipient, so this is one publishEvent call, not two.
+  const leadFrontendId = teamLeadPk ? fromUserPk(teamLeadPk) : undefined;
 
   if (statusCode === 'Active') {
     notifyRecipients(members, actorId, {
       type: 'project_created',
       title: 'Project Created',
       message: `${actorName} created "${dto.title}" and added you to it.`,
+      recipientMessages: leadFrontendId
+        ? { [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead.` }
+        : undefined,
       actorId,
       projectId: dto.id
     });
@@ -210,6 +272,12 @@ export const createProject = async (
       type: 'project_created',
       title: 'Project Created',
       message: `${actorName} created "${dto.title}" and added you to it (pending Admin activation).`,
+      recipientMessages: leadFrontendId
+        ? {
+            [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead ` +
+              '(pending Admin activation).'
+          }
+        : undefined,
       actorId,
       projectId: dto.id
     });
@@ -308,14 +376,17 @@ export const updateProject = async (
 
   // TeamLead is a ProjectMembers role, not a projects-table column (see reassignTeamLead's
   // comment), so it's handled as its own step rather than through the updates object above.
+  let previousLeadId: string | undefined;
   if (input.teamLeadId !== undefined) {
+    await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+    previousLeadId = resolveTeamLeadUserId(row, await repo.findMembersForProject(row.projectid));
     await repo.reassignTeamLead(row.projectid, toUserPk(input.teamLeadId), row.owneruserid, toUserPk(actorId));
   }
 
   const updatedRow = await repo.findProjectById(row.projectid);
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(updatedRow!, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notifyRecipients(members, actorId, {
     type: 'project_updated',
@@ -324,6 +395,21 @@ export const updateProject = async (
     actorId,
     projectId: dto.id
   });
+
+  // A member newly assigned as Team Lead through an edit (not project creation, see
+  // createProject) hears about it distinctly from the generic "Project Updated" notice above.
+  if (input.teamLeadId !== undefined && input.teamLeadId !== previousLeadId) {
+    notificationService
+      .publishEvent({
+        type: 'project_member_added',
+        title: 'Assigned as Project Lead',
+        message: `${actorName} assigned you as the Project Lead of "${dto.title}".`,
+        actorId,
+        projectId: dto.id,
+        recipientIds: [input.teamLeadId]
+      })
+      .catch((error) => console.error('[project.service] Failed to publish lead-assigned event.', error));
+  }
 
   const projectChanges = [
     input.title !== undefined && input.title.trim() !== row.projectname ? { field: 'Title', previousValue: row.projectname, newValue: dto.title } : null,
@@ -359,7 +445,7 @@ export const archiveProject = async (
   const archived = await repo.archiveProject(row.projectid, toUserPk(actorId), reason.trim());
   if (!archived) throw new ProjectValidationError('Project is already archived.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   notifyRecipients(members, actorId, {
     type: 'project_archived',
     title: 'Project Archived',
@@ -377,9 +463,13 @@ export const archiveProject = async (
   });
 };
 
-// Step two of the two-step delete: only an already-Archived project may be hard-deleted, and
-// only once. Related tasks/subtasks are deleted transactionally by the repository. A remaining
-// project-level Calendar/Discussion/AI FK still surfaces as a clear validation error.
+// Step two of the two-step delete: only an already-Archived project may be hard-deleted, and only
+// once. Every project-owned dependent (tasks/subtasks, task history, assignments, dependencies,
+// comments, discussion threads, milestones, members, reviewer designations, files, and calendar
+// events) is deleted transactionally by the repository before the project row itself; Notifications
+// and AI activity are historical logs so they're detached (their Project/Task reference nulled)
+// rather than deleted; audit.AuditEvents/AuditEventChanges are never touched. The 23503 catch below
+// is a defensive fallback for any FK the repository's cleanup doesn't yet know about.
 export const permanentlyDeleteProject = async (
   projectId: string,
   actorId: string,
@@ -398,14 +488,14 @@ export const permanentlyDeleteProject = async (
   } catch (error) {
     if ((error as { code?: string } | null)?.code === '23503') {
       throw new ProjectValidationError(
-        'This project still has calendar events, project discussions, or AI activity linked to it. Remove those first.'
+        'This project still has linked records that could not be automatically removed. Please contact support.'
       );
     }
     throw error;
   }
   if (!deleted) throw new ProjectValidationError('Project could not be permanently deleted.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   // No projectId here -- the row is gone, so a real FK reference would itself violate the
   // AuditEvents FK. projectName is a plain snapshot column, safe to keep for readability.
   recordActivitySafe({
@@ -440,7 +530,7 @@ export const restoreProject = async (
   const restored = await repo.restoreProject(row.projectid);
   if (!restored) throw new ProjectValidationError('Project could not be restored.');
 
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
   notifyRecipients(members, actorId, {
     type: 'project_restored',
     title: 'Project Restored',
@@ -469,17 +559,28 @@ export const addMember = async (
   if (!row) throw new ProjectNotFoundError('Project not found.');
   await assertCanManage(row, actorId, actorRole);
 
+  await assertEligibleAssignee(
+    memberUserId,
+    roleCode === 'TeamLead' ? PROJECT_LEAD_ELIGIBLE_ROLES : PROJECT_MEMBER_ELIGIBLE_ROLES,
+    roleCode === 'TeamLead' ? 'Team Lead' : 'a member'
+  );
+
   await repo.addProjectMember(row.projectid, toUserPk(memberUserId), roleCode || 'Member', toUserPk(actorId));
 
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(row, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
+  // Only a member added specifically as the project's Team Lead reads "...as the Project Lead" —
+  // every other member role (plain Member, Reviewer, Observer) gets the plain wording.
+  const isLead = roleCode === 'TeamLead';
   notificationService
     .publishEvent({
       type: 'project_member_added',
       title: 'Added to Project',
-      message: `${actorName} added you to "${dto.title}".`,
+      message: isLead
+        ? `${actorName} added you to "${dto.title}" as the Project Lead.`
+        : `${actorName} added you to "${dto.title}".`,
       actorId,
       projectId: dto.id,
       recipientIds: [memberUserId]
@@ -519,7 +620,7 @@ export const removeMember = async (
 
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(row, members);
-  const actorName = userStore.findById(actorId)?.name || 'Someone';
+  const actorName = actorDisplayName(actorId);
 
   notificationService
     .publishEvent({
@@ -542,4 +643,203 @@ export const removeMember = async (
   });
 
   return dto;
+};
+
+const MILESTONE_TITLE_MAX_LENGTH = 150; // matches work.ProjectMilestones.MilestoneName varchar(150)
+
+const assertMilestoneDatesWithinProject = (row: ProjectRow, dueDate: string) => {
+  if (dueDate < row.startdate || dueDate > row.enddate) {
+    throw new ProjectValidationError(
+      `Milestone due date must fall between the project's start date (${row.startdate}) and end date (${row.enddate}).`
+    );
+  }
+};
+
+export const addMilestone = async (
+  projectId: string,
+  input: CreateMilestoneInput,
+  actorId: string,
+  actorRole: string
+): Promise<MilestoneDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  if (!input.title?.trim()) throw new ProjectValidationError('Milestone title is required.');
+  if (input.title.trim().length > MILESTONE_TITLE_MAX_LENGTH) {
+    throw new ProjectValidationError(`Milestone title cannot exceed ${MILESTONE_TITLE_MAX_LENGTH} characters.`);
+  }
+  if (!input.dueDate) throw new ProjectValidationError('Milestone due date is required.');
+  assertMilestoneDatesWithinProject(row, input.dueDate);
+
+  let milestoneId: number;
+  try {
+    milestoneId = await repo.insertMilestone({
+      projectId: row.projectid,
+      title: input.title.trim(),
+      description: input.description?.trim() || null,
+      dueDate: input.dueDate,
+      createdByUserId: toUserPk(actorId)
+    });
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === '23505') {
+      throw new ProjectValidationError('A milestone with this name already exists for this project.');
+    }
+    throw error;
+  }
+
+  const dto = rowToMilestoneDTO((await repo.findMilestoneById(milestoneId))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Projects', entityType: 'Milestone', entityId: dto.id,
+    entityName: dto.title, projectId, projectName: row.projectname,
+    description: `${actorName} added milestone “${dto.title}” to “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const updateMilestone = async (
+  projectId: string,
+  milestoneId: string,
+  input: UpdateMilestoneInput,
+  actorId: string,
+  actorRole: string
+): Promise<MilestoneDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const milestonePk = Number(milestoneId);
+  if (!Number.isInteger(milestonePk)) throw new ProjectValidationError('Invalid milestone id.');
+
+  if (input.title !== undefined) {
+    if (!input.title.trim()) throw new ProjectValidationError('Milestone title cannot be empty.');
+    if (input.title.trim().length > MILESTONE_TITLE_MAX_LENGTH) {
+      throw new ProjectValidationError(`Milestone title cannot exceed ${MILESTONE_TITLE_MAX_LENGTH} characters.`);
+    }
+  }
+  if (input.dueDate !== undefined) assertMilestoneDatesWithinProject(row, input.dueDate);
+
+  let updated: boolean;
+  try {
+    updated = await repo.updateMilestone(milestonePk, row.projectid, {
+      title: input.title?.trim(),
+      description: input.description !== undefined ? (input.description.trim() || null) : undefined,
+      dueDate: input.dueDate
+    });
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === '23505') {
+      throw new ProjectValidationError('A milestone with this name already exists for this project.');
+    }
+    throw error;
+  }
+  if (!updated) throw new ProjectValidationError('Milestone not found for this project.');
+
+  const dto = rowToMilestoneDTO((await repo.findMilestoneById(milestonePk))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Updated', module: 'Projects', entityType: 'Milestone', entityId: dto.id,
+    entityName: dto.title, projectId, projectName: row.projectname,
+    description: `${actorName} updated milestone “${dto.title}” on “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const deleteMilestone = async (
+  projectId: string,
+  milestoneId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const milestonePk = Number(milestoneId);
+  if (!Number.isInteger(milestonePk)) throw new ProjectValidationError('Invalid milestone id.');
+
+  const milestoneRow = await repo.findMilestoneById(milestonePk);
+  const deleted = await repo.deleteMilestone(milestonePk, row.projectid);
+  if (!deleted) throw new ProjectValidationError('Milestone not found for this project.');
+
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'Milestone', entityId: milestoneId,
+    entityName: milestoneRow?.milestonename || milestoneId, projectId, projectName: row.projectname,
+    description: `${actorName} removed milestone “${milestoneRow?.milestonename || milestoneId}” from “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+};
+
+export const addProjectFile = async (
+  projectId: string,
+  input: CreateProjectFileInput,
+  actorId: string,
+  actorRole: string
+): Promise<ProjectFileDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  if (!input.name?.trim()) throw new ProjectValidationError('File name is required.');
+  if (!input.url?.trim()) throw new ProjectValidationError('File content is required.');
+
+  let fileId: number;
+  try {
+    fileId = await repo.insertProjectFile({
+      projectId: row.projectid,
+      uploadedByUserId: toUserPk(actorId),
+      originalFileName: input.name.trim(),
+      mimeType: input.mimeType?.trim() || 'application/octet-stream',
+      dataUrl: input.url
+    });
+  } catch (error) {
+    throw new ProjectValidationError((error as Error)?.message || 'Failed to store the attachment.');
+  }
+
+  const dto = rowToProjectFileDTO((await repo.findProjectFileById(row.projectid, fileId))!);
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Created', module: 'Projects', entityType: 'ProjectFile', entityId: dto.id,
+    entityName: dto.name, projectId, projectName: row.projectname,
+    description: `${actorName} attached “${dto.name}” to “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
+
+  return dto;
+};
+
+export const removeProjectFile = async (
+  projectId: string,
+  fileId: string,
+  actorId: string,
+  actorRole: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  await assertCanManage(row, actorId, actorRole);
+
+  const filePk = Number(fileId);
+  if (!Number.isInteger(filePk)) throw new ProjectValidationError('Invalid file id.');
+
+  const fileRow = await repo.findProjectFileById(row.projectid, filePk);
+  const removed = await repo.removeProjectFile(row.projectid, filePk);
+  if (!removed) throw new ProjectValidationError('File not found for this project.');
+
+  const actorName = actorDisplayName(actorId);
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    action: 'Deleted', module: 'Projects', entityType: 'ProjectFile', entityId: fileId,
+    entityName: fileRow?.originalfilename || fileId, projectId, projectName: row.projectname,
+    description: `${actorName} removed attachment “${fileRow?.originalfilename || fileId}” from “${row.projectname}”.`,
+    linkRoute: 'projects'
+  });
 };

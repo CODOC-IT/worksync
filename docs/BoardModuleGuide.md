@@ -12,6 +12,17 @@ specific to the board.
 > board's UI/interaction model (columns, drag-and-drop, mandatory-reason modal, approval gate)
 > is unchanged — only what happens when you drop a card changed.
 
+> **Update (`feature/project-lead-workflow-fixes`)**: Review decisions (§11) are now
+> Team-Lead-only — an Admin account no longer gets a blanket bypass on `approveTask`/`rejectTask`
+> (it still does for most other Task/Project operations; this is a deliberate, narrower carve-out
+> — see `task.service.ts`'s `decideReview` and `isProjectLead`'s new `{ allowAdmin: false }`
+> option). "Team Lead" here has always meant *this specific project's* `ProjectMembers`
+> membership row with `MemberRoleCode = 'TeamLead'` (`project.mapper.ts`'s
+> `resolveTeamLeadUserId`), never the actor's account role — that per-project design predates
+> this branch and did not need to change, only the Admin bypass on review decisions did.
+> Rejecting a task with completed subtasks now requires a per-subtask Accept/Reject verdict, not
+> just an overall comment — see the new §11a.
+
 ## 1. Purpose
 
 A role-scoped Kanban view of tasks per project: `Todo → In Progress → Review → Done`, with
@@ -118,9 +129,18 @@ arrays' *content* comes from (the real API, not just seed data) and where a stat
 
 | Role | Project visibility | Can switch projects | Can drag/change status | Can Approve/Reject Review |
 |---|---|---|---|---|
-| **Admin** | All projects (all "workspaces") | Yes | Yes, any task | Yes, any project |
+| **Admin** | All projects (all "workspaces") | Yes | Yes, any task | **No** — Admin cannot decide a review, even for a project they created |
 | **Team Lead** | Only projects where `project.teamLeadId === currentUser.id` | Yes, among their own projects | Yes, any task in their project (subject to `canEditTask`'s active-project check) | Yes, only for projects they lead |
 | **Team Member** | Only projects where `project.memberIds.includes(currentUser.id)` | Only among projects they belong to | Only tasks assigned to them (`canEditTask` rule) | No |
+| **HR** | Read-only, no board access | — | No | No |
+
+"projects where `project.teamLeadId === currentUser.id`" is a **per-project** fact, not an
+account-role check — `teamLeadId` comes from that project's own `ProjectMembers` row
+(`MemberRoleCode = 'TeamLead'`), so a `Team_Member`-role account can lead Project A while being a
+plain member of Project B, and the board (and the backend) treat them accordingly on each project
+independently. `canDecideReview`/`canReopenTask` in `boardAccess.ts` and `isProjectLead` in
+`backend/src/projects/project.service.ts` are the single source of truth for this on the frontend
+and backend respectively — never `currentUser.role === 'Team_Lead'`.
 
 Everyone who can see a project sees **every task in it**, regardless of assignee — per the
 brief, understanding project context matters more than hiding teammates' cards. Only the
@@ -208,6 +228,33 @@ Todo ⇄ In Progress ⇄ Review  →  (Team Lead / Admin decision)  →  Done
   step regardless of who is doing it. This is a deliberate simplification — see §13 for the
   natural follow-up.
 
+## 11a. Partial Subtask Rejection
+
+Rejecting a task that has completed (Done) subtasks is no longer all-or-nothing. Previously,
+rejecting the parent left every subtask marked Done even though the parent itself went back to
+In Progress — this was a bug (a rejected task with a "100% complete" checklist), not a feature.
+
+- The Reject modal (`StatusChangeModal` in `KanbanView.tsx`) fetches the task's subtasks
+  (`GET /api/tasks/:id`) and, for every subtask currently `Done`, requires an explicit
+  **Accept** or **Reject** choice — defaulting to Accept — plus a mandatory comment on any
+  subtask marked Reject. This is in addition to, not instead of, the existing mandatory overall
+  review comment.
+- On submit, `PATCH /api/tasks/:id/reject` carries `{ note, subtaskDecisions }`, where
+  `subtaskDecisions` is one `{ subtaskId, decision, comment? }` per Done subtask.
+  `task.service.ts`'s `decideReview` validates every Done subtask has a decision (Reject ones
+  must have a non-empty comment) before writing anything.
+- **Accepted** subtasks are left untouched — they remain `Done`.
+- **Rejected** subtasks are moved `Done → In Progress` via the same `work.TaskStatusHistory`
+  write every other status change uses, with the Project Lead's per-subtask comment as that
+  entry's `ProgressNote` — no new table, this reuses the existing shared audit trail (see §5's
+  Task Module integration note). Each rejected subtask's own assignees are notified via the
+  existing `subtask_reopened` event (the same one the ordinary subtask-status-change path already
+  sends), carrying that subtask's specific comment.
+- The parent task's own transition (`Review → In Progress`) and its overall review comment are
+  unchanged from before — that half of the workflow was already correct.
+- A task with no completed subtasks (or no subtasks at all) rejects exactly as before — no
+  `subtaskDecisions` needed, and the modal shows no checklist.
+
 ### Assignee overflow
 
 A card shows at most 2 assignee names inline; beyond that, a `+N` chip appears. Hovering or
@@ -252,7 +299,11 @@ frontend `pushActivity` path originally anticipated below: `task.service.ts`'s
 `changeTaskStatus`/`approveTask`/`rejectTask` call `notificationService.publishEvent()` directly,
 in the same DB transaction as the status/history update, for `task_status_changed`/
 `task_review_requested`/`task_review_approved`/`task_review_rejected` — including notifying the
-project's Team Lead specifically when a task enters `Review`, exactly as anticipated below. The
+project's Team Lead specifically when a task enters `Review`, exactly as anticipated below.
+`task_review_approved`/`task_review_rejected` messages read "`<Lead's display name>` approved/
+rejected your review request for `<task title>`..." — always the Project Lead's resolved display
+name (see `docs/Notification_Module_Guide.md`'s actor-display-name section), never a raw user id.
+Rejected subtasks (§11a) additionally get their own `subtask_reopened` event per subtask. The
 frontend's `dispatchNotifications` is *not* called for any of these anymore (see
 `docs/ProjectBoardNotification_Implementation_Notes.md`) — the paragraph that originally lived
 here describing a frontend-side `pushActivity`/`notifications`-setter hook point is superseded by

@@ -7,6 +7,7 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { ProjectApprovalRequestDTO, ProjectApprovalRequestRow, ProjectApprovalRequestType } from './projectApproval.types.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -23,7 +24,7 @@ import { ProjectApprovalRequestDTO, ProjectApprovalRequestRow, ProjectApprovalRe
 export { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError } from './project.service.js';
 import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError } from './project.service.js';
 
-const actorName = (userId: string): string => userStore.findById(userId)?.name || 'Someone';
+const actorName = (userId: string): string => actorDisplayName(userId);
 
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
   const project = await projectRepo.findProjectById(row.projectid);
@@ -67,7 +68,6 @@ const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
   PROJECT_CREATE: 'create',
   PROJECT_EDIT: 'edit',
   PROJECT_ARCHIVE: 'archive',
-  PROJECT_DELETE: 'delete',
   PROJECT_RESTORE: 'restore',
   PROJECT_PERMANENT_DELETE: 'permanently delete'
 };
@@ -83,8 +83,8 @@ export const createApprovalRequest = async (
   requesterId: string,
   requesterRole: string
 ): Promise<ProjectApprovalRequestDTO> => {
-  if (requesterRole !== 'Team_Lead') {
-    throw new ProjectAuthorizationError('Only Team Leads submit project approval requests.');
+  if (requesterRole !== 'Team_Lead' && requesterRole !== 'Team_Member') {
+    throw new ProjectAuthorizationError('Only project leads can submit project approval requests.');
   }
   if (!reason?.trim()) {
     throw new ProjectValidationError('A reason is required to submit this request for Admin approval.');
@@ -187,7 +187,6 @@ export const decideApprovalRequest = async (
         );
         break;
       case 'PROJECT_ARCHIVE':
-      case 'PROJECT_DELETE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
       case 'PROJECT_RESTORE':

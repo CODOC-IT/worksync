@@ -385,6 +385,23 @@ test('HR: cannot see activity performed by Admins', async () => {
   assert.ok(!descriptions.includes('Admin action hidden from HR'), 'HR must not see events performed by Admins');
 });
 
+test('HR: can view auth/security events and deleted comments', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (1, NULL, 'Login', 'User', 'failed-user@example.com', '00000000-0000-0000-0000-000000000087', 'Authentication', 'Failed login attempt for failed-user@example.com', NULL),
+    (1, 5, 'Deleted', 'Comment', 'cmt-101', '00000000-0000-0000-0000-000000000088', 'Project Chats', 'User deleted a comment on Discussion', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Failed login attempt for failed-user@example.com'), 'HR should see auth/security events');
+  assert.ok(descriptions.includes('User deleted a comment on Discussion'), 'HR should see deleted comments');
+});
+
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
@@ -588,4 +605,62 @@ test('Notification preference change: Admin\'s own change is visible only to Adm
     adminResult.rows.some((r: any) => r.description === 'Admin turned off due reminder notifications'),
     "Admin should see their own preference change"
   );
+});
+
+test('Comment deletion activity is visible only to HR and Admin', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES
+      (1, 4, 'Deleted', 'Comment', 'cmt-member-delete', 1, '00000000-0000-0000-0000-000000000124', 'Project Chats', 'Team Member deleted a comment', 'Team_Member'),
+      (1, 5, 'Deleted', 'Comment', 'cmt-lead-delete', 2, '00000000-0000-0000-0000-000000000125', 'Project Chats', 'Team Lead deleted a comment', 'Team_Lead')`);
+
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES
+      (3, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour'),
+      (5, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  const leadRoleId = memDb.public.one(`SELECT ur.userroleid FROM iam.userroles ur
+    JOIN iam.roles r ON r.roleid = ur.roleid
+    WHERE ur.userid = 5 AND r.rolecode = 'TeamLead'`).userroleid;
+  memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${leadRoleId}, 2)`);
+
+  const { findActivities, findVisibleActivityById } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+
+  const memberRoles = await getEffectiveRoles('usr-4');
+  const memberResult = await findActivities({ page: 1, pageSize: 50 }, memberRoles, 'usr-4');
+  assert.ok(!memberResult.rows.some((r: any) => r.entityidtext === 'cmt-member-delete'), 'Member must not see their own comment deletion');
+
+  const leadRoles = await getEffectiveRoles('usr-5');
+  const leadResult = await findActivities({ page: 1, pageSize: 50 }, leadRoles, 'usr-5');
+  assert.ok(!leadResult.rows.some((r: any) => r.entityidtext === 'cmt-lead-delete'), 'Team Lead must not see their own comment deletion');
+  const leadDeletionId = memDb.public.one(
+    "SELECT auditeventid::text AS id FROM audit.auditevents WHERE entityidtext = 'cmt-lead-delete'"
+  ).id;
+  const leadDirect = await findVisibleActivityById(leadDeletionId, 'usr-5', leadRoles);
+  assert.equal(leadDirect, null, 'Team Lead must not retrieve a comment deletion by direct activity ID');
+
+  const hrRoles = await getEffectiveRoles('usr-3');
+  const hrResult = await findActivities({ page: 1, pageSize: 50 }, hrRoles, 'usr-3');
+  assert.ok(hrResult.rows.some((r: any) => r.entityidtext === 'cmt-member-delete'), 'HR should see comment deletion activity');
+
+  const adminRoles = await getEffectiveRoles('usr-1');
+  const adminResult = await findActivities({ page: 1, pageSize: 50 }, adminRoles, 'usr-1');
+  assert.ok(adminResult.rows.some((r: any) => r.entityidtext === 'cmt-member-delete'), 'Admin should see comment deletion activity');
+});
+
+test('PDF export paginates long activity rows without producing an invalid document', async () => {
+  for (let index = 0; index < 40; index++) {
+    const suffix = String(index + 200).padStart(12, '0');
+    memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+      VALUES (1, 1, 'Updated', 'Task', 'tsk-pdf-${index}', 1, '00000000-0000-0000-0000-${suffix}', 'Tasks', 'A detailed audit record that must wrap cleanly inside the PDF table cell without overlapping the footer or creating an orphaned row on the next page.', 'Admin')`);
+  }
+
+  const { exportPdf } = await import('./activity.service.js');
+  const exported = await exportPdf({ page: 1, pageSize: 100, sort: 'newest' }, 'usr-1', 'Admin');
+  const pdfText = exported.content.toString('latin1');
+  const pageCount = (pdfText.match(/\/Type \/Page\b/g) || []).length;
+
+  assert.ok(exported.content.subarray(0, 4).equals(Buffer.from('%PDF')), 'Export must be a valid PDF document');
+  assert.equal(exported.exportedCount, 40);
+  assert.ok(pageCount >= 2, 'Long rows should continue onto a subsequent page');
+  assert.ok(pageCount <= 4, `Rows should use each page efficiently without excessive page breaks (generated ${pageCount} pages)`);
 });

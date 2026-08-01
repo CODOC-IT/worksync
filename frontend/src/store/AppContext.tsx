@@ -3,6 +3,8 @@ import {
   UserRole,
   User,
   Project,
+  Milestone,
+  ProjectFile,
   Task,
   TaskStatus,
   AttendanceRecord,
@@ -26,6 +28,7 @@ import {
   BreakType,
   WorkBreak,
   ControlledEditRequest,
+  SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
 
@@ -62,7 +65,12 @@ import {
   permanentlyDeleteProjectApi,
   restoreProjectApi,
   addProjectMemberApi,
-  removeProjectMemberApi
+  removeProjectMemberApi,
+  addMilestoneApi,
+  updateMilestoneApi,
+  deleteMilestoneApi,
+  addProjectFileApi,
+  removeProjectFileApi
 } from '../features/projects/projectRepository';
 import {
   fetchActivities,
@@ -179,6 +187,11 @@ interface AppState {
   deleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   permanentlyDeleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   restoreProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  // Fetches this project's full server detail (includes real, persisted milestones -- the list
+  // endpoint backing `projects` deliberately doesn't, to avoid an N+1 query on every project list
+  // load), merges it in, and returns it -- called when the Project Details popup or the Edit form
+  // opens, so both show backend data rather than the list-cached snapshot.
+  refreshProjectDetails: (projectId: string) => Promise<Project | null>;
   projectApprovalRequests: ProjectApprovalRequest[];
   approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
@@ -195,6 +208,10 @@ interface AppState {
       // -- Review -> Done must always go through an explicit reviewer decision).
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
+      // Only meaningful alongside reviewDecision: 'Reject' -- one Accept/Reject verdict per
+      // completed subtask, required whenever the task being rejected has any (see
+      // task.service.ts's decideReview).
+      subtaskDecisions?: SubtaskReviewDecision[];
     }
   ) => Promise<{ success: boolean; message: string }>;
   // Team-Lead-only reopen of a Done task. `reason` is mandatory and is persisted to
@@ -408,7 +425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return data;
       })
       .then((data) => {
-        if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+        if (data.success && Array.isArray(data.users)) {
           setUsers(data.users as User[]);
         }
       })
@@ -540,11 +557,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
-    // Team Lead sees their own submitted requests (any status), to check outcomes. Team Member
-    // and HR never create these, so skipping the call for them avoids a wasted round trip --
-    // this is not authorization (the backend endpoints themselves already gate that).
+    // a project's lead sees their own submitted requests (any status), to check outcomes. Team
+    // Lead is not a separate account role -- a Team_Member becomes a project's lead only by
+    // per-project assignment, so this fetches for Team_Lead and Team_Member alike (HR never
+    // creates these, so skipping the call for HR avoids a wasted round trip) -- this is not
+    // authorization (the backend endpoints themselves already gate that via isProjectLead).
     const hydrateProjectApprovalRequests = async () => {
-      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead') return;
+      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'Team_Member') return;
       try {
         const remote = currentRole === 'Admin'
           ? await fetchPendingProjectApprovals()
@@ -691,7 +710,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [projects, tasks]);
 
   useEffect(() => {
-    if (!currentUser.id || currentRole !== 'Team_Lead' || projects.length === 0 || tasks.length === 0) return;
+    // Team Lead is a project assignment, not an account role.  Team Members always
+    // load this endpoint; the API returns only requests for projects they actively lead.
+    // HR must not retain a previous lead's restricted approval data after a role change.
+    if (!currentUser.id || currentRole !== 'Team_Member' || projects.length === 0) {
+      setSystemApprovals((prev) => prev.filter((approval) =>
+        !(approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate)
+      ));
+      return;
+    }
     let isActive = true;
 
     void loadTaskEditApprovalsViaApi()
@@ -717,7 +744,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             )
           ];
         });
-        if (validApprovals.length === 0) return;
         setTasks((prev) => prev.map((task) => {
           const directApproval = validApprovals.find((approval) => approval.targetId === task.id);
           if (directApproval) {
@@ -739,6 +765,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           return {
             ...task,
+            approvalStatus: task.hasPendingApproval ? 'Pending Approval' : 'Approved',
+            pendingEdit: undefined,
             subtasks: task.subtasks.map((subtask) => {
               const approval = validApprovals.find((candidate) => candidate.targetId === subtask.id);
               return approval
@@ -757,7 +785,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       createdAt: approval.createdAt
                     }
                   }
-                : subtask;
+                : {
+                    ...subtask,
+                    approvalStatus: (subtask as Partial<Task>).hasPendingApproval ? 'Pending Approval' : 'Approved',
+                    pendingEdit: undefined
+                  };
             })
           };
         }));
@@ -808,11 +840,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setActivityLogs((prev) => [newAct, ...prev]);
 
-    fetch('/api/activity-log', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
-    }).catch(() => {});
+    // Backend workflows persist the authoritative audit event; keep this optimistic
+    // compatibility list local to avoid duplicate audit rows.
   };
 
   // --- Notification Module -----------------------------------------------------------
@@ -985,7 +1014,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  // A project member who creates a project becomes its project-scoped lead after approval.
   const eligibleProjectMemberIds = (ids: string[]): string[] =>
     ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
 
@@ -999,7 +1028,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // project.types.ts's ProjectDTO comment), so they are preserved/merged locally on top of
   // whatever the server returns.
   const createProject = async (data: Partial<Project>): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
+    if (currentRole !== 'Team_Member' && currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
       return { success: false, message: 'You do not have permission to create a project.' };
     }
 
@@ -1020,8 +1049,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         creationReason: data.creationReason
       });
 
+      // Milestones have their own dedicated endpoints (no bulk field on POST /api/projects,
+      // matching how membership already works above) -- the project must exist first, so these
+      // are created one at a time against the new project's real id, right after it's created.
+      const createdMilestones: Milestone[] = [];
+      const milestoneErrors: string[] = [];
+      for (const milestone of data.milestones || []) {
+        if (!milestone.title?.trim() || !milestone.dueDate) continue;
+        try {
+          createdMilestones.push(
+            await addMilestoneApi(created.id, { title: milestone.title.trim(), dueDate: milestone.dueDate })
+          );
+        } catch (error: any) {
+          milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+        }
+      }
+
+      // Same pattern as milestones just above -- attachments have their own dedicated endpoint,
+      // the project must exist first. `file.dataUrl` is only present for a file just selected in
+      // the form (see ProjectsView.tsx's handleFileSelect); anything without one has no content to
+      // upload and is skipped defensively.
+      const createdFiles: ProjectFile[] = [];
+      const fileErrors: string[] = [];
+      for (const file of data.files || []) {
+        if (!file.dataUrl) continue;
+        try {
+          createdFiles.push(
+            await addProjectFileApi(created.id, { name: file.name, mimeType: file.mimeType, url: file.dataUrl })
+          );
+        } catch (error: any) {
+          fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+        }
+      }
+
       setProjects((prev) => [
-        { ...created, milestones: data.milestones || [], files: data.files || [], pinnedMessagesCount: 0 },
+        { ...created, milestones: createdMilestones, files: createdFiles, pinnedMessagesCount: 0 },
         ...prev
       ]);
 
@@ -1045,12 +1107,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       pushActivity('Created project', 'Project', created.id, created.title);
 
-      const message =
+      const baseMessage =
         created.status === 'Pending Approval'
           ? `"${created.title}" was submitted for Admin approval successfully.`
           : `"${created.title}" was created successfully.`;
-      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
-      return { success: true, message };
+      const creationErrors = [...milestoneErrors, ...fileErrors];
+      if (creationErrors.length > 0) {
+        const message = `${baseMessage} Some items could not be saved: ${creationErrors.join(' ')}`;
+        confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
+        return { success: true, message };
+      }
+      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', baseMessage);
+      return { success: true, message: baseMessage };
     } catch (error: any) {
       console.error('Failed to create project.', error);
       return { success: false, message: error?.message || 'Failed to create the project. Please try again.' };
@@ -1066,7 +1134,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const result = await updateProjectApi(projectId, { status: 'Active' });
       const updated = result.project!;
-      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      // `updated` is a fresh server DTO -- milestones/files/pinnedMessagesCount have no backend
+      // representation, so the server always reports them empty. Preserve whatever the Team Lead
+      // set locally when they created this project instead of letting activation wipe it out.
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, ...updated, milestones: p.milestones, files: p.files, pinnedMessagesCount: p.pinnedMessagesCount }
+            : p
+        )
+      );
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Approved' } : sa
@@ -1144,11 +1221,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (!result.pendingApproval && result.project) {
         const updated = result.project;
+        // milestones: p.milestones (not data.milestones) -- the milestone diff block below is the
+        // single source of truth for persisting milestone changes and refreshing this array from
+        // the server; this merge must not race it with the form's raw (possibly unpersisted-id)
+        // local list.
+        // files: p.files (not data.files) -- same reasoning as milestones: the file diff block
+        // below is the single source of truth for persisting attachment changes and refreshing
+        // this array from the server.
         setProjects((prev) =>
           prev.map((p) =>
-            p.id === projectId
-              ? { ...p, ...updated, milestones: data.milestones ?? p.milestones, files: data.files ?? p.files }
-              : p
+            p.id === projectId ? { ...p, ...updated, milestones: p.milestones, files: p.files } : p
           )
         );
         pushActivity('Updated project', 'Project', projectId, updated.title);
@@ -1161,12 +1243,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // call per added/removed user, diffed against the project's current membership. Member
       // changes are never approval-gated (not one of this workflow's five integration points),
       // so they apply immediately regardless of whether the rest of this edit is pending.
+      const memberErrors: string[] = [];
+      let membershipChanged = false;
       if (data.memberIds) {
-        const beforeIds = new Set(project.memberIds);
+        // Both sides of this diff must go through the same eligibility filter. project.memberIds
+        // (the "before" set) includes the project's Team Lead, whose account role is virtually
+        // never 'Team_Member' -- comparing it unfiltered against the filtered `afterIds` made the
+        // lead look "removed" on every single save (the edit form's member checkboxes never
+        // touch the lead's own membership, see ProjectsView.tsx's assignableMembers), silently
+        // firing a real removeProjectMemberApi call and a false "removed from project"
+        // notification. Filtering both sides identically fixes the root cause instead of
+        // special-casing the lead's id.
+        const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
-        const removed = project.memberIds.filter((id) => !afterIds.includes(id));
-        const memberErrors: string[] = [];
+        const removed = Array.from(beforeIds).filter((id) => !afterIds.includes(id));
 
         for (const userId of added) {
           try {
@@ -1182,16 +1273,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberErrors.push(error?.message || `Failed to remove member ${userId}.`);
           }
         }
+        membershipChanged = added.length > 0 || removed.length > 0;
+      }
 
-        if (added.length > 0 || removed.length > 0) {
-          const refreshed = await fetchProjectApi(projectId);
-          setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...refreshed } : p)));
-        }
+      // Milestones now have their own dedicated endpoints (POST/PATCH/DELETE
+      // /api/projects/:id/milestones[/:milestoneId]), same "no bulk field, diff against current
+      // state, one call per change" pattern as membership above -- and same non-approval-gated
+      // treatment (reuses assertCanManage server-side, not the Team Lead approval workflow).
+      // A milestone not yet saved to the server has a client-generated id like "m-<timestamp>-<n>"
+      // (see ProjectsView.tsx's addMilestone); a real, persisted one has a plain numeric id (the
+      // DB's MilestoneId as a string) -- that shape difference is what tells "new" from "existing"
+      // apart, no separate tracking needed.
+      const milestoneErrors: string[] = [];
+      let milestonesChanged = false;
+      if (data.milestones) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextById = new Map(data.milestones.filter((m) => isPersistedId(m.id)).map((m) => [m.id, m]));
+        const removedMilestones = project.milestones.filter((m) => !nextById.has(m.id));
+        const addedMilestones = data.milestones.filter((m) => !isPersistedId(m.id));
+        const changedMilestones = project.milestones.filter((m) => {
+          const next = nextById.get(m.id);
+          return next && (next.title !== m.title || next.dueDate !== m.dueDate);
+        });
 
-        if (memberErrors.length > 0) {
-          const message = `Project details saved, but some membership changes failed: ${memberErrors.join(' ')}`;
-          return { success: false, message };
+        for (const milestone of removedMilestones) {
+          try {
+            await deleteMilestoneApi(projectId, milestone.id);
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to remove milestone "${milestone.title}".`);
+          }
         }
+        for (const milestone of changedMilestones) {
+          const next = nextById.get(milestone.id)!;
+          try {
+            await updateMilestoneApi(projectId, milestone.id, { title: next.title, dueDate: next.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to update milestone "${milestone.title}".`);
+          }
+        }
+        for (const milestone of addedMilestones) {
+          if (!milestone.title?.trim() || !milestone.dueDate) continue;
+          try {
+            await addMilestoneApi(projectId, { title: milestone.title.trim(), dueDate: milestone.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+          }
+        }
+        milestonesChanged =
+          removedMilestones.length > 0 || changedMilestones.length > 0 || addedMilestones.length > 0;
+      }
+
+      // Attachments have their own dedicated endpoints too, same pattern as milestones just above
+      // -- only add/remove exist (no "rename"/"replace content" in the current UI, so no "changed"
+      // case to diff). Same numeric-id-vs-client-generated-id discriminator: a file just selected
+      // in the form has an id like "f-<timestamp>-<name>" and carries its content in `dataUrl`
+      // (see ProjectsView.tsx's handleFileSelect); an already-persisted file has a plain numeric id
+      // (the DB's FileId) and no `dataUrl`.
+      const fileErrors: string[] = [];
+      let filesChanged = false;
+      if (data.files) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextIds = new Set(data.files.filter((f) => isPersistedId(f.id)).map((f) => f.id));
+        const removedFiles = project.files.filter((f) => !nextIds.has(f.id));
+        const addedFiles = data.files.filter((f) => !isPersistedId(f.id) && f.dataUrl);
+
+        for (const file of removedFiles) {
+          try {
+            await removeProjectFileApi(projectId, file.id);
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to remove file "${file.name}".`);
+          }
+        }
+        for (const file of addedFiles) {
+          try {
+            await addProjectFileApi(projectId, { name: file.name, mimeType: file.mimeType, url: file.dataUrl! });
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+          }
+        }
+        filesChanged = removedFiles.length > 0 || addedFiles.length > 0;
+      }
+
+      if (membershipChanged || milestonesChanged || filesChanged) {
+        const refreshed = await fetchProjectApi(projectId);
+        // `refreshed` is a fresh server DTO -- pinnedMessagesCount has no backend representation,
+        // so keep the locally-held value; milestones and files are now real, persisted,
+        // server-confirmed data, so take both from `refreshed`.
+        setProjects((prev) =>
+          prev.map((p) => (p.id === projectId ? { ...p, ...refreshed, pinnedMessagesCount: p.pinnedMessagesCount } : p))
+        );
+      }
+
+      if (memberErrors.length > 0 || milestoneErrors.length > 0 || fileErrors.length > 0) {
+        const message = `Project details saved, but some changes failed: ${[...memberErrors, ...milestoneErrors, ...fileErrors].join(' ')}`;
+        return { success: false, message };
       }
 
       if (result.pendingApproval) {
@@ -1208,9 +1383,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // GET /api/projects/:id returns the full detail DTO (milestones included -- see
+  // project.service.ts's buildDetailDTO), unlike GET /api/projects (the list `projects` is
+  // hydrated from), which omits milestones/files to avoid an N+1 query on every project list load.
+  // ProjectsView.tsx calls this when the Details popup or the Edit form opens (the Edit button on
+  // a card also only ever has the list-cached, milestone/file-less project), so both reflect real
+  // backend data instead of that snapshot. Returns the merged project so a caller that needs it
+  // synchronously (e.g. to seed an edit form) doesn't have to read back a stale closure of
+  // `projects` right after this resolves.
+  const refreshProjectDetails = async (projectId: string): Promise<Project | null> => {
+    try {
+      const detail = await fetchProjectApi(projectId);
+      const existing = projects.find((p) => p.id === projectId);
+      const merged: Project = existing ? { ...existing, ...detail } : detail;
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? merged : p)));
+      return merged;
+    } catch (error) {
+      console.warn('Failed to load project details.', error);
+      return null;
+    }
+  };
+
   // Soft-deletes an Active project by archiving it (or, for an already-Archived one, is the first
   // half of the two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead
-  // this creates a Pending PROJECT_DELETE approval request instead of archiving immediately (see
+  // this creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
   // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
   // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
   // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
@@ -1350,14 +1546,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
       try {
         const remoteProjects = await fetchProjectsApi();
-        setProjects(
-          remoteProjects.map((p) => ({
-            ...p,
-            milestones: p.milestones || [],
-            files: p.files || [],
-            pinnedMessagesCount: p.pinnedMessagesCount ?? 0
-          }))
-        );
+        // remoteProjects is a fresh server list -- milestones/files/pinnedMessagesCount have no
+        // backend representation, so every entry reports them empty regardless of what was set
+        // locally. Look each project up in the previous state (not the fresh `p` itself) to carry
+        // those fields forward instead of wiping them out for every project in the list.
+        setProjects((prev) => {
+          const prevById = new Map(prev.map((p) => [p.id, p]));
+          return remoteProjects.map((p) => {
+            const existing = prevById.get(p.id);
+            return {
+              ...p,
+              milestones: existing?.milestones || [],
+              files: existing?.files || [],
+              pinnedMessagesCount: existing?.pinnedMessagesCount ?? 0
+            };
+          });
+        });
       } catch (refreshError) {
         console.warn('Failed to refresh projects after approving a request.', refreshError);
       }
@@ -1489,7 +1693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Team Members submit task creation requests to the selected project's Team Lead.
     // The task is only created in the backend after that Team Lead approves the request.
-    if (currentRole === 'Team_Member') {
+    if (currentRole === 'Team_Member' && projects.find((item) => item.id === input.projectId)?.teamLeadId !== currentUser.id) {
       const project = projects.find((item) => item.id === input.projectId);
 
       if (!project) {
@@ -1589,7 +1793,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       existingTask
       && (Boolean(existingTask.parentTaskId)
         || Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0)
-      && currentRole === 'Team_Member'
+        && currentRole === 'Team_Member'
+        && project?.teamLeadId !== currentUser.id
     );
 
     // Team Members may prepare changes to their assigned standalone tasks and subtasks, but
@@ -1704,6 +1909,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       extraInfo?: {
         note?: string;
         reviewDecision?: 'Approve' | 'Reject';
+        subtaskDecisions?: SubtaskReviewDecision[];
       }
     ): Promise<{ success: boolean; message: string }> => {
       const task = tasks.find((t) => t.id === taskId);
@@ -1716,7 +1922,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           extraInfo?.reviewDecision === 'Approve'
             ? await approveTaskViaApi(taskId, note)
             : extraInfo?.reviewDecision === 'Reject'
-              ? await rejectTaskViaApi(taskId, note)
+              ? await rejectTaskViaApi(taskId, note, extraInfo?.subtaskDecisions)
               : await changeTaskStatusViaApi(taskId, newStatus, note);
 
         setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
@@ -1896,7 +2102,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can approve the task request.'
@@ -1952,7 +2158,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         confirmActionSuccess('Task Request Approved', result.message);
       } else if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
         const relatedProject = item.projectId && projects.find((project) => project.id === item.projectId);
-        if (currentRole !== 'Team_Lead' || !relatedProject || relatedProject.teamLeadId !== currentUser.id) {
+        if (!relatedProject || relatedProject.teamLeadId !== currentUser.id) {
           return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
         }
         try {
@@ -2049,7 +2255,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can reject the task request.'
@@ -2059,7 +2265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
         const project = item.projectId && projects.find((candidate) => candidate.id === item.projectId);
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
         }
         try {
@@ -3049,6 +3255,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteProject,
         permanentlyDeleteProject,
         restoreProject,
+        refreshProjectDetails,
         projectApprovalRequests,
         approveProjectApprovalRequest,
         rejectProjectApprovalRequest,

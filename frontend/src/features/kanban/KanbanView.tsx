@@ -24,6 +24,7 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import {
   Project,
   Subtask,
+  SubtaskReviewDecision,
   Task,
   TaskPriority,
   TaskStatus,
@@ -155,13 +156,14 @@ export const KanbanView: React.FC = () => {
     });
   };
 
-  const handleModalSubmit = async (note: string) => {
+  const handleModalSubmit = async (note: string, subtaskDecisions?: SubtaskReviewDecision[]) => {
     if (!pendingChange) return;
     const { task, toStatus, kind } = pendingChange;
     setModalSubmitting(true);
     const result = await updateTaskStatus(task.id, toStatus, {
       note,
-      reviewDecision: kind === 'approve' ? 'Approve' : kind === 'reject' ? 'Reject' : undefined
+      reviewDecision: kind === 'approve' ? 'Approve' : kind === 'reject' ? 'Reject' : undefined,
+      subtaskDecisions: kind === 'reject' ? subtaskDecisions : undefined
     });
     setModalSubmitting(false);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
@@ -661,6 +663,7 @@ const BoardCard: React.FC<{
       </div>
 
       {isInReview && <StatusBadge status="Pending Approval" size="sm" />}
+      {task.hasPendingApproval && !isInReview && <StatusBadge status="Pending Approval" size="sm" />}
 
       <SubtaskProgress task={task} />
 
@@ -858,14 +861,50 @@ const AssigneesDisplay: React.FC<{ names: string[] }> = ({ names }) => {
   );
 };
 
+// Whether a completed (Done) subtask needs an Accept/Reject verdict from whoever is rejecting
+// the parent's review — see backend/src/tasks/task.service.ts's decideReview. Accepted subtasks
+// stay Done untouched; rejected ones return to In Progress with their own mandatory comment.
+type SubtaskDecisionState = Record<string, { decision: 'Accept' | 'Reject'; comment: string }>;
+
 const StatusChangeModal: React.FC<{
   pending: PendingChange;
   submitting: boolean;
   onCancel: () => void;
-  onSubmit: (note: string) => void;
+  onSubmit: (note: string, subtaskDecisions?: SubtaskReviewDecision[]) => void;
 }> = ({ pending, submitting, onCancel, onSubmit }) => {
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+
+  const isRejectWithSubtasks = pending.kind === 'reject' && (pending.task.subtaskCount ?? 0) > 0;
+  const [doneSubtasks, setDoneSubtasks] = useState<Subtask[]>([]);
+  const [loadingSubtasks, setLoadingSubtasks] = useState(isRejectWithSubtasks);
+  const [subtaskLoadError, setSubtaskLoadError] = useState('');
+  const [subtaskValidationError, setSubtaskValidationError] = useState('');
+  const [decisions, setDecisions] = useState<SubtaskDecisionState>({});
+
+  useEffect(() => {
+    if (!isRejectWithSubtasks) return;
+    let cancelled = false;
+    setLoadingSubtasks(true);
+    setSubtaskLoadError('');
+    loadTaskDetailFromApi(pending.task.id)
+      .then((detail) => {
+        if (cancelled) return;
+        const done = (detail.subtasks || []).filter((subtask) => subtask.completed);
+        setDoneSubtasks(done);
+        setDecisions(Object.fromEntries(done.map((subtask) => [subtask.id, { decision: 'Accept' as const, comment: '' }])));
+      })
+      .catch(() => {
+        if (!cancelled) setSubtaskLoadError("Unable to load this task's subtasks. Please try again.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSubtasks(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending.task.id, isRejectWithSubtasks]);
 
   const titles: Record<PendingChange['kind'], string> = {
     move: 'Change Task Status',
@@ -879,12 +918,39 @@ const StatusChangeModal: React.FC<{
     reject: 'Reject Task'
   };
 
+  const setSubtaskDecision = (subtaskId: string, decision: 'Accept' | 'Reject') => {
+    setDecisions((prev) => ({
+      ...prev,
+      [subtaskId]: { decision, comment: decision === 'Accept' ? '' : prev[subtaskId]?.comment || '' }
+    }));
+    setSubtaskValidationError('');
+  };
+
+  const setSubtaskComment = (subtaskId: string, comment: string) => {
+    setDecisions((prev) => ({ ...prev, [subtaskId]: { ...prev[subtaskId], comment } }));
+    setSubtaskValidationError('');
+  };
+
   const handleSubmit = () => {
     if (!note.trim()) {
       setError('A description is required before changing status.');
       return;
     }
-    onSubmit(note.trim());
+    if (isRejectWithSubtasks) {
+      const missing = doneSubtasks.find((subtask) => decisions[subtask.id]?.decision === 'Reject' && !decisions[subtask.id]?.comment.trim());
+      if (missing) {
+        setSubtaskValidationError(`A comment is required for the rejected subtask "${missing.title}".`);
+        return;
+      }
+    }
+    const subtaskDecisions: SubtaskReviewDecision[] | undefined = isRejectWithSubtasks
+      ? doneSubtasks.map((subtask) => ({
+          subtaskId: subtask.id,
+          decision: decisions[subtask.id]?.decision || 'Accept',
+          comment: decisions[subtask.id]?.comment?.trim() || undefined
+        }))
+      : undefined;
+    onSubmit(note.trim(), subtaskDecisions);
   };
 
   return (
@@ -894,7 +960,7 @@ const StatusChangeModal: React.FC<{
         if (event.target === event.currentTarget) onCancel();
       }}
     >
-      <div className="glass-panel-glow w-full max-w-lg overflow-hidden">
+      <div className={`glass-panel-glow w-full overflow-hidden ${isRejectWithSubtasks ? 'max-w-xl' : 'max-w-lg'}`}>
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
           <h2 className="font-bold text-white">{titles[pending.kind]}</h2>
           <button
@@ -906,7 +972,7 @@ const StatusChangeModal: React.FC<{
             <X size={18} />
           </button>
         </div>
-        <div className="space-y-4 p-5">
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto p-5">
           <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
             <span className="block text-[10px] uppercase tracking-wider text-slate-500">Task</span>
             <span className="mt-1 block text-sm font-semibold text-slate-100">{pending.task.title}</span>
@@ -920,9 +986,77 @@ const StatusChangeModal: React.FC<{
               {getTaskStatusLabel(pending.toStatus)}
             </span>
           </div>
+
+          {isRejectWithSubtasks && (
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-slate-300">
+                Subtask Review <span className="text-rose-400">*</span>
+              </span>
+              {loadingSubtasks ? (
+                <p className="rounded-xl border border-white/5 bg-slate-950/30 p-3 text-xs text-slate-500">
+                  Loading subtasks...
+                </p>
+              ) : subtaskLoadError ? (
+                <p className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+                  {subtaskLoadError}
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {doneSubtasks.map((subtask) => {
+                    const entry = decisions[subtask.id] || { decision: 'Accept' as const, comment: '' };
+                    return (
+                      <li key={subtask.id} className="space-y-2 rounded-lg border border-white/5 bg-slate-950/30 p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-xs font-medium text-slate-200">{subtask.title}</span>
+                          <div className="flex shrink-0 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setSubtaskDecision(subtask.id, 'Accept')}
+                              className={`rounded-md border px-2 py-1 text-[10px] font-semibold transition ${
+                                entry.decision === 'Accept'
+                                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                                  : 'border-white/10 text-slate-400 hover:bg-white/5'
+                              }`}
+                            >
+                              Accept
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSubtaskDecision(subtask.id, 'Reject')}
+                              className={`rounded-md border px-2 py-1 text-[10px] font-semibold transition ${
+                                entry.decision === 'Reject'
+                                  ? 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+                                  : 'border-white/10 text-slate-400 hover:bg-white/5'
+                              }`}
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                        {entry.decision === 'Reject' && (
+                          <textarea
+                            value={entry.comment}
+                            onChange={(event) => setSubtaskComment(subtask.id, event.target.value)}
+                            rows={2}
+                            className={inputClass}
+                            placeholder="Why was this subtask rejected?"
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {subtaskValidationError && (
+                <span className="block text-[11px] text-rose-400">{subtaskValidationError}</span>
+              )}
+            </div>
+          )}
+
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold text-slate-300">
-              Reason for status change <span className="text-rose-400">*</span>
+              {isRejectWithSubtasks ? 'Overall review comment' : 'Reason for status change'}{' '}
+              <span className="text-rose-400">*</span>
             </span>
             <textarea
               autoFocus
@@ -952,7 +1086,7 @@ const StatusChangeModal: React.FC<{
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting}
+            disabled={submitting || (isRejectWithSubtasks && (loadingSubtasks || Boolean(subtaskLoadError)))}
             className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? 'Saving...' : submitLabels[pending.kind]}

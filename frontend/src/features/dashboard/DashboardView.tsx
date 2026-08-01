@@ -110,6 +110,17 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ deadlines }) => {
   );
 };
 
+// Formats a Date as a local calendar date string (YYYY-MM-DD). The activity API's
+// `dateBounds()` Custom preset parses customFrom/customTo as LOCAL dates, so we must
+// supply local date strings here — using UTC date strings (toISOString) shifts the
+// range by the timezone offset and silently drops recent activity on non-UTC systems.
+const toLocalDateString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users } = useApp();
 
@@ -137,7 +148,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
         }
 
-        const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: fromDate.toISOString().split('T')[0], customTo: toDate.toISOString().split('T')[0] };
+        const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: toLocalDateString(fromDate), customTo: toLocalDateString(toDate) };
         const result = await fetchActivities(filters, 1, 50);
         if (!cancelled && Array.isArray(result.items)) {
           const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({

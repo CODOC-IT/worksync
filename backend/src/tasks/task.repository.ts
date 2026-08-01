@@ -23,7 +23,17 @@ const TASK_COLUMNS = `
   -- every read (list AND detail) instead of being recomputed from client state.
   (SELECT COUNT(*)::int FROM work.tasks st
      JOIN work.taskstatuses sts ON sts.taskstatusid = st.taskstatusid
-   WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount
+   WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount,
+  EXISTS (
+    SELECT 1
+    FROM work.taskchangerequests cr
+    JOIN work.changerequesttypes crt ON crt.changerequesttypeid = cr.changerequesttypeid
+    WHERE cr.taskid = t.taskid
+      AND cr.requeststatus = 'Pending'
+      AND cr.cancelledatutc IS NULL
+      AND crt.typecode = 'Description'
+      AND cr.requestreason = 'Controlled task edit approval'
+  ) AS haspendingeditapproval
 `;
 
 const TASK_JOINS = `

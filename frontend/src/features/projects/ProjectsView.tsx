@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
@@ -15,10 +15,15 @@ import {
   Paperclip,
   StickyNote,
   Check,
-  AlertCircle
+  AlertCircle,
+  ArchiveRestore
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
+// A project's own lead is also always one of its members (see project.mapper.ts's memberIds,
+// which includes the TeamLead role), so "Led" and "Assigned" can both match the same project --
+// this mirrors that overlap rather than treating the three categories as mutually exclusive.
+type CategoryFilter = 'All' | 'Led' | 'Assigned' | 'Unassigned';
 
 interface ProjectFormState {
   title: string;
@@ -57,10 +62,14 @@ const formatBytes = (bytes: number): string => {
 };
 
 export const ProjectsView: React.FC = () => {
-  const { projects, tasks, users, currentRole, currentUser, createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject } = useApp();
+  const {
+    projects, tasks, users, currentRole, currentUser,
+    createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('All');
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -76,39 +85,81 @@ export const ProjectsView: React.FC = () => {
   // auto-generated reason, matching the unchanged backend behavior for that role.
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteReasonError, setDeleteReasonError] = useState('');
+
+  // Restore confirmation -- mirrors the delete-confirmation state above. Only shown/required for
+  // Team Lead; Admin's direct restore stays a single confirm click, matching the unchanged
+  // backend behavior for that role.
+  const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
+  const [restoreSubmitting, setRestoreSubmitting] = useState(false);
+  const [restoreReason, setRestoreReason] = useState('');
+  const [restoreReasonError, setRestoreReasonError] = useState('');
+
+  // "Admin Approval Required" confirmation step for a Team Lead's edit -- shown after the edit
+  // form itself validates, before the PROJECT_EDIT approval request is actually sent (mirrors the
+  // Archive/Permanent Delete confirmation dialog below). Admin edits skip this entirely and save
+  // immediately, exactly as before.
+  const [editApprovalOpen, setEditApprovalOpen] = useState(false);
+  const [editApprovalData, setEditApprovalData] = useState<Partial<Project> | null>(null);
+  const [editApprovalReason, setEditApprovalReason] = useState('');
+  const [editApprovalReasonError, setEditApprovalReasonError] = useState('');
+  const [editApprovalSubmitting, setEditApprovalSubmitting] = useState(false);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+
+  // The list-loaded `projects` array never carries milestones (see refreshProjectDetails's own
+  // comment) -- fetch the real detail whenever the Details popup opens so it reflects backend
+  // data instead of an always-empty milestones array.
+  useEffect(() => {
+    if (selectedProjectId) {
+      void refreshProjectDetails(selectedProjectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
   const nonAdminUsers = users.filter((u) => u.role !== 'Admin');
   // Team Lead dropdown: active Team_Lead or Team_Member users only -- Admin (already excluded via
-  // nonAdminUsers) and HR must not appear. Team Member dropdown below is unchanged.
+  // nonAdminUsers) and HR must not appear.
   const teamLeads = nonAdminUsers.filter(
     (u) => (u.role === 'Team_Lead' || u.role === 'Team_Member') && u.status !== 'inactive'
   );
-  const assignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member');
+  // Member checklist: same active-account rule as the Team Lead dropdown above -- a deactivated
+  // Team_Member must not be checkable here either.
+  const assignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member' && u.status !== 'inactive');
   // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
   // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
   // positive-offset timezone. See calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
 
-  const canCreate = currentRole === 'Team_Lead' || currentRole === 'Admin';
+  const canCreate = currentRole === 'Team_Member' || currentRole === 'Team_Lead' || currentRole === 'Admin';
+  // Matches the backend's per-project lead check (project.service.ts's isProjectLead /
+  // resolveTeamLeadUserId) -- Team Lead is not a separate account role; a Team_Member becomes a
+  // project's lead only via this project-specific assignment. Every permission decision below
+  // must go through this (or an explicit currentRole === 'Admin' check), never a bare
+  // currentRole !== 'Admin' -- that's true for a normal Team_Member too.
+  const isProjectLead = (project: Project) => project.teamLeadId === currentUser.id;
   const canManage = (project: Project) =>
-    currentRole === 'Admin' || (currentRole === 'Team_Lead' && project.teamLeadId === currentUser.id);
+    currentRole === 'Admin' || (currentRole !== 'HR' && isProjectLead(project));
 
-  // Team members only see projects they've been assigned to; other roles see everything.
-  const visibleProjects =
-    currentRole === 'Team_Member'
-      ? projects.filter((p) => p.memberIds.includes(currentUser.id))
-      : projects;
+  // Every role sees every project now (matches the backend's listProjectsForUser) -- Team Lead
+  // isn't a separate account role, so hiding "unassigned" projects from every Team_Member made
+  // them invisible to whoever wasn't already on that specific project, including its own would-be
+  // lead before they'd been assigned. The categoryFilter below distinguishes a user's own
+  // led/assigned/unassigned projects instead of hiding any of them.
+  const visibleProjects = projects;
 
   const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesCategory =
+      categoryFilter === 'All' ||
+      (categoryFilter === 'Led' && p.teamLeadId === currentUser.id) ||
+      (categoryFilter === 'Assigned' && p.memberIds.includes(currentUser.id)) ||
+      (categoryFilter === 'Unassigned' && !p.memberIds.includes(currentUser.id));
+    return matchesSearch && matchesStatus && matchesCategory;
   });
 
   const openCreateForm = () => {
@@ -116,32 +167,37 @@ export const ProjectsView: React.FC = () => {
     setEditingProjectId(null);
     setForm({
       ...EMPTY_FORM,
-      // Team Lead creation defaults to themselves as lead, unless they reassign to another eligible lead
-      teamLeadId: currentRole === 'Team_Lead' ? currentUser.id : ''
+      // A member creating a project becomes its project-scoped lead once it is approved.
+      teamLeadId: currentRole !== 'Admin' ? currentUser.id : ''
     });
     setFormErrors({});
     setFileError('');
     setFormOpen(true);
   };
 
-  const openEditForm = (project: Project) => {
+  const openEditForm = async (project: Project) => {
     setFormMode('edit');
     setEditingProjectId(project.id);
-    setForm({
-      title: project.title,
-      description: project.description,
-      startDate: project.startDate,
-      targetDate: project.targetDate,
-      priority: project.priority || 'Medium',
-      teamLeadId: project.teamLeadId,
-      memberIds: project.memberIds,
-      status: project.status === 'Pending Approval' ? 'Active' : project.status,
-      creationReason: project.creationReason || '',
-      milestones: project.milestones,
-      files: project.files
-    });
     setFormErrors({});
     setFileError('');
+    // `project` here is whatever ProjectCard was rendering, i.e. the list-cached snapshot that
+    // never carries milestones (see refreshProjectDetails's comment). Fetch the real detail first
+    // so the edit form opens with the project's actual current milestones, not an empty list.
+    const fresh = await refreshProjectDetails(project.id);
+    const source = fresh || project;
+    setForm({
+      title: source.title,
+      description: source.description,
+      startDate: source.startDate,
+      targetDate: source.targetDate,
+      priority: source.priority || 'Medium',
+      teamLeadId: source.teamLeadId,
+      memberIds: source.memberIds,
+      status: source.status === 'Pending Approval' ? 'Active' : source.status,
+      creationReason: source.creationReason || '',
+      milestones: source.milestones,
+      files: source.files
+    });
     setFormOpen(true);
   };
 
@@ -181,10 +237,14 @@ export const ProjectsView: React.FC = () => {
     setForm((prev) => ({ ...prev, milestones: prev.milestones.filter((m) => m.id !== id) }));
   };
 
-  const handleFileSelect = (fileList: FileList | null) => {
+  // Reads real content as a base64 data URL (same convention already used for Project Chat
+  // attachments -- see fileStorage.ts / discussion.repository.ts's upsertStoredFile), instead of
+  // only recording the file's name/size with a fake `url: '#'` placeholder. The backend persists
+  // these bytes for real and rejects anything with no readable content.
+  const handleFileSelect = async (fileList: FileList | null) => {
     if (!fileList) return;
     const rejected: string[] = [];
-    const accepted: ProjectFile[] = [];
+    const candidates: File[] = [];
 
     Array.from(fileList).forEach((file) => {
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
@@ -196,21 +256,34 @@ export const ProjectsView: React.FC = () => {
         rejected.push(`${file.name} (exceeds 10 MB limit)`);
         return;
       }
-      accepted.push({
-        id: `f-${Date.now()}-${file.name}`,
-        name: file.name,
-        size: formatBytes(file.size),
-        type: ext.toUpperCase(),
-        uploadedBy: currentUser.id,
-        uploadedAt: todayStr,
-        url: '#'
-      });
+      candidates.push(file);
     });
 
     setFileError(rejected.length > 0 ? `Rejected: ${rejected.join(', ')}` : '');
-    if (accepted.length > 0) {
-      setForm((prev) => ({ ...prev, files: [...prev.files, ...accepted] }));
-    }
+    if (candidates.length === 0) return;
+
+    const accepted: ProjectFile[] = await Promise.all(
+      candidates.map(
+        (file) =>
+          new Promise<ProjectFile>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                id: `f-${Date.now()}-${file.name}`,
+                name: file.name,
+                size: file.size,
+                mimeType: file.type || 'application/octet-stream',
+                uploadedBy: currentUser.id,
+                uploadedAt: todayStr,
+                dataUrl: reader.result as string
+              });
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+
+    setForm((prev) => ({ ...prev, files: [...prev.files, ...accepted] }));
   };
 
   const removeFile = (id: string) => {
@@ -254,14 +327,6 @@ export const ProjectsView: React.FC = () => {
       errors.targetDate = 'Deadline cannot be before the start date.';
     }
 
-    // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
-    // request, and the backend requires a non-empty reason to create one (see
-    // projectApproval.service.ts's createApprovalRequest). The existing "Creation Reason / Notes"
-    // field doubles as that reason rather than adding a separate field for it.
-    if (editingProjectId && currentRole === 'Team_Lead' && !data.creationReason.trim()) {
-      errors.creationReason = 'A reason is required so the Admin can review your edit request.';
-    }
-
     if (data.startDate && data.targetDate) {
       const violations = data.milestones
         .filter((m) => m.dueDate)
@@ -303,6 +368,29 @@ export const ProjectsView: React.FC = () => {
       creationReason: form.creationReason.trim() || undefined
     };
 
+    // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
+    // request. Instead of saving straight away, hand off to the "Admin Approval Required"
+    // dialog below, which collects the required reason and sends the request; the edit form
+    // stays open underneath in case they cancel and want to adjust anything. Explicitly checked
+    // against isProjectLead here (not just "not Admin") so this logic is correct on its own,
+    // rather than depending on the Edit button already having been hidden from a normal member by
+    // canManage elsewhere -- a normal Team_Member is a non-admin too, and must get neither a
+    // direct save nor an approval request.
+    if (formMode === 'edit' && editingProjectId) {
+      const editingProject = projects.find((p) => p.id === editingProjectId);
+      if (currentRole !== 'Admin') {
+        if (!editingProject || !isProjectLead(editingProject)) {
+          setFormNotice('You do not have permission to edit this project.');
+          return;
+        }
+        setEditApprovalData({ ...data, status: form.status });
+        setEditApprovalReason('');
+        setEditApprovalReasonError('');
+        setEditApprovalOpen(true);
+        return;
+      }
+    }
+
     setFormSubmitting(true);
     setFormNotice('');
     try {
@@ -312,11 +400,7 @@ export const ProjectsView: React.FC = () => {
         formMode === 'create'
           ? await createProject(data)
           : editingProjectId
-            ? await updateProject(
-                editingProjectId,
-                { ...data, status: form.status },
-                currentRole === 'Team_Lead' ? form.creationReason.trim() : undefined
-              )
+            ? await updateProject(editingProjectId, { ...data, status: form.status })
             : { success: false, message: 'No project selected to update.' };
 
       if (!result.success) {
@@ -331,20 +415,86 @@ export const ProjectsView: React.FC = () => {
     }
   };
 
-  const handleRestore = async (projectId: string) => {
-    // A Team Lead's restore doesn't apply immediately -- it becomes a PROJECT_RESTORE approval
-    // request, and the backend requires a non-empty reason to create one. Admin's restore stays
-    // a single click, unchanged.
-    let reason: string | undefined;
-    if (currentRole === 'Team_Lead') {
-      const entered = window.prompt('Reason for requesting this project be restored:');
-      if (!entered?.trim()) return;
-      reason = entered.trim();
-    }
-    const result = await restoreProject(projectId, reason);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+  const closeEditApproval = () => {
+    if (editApprovalSubmitting) return;
+    setEditApprovalOpen(false);
+    setEditApprovalData(null);
+    setEditApprovalReason('');
+    setEditApprovalReasonError('');
   };
 
+  // Sends the PROJECT_EDIT approval request created by the dialog below. The project itself is
+  // never touched here -- backend/src/projects/project.controller.ts routes this Team Lead call
+  // to projectApproval.service.ts's createApprovalRequest instead of project.service.ts's
+  // updateProject, so nothing changes until an Admin approves it.
+  const sendEditApprovalRequest = async () => {
+    if (!editingProjectId || !editApprovalData || editApprovalSubmitting) return;
+    if (!editApprovalReason.trim()) {
+      setEditApprovalReasonError('A reason is required so the Admin can review your edit request.');
+      return;
+    }
+    setEditApprovalReasonError('');
+    setEditApprovalSubmitting(true);
+    try {
+      const result = await updateProject(editingProjectId, editApprovalData, editApprovalReason.trim());
+      setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.success) {
+        setEditApprovalOpen(false);
+        setEditApprovalData(null);
+        setEditApprovalReason('');
+        setEditApprovalReasonError('');
+        closeForm();
+      }
+    } finally {
+      setEditApprovalSubmitting(false);
+    }
+  };
+
+  const openRestoreConfirm = (projectId: string) => {
+    setRestoreTargetId(projectId);
+    setRestoreReason('');
+    setRestoreReasonError('');
+  };
+
+  const closeRestoreConfirm = () => {
+    if (restoreSubmitting) return;
+    setRestoreTargetId(null);
+    setRestoreReason('');
+    setRestoreReasonError('');
+  };
+
+  const confirmRestore = async () => {
+    if (!restoreTargetId || restoreSubmitting) return;
+    // A Team Lead's restore doesn't apply immediately -- it becomes a PROJECT_RESTORE approval
+    // request, and the backend requires a non-empty reason to create one. Admin's restore stays a
+    // single confirm click, unchanged. Explicitly checked against isProjectLead here (not just
+    // "not Admin") so this logic is correct on its own, rather than depending on the Restore
+    // button already having been hidden from a normal member by canManage elsewhere -- a normal
+    // Team_Member is a non-admin too, and must get no action here at all.
+    if (currentRole !== 'Admin') {
+      const target = projects.find((p) => p.id === restoreTargetId);
+      if (!target || !isProjectLead(target)) {
+        setRestoreReasonError('You do not have permission to perform this action.');
+        return;
+      }
+      if (!restoreReason.trim()) {
+        setRestoreReasonError('A reason is required so the Admin can review your request.');
+        return;
+      }
+    }
+    setRestoreReasonError('');
+    setRestoreSubmitting(true);
+    try {
+      const result = await restoreProject(restoreTargetId, restoreReason.trim() || undefined);
+      setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.success) closeRestoreConfirm();
+    } finally {
+      setRestoreSubmitting(false);
+    }
+  };
+
+  const editingProject = editingProjectId ? projects.find((p) => p.id === editingProjectId) || null : null;
+  const restoreTarget = projects.find((p) => p.id === restoreTargetId) || null;
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
@@ -364,11 +514,22 @@ export const ProjectsView: React.FC = () => {
   const confirmDelete = async () => {
     if (!deleteTargetId || deleteSubmitting) return;
     // A Team Lead's delete/permanent-delete doesn't apply immediately -- it becomes a
-    // PROJECT_DELETE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
-    // non-empty reason to create one. Admin keeps the previous auto-generated reason.
-    if (currentRole === 'Team_Lead' && !deleteReason.trim()) {
-      setDeleteReasonError('A reason is required so the Admin can review your request.');
-      return;
+    // PROJECT_ARCHIVE/PROJECT_PERMANENT_DELETE approval request, and the backend requires a
+    // non-empty reason to create one. Admin keeps the previous auto-generated reason. Explicitly
+    // checked against isProjectLead here (not just "not Admin") so this logic is correct on its
+    // own, rather than depending on the Delete/Archive button already having been hidden from a
+    // normal member by canManage elsewhere -- a normal Team_Member is a non-admin too, and must
+    // get no action here at all.
+    if (currentRole !== 'Admin') {
+      const target = projects.find((p) => p.id === deleteTargetId);
+      if (!target || !isProjectLead(target)) {
+        setDeleteReasonError('You do not have permission to perform this action.');
+        return;
+      }
+      if (!deleteReason.trim()) {
+        setDeleteReasonError('A reason is required so the Admin can review your request.');
+        return;
+      }
     }
     setDeleteReasonError('');
     setDeleteSubmitting(true);
@@ -448,6 +609,21 @@ export const ProjectsView: React.FC = () => {
           <option value="Completed">Completed</option>
           <option value="Archived">Archived</option>
         </select>
+        {/* Meaningful only for accounts that can actually be a project's lead/member -- Admin/HR
+            are never assignable to a project (see nonAdminUsers above), so "Led"/"Assigned" would
+            always be empty and "Unassigned" would always equal "All" for them. */}
+        {(currentRole === 'Team_Lead' || currentRole === 'Team_Member') && (
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
+          >
+            <option value="All">All Projects</option>
+            <option value="Led">Led by Me</option>
+            <option value="Assigned">Assigned to Me</option>
+            <option value="Unassigned">Not Assigned</option>
+          </select>
+        )}
       </div>
 
       {/* Project Grid */}
@@ -464,9 +640,11 @@ export const ProjectsView: React.FC = () => {
               teamLead={teamLead}
               isOverdue={isOverdue}
               manageable={manageable}
+              currentUserId={currentUser.id}
+              currentRole={currentRole}
               onEdit={() => openEditForm(project)}
               onDelete={() => openDeleteConfirm(project.id)}
-              onRestore={() => handleRestore(project.id)}
+              onRestore={() => openRestoreConfirm(project.id)}
               onClick={() => setSelectedProjectId(project.id)}
             />
           );
@@ -565,9 +743,13 @@ export const ProjectsView: React.FC = () => {
                 <select
                   value={form.teamLeadId}
                   onChange={(e) => setForm((prev) => ({ ...prev, teamLeadId: e.target.value }))}
-                  // Team Leads can edit their own project but must not reassign its Team Lead;
-                  // only Admins are allowed to change this field once a project exists.
-                  disabled={formMode === 'edit' && currentRole === 'Team_Lead'}
+                  // A project's lead can edit their own project but must not reassign its Team
+                  // Lead; only Admins are allowed to change this field once a project exists.
+                  disabled={
+                    formMode === 'edit' &&
+                    currentRole !== 'Admin' &&
+                    (!editingProject || isProjectLead(editingProject))
+                  }
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">Select a Team Lead...</option>
@@ -667,7 +849,7 @@ export const ProjectsView: React.FC = () => {
                 <input
                   type="file"
                   multiple
-                  onChange={(e) => handleFileSelect(e.target.files)}
+                  onChange={(e) => void handleFileSelect(e.target.files)}
                   className="w-full text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:text-cyan-300 file:text-xs file:font-semibold"
                 />
                 {fileError && <p className="text-rose-400 mt-1">{fileError}</p>}
@@ -679,7 +861,7 @@ export const ProjectsView: React.FC = () => {
                         className="flex items-center justify-between text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5"
                       >
                         <span className="truncate">
-                          {f.name} <span className="text-slate-500">({f.size})</span>
+                          {f.name} <span className="text-slate-500">({formatBytes(f.size)})</span>
                         </span>
                         <button
                           type="button"
@@ -694,17 +876,13 @@ export const ProjectsView: React.FC = () => {
                 )}
               </div>
 
-              {/* Creation reason / notes -- for a Team Lead editing an existing project, this
-                  also doubles as the PROJECT_EDIT approval request's required reason. */}
+              {/* Creation reason / notes -- a plain project-level note, independent of the
+                  PROJECT_EDIT approval request's own required reason (captured in the "Admin
+                  Approval Required" dialog below for a Team Lead's edit). */}
               <div>
                 <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
-                  <StickyNote size={12} className="text-cyan-400" />{' '}
-                  {formMode === 'edit' && currentRole === 'Team_Lead' ? 'Reason for Change' : 'Creation Reason / Notes'}{' '}
-                  <span className="text-slate-500 font-normal">
-                    {formMode === 'edit' && currentRole === 'Team_Lead'
-                      ? '(required for Admin approval)'
-                      : '(recommended for Admin review)'}
-                  </span>
+                  <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
+                  <span className="text-slate-500 font-normal">(recommended for Admin review)</span>
                 </label>
                 <textarea
                   value={form.creationReason}
@@ -713,10 +891,13 @@ export const ProjectsView: React.FC = () => {
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="Why is this project being created? Any context for the reviewer?"
                 />
-                {formErrors.creationReason && <p className="text-rose-400 mt-1">{formErrors.creationReason}</p>}
               </div>
 
-              {formMode === 'create' && currentRole === 'Team_Lead' && (
+              {/* No project exists yet at creation time, so there's no per-project lead to check
+                  against -- this must match project.service.ts's own condition for who gets
+                  PendingActivation (`actorRole === 'Admin' ? 'Active' : 'PendingActivation'`),
+                  i.e. anyone who isn't Admin, not just accounts literally role 'Team_Lead'. */}
+              {formMode === 'create' && currentRole !== 'Admin' && (
                 <p className="text-slate-500 flex items-center gap-1.5">
                   <CheckCircle2 size={12} className="text-cyan-400 shrink-0" />
                   This project will be created as Pending Approval until an Admin approves it.
@@ -751,6 +932,118 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
+      {/* Admin Approval Required (Team Lead edit) */}
+      {editApprovalOpen && editApprovalData && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="w-full max-w-md glass-panel-glow border border-amber-500/40 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-amber-400">
+              <AlertTriangle size={18} />
+              <h2 className="text-sm font-bold text-white">Admin Approval Required</h2>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Editing "{form.title || 'this project'}" requires Admin approval. Your changes will not be applied
+              to the project until an Admin reviews and approves this request.
+            </p>
+
+            <div>
+              <label className="block text-xs text-slate-300 font-semibold mb-1">
+                Reason <span className="text-slate-500 font-normal">(required for Admin approval)</span>
+              </label>
+              <textarea
+                value={editApprovalReason}
+                onChange={(e) => {
+                  setEditApprovalReason(e.target.value);
+                  if (e.target.value.trim()) setEditApprovalReasonError('');
+                }}
+                rows={3}
+                autoFocus
+                className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                placeholder="Why are these changes needed? Any context for the Admin?"
+              />
+              {editApprovalReasonError && <p className="text-rose-400 text-xs mt-1">{editApprovalReasonError}</p>}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                onClick={closeEditApproval}
+                disabled={editApprovalSubmitting}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendEditApprovalRequest}
+                disabled={editApprovalSubmitting}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {editApprovalSubmitting ? 'Sending...' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirmation (inline) */}
+      {restoreTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="w-full max-w-md glass-panel-glow border border-emerald-500/40 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-emerald-400">
+              <ArchiveRestore size={18} />
+              <h2 className="text-sm font-bold text-white">
+                {currentRole === 'Admin'
+                  ? `Restore "${restoreTarget.title}"?`
+                  : `Request restoration of "${restoreTarget.title}"?`}
+              </h2>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              {currentRole === 'Admin'
+                ? 'This project and its related tasks will be restored from Archives and become Active again.'
+                : 'Restoring this project requires Admin approval. This will submit a request; the project stays archived unless an Admin approves it.'}
+            </p>
+
+            {currentRole !== 'Admin' && isProjectLead(restoreTarget) && (
+              <div>
+                <label className="block text-xs text-slate-300 font-semibold mb-1">
+                  Reason <span className="text-slate-500 font-normal">(required for Admin approval)</span>
+                </label>
+                <textarea
+                  value={restoreReason}
+                  onChange={(e) => {
+                    setRestoreReason(e.target.value);
+                    if (e.target.value.trim()) setRestoreReasonError('');
+                  }}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                  placeholder="Why is this needed? Any context for the Admin?"
+                />
+                {restoreReasonError && <p className="text-rose-400 text-xs mt-1">{restoreReasonError}</p>}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                onClick={closeRestoreConfirm}
+                disabled={restoreSubmitting}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRestore}
+                disabled={restoreSubmitting}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {restoreSubmitting
+                  ? 'Working...'
+                  : currentRole === 'Admin' ? 'Restore Project' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Confirmation (inline) */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
@@ -776,8 +1069,8 @@ export const ProjectsView: React.FC = () => {
                 </p>
               ) : (
                 <p className="text-xs text-slate-400">
-                  This will submit a request to permanently delete this project and its related tasks and subtasks
-                  for Admin approval. Everything stays unchanged unless an Admin approves it.
+                  Permanently deleting this project requires Admin approval. This will submit a request to delete
+                  it and its related tasks and subtasks; everything stays unchanged unless an Admin approves it.
                 </p>
               )
             ) : currentRole === 'Admin' ? (
@@ -803,12 +1096,12 @@ export const ProjectsView: React.FC = () => {
               )
             ) : (
               <p className="text-xs text-slate-400">
-                This project will not be deleted immediately. A delete request will be submitted for Admin
-                approval, and the project stays unchanged unless an Admin approves it.
+                Archiving this project requires Admin approval. This will submit a request; the project stays
+                unchanged unless an Admin approves it.
               </p>
             )}
 
-            {currentRole === 'Team_Lead' && (
+            {currentRole !== 'Admin' && isProjectLead(deleteTarget) && (
               <div>
                 <label className="block text-xs text-slate-300 font-semibold mb-1">
                   Reason <span className="text-slate-500 font-normal">(required for Admin approval)</span>
@@ -838,14 +1131,14 @@ export const ProjectsView: React.FC = () => {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 disabled:opacity-60"
               >
                 {deleteSubmitting
-                  ? 'Working...'
+                  ? currentRole === 'Admin' ? 'Working...' : 'Sending...'
                   : deleteTarget.status === 'Archived'
                     ? currentRole === 'Admin'
                       ? 'Yes, Permanently Delete'
-                      : 'Request Permanent Deletion'
+                      : 'Send Request'
                     : currentRole === 'Admin'
                       ? 'Delete Project'
-                      : 'Request Deletion'}
+                      : 'Send Request'}
               </button>
             </div>
           </div>

@@ -48,6 +48,7 @@ export interface TaskRow {
   projectcode: string;
   subtaskcount?: number;
   completedsubtaskcount?: number;
+  haspendingeditapproval?: boolean;
 }
 
 export interface TaskAssigneeRow {
@@ -97,6 +98,8 @@ export interface TaskDTO {
   tags: string[];
   attachments: [];
   approvalStatus: 'Approved';
+  /** Derived from unresolved persisted task-edit approval records. */
+  hasPendingApproval: boolean;
   completionSummary?: string;
   createdAt: string;
   reviewApproval?: 'Pending';
@@ -151,6 +154,16 @@ export interface UpdateTaskInput {
 export interface ChangeStatusInput {
   status: ApiTaskStatus;
   note: string;
+}
+
+// A Project Lead's per-subtask verdict when rejecting a parent task's review — see
+// task.service.ts's decideReview. Only completed (`Done`) subtasks require a decision: accepted
+// ones stay Done untouched, rejected ones return to InProgress with `comment` persisted as their
+// own work.TaskStatusHistory entry (the same audit trail every other status change already uses).
+export interface SubtaskReviewDecisionInput {
+  subtaskId: string;
+  decision: 'Accept' | 'Reject';
+  comment?: string;
 }
 
 export interface TaskEditApprovalInput {

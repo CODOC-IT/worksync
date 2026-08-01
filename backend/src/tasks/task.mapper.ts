@@ -61,6 +61,7 @@ export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[]): TaskDT
     tags: [],
     attachments: [],
     approvalStatus: 'Approved',
+    hasPendingApproval: Boolean(row.haspendingeditapproval),
     completionSummary: row.completionsummary || undefined,
     createdAt: formatDate(row.createdatutc),
     reviewApproval: status === 'Review' ? 'Pending' : undefined,

@@ -44,4 +44,19 @@ router.post('/:id/members', controller.addMember);
 // DELETE /api/projects/:id/members/:userId
 router.delete('/:id/members/:userId', controller.removeMember);
 
+// POST /api/projects/:id/milestones — body: { title, dueDate, description? }
+router.post('/:id/milestones', controller.addMilestone);
+
+// PATCH /api/projects/:id/milestones/:milestoneId — body: { title?, dueDate?, description? }
+router.patch('/:id/milestones/:milestoneId', controller.updateMilestone);
+
+// DELETE /api/projects/:id/milestones/:milestoneId
+router.delete('/:id/milestones/:milestoneId', controller.deleteMilestone);
+
+// POST /api/projects/:id/files — body: { name, mimeType?, url } (url is a base64 data URL)
+router.post('/:id/files', controller.addProjectFile);
+
+// DELETE /api/projects/:id/files/:fileId
+router.delete('/:id/files/:fileId', controller.removeProjectFile);
+
 export default router;

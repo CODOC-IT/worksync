@@ -33,7 +33,7 @@ export interface ActivityItem {
 }
 
 export interface ActivityFilters {
-  datePreset: 'Today' | 'Yesterday' | 'Last 7 Days' | 'Last 30 Days' | 'Custom' | 'All';
+  datePreset: 'Today' | 'Yesterday' | 'Last 7 Days' | 'Last 30 Days' | 'Custom';
   customFrom: string;
   customTo: string;
   userId: string;

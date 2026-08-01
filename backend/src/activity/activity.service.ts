@@ -347,15 +347,14 @@ export const exportPdf = async (
   const CONTENT  = PW - MARGIN * 2;
 
   // ── Column definitions ──────────────────────────────────────────────────
-  // Keep the printable report compact and readable instead of squeezing every audit field
-  // into tiny columns that can overflow across pages.
+  // Result is grouped with the event so the description can remain readable at a practical
+  // font size. Every column is kept inside the landscape A4 printable area.
   const COLS = [
-    { header: 'Timestamp',      key: 'ts',      w: 112 },
-    { header: 'Member',         key: 'actor',   w: 106 },
-    { header: 'Action',         key: 'action',  w: 112 },
-    { header: 'Project / Task', key: 'context', w: 158 },
-    { header: 'Result',         key: 'result',  w: 72  },
-    { header: 'Details',        key: 'details', w: 0   }, // fills remainder
+    { header: 'Timestamp', key: 'ts',      w: 108 },
+    { header: 'Actor',     key: 'actor',   w: 110 },
+    { header: 'Event',     key: 'event',   w: 148 },
+    { header: 'Context',   key: 'context', w: 154 },
+    { header: 'Details',   key: 'details', w: 0   }, // fills remainder
   ] as const;
 
   // Calculate description column width
@@ -364,79 +363,56 @@ export const exportPdf = async (
 
   const colWidths = [...COLS.slice(0, -1).map((c) => c.w), descW];
 
-  const ROW_H       = 14;
-  const HEADER_H    = 16;
-  const BAND_H      = 44;
-  const COVER_H     = 90;
-  const TABLE_TOP_P1 = COVER_H + 4;
-  const TABLE_TOP_PN = BAND_H + 4;
-  const FOOTER_H    = 20;
+  const PAGE_HEADER_H = 42;
+  const SUMMARY_H = 28;
+  const HEADER_H = 20;
+  const FOOTER_H = 22;
+  const CELL_PAD_X = 5;
+  const CELL_PAD_Y = 5;
+  const CELL_LINE_H = 9;
+  const MIN_ROW_H = 28;
+  const MAX_ROW_H = 42;
+  const TABLE_BOTTOM = PH - FOOTER_H - 7;
 
   let pageNum = 0;
   let y       = 0;
 
   // ── Page-level helpers ──────────────────────────────────────────────────
-  const drawBrandBand = (height: number) => {
-    // Gradient-like effect: two rectangles
-    doc.rect(0, 0, PW, height).fill(PDF.brandDark);
-    doc.rect(0, height - 3, PW, 3).fill(PDF.brandAccent);
-    // Logo area
-    doc.fillColor(PDF.brandAccent).fontSize(13).font('Helvetica-Bold')
-      .text('WorkSync', MARGIN, 10, { lineBreak: false });
-    doc.fillColor(PDF.pageBg).fontSize(7).font('Helvetica')
-      .text('Activity Log Export', MARGIN + 80, 13, { lineBreak: false });
-    // Right: page number
+  const drawBrandBand = () => {
+    doc.rect(0, 0, PW, PAGE_HEADER_H).fill(PDF.brandDark);
+    doc.rect(0, PAGE_HEADER_H - 3, PW, 3).fill(PDF.brandAccent);
+    doc.fillColor(PDF.brandAccent).fontSize(14).font('Helvetica-Bold')
+      .text('WorkSync', MARGIN, 12, { lineBreak: false });
+    doc.fillColor(PDF.pageBg).fontSize(9).font('Helvetica-Bold')
+      .text('Activity Log', MARGIN + 84, 15, { lineBreak: false });
     doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
-      .text(`Page ${pageNum}`, PW - MARGIN - 40, 13, { width: 40, align: 'right', lineBreak: false });
+      .text(`Exported ${fmtDate(exportedAt.toISOString())}  |  Page ${pageNum}`, PW - MARGIN - 220, 16, {
+        width: 220, align: 'right', lineBreak: false,
+      });
   };
 
-  const drawCoverMeta = () => {
-    // White meta block
-    const metaY = BAND_H + 8;
-    const metaH = COVER_H - BAND_H - 12;
-    doc.rect(MARGIN, metaY, CONTENT, metaH).fill(PDF.brandLight);
-    doc.rect(MARGIN, metaY, 4, metaH).fill(PDF.brandAccent);
-
-    const col1 = MARGIN + 14;
-    const col2 = MARGIN + CONTENT / 2;
-    const lineH = 12;
-    let metaLine = metaY + 6;
-
-    const drawMeta = (label: string, value: string, x: number) => {
-      doc.fillColor(PDF.textMuted).fontSize(6).font('Helvetica')
-        .text(label.toUpperCase(), x, metaLine, { lineBreak: false });
-      doc.fillColor(PDF.textPrimary).fontSize(7).font('Helvetica-Bold')
-        .text(value, x, metaLine + 6, { lineBreak: false });
-    };
-
-    drawMeta('Exported at',      fmtDate(exportedAt.toISOString()),    col1);
-    drawMeta('Exported by',      userStore.findById(viewerId)?.name || 'System', col2);
-    metaLine += lineH + 8;
-    drawMeta('Records exported', `${result.items.length} of ${result.total} matching`, col1);
-    drawMeta('Export limit',     `${EXPORT_LIMIT.toLocaleString()} rows`, col2);
-
-    if (filterSummary !== '{}') {
-      metaLine += lineH + 4;
-      doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
-        .text('ACTIVE FILTERS', col1, metaLine, { lineBreak: false });
-      doc.fillColor(PDF.textSecondary).fontSize(7).font('Helvetica')
-        .text(pdfCellValue(filterSummary, 220), col1, metaLine + 9, {
-          width: CONTENT - 18, height: 9, lineBreak: false, ellipsis: true,
-        });
-    }
+  const drawSummary = (topY: number) => {
+    doc.rect(MARGIN, topY, CONTENT, SUMMARY_H).fill(PDF.brandLight);
+    doc.rect(MARGIN, topY, 4, SUMMARY_H).fill(PDF.brandAccent);
+    const exportedBy = userStore.findById(viewerId)?.name || 'System';
+    const activeFilters = filterSummary === '{}' ? 'No active filters' : pdfCellValue(filterSummary, 175);
+    doc.fillColor(PDF.textPrimary).fontSize(7.5).font('Helvetica-Bold')
+      .text(`${result.items.length} of ${result.total} matching activities`, MARGIN + 12, topY + 10, { lineBreak: false });
+    doc.fillColor(PDF.textSecondary).fontSize(7).font('Helvetica')
+      .text(`Exported by ${exportedBy}  |  ${activeFilters}`, MARGIN + CONTENT / 2 - 24, topY + 10, {
+        width: CONTENT / 2 + 10, align: 'right', lineBreak: false, ellipsis: true,
+      });
   };
 
   const drawTableHeader = (topY: number) => {
     doc.rect(MARGIN, topY, CONTENT, HEADER_H).fill(PDF.tableHeaderBg);
     let x = MARGIN;
-    COLS.slice(0, -1).forEach((col, i) => {
-      doc.fillColor(PDF.tableHeaderFg).fontSize(6).font('Helvetica-Bold')
-        .text(col.header, x + 4, topY + 5, { width: colWidths[i] - 8, lineBreak: false });
+    COLS.forEach((col, i) => {
+      doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
+        .text(col.header, x + CELL_PAD_X, topY + 6, { width: colWidths[i] - CELL_PAD_X * 2, lineBreak: false });
+      if (i > 0) doc.rect(x, topY, 0.5, HEADER_H).fill('#334155');
       x += colWidths[i];
     });
-    // Details header
-    doc.fillColor(PDF.tableHeaderFg).fontSize(7).font('Helvetica-Bold')
-      .text('Details', x + 4, topY + 5, { width: descW - 8, height: 8, lineBreak: false, ellipsis: true });
   };
 
   const drawFooterBar = () => {
@@ -444,7 +420,7 @@ export const exportPdf = async (
     doc.rect(0, PH - FOOTER_H, PW, 1).fill(PDF.rowBorder);
     doc.fillColor(PDF.textMuted).fontSize(7).font('Helvetica')
       .text(
-        `WorkSync Audit Export  ·  ${fmtDate(exportedAt.toISOString())}  ·  Page ${pageNum}`,
+        `WorkSync Activity Log  ·  ${result.items.length} exported  ·  Page ${pageNum}`,
         MARGIN, PH - FOOTER_H + 8,
         { width: CONTENT, align: 'center', lineBreak: false },
       );
@@ -453,11 +429,17 @@ export const exportPdf = async (
   // ── First page ───────────────────────────────────────────────────────────
   const newPage = (isFirst = false) => {
     pageNum++;
+    // PDFKit otherwise retains the footer's cursor position while a page is being drawn,
+    // which can trigger an automatic blank page when the next table header is rendered.
+    doc.x = MARGIN;
+    doc.y = 0;
     doc.rect(0, 0, PW, PH).fill(PDF.pageBg);
-    const bandH = isFirst ? COVER_H : BAND_H;
-    drawBrandBand(isFirst ? BAND_H : BAND_H);
-    if (isFirst) drawCoverMeta();
-    y = (isFirst ? TABLE_TOP_P1 : TABLE_TOP_PN);
+    drawBrandBand();
+    y = PAGE_HEADER_H + 8;
+    if (isFirst) {
+      drawSummary(y);
+      y += SUMMARY_H + 8;
+    }
     drawTableHeader(y);
     y += HEADER_H;
     drawFooterBar();
@@ -465,50 +447,87 @@ export const exportPdf = async (
 
   newPage(true);
 
+  // PDFKit's wrapped text renderer can add a page while a table cell is being drawn. Wrap into
+  // a bounded number of lines ourselves and draw each one at a fixed coordinate instead.
+  const cellLines = (value: string, width: number, maxLength: number): string[] => {
+    const text = pdfCellValue(value, maxLength);
+    const words = text.split(' ').filter(Boolean);
+    const maxLines = Math.floor((MAX_ROW_H - CELL_PAD_Y * 2) / CELL_LINE_H);
+    const lines: string[] = [];
+    let current = '';
+
+    const fit = (source: string, suffix = ''): string => {
+      let fitted = source;
+      while (fitted && doc.widthOfString(`${fitted}${suffix}`) > width) fitted = fitted.slice(0, -1);
+      return `${fitted}${suffix}`;
+    };
+
+    for (let index = 0; index < words.length; index++) {
+      const candidate = current ? `${current} ${words[index]}` : words[index];
+      if (doc.widthOfString(candidate) <= width) {
+        current = candidate;
+        continue;
+      }
+      if (current) lines.push(current);
+      if (lines.length === maxLines) {
+        lines[maxLines - 1] = fit(`${lines[maxLines - 1]}…`);
+        return lines;
+      }
+      current = fit(words[index]);
+    }
+
+    if (current) lines.push(current);
+    return lines.length ? lines : ['—'];
+  };
+
   // ── Data rows ────────────────────────────────────────────────────────────
   let rowNum = 0;
   for (const item of result.items) {
-    const availH = PH - FOOTER_H - y;
-    if (availH < ROW_H) {
-      doc.addPage({ size: 'A4', layout: 'landscape' });
-      newPage(false);
-    }
-
-    const bg = rowNum % 2 === 0 ? PDF.rowEven : PDF.rowOdd;
-    doc.rect(MARGIN, y, CONTENT, ROW_H).fill(bg);
-
-    // Bottom border
-    doc.rect(MARGIN, y + ROW_H - 0.5, CONTENT, 0.5).fill(PDF.rowBorder);
-
     const projectTask = [item.project?.name, item.task?.name].filter(Boolean).join(' / ') || '—';
     const cellData = [
       fmtDate(item.timestamp),
       item.actor.name,
-      `${item.action} • ${item.module}`,
+      `${item.action} • ${item.module}\n${item.result}`,
       projectTask,
-      item.result,
       item.description,
     ];
 
-    let x = MARGIN;
-    cellData.forEach((cell, i) => {
-      const cx = x + 4;
-      const cy = y + (ROW_H - 9) / 2;   // vertically centered
-      const cw = colWidths[i] - 8;
+    // Measure the content before drawing so a complete row moves to the next page instead of
+    // leaving a clipped row, orphaned text, or a mostly blank trailing page.
+    const cellText = cellData.map((cell, i) => {
+      const width = colWidths[i] - CELL_PAD_X * 2;
+      doc.font('Helvetica').fontSize(i === 4 ? 7.5 : 7);
+      return cellLines(cell, width, i === 4 ? 240 : 90);
+    });
+    const rowHeight = Math.max(
+      MIN_ROW_H,
+      Math.min(MAX_ROW_H, Math.max(...cellText.map((lines) => lines.length * CELL_LINE_H)) + CELL_PAD_Y * 2),
+    );
+    if (y + rowHeight > TABLE_BOTTOM) {
+      doc.addPage({ size: 'A4', layout: 'landscape', margin: 0 });
+      newPage(false);
+    }
 
-      doc.fillColor(i === 0 || i === 4 ? PDF.textSecondary : PDF.textPrimary)
-        .fontSize(i === 5 ? 6 : 6.5)
-        .font('Helvetica')
-        .text(pdfCellValue(cell, i === 5 ? 150 : 42), cx, cy, {
-          width: cw,
-          height: 8,
-          lineBreak: false,
-          ellipsis: true,
-        });
+    const bg = rowNum % 2 === 0 ? PDF.rowEven : PDF.rowOdd;
+    doc.rect(MARGIN, y, CONTENT, rowHeight).fill(bg);
+    doc.lineWidth(0.5).strokeColor(PDF.rowBorder).rect(MARGIN, y, CONTENT, rowHeight).stroke();
+
+    let x = MARGIN;
+    cellText.forEach((lines, i) => {
+      const cx = x + CELL_PAD_X;
+      const cy = y + CELL_PAD_Y;
+
+      doc.fillColor(i === 0 ? PDF.textSecondary : PDF.textPrimary)
+        .fontSize(i === 4 ? 7.5 : 7)
+        .font('Helvetica');
+      lines.forEach((line, lineIndex) => {
+        doc.text(line, cx, cy + lineIndex * CELL_LINE_H, { lineBreak: false });
+      });
+      if (i > 0) doc.rect(x, y, 0.5, rowHeight).fill(PDF.rowBorder);
       x += colWidths[i];
     });
 
-    y += ROW_H;
+    y += rowHeight;
     rowNum++;
   }
 

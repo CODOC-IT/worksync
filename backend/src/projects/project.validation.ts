@@ -1,4 +1,10 @@
-import { CreateProjectInput, UpdateProjectInput } from './project.types.js';
+import {
+  CreateMilestoneInput,
+  CreateProjectFileInput,
+  CreateProjectInput,
+  UpdateMilestoneInput,
+  UpdateProjectInput
+} from './project.types.js';
 
 export interface ValidationResult {
   valid: boolean;
@@ -74,6 +80,54 @@ export const validateMemberBody = (body: unknown): ValidationResult => {
   }
   if (role !== undefined && !['Owner', 'TeamLead', 'Member', 'Reviewer', 'Observer'].includes(role as string)) {
     return { valid: false, message: 'role is not a recognized project member role.' };
+  }
+  return { valid: true };
+};
+
+export const validateCreateMilestoneBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const input = body as Partial<CreateMilestoneInput>;
+
+  if (!input.title || typeof input.title !== 'string' || !input.title.trim()) {
+    return { valid: false, message: 'title is required.' };
+  }
+  if (!input.dueDate || !isValidIsoDate(input.dueDate)) {
+    return { valid: false, message: 'dueDate must be a valid YYYY-MM-DD date.' };
+  }
+  if (input.description !== undefined && typeof input.description !== 'string') {
+    return { valid: false, message: 'description must be a string.' };
+  }
+  return { valid: true };
+};
+
+export const validateCreateProjectFileBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const input = body as Partial<CreateProjectFileInput>;
+
+  if (!input.name || typeof input.name !== 'string' || !input.name.trim()) {
+    return { valid: false, message: 'name is required.' };
+  }
+  if (!input.url || typeof input.url !== 'string' || !input.url.trim()) {
+    return { valid: false, message: 'url (file content) is required.' };
+  }
+  if (input.mimeType !== undefined && typeof input.mimeType !== 'string') {
+    return { valid: false, message: 'mimeType must be a string.' };
+  }
+  return { valid: true };
+};
+
+export const validateUpdateMilestoneBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const input = body as Partial<UpdateMilestoneInput>;
+
+  if (input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim())) {
+    return { valid: false, message: 'title cannot be empty.' };
+  }
+  if (input.dueDate !== undefined && !isValidIsoDate(input.dueDate)) {
+    return { valid: false, message: 'dueDate must be a valid YYYY-MM-DD date.' };
+  }
+  if (input.description !== undefined && typeof input.description !== 'string') {
+    return { valid: false, message: 'description must be a string.' };
   }
   return { valid: true };
 };

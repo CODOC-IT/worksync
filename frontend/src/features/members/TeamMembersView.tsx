@@ -15,15 +15,19 @@ import {
   EyeOff,
   Pencil,
   FolderKanban,
+  IdCard,
   LayoutGrid,
   List,
+  LoaderCircle,
   Mail,
   Plus,
   RotateCcw,
   Search,
   ShieldCheck,
   Sparkles,
+  Send,
   UserMinus,
+  UserPlus,
   UserRoundSearch,
   Users,
   X,
@@ -110,6 +114,15 @@ const formatRole = (role: UserRole) => ROLE_LABELS[role] || role.replace('_', ' 
 
 const TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
 
+const surfaceInputClass =
+  'w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
+const surfaceMutedCardClass =
+  'rounded-xl border border-white/10 bg-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]';
+const modalSecondaryButtonClass =
+  'rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/10';
+const modalPrimaryButtonClass =
+  'rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18 disabled:opacity-60';
+
 const EMPTY_MEMBER_FORM: MemberFormState = {
   name: '',
   username: '',
@@ -142,6 +155,8 @@ export const TeamMembersView: React.FC = () => {
   const [confirmAction, setConfirmAction] = useState<{ type: 'deactivate' | 'reactivate'; memberId: string; memberName: string } | null>(null);
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
+  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [departmentsBusy, setDepartmentsBusy] = useState(false);
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
   const canManageAccounts = currentRole === 'Admin' || currentRole === 'HR';
@@ -192,9 +207,13 @@ export const TeamMembersView: React.FC = () => {
     [projects, selectedMember, tasks],
   );
   const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && selectedMember?.role === 'Admin');
+  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR');
+  const canEditSelectedMember = Boolean(selectedMember) && !hrCannotManageSelectedMember;
+  const selectedMemberIsAdmin = selectedMember?.role === 'Admin';
 
   const activeMembersCount = useMemo(() => users.filter((member) => member.status !== 'inactive').length, [users]);
   const deactivatedMembersCount = useMemo(() => users.filter((member) => member.status === 'inactive').length, [users]);
+  const roleLockedToProjectLead = manageMode === 'edit' && memberForm.role === 'Team_Lead';
 
   useEffect(() => {
     if (!canInspectMembers) {
@@ -208,16 +227,42 @@ export const TeamMembersView: React.FC = () => {
     }
   }, [accountView, canManageAccounts]);
 
-  const totalMembers = users.length;
-  const teamLeadCount = users.filter((member) => member.role === 'Team_Lead').length;
-  const hrCount = users.filter((member) => member.role === 'HR').length;
-  const teamMemberCount = users.filter((member) => member.role === 'Team_Member').length;
+  useEffect(() => {
+    if (!canManageAccounts) return;
+    let active = true;
+    setDepartmentsBusy(true);
+    const token = localStorage.getItem('worksync_auth_token');
+    fetch('/api/accounts/departments', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) throw new Error(data.message || 'Could not load departments.');
+        return data.data?.departments as DepartmentOption[];
+      })
+      .then((items) => {
+        if (!active) return;
+        setDepartments(Array.isArray(items) ? items : []);
+      })
+      .catch((reason) => {
+        if (active) setNotice({ type: 'error', message: reason instanceof Error ? reason.message : 'Could not load departments.' });
+      })
+      .finally(() => {
+        if (active) setDepartmentsBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [canManageAccounts]);
+
+  const totalMembers = users.filter((member) => member.status !== 'inactive').length;
+  const teamLeadCount = users.filter((member) => member.role === 'Team_Lead' && member.status !== 'inactive').length;
+  const hrCount = users.filter((member) => member.role === 'HR' && member.status !== 'inactive').length;
+  const teamMemberCount = users.filter((member) => member.role === 'Team_Member' && member.status !== 'inactive').length;
 
   const roleQuickFilters: Array<{ label: string; value: 'all' | UserRole; count: number }> = [
-    { label: 'All', value: 'all', count: users.length },
-    { label: 'Admins', value: 'Admin', count: users.filter((member) => member.role === 'Admin').length },
-    { label: 'Team Leads', value: 'Team_Lead', count: users.filter((member) => member.role === 'Team_Lead').length },
-    { label: 'HR', value: 'HR', count: users.filter((member) => member.role === 'HR').length },
+    { label: 'All', value: 'all', count: totalMembers },
+    { label: 'Admins', value: 'Admin', count: users.filter((member) => member.role === 'Admin' && member.status !== 'inactive').length },
+    { label: 'Team Leads', value: 'Team_Lead', count: teamLeadCount },
+    { label: 'HR', value: 'HR', count: hrCount },
     { label: 'Members', value: 'Team_Member', count: teamMemberCount },
   ];
 
@@ -285,7 +330,7 @@ export const TeamMembersView: React.FC = () => {
         username: memberForm.username.trim().toLowerCase(),
         email: memberForm.email.trim().toLowerCase(),
         role: memberForm.role,
-        department: memberForm.department.trim(),
+        department: departments.find((department) => String(department.id) === memberForm.department)?.name || memberForm.department.trim(),
         title: memberForm.title.trim(),
         ...(isCreate ? { password: memberForm.password } : {}),
         ...(manageMode === 'edit' && memberForm.password ? { password: memberForm.password, confirmPassword: memberForm.confirmPassword } : {}),
@@ -372,6 +417,8 @@ export const TeamMembersView: React.FC = () => {
                           <span className="truncate">@{member.username}</span>
                         </div>
                       )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
                       <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-400">
                         <Building2 size={13} />
                         <span className="truncate">{member.department}</span>
@@ -508,7 +555,7 @@ export const TeamMembersView: React.FC = () => {
 
   return (
     <>
-      <div className="mx-auto max-w-7xl space-y-6">
+      <div className="mx-auto max-w-7xl space-y-5 md:space-y-6">
         <section className="glass-panel-glow border border-cyan-500/25 p-5 md:p-6">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
             <div className="max-w-3xl space-y-3">
@@ -522,28 +569,28 @@ export const TeamMembersView: React.FC = () => {
                       Member Directory
                     </span>
                   </div>
-                  <h1 className="mt-3 text-2xl font-bold text-white md:text-[2rem]">Team directory and member contact overview.</h1>
-                </div>
-              </div>
-              <p className="text-sm leading-6 text-slate-400">
+                   <h1 className="mt-3 text-2xl font-bold leading-tight text-white md:text-[2rem]">Team directory and member contact overview.</h1>
+                 </div>
+               </div>
+              <p className="max-w-2xl text-sm leading-6 text-slate-400">
                 Review the team roster, role coverage, and member contact details in a cleaner directory view aligned with the rest of WorkSync.
               </p>
             </div>
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:min-w-[32rem]">
-              <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+              <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4 md:p-4.5 min-h-[8rem]">
                 <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Members</div>
                 <div className="mt-2 text-2xl font-bold text-white">{totalMembers}</div>
               </GlassCard>
-              <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+              <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4 md:p-4.5 min-h-[8rem]">
                 <div className="whitespace-nowrap text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Team Members</div>
                 <div className="mt-2 text-2xl font-bold text-emerald-300">{teamMemberCount}</div>
               </GlassCard>
-              <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+              <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4 md:p-4.5 min-h-[8rem]">
                 <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">Team Leads</div>
                 <div className="mt-2 text-2xl font-bold text-purple-300">{teamLeadCount}</div>
               </GlassCard>
-              <GlassCard glowColor="magenta" hover3dTilt={false} className="cursor-default p-4 md:p-4.5">
+              <GlassCard glowColor="magenta" hover3dTilt={false} className="cursor-default p-4 md:p-4.5 min-h-[8rem]">
                 <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-slate-500">HR</div>
                 <div className="mt-2 text-2xl font-bold text-fuchsia-300">{hrCount}</div>
               </GlassCard>
@@ -584,7 +631,7 @@ export const TeamMembersView: React.FC = () => {
                 <select
                   value={searchField}
                   onChange={(event) => setSearchField(event.target.value as SearchField)}
-                  className="rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-300 focus:border-cyan-500/40 focus:outline-none md:w-44"
+                  className={`${surfaceInputClass} md:w-44`}
                 >
                   <option value="name">Name</option>
                   <option value="email">Email</option>
@@ -598,7 +645,7 @@ export const TeamMembersView: React.FC = () => {
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder={`Search by ${searchField}`}
-                    className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-10 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none"
+                    className={`${surfaceInputClass} pl-10`}
                   />
                 </label>
 
@@ -632,12 +679,10 @@ export const TeamMembersView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCreateAccountOpen(true)}
-                       className="whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-3 py-2.5 text-sm font-medium text-cyan-300 transition hover:bg-cyan-500/18"
-                     >
-                    <span className="inline-flex items-center gap-1.5">
-                      <Plus size={15} />
-                      Create account
-                    </span>
+                    className="glass-button-neon inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold"
+                  >
+                    <Plus size={17} />
+                    Create account
                   </button>
                 )}
 
@@ -667,7 +712,7 @@ export const TeamMembersView: React.FC = () => {
                 <select
                   value={sortBy}
                   onChange={(event) => setSortBy(event.target.value as SortOption)}
-                  className="rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-300 focus:border-cyan-500/40 focus:outline-none"
+                  className={surfaceInputClass}
                 >
                   <option value="name">Sort: Name</option>
                   <option value="role">Sort: Role</option>
@@ -738,7 +783,7 @@ export const TeamMembersView: React.FC = () => {
             if (event.target === event.currentTarget) setSelectedMemberId(null);
           }}
         >
-          <div className="glass-panel-glow flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border border-cyan-500/25">
+            <div className="glass-panel-glow flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border border-cyan-500/25">
             <div className="border-b border-white/10 bg-gradient-to-r from-cyan-500/8 via-transparent to-purple-500/8 px-6 py-5">
               <div className="flex items-start justify-between gap-4">
               <div className="flex min-w-0 items-start gap-4">
@@ -754,7 +799,9 @@ export const TeamMembersView: React.FC = () => {
                   </div>
                   <p className="mt-1 text-sm text-slate-400">{selectedMember.title}</p>
                   <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
-                    Member overview covering project participation, leadership ownership, and active delivery workload.
+                    {selectedMemberIsAdmin
+                      ? 'Administrator overview covering platform access, account status, and workspace oversight context.'
+                      : 'Member overview covering project participation, leadership ownership, and active delivery workload.'}
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
                     <span className="inline-flex items-center gap-1.5">
@@ -778,7 +825,7 @@ export const TeamMembersView: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {canManageAccounts && (
+                {canManageAccounts && canEditSelectedMember && (
                   <>
                     <button
                       type="button"
@@ -814,12 +861,17 @@ export const TeamMembersView: React.FC = () => {
                           </span>
                         </button>
                       </>
-                    ) : currentRole === 'HR' && selectedMember.role === 'Admin' ? (
+                    ) : hrCannotManageSelectedMember ? (
                       <span className="whitespace-nowrap rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400">
-                        Administrator protected
+                        HR can only manage member accounts
                       </span>
                     ) : null}
                   </>
+                )}
+                {canManageAccounts && !canEditSelectedMember && (
+                  <span className="whitespace-nowrap rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400">
+                    HR can only manage member accounts
+                  </span>
                 )}
                 <button
                   type="button"
@@ -834,56 +886,62 @@ export const TeamMembersView: React.FC = () => {
             </div>
 
             <div className="overflow-y-auto px-6 py-5">
-              <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+              {!selectedMemberIsAdmin && (
+                <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                 <GlassCard glowColor="cyan" hover3dTilt={false} className="cursor-default p-4">
-                  <div className="text-xs font-mono text-slate-400">Active projects</div>
+                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Visible projects' : 'Active projects'}</div>
                   <div className="mt-2 text-2xl font-bold text-white">{selectedMemberInsights.activeProjects.length}</div>
                 </GlassCard>
                 <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4">
-                  <div className="text-xs font-mono text-slate-400">Projects leading</div>
+                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Lead assignments' : 'Projects leading'}</div>
                   <div className="mt-2 text-2xl font-bold text-purple-300">{selectedMemberInsights.leadProjects.length}</div>
                 </GlassCard>
                 <GlassCard glowColor="amber" hover3dTilt={false} className="cursor-default p-4">
-                  <div className="text-xs font-mono text-slate-400">Open tasks</div>
+                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Open assignments' : 'Open tasks'}</div>
                   <div className="mt-2 text-2xl font-bold text-amber-300">{selectedMemberInsights.activeTasks.length}</div>
                 </GlassCard>
                 <GlassCard glowColor="emerald" hover3dTilt={false} className="cursor-default p-4">
-                  <div className="text-xs font-mono text-slate-400">Completed tasks</div>
+                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Completed assignments' : 'Completed tasks'}</div>
                   <div className="mt-2 text-2xl font-bold text-emerald-300">{selectedMemberInsights.completedTasks.length}</div>
                 </GlassCard>
-              </div>
+                </div>
+              )}
 
               <div className="mt-5 grid gap-5 xl:grid-cols-12">
-                <div className="space-y-5 xl:col-span-5">
+                <div className={`space-y-5 ${selectedMemberIsAdmin ? 'xl:col-span-12' : 'xl:col-span-5'}`}>
                   <div className="glass-panel border border-white/10 p-5">
                     <div className="flex items-center gap-2">
                       <ShieldCheck size={16} className="text-cyan-300" />
                       <h3 className="text-sm font-semibold text-white">Member summary</h3>
                     </div>
                     <div className="mt-4 space-y-3 text-sm text-slate-300">
-                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                      <div className={`flex items-center justify-between gap-4 px-3 py-2.5 ${surfaceMutedCardClass}`}>
                         <span className="text-slate-400">Created in system</span>
                         <span className="font-medium text-white">{formatDate(selectedMember.createdAt)}</span>
                       </div>
-                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                      <div className={`flex items-center justify-between gap-4 px-3 py-2.5 ${surfaceMutedCardClass}`}>
                         <span className="text-slate-400">Current role</span>
                         <span className="font-medium text-white">{formatRole(selectedMember.role)}</span>
                       </div>
-                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
-                        <span className="text-slate-400">Overdue work items</span>
-                        <span className="font-medium text-white">{selectedMemberInsights.overdueTasks.length}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
-                        <span className="text-slate-400">Current workload</span>
-                        <span className="font-medium text-white">{selectedMemberInsights.activeTasks.length} open tasks</span>
-                      </div>
+                      {!selectedMemberIsAdmin && (
+                        <>
+                          <div className={`flex items-center justify-between gap-4 px-3 py-2.5 ${surfaceMutedCardClass}`}>
+                            <span className="text-slate-400">Overdue work items</span>
+                            <span className="font-medium text-white">{selectedMemberInsights.overdueTasks.length}</span>
+                          </div>
+                          <div className={`flex items-center justify-between gap-4 px-3 py-2.5 ${surfaceMutedCardClass}`}>
+                            <span className="text-slate-400">Current workload</span>
+                            <span className="font-medium text-white">{selectedMemberInsights.activeTasks.length} open tasks</span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  <div className="glass-panel border border-white/10 p-5">
+                  {!selectedMemberIsAdmin && <div className="glass-panel border border-white/10 p-5">
                     <div className="flex items-center gap-2">
                       <FolderKanban size={16} className="text-purple-300" />
-                      <h3 className="text-sm font-semibold text-white">Active project participation</h3>
+                        <h3 className="text-sm font-semibold text-white">Active project participation</h3>
                     </div>
                     <div className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
                       {selectedMemberInsights.activeProjects.length === 0 ? (
@@ -917,14 +975,38 @@ export const TeamMembersView: React.FC = () => {
                         ))
                       )}
                     </div>
-                  </div>
+                  </div>}
+                  {selectedMemberIsAdmin && <div className="glass-panel border border-white/10 p-5">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-purple-300" />
+                      <h3 className="text-sm font-semibold text-white">Access Summary</h3>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-sm text-slate-300">
+                        <div className="text-xs font-mono text-slate-500">Authority</div>
+                        <div className="mt-2 font-medium text-white">Full workspace administration</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-sm text-slate-300">
+                        <div className="text-xs font-mono text-slate-500">Accounts</div>
+                        <div className="mt-2 font-medium text-white">Can manage user access and credentials</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-sm text-slate-300">
+                        <div className="text-xs font-mono text-slate-500">Approvals</div>
+                        <div className="mt-2 font-medium text-white">Can approve protected workflow changes</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3 text-sm text-slate-300">
+                        <div className="text-xs font-mono text-slate-500">Visibility</div>
+                        <div className="mt-2 font-medium text-white">Reporting, settings, and oversight access</div>
+                      </div>
+                    </div>
+                  </div>}
                 </div>
 
-                <div className="space-y-5 xl:col-span-7">
+                {!selectedMemberIsAdmin && <div className="space-y-5 xl:col-span-7">
                   <div className="glass-panel border border-white/10 p-5">
                     <div className="flex items-center gap-2">
                       <Briefcase size={16} className="text-amber-300" />
-                      <h3 className="text-sm font-semibold text-white">Current work items</h3>
+                        <h3 className="text-sm font-semibold text-white">Current work items</h3>
                     </div>
                     <div className="mt-4 max-h-80 space-y-3 overflow-y-auto pr-1">
                       {selectedMemberInsights.activeTasks.length === 0 ? (
@@ -1019,7 +1101,7 @@ export const TeamMembersView: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                </div>
+                </div>}
               </div>
             </div>
           </div>
@@ -1033,7 +1115,7 @@ export const TeamMembersView: React.FC = () => {
             if (event.target === event.currentTarget) closeManageModal();
           }}
         >
-          <form onSubmit={submitMemberForm} className="glass-panel-glow w-full max-w-2xl border border-cyan-500/25">
+          <form onSubmit={submitMemberForm} className="glass-panel-glow flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden border border-cyan-500/25">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-white">Edit account</h2>
@@ -1044,43 +1126,50 @@ export const TeamMembersView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid gap-4 p-5 md:grid-cols-2">
+            <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Full name</span>
-                <input value={memberForm.name} onChange={(event) => setMemberForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+                <input value={memberForm.name} onChange={(event) => setMemberForm((prev) => ({ ...prev, name: event.target.value }))} className={surfaceInputClass} required />
               </label>
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Username</span>
-                <input value={memberForm.username} onChange={(event) => setMemberForm((prev) => ({ ...prev, username: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+                <input value={memberForm.username} onChange={(event) => setMemberForm((prev) => ({ ...prev, username: event.target.value }))} className={surfaceInputClass} required />
               </label>
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Email</span>
-                <input type="email" value={memberForm.email} onChange={(event) => setMemberForm((prev) => ({ ...prev, email: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+                <input type="email" value={memberForm.email} onChange={(event) => setMemberForm((prev) => ({ ...prev, email: event.target.value }))} className={surfaceInputClass} required />
               </label>
                 <label className="text-sm text-slate-300">
                   <span className="mb-1 block text-xs">Role</span>
-                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin'} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60">
+                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin') || roleLockedToProjectLead} className={surfaceInputClass}>
                     {currentRole === 'Admin' && <option value="Admin">Administrator</option>}
                     {currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin' && <option value="Admin">Administrator</option>}
-                    <option value="Team_Lead">Team Lead</option>
+                    {roleLockedToProjectLead && <option value="Team_Lead">Team Lead</option>}
                     <option value="HR">HR</option>
                     <option value="Team_Member">Team Member</option>
                   </select>
-                  {currentRole === 'HR' && (
+                  {(currentRole === 'HR' || roleLockedToProjectLead) && (
                     <p className="mt-2 text-xs text-slate-500">
-                      HR cannot create or change Administrator roles.
+                      {roleLockedToProjectLead
+                        ? 'Team Lead assignment is managed from the Projects section.'
+                        : 'HR cannot create or change Administrator roles.'}
                     </p>
                   )}
                 </label>
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Department</span>
-                <input value={memberForm.department} onChange={(event) => setMemberForm((prev) => ({ ...prev, department: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+                <select value={memberForm.department} onChange={(event) => setMemberForm((prev) => ({ ...prev, department: event.target.value }))} disabled={departmentsBusy} className={surfaceInputClass} required>
+                  <option value="">{departmentsBusy ? 'Loading departments...' : 'Select a department'}</option>
+                  {departments.map((department) => (
+                    <option key={department.id} value={String(department.id)}>{department.name}</option>
+                  ))}
+                </select>
               </label>
               <label className="text-sm text-slate-300 md:col-span-2">
                 <span className="mb-1 block text-xs">Title</span>
-                <input value={memberForm.title} onChange={(event) => setMemberForm((prev) => ({ ...prev, title: event.target.value }))} className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none" required />
+                <input value={memberForm.title} onChange={(event) => setMemberForm((prev) => ({ ...prev, title: event.target.value }))} className={surfaceInputClass} required />
               </label>
-              {manageMode === 'edit' && memberForm.role === 'Team_Member' && (
+              {manageMode === 'edit' && (memberForm.role === 'Team_Member' || (currentRole === 'Admin' && memberForm.role === 'HR')) && (
                 <>
                   <label className="text-sm text-slate-300 md:col-span-2">
                     <span className="mb-1 block text-xs">New password</span>
@@ -1089,7 +1178,7 @@ export const TeamMembersView: React.FC = () => {
                         type={showTemporaryPassword ? 'text' : 'password'}
                         value={memberForm.password}
                         onChange={(event) => setMemberForm((prev) => ({ ...prev, password: event.target.value }))}
-                        className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 pr-12 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                        className={`${surfaceInputClass} pr-12`}
                         minLength={6}
                         placeholder="Leave blank to keep the current password"
                       />
@@ -1109,12 +1198,12 @@ export const TeamMembersView: React.FC = () => {
                       type={showTemporaryPassword ? 'text' : 'password'}
                       value={memberForm.confirmPassword}
                       onChange={(event) => setMemberForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
-                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                      className={surfaceInputClass}
                       minLength={6}
                       placeholder="Confirm the new password"
                     />
                     <p className="mt-2 text-xs text-slate-500">
-                      When changed, the member will receive an email confirming the update and their new credentials.
+                      When changed, the account owner will receive an email confirming the update and their new credentials.
                     </p>
                   </label>
                 </>
@@ -1127,7 +1216,7 @@ export const TeamMembersView: React.FC = () => {
                       type={showTemporaryPassword ? 'text' : 'password'}
                       value={memberForm.password}
                       onChange={(event) => setMemberForm((prev) => ({ ...prev, password: event.target.value }))}
-                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 pr-12 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                        className={`${surfaceInputClass} pr-12`}
                       minLength={6}
                       required
                     />
@@ -1146,8 +1235,8 @@ export const TeamMembersView: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-end gap-3 border-t border-white/10 px-5 py-4">
-              <button type="button" onClick={closeManageModal} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">Cancel</button>
-              <button type="submit" disabled={manageSubmitting} className="rounded-xl border border-cyan-500/30 bg-cyan-500/12 px-4 py-2 text-sm font-medium text-cyan-300 disabled:opacity-60">
+              <button type="button" onClick={closeManageModal} className={modalSecondaryButtonClass}>Cancel</button>
+              <button type="submit" disabled={manageSubmitting} className={modalPrimaryButtonClass}>
                 {manageSubmitting ? 'Saving...' : 'Save changes'}
               </button>
             </div>
@@ -1227,6 +1316,10 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const passwordChecks = getPasswordChecks(form.password);
+  const eligibleLeadProjects = useMemo(
+    () => projects.filter((project) => project.status === 'Active' && project.approvalStatus === 'Approved'),
+    [projects]
+  );
 
   useEffect(() => {
     let active = true;
@@ -1253,7 +1346,14 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
   }, []);
 
   const update = (field: keyof AccountFormValues, value: string) => {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === 'baseRole' && value !== 'Team_Member') {
+        next.projectId = '';
+        next.endsAtUtc = '';
+      }
+      return next;
+    });
     setErrors((current) => ({ ...current, [field]: undefined }));
     setServerError('');
   };
@@ -1301,48 +1401,126 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; projects: Project[]; onC
     }
     finally { setBusy(false); }
   };
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <form onSubmit={submit} className="glass-panel-glow w-full max-w-2xl overflow-hidden border border-white/10">
-      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4"><div><h2 className="text-lg font-bold text-white">Create account</h2><p className="mt-1 text-xs text-slate-400">Create an active account and email its permanent sign-in credentials.</p></div><button type="button" disabled={busy} onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-50"><X size={18} /></button></div>
-      <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
-        <AccountField label="Full name" required error={errors.fullName}><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} autoComplete="name" /></AccountField>
-        <AccountField label="Username" required error={errors.username}><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} autoComplete="off" /></AccountField>
-        <AccountField label="Email" required error={errors.email}><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} autoComplete="email" /></AccountField>
-        <AccountField label="Designation" error={errors.designation}><input maxLength={120} value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} /></AccountField>
-        <AccountField label="Password" required error={errors.password}>
-          <div className="relative">
-            <input required type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => update('password', e.target.value)} className={`${accountInput} pr-10`} autoComplete="new-password" />
-            <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400 hover:text-white" aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <form onSubmit={submit} className="glass-panel-glow flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden border border-cyan-500/40 shadow-2xl">
+      <header className="relative overflow-hidden border-b border-white/10 bg-slate-950/55 px-5 py-5 sm:px-6">
+        <div className="pointer-events-none absolute -right-14 -top-20 h-44 w-44 rounded-full bg-cyan-500/10 blur-3xl" />
+        <div className="pointer-events-none absolute right-20 top-0 h-28 w-28 rounded-full bg-purple-500/10 blur-3xl" />
+        <div className="relative flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3.5">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 shadow-[0_0_24px_rgba(0,242,254,0.12)]">
+              <UserPlus size={20} />
+            </span>
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-cyan-300">Members / Access management</p>
+              <h2 className="mt-1 text-xl font-bold text-white">Create a member account</h2>
+              <p className="mt-1 max-w-xl text-xs leading-5 text-slate-400">Set up workspace access. The member receives their sign-in credentials by email when the account is created.</p>
+            </div>
           </div>
-        </AccountField>
-        <AccountField label="Confirm password" required error={errors.confirmPassword}>
-          <div className="relative">
-            <input required type={showConfirmation ? 'text' : 'password'} value={form.confirmPassword} onChange={(e) => update('confirmPassword', e.target.value)} className={`${accountInput} pr-10`} autoComplete="new-password" />
-            <button type="button" onClick={() => setShowConfirmation((value) => !value)} className="absolute right-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400 hover:text-white" aria-label={showConfirmation ? 'Hide confirmation' : 'Show confirmation'}>{showConfirmation ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-          </div>
-        </AccountField>
-        <div className="md:col-span-2 grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] sm:grid-cols-5">
-          {Object.entries(passwordChecks).map(([key, passed]) => <span key={key} className={passed ? 'text-emerald-300' : 'text-slate-500'}>{passed ? '✓' : '○'} {key === 'length' ? '8-128 chars' : key}</span>)}
+          <button type="button" disabled={busy} onClick={onClose} className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50" aria-label="Close create account dialog"><X size={18} /></button>
         </div>
-        <AccountField label="Base role" required error={errors.baseRole}>
-          <select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>
-            {isAdmin && <option value="Admin">Admin</option>}
-            {isAdmin && <option value="HR">HR</option>}
-            <option value="Team_Member">Team Member</option>
-          </select>
-        </AccountField>
-        <AccountField label="Department" required error={errors.departmentId}>
-          <select required disabled={departmentsBusy} value={form.departmentId} onChange={(e) => update('departmentId', e.target.value)} className={accountInput}>
-            <option value="">{departmentsBusy ? 'Loading departments...' : 'Select a department'}</option>
-            {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
-          </select>
-        </AccountField>
-        {serverError && <p role="alert" className="md:col-span-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{serverError}</p>}
+      </header>
+
+      <div className="overflow-y-auto p-4 sm:p-6">
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-white/10 bg-black/20 p-4 sm:p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <IdCard size={16} className="text-cyan-300" />
+              <div>
+                <h3 className="text-sm font-semibold text-white">Member identity</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">Basic profile and contact information.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <AccountField label="Full name" required error={errors.fullName}><input required value={form.fullName} onChange={(e) => update('fullName', e.target.value)} className={accountInput} autoComplete="name" placeholder="e.g. Jordan Lee" /></AccountField>
+              <AccountField label="Username" required error={errors.username}><input required value={form.username} onChange={(e) => update('username', e.target.value)} className={accountInput} autoComplete="off" placeholder="e.g. jordan.lee" /></AccountField>
+              <AccountField label="Email address" required error={errors.email}><input required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} className={accountInput} autoComplete="email" placeholder="name@company.com" /></AccountField>
+              <AccountField label="Designation" error={errors.designation}><input maxLength={120} value={form.designation} onChange={(e) => update('designation', e.target.value)} className={accountInput} placeholder="e.g. Product Designer" /></AccountField>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-white/10 bg-black/20 p-4 sm:p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <ShieldCheck size={16} className="text-purple-300" />
+              <div>
+                <h3 className="text-sm font-semibold text-white">Sign-in credentials</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">Choose the permanent password included in the credential email.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <AccountField label="Password" required error={errors.password}>
+                <div className="relative">
+                  <input required type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => update('password', e.target.value)} className={`${accountInput} pr-11`} autoComplete="new-password" placeholder="Enter a secure password" />
+                  <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-2.5 top-1/2 mt-0.5 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-white" aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                </div>
+              </AccountField>
+              <AccountField label="Confirm password" required error={errors.confirmPassword}>
+                <div className="relative">
+                  <input required type={showConfirmation ? 'text' : 'password'} value={form.confirmPassword} onChange={(e) => update('confirmPassword', e.target.value)} className={`${accountInput} pr-11`} autoComplete="new-password" placeholder="Re-enter the password" />
+                  <button type="button" onClick={() => setShowConfirmation((value) => !value)} className="absolute right-2.5 top-1/2 mt-0.5 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-white" aria-label={showConfirmation ? 'Hide confirmation' : 'Show confirmation'}>{showConfirmation ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                </div>
+              </AccountField>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-slate-950/45 p-3 text-[11px] sm:grid-cols-5">
+              {Object.entries(passwordChecks).map(([key, passed]) => <span key={key} className={`inline-flex items-center gap-1.5 capitalize ${passed ? 'text-emerald-300' : 'text-slate-500'}`}><span className={`flex h-4 w-4 items-center justify-center rounded-full border ${passed ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/10'}`}>{passed ? <Check size={10} /> : null}</span>{key === 'length' ? '8-128 chars' : key}</span>)}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-white/10 bg-black/20 p-4 sm:p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Building2 size={16} className="text-amber-300" />
+              <div>
+                <h3 className="text-sm font-semibold text-white">Workspace access</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500">Assign the member's role, department, and optional project leadership.</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <AccountField label="Base role" required error={errors.baseRole}>
+                <select value={form.baseRole} onChange={(e) => update('baseRole', e.target.value)} className={accountInput}>
+                  {isAdmin && <option value="Admin">Administrator</option>}
+                  {isAdmin && <option value="HR">HR</option>}
+                  <option value="Team_Member">Team Member</option>
+                </select>
+              </AccountField>
+              <AccountField label="Department" required error={errors.departmentId}>
+                <select required disabled={departmentsBusy} value={form.departmentId} onChange={(e) => update('departmentId', e.target.value)} className={accountInput}>
+                  <option value="">{departmentsBusy ? 'Loading departments...' : 'Select a department'}</option>
+                  {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+                </select>
+              </AccountField>
+              {isAdmin && form.baseRole === 'Team_Member' && (
+                <>
+                  <AccountField label="Team Lead project (optional)" error={errors.projectId}>
+                    <select value={form.projectId} onChange={(e) => update('projectId', e.target.value)} className={accountInput}>
+                      <option value="">No Team Lead assignment</option>
+                      {eligibleLeadProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+                    </select>
+                  </AccountField>
+                  <AccountField label="Team Lead expiry" required={Boolean(form.projectId)} error={errors.endsAtUtc}>
+                    <input required={Boolean(form.projectId)} type="datetime-local" value={form.endsAtUtc} onChange={(e) => update('endsAtUtc', e.target.value)} className={accountInput} />
+                  </AccountField>
+                </>
+              )}
+            </div>
+          </section>
+
+          {serverError && <p role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">{serverError}</p>}
+        </div>
       </div>
-      <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" disabled={busy} onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50">Cancel</button><button disabled={busy || departmentsBusy || departments.length === 0} className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">{busy ? 'Creating account...' : 'Create and send credentials'}</button></div>
+
+      <footer className="flex flex-col-reverse gap-3 border-t border-white/10 bg-slate-950/35 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <p className="inline-flex items-center gap-2 text-[11px] text-slate-500"><Send size={13} className="text-cyan-400" />Credentials are emailed after successful creation.</p>
+        <div className="flex items-center justify-end gap-3">
+          <button type="button" disabled={busy} onClick={onClose} className={modalSecondaryButtonClass}>Cancel</button>
+          <button disabled={busy || departmentsBusy || departments.length === 0} className="glass-button-neon inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : <UserPlus size={16} />}
+            {busy ? 'Creating account...' : 'Create account'}
+          </button>
+        </div>
+      </footer>
     </form>
   </div>;
 };
 
-const accountInput = 'mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500/40';
-const AccountField: React.FC<{ label: string; required?: boolean; error?: string; children: React.ReactNode }> = ({ label, required, error, children }) => <label className="text-xs font-semibold text-slate-300">{label}{required && <span className="ml-1 text-rose-400">*</span>}{children}{error && <span className="mt-1 block font-normal text-rose-300">{error}</span>}</label>;
+const accountInput = 'mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50';
+const AccountField: React.FC<{ label: string; required?: boolean; error?: string; children: React.ReactNode }> = ({ label, required, error, children }) => <label className="block text-xs font-semibold text-slate-300">{label}{required && <span className="ml-1 text-cyan-400">*</span>}{children}{error && <span className="mt-1.5 block font-normal text-rose-300">{error}</span>}</label>;

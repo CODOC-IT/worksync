@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   getProjectUpdateApprovalType,
-  PROJECT_DELETE_APPROVAL_TYPE
+  PROJECT_ARCHIVE_APPROVAL_TYPE
 } from './projectApproval.routing.js';
 import { ProjectApprovalRequestType } from './projectApproval.types.js';
 
@@ -30,4 +30,6 @@ test('authoritative project approval type supports every distinct workflow', () 
     'PROJECT_PERMANENT_DELETE'
   ];
   assert.equal(new Set(requestTypes).size, 6);
+test('routes a Team Lead archive action to Project Archive approval', () => {
+  assert.equal(PROJECT_ARCHIVE_APPROVAL_TYPE, 'PROJECT_ARCHIVE');
 });
