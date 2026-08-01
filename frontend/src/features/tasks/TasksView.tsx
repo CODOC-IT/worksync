@@ -188,6 +188,10 @@ export const TasksView: React.FC = () => {
       : [],
     [selectedProject, users]
   );
+  const availableSubtaskAssignees = useMemo(
+    () => availableAssignees.filter((user) => form.assigneeIds.includes(user.id)),
+    [availableAssignees, form.assigneeIds]
+  );
 
   const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
@@ -998,7 +1002,7 @@ export const TasksView: React.FC = () => {
                       className="sm:col-span-2"
                     >
                       <div className="grid gap-2 sm:grid-cols-2">
-                        {availableAssignees.map((user) => {
+                        {availableSubtaskAssignees.map((user) => {
                           const selected = sub.assigneeIds.includes(user.id);
                           return (
                             <button
@@ -1482,7 +1486,7 @@ const AssigneeFilter: React.FC<{ value: string; onChange: (value: string) => voi
   const validUsers = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return users.filter((user) => user.status !== 'inactive' && user.role !== 'Admin' && user.role !== 'HR')
-      .filter((user) => !needle || [user.name, user.username, user.email].filter(Boolean).some((part) => part!.toLowerCase().includes(needle)));
+      .filter((user) => !needle || user.name.toLowerCase().includes(needle));
   }, [query, users]);
   return (
     <div className="relative">
@@ -1490,11 +1494,11 @@ const AssigneeFilter: React.FC<{ value: string; onChange: (value: string) => voi
         <span className="truncate">{selected?.name || 'All assignees'}</span><ChevronDown size={13} className="text-slate-500" />
       </button>
       {open && <div className="absolute z-30 mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-2 shadow-xl">
-        <input autoFocus aria-label="Search assignees" value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search name, username, or email" />
+        <input autoFocus aria-label="Search assignees" value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search member name" />
         <div role="listbox" aria-label="Assignees" className="mt-2 max-h-52 overflow-y-auto">
           <button role="option" aria-selected={!value} type="button" onClick={() => { onChange(''); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">Clear selection — All assignees</button>
           {selected && !validUsers.some((user) => user.id === selected.id) && <button role="option" aria-selected type="button" onClick={() => { onChange(selected.id); setOpen(false); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">{selected.name}</button>}
-          {validUsers.map((user) => <button key={user.id} role="option" aria-selected={value === user.id} type="button" onClick={() => { onChange(user.id); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-200 hover:bg-white/10">{user.name}<span className="ml-1 text-slate-500">{user.username || user.email}</span></button>)}
+          {validUsers.map((user) => <button key={user.id} role="option" aria-selected={value === user.id} type="button" onClick={() => { onChange(user.id); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-200 hover:bg-white/10">{user.name}</button>)}
           {validUsers.length === 0 && <p className="px-2 py-3 text-xs text-slate-500">No members found</p>}
         </div>
       </div>}
