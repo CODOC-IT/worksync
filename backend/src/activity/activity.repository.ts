@@ -187,6 +187,13 @@ const buildWhere = (
   // bounded to the same organization as inserts, including administrator queries.
   const clauses: string[] = ['a.organizationid = 1', `(${visibilityClause})`];
 
+  // Comment deletion is retained as an audit record for oversight, but must never appear in a
+  // Team Member's or Team Lead's Activity Log — including the actor's own deletion. HR and
+  // Admin retain visibility through their higher-privilege paths above.
+  if (effectiveRoles.permanentRole !== 'Admin' && !effectiveRoles.isActiveHR) {
+    clauses.push("NOT (a.actioncode = 'Deleted' AND a.entitytypecode = 'Comment')");
+  }
+
   // myActivityOnly uses $1 (viewerPk). For Admin that param slot doesn't exist yet, so we
   // push viewerPk on demand and reference its position dynamically.
   let myActivityOnlyParamIdx: number | null = null;
