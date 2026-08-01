@@ -255,7 +255,12 @@ export const createProject = async (
     createdByUserId: ownerPk,
     creationReason: input.creationReason?.trim() || null,
     teamLeadUserId: teamLeadPk,
-    memberUserIds: memberPks
+    memberUserIds: memberPks,
+    // An Admin who creates a project is its creator, not a team member -- they get no 'Owner'
+    // membership row (Admins already have org-wide project access), so they don't show up in the
+    // project's own member list. A Team Member/Lead creator, by contrast, always becomes the
+    // project's Owner (and, via resolveTeamLeadUserId's owner-fallback, its lead).
+    includeOwnerMembership: actorRole !== 'Admin'
   });
 
   const row = await repo.findProjectById(projectId);
