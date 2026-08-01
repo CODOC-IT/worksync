@@ -114,7 +114,7 @@ class UserStore {
   private dbAvailable: boolean = false;
   private fallbackUsers: Map<string, UserRecord> = new Map();
   private initialized = false;
-  private dbLoadStarted = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor() {
     if (this.isLegacyFileAuthEnabled()) {
@@ -129,33 +129,36 @@ class UserStore {
 
   private async ensureInit(): Promise<void> {
     if (this.initialized) return;
-    if (this.dbLoadStarted) return;
-    this.dbLoadStarted = true;
-    this.initialized = true;
+    if (!isDatabaseConfigured()) {
+      this.initialized = true;
+      return;
+    }
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.reloadUsersFromDb()
+        .then(() => this.alignDatabaseUserSequence())
+        .then(() => { this.initialized = true; })
+        .finally(() => { this.initializationPromise = null; });
+    }
+    await this.initializationPromise;
+  }
 
-    if (isDatabaseConfigured()) {
-      try {
-        const result = await query<DbUserRow>(
-          USER_QUERY + ' WHERE u.organizationid = 1 ORDER BY u.userid'
-        );
-        this.dbAvailable = true;
-        // A configured database is authoritative. Clear local fallback users
-        // so registrations from a previous database are not carried forward.
-        this.fallbackUsers.clear();
-        for (const row of result.rows) {
-          const user = rowToUserRecord(row);
-          this.fallbackUsers.set(user.email.toLowerCase(), user);
-        }
-        if (result.rows.length > 0) {
-          console.log(`[UserStore] Connected to Supabase — loaded ${result.rows.length} users ✓`);
-        }
-
-        await this.alignDatabaseUserSequence();
-
-        return;
-      } catch (err: any) {
-        console.warn(`[UserStore] Database query failed (${err.message}), falling back to file store.`);
+  private async reloadUsersFromDb(): Promise<void> {
+    try {
+      const result = await query<DbUserRow>(
+        USER_QUERY + ' WHERE u.organizationid = 1 ORDER BY u.userid'
+      );
+      const databaseUsers = new Map<string, UserRecord>();
+      for (const row of result.rows) {
+        const user = rowToUserRecord(row);
+        databaseUsers.set(user.email.toLowerCase(), user);
       }
+
+      this.dbAvailable = true;
+      this.fallbackUsers = databaseUsers;
+      console.log(`[UserStore] Synced ${databaseUsers.size} users from Supabase.`);
+    } catch (err: any) {
+      this.dbAvailable = false;
+      throw new Error(`Supabase user sync failed: ${err.message}`);
     }
   }
 
@@ -273,8 +276,15 @@ class UserStore {
   }
 
   public async syncUsersToDb(): Promise<void> {
-    if (!isDatabaseConfigured()) return;
-    await this.ensureInit();
+    if (!isDatabaseConfigured()) {
+      await this.ensureInit();
+      return;
+    }
+    if (!this.initialized) {
+      await this.ensureInit();
+      return;
+    }
+    await this.reloadUsersFromDb();
   }
 
   public async refreshUserFromDb(userId: string): Promise<Omit<UserRecord, 'passwordHash'> | undefined> {

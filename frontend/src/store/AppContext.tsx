@@ -406,7 +406,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return data;
       })
       .then((data) => {
-        if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+        if (data.success && Array.isArray(data.users)) {
           setUsers(data.users as User[]);
         }
       })
