@@ -34,7 +34,7 @@ export const DayGrid: React.FC<{
                 <button
                   type="button"
                   onClick={() => onSelectEntry(entry)}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-left transition-colors hover:border-white/20"
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-left transition-colors hover:border-white/20 ${entry.completed ? 'opacity-50' : ''}`}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <span
@@ -44,7 +44,7 @@ export const DayGrid: React.FC<{
                       {entry.kind}
                     </span>
                     <OriginIcon entry={entry} />
-                    <span className="truncate text-xs font-semibold text-slate-200">{entry.title}</span>
+                    <span className={`truncate text-xs font-semibold text-slate-200 ${entry.completed ? 'line-through' : ''}`}>{entry.title}</span>
                   </span>
                   {entry.time && <span className="shrink-0 font-mono text-[10px] text-slate-400">{entry.time}</span>}
                 </button>

@@ -85,6 +85,22 @@ export const findMilestonesForProject = async (projectId: number): Promise<Miles
   return result.rows;
 };
 
+// Batched sibling of findMilestonesForProject, mirroring findMembersForProjects above -- lets
+// the project list endpoint include real milestone data (the Calendar's source for Milestone
+// entries, see frontend/.../calendarRules.ts#buildCalendarEntries) without an N+1 query per
+// project.
+export const findMilestonesForProjects = async (projectIds: number[]): Promise<MilestoneRow[]> => {
+  if (projectIds.length === 0) return [];
+  const result = await query<MilestoneRow>(
+    `SELECT ${MILESTONE_COLUMNS}
+     FROM work.projectmilestones
+     WHERE projectid = ANY($1::int[])
+     ORDER BY duedate, milestoneid`,
+    [projectIds]
+  );
+  return result.rows;
+};
+
 export const findMilestoneById = async (milestoneId: number): Promise<MilestoneRow | null> => {
   const result = await query<MilestoneRow>(
     `SELECT ${MILESTONE_COLUMNS} FROM work.projectmilestones WHERE milestoneid = $1`,

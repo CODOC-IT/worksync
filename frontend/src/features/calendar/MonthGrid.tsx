@@ -80,10 +80,10 @@ export const MonthGrid: React.FC<{
                       }}
                       title={entry.title}
                       data-calendar-entry-kind={entry.kind}
-                      className={`flex w-full items-center gap-1 px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium border ${tone.badgeClass}`}
+                      className={`flex w-full items-center gap-1 px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium border ${tone.badgeClass} ${entry.completed ? 'opacity-50' : ''}`}
                     >
                       <OriginIcon entry={entry} />
-                      <span className="truncate">{entry.title}</span>
+                      <span className={`truncate ${entry.completed ? 'line-through' : ''}`}>{entry.title}</span>
                     </button>
                   </CalendarEntryTooltip>
                 );

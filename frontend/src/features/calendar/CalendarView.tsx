@@ -14,6 +14,7 @@ import {
   buildApprovedLeaveEntries,
   groupEntriesByDate,
   filterCalendarEntries,
+  isMyDeadlineEntry,
   getMonthGridDates,
   getWeekDates,
   getYearMonths,
@@ -43,7 +44,7 @@ const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1):
 };
 
 export const CalendarView: React.FC = () => {
-  const { projects, tasks, users, calendarEvents, approvedLeave, holidays, currentRole } = useApp();
+  const { projects, tasks, users, calendarEvents, approvedLeave, holidays, currentRole, currentUser } = useApp();
 
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
@@ -51,6 +52,7 @@ export const CalendarView: React.FC = () => {
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
   const [activeKinds, setActiveKinds] = useState<Set<CalendarEntryKind>>(new Set(ALL_CALENDAR_KINDS));
+  const [myDeadlinesOnly, setMyDeadlinesOnly] = useState(false);
   const [manageHolidaysOpen, setManageHolidaysOpen] = useState(false);
 
   // Recomputed every render (not memoized) so "today" stays correct if the app is left open
@@ -62,21 +64,33 @@ export const CalendarView: React.FC = () => {
   // navigating Previous/Next keeps showing correct holidays regardless of year.
   const anchorYear = anchorDate.getFullYear();
 
-  const entriesByDate = useMemo(
-    () =>
-      groupEntriesByDate(
-        filterCalendarEntries(
-          [
-            ...buildCalendarEntries(projects, tasks, calendarEvents),
-            ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1], holidays),
-            ...buildApprovedLeaveEntries(approvedLeave)
-          ],
-          originFilter,
-          activeKinds
-        )
-      ),
-    [projects, tasks, calendarEvents, approvedLeave, holidays, anchorYear, originFilter, activeKinds]
-  );
+  const entriesByDate = useMemo(() => {
+    const filtered = filterCalendarEntries(
+      [
+        ...buildCalendarEntries(projects, tasks, calendarEvents),
+        ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1], holidays),
+        ...buildApprovedLeaveEntries(approvedLeave)
+      ],
+      originFilter,
+      activeKinds
+    );
+    return groupEntriesByDate(
+      myDeadlinesOnly
+        ? filtered.filter((entry) => isMyDeadlineEntry(entry, projects, tasks, currentUser.id))
+        : filtered
+    );
+  }, [
+    projects,
+    tasks,
+    calendarEvents,
+    approvedLeave,
+    holidays,
+    anchorYear,
+    originFilter,
+    activeKinds,
+    myDeadlinesOnly,
+    currentUser.id
+  ]);
 
   const monthDates = useMemo(
     () => getMonthGridDates(anchorDate.getFullYear(), anchorDate.getMonth()),
@@ -212,6 +226,8 @@ export const CalendarView: React.FC = () => {
           onOriginFilterChange={setOriginFilter}
           activeKinds={activeKinds}
           onActiveKindsChange={setActiveKinds}
+          myDeadlinesOnly={myDeadlinesOnly}
+          onMyDeadlinesOnlyChange={setMyDeadlinesOnly}
         />
       </div>
 

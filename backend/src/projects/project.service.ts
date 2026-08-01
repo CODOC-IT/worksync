@@ -13,6 +13,7 @@ import {
   CreateProjectFileInput,
   CreateProjectInput,
   MilestoneDTO,
+  MilestoneRow,
   ProjectDTO,
   ProjectFileDTO,
   ProjectMemberRoleCode,
@@ -36,9 +37,13 @@ export class ProjectAuthorizationError extends Error {}
 export class ProjectNotFoundError extends Error {}
 export class ProjectValidationError extends Error {}
 
-const buildDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<ProjectDTO> => {
+const buildDTO = async (
+  row: ProjectRow,
+  members: ProjectMemberRow[],
+  milestones: MilestoneRow[] = []
+): Promise<ProjectDTO> => {
   const progress = await repo.getProjectProgress(row.projectid);
-  return rowToProjectDTO(row, members, progress);
+  return rowToProjectDTO(row, members, progress, milestones);
 };
 
 const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<ProjectDTO> => {
@@ -115,9 +120,19 @@ export const listProjectsForUser = async (userId: string, role: string): Promise
   // (Led/Assigned/Unassigned in ProjectsView.tsx), never whether it's returned here.
   const rows = await repo.findAllProjects();
   if (rows.length === 0) return [];
-  const membersByProject = await repo.findMembersForProjects(rows.map((row) => row.projectid));
+  const projectIds = rows.map((row) => row.projectid);
+  const [membersByProject, milestonesByProject] = await Promise.all([
+    repo.findMembersForProjects(projectIds),
+    repo.findMilestonesForProjects(projectIds)
+  ]);
   return Promise.all(
-    rows.map((row) => buildDTO(row, membersByProject.filter((member) => member.projectid === row.projectid)))
+    rows.map((row) =>
+      buildDTO(
+        row,
+        membersByProject.filter((member) => member.projectid === row.projectid),
+        milestonesByProject.filter((milestone) => milestone.projectid === row.projectid)
+      )
+    )
   );
 };
 

@@ -611,7 +611,12 @@ export const ProjectsView: React.FC = () => {
         </select>
         {/* Meaningful only for accounts that can actually be a project's lead/member -- Admin/HR
             are never assignable to a project (see nonAdminUsers above), so "Led"/"Assigned" would
-            always be empty and "Unassigned" would always equal "All" for them. */}
+            always be empty and "Unassigned" would always equal "All" for them. "Led by Me" is
+            shown only for currentRole === 'Team_Lead' -- Team Lead is still not a separate
+            account entity (isProjectLead above stays the same per-project
+            teamLeadId === currentUser.id check for both roles; a Team_Member remains eligible to
+            be assigned as a project's lead, see PROJECT_LEAD_ELIGIBLE_ROLES on the backend), this
+            only limits which role sees the extra option in the dropdown itself. */}
         {(currentRole === 'Team_Lead' || currentRole === 'Team_Member') && (
           <select
             value={categoryFilter}
@@ -619,7 +624,7 @@ export const ProjectsView: React.FC = () => {
             className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
           >
             <option value="All">All Projects</option>
-            <option value="Led">Led by Me</option>
+            {currentRole === 'Team_Lead' && <option value="Led">Led by Me</option>}
             <option value="Assigned">Assigned to Me</option>
             <option value="Unassigned">Not Assigned</option>
           </select>

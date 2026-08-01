@@ -7,16 +7,14 @@ export type CalendarEntryKind = CalendarEvent['type'] | 'Task Due' | 'Holiday';
 export type CalendarNavigateTab = 'projects' | 'tasks';
 
 // Which side of the app an entry originates from. 'Deadline'/'Milestone' come from a Project,
-// 'Task Due' comes from a Task; standalone calendarEvents (Meeting/Review/Leave) are neither and
-// are only controllable via the kind filter, not the project/task origin toggle.
+// 'Task Due' comes from a Task; standalone calendarEvents (Leave) are neither and are only
+// controllable via the kind filter, not the project/task origin toggle.
 export type CalendarEntryOrigin = 'project' | 'task' | 'other';
 
 export const ALL_CALENDAR_KINDS: CalendarEntryKind[] = [
   'Deadline',
   'Milestone',
   'Task Due',
-  'Meeting',
-  'Review',
   'Leave',
   'Holiday'
 ];
@@ -29,7 +27,7 @@ export interface CalendarEntry {
   kind: CalendarEntryKind;
   projectId?: string;
   taskId?: string;
-  completed?: boolean; // milestone.completed, or task.status === 'Done'
+  completed?: boolean; // milestone.completed, task.status === 'Done', or project.status === 'Completed'
   navigateTab?: CalendarNavigateTab;
   navigateId?: string;
 }
@@ -94,6 +92,7 @@ export const buildCalendarEntries = (
         title: project.title,
         kind: 'Deadline',
         projectId: project.id,
+        completed: project.status === 'Completed',
         navigateTab: 'projects',
         navigateId: project.id
       });
@@ -196,6 +195,32 @@ export const entryOrigin = (entry: CalendarEntry): CalendarEntryOrigin => {
   return 'other';
 };
 
+// "My Deadlines" predicate, reusing the same task-assignee/project-member/project-lead
+// relationships already established elsewhere (DashboardView's isMyTask, ProjectsView's
+// isProjectLead/categoryFilter) rather than a new data structure. A project-origin entry counts
+// only while its project is 'Active' -- Completed/Archived/On Hold/Draft/Pending Approval
+// projects are excluded from "my deadlines" the same way DashboardView's upcoming-deadlines
+// widget excludes them. A task-origin entry counts only while the task is neither archived nor
+// Done. 'other'-origin entries (Leave/Holiday) are never personal deadlines.
+export const isMyDeadlineEntry = (
+  entry: CalendarEntry,
+  projects: Project[],
+  tasks: Task[],
+  currentUserId: string
+): boolean => {
+  if (entry.kind === 'Task Due') {
+    const task = tasks.find((t) => t.id === entry.taskId);
+    if (!task || task.isArchived || task.status === 'Done') return false;
+    return task.assigneeId === currentUserId || (task.assigneeIds ?? []).includes(currentUserId);
+  }
+  if (entry.kind === 'Deadline' || entry.kind === 'Milestone') {
+    const project = projects.find((p) => p.id === entry.projectId);
+    if (!project || project.status !== 'Active') return false;
+    return project.teamLeadId === currentUserId || project.memberIds.includes(currentUserId);
+  }
+  return false;
+};
+
 // View-only filtering layered on top of buildCalendarEntries' output — never changes what data
 // enters the pipeline, only what's shown. originFilter narrows to project- or task-origin entries
 // ('other'-origin standalone events are unaffected by it, only by activeKinds). activeKinds narrows
@@ -267,13 +292,11 @@ export const getYearMonths = (year: number): CalendarYearMonth[] =>
 // Per-kind color tone, reusing WorkSync's existing semantic palette instead of inventing a new
 // one: 'Deadline' mirrors StatusBadge's blocked/rejected rose bucket (hardest cutoff), 'Milestone'
 // mirrors its urgent/high fuchsia bucket, 'Task Due' mirrors StatusBadge's todo cyan and
-// boardAccess.getDueDateIndicator's "days left" cyan, 'Review' mirrors StatusBadge's own
-// literal 'review' amber bucket, 'Meeting' reuses the purple/violet brand accent seen in
-// Sidebar and GlassCard, 'Leave' falls back to StatusBadge's neutral slate bucket since no
-// existing status maps to it, and 'Holiday' uses StatusBadge's completed/approved emerald bucket
-// so read-only public holidays read as distinctly "settled" entries. `glow` values are
-// GlassCard's own glowColor tokens; with 7 kinds and 6 tokens, 'Holiday' shares 'none' with
-// 'Leave' (both are informational, non-project/non-task entries) rather than inventing a 7th.
+// boardAccess.getDueDateIndicator's "days left" cyan, 'Leave' falls back to StatusBadge's neutral
+// slate bucket since no existing status maps to it, and 'Holiday' uses StatusBadge's
+// completed/approved emerald bucket so read-only public holidays read as distinctly "settled"
+// entries. `glow` values are GlassCard's own glowColor tokens; 'Holiday' shares 'none' with
+// 'Leave' (both are informational, non-project/non-task entries) rather than inventing a new one.
 export const entryToneClasses = (kind: CalendarEntryKind): CalendarEntryTone => {
   switch (kind) {
     case 'Deadline':
@@ -293,18 +316,6 @@ export const entryToneClasses = (kind: CalendarEntryKind): CalendarEntryTone => 
         badgeClass: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
         dotClass: 'bg-cyan-400',
         glow: 'cyan'
-      };
-    case 'Meeting':
-      return {
-        badgeClass: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-        dotClass: 'bg-purple-400',
-        glow: 'violet'
-      };
-    case 'Review':
-      return {
-        badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-        dotClass: 'bg-amber-400',
-        glow: 'amber'
       };
     case 'Holiday':
       return {

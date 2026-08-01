@@ -62,10 +62,10 @@ export const WeekGrid: React.FC<{
                       type="button"
                       onClick={() => onSelectEntry(entry)}
                       data-calendar-entry-kind={entry.kind}
-                      className={`flex w-full items-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass}`}
+                      className={`flex w-full items-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium border ${tone.badgeClass} ${entry.completed ? 'opacity-50' : ''}`}
                       >
                         <OriginIcon entry={entry} />
-                        <span className="truncate">
+                        <span className={`truncate ${entry.completed ? 'line-through' : ''}`}>
                           {entry.time && <span className="font-mono opacity-80 mr-1">{entry.time}</span>}
                           {entry.title}
                         </span>
