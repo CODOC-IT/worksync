@@ -1,4 +1,5 @@
 import { fromProjectPk, fromTaskPk, fromUserPk } from '../utils/idMapping.js';
+import { normalizeActorMessage } from '../utils/actorDisplay.js';
 import { ApiPriority, DbPriority, NotificationCategory, NotificationDTO, NotificationType } from './notification.types.js';
 
 // One row per notification, already joined against NotificationTypes (for TypeCode/
@@ -74,7 +75,7 @@ export const rowToNotificationDTO = (row: NotificationRow): NotificationDTO => (
   actorId: row.actoruserid !== null ? fromUserPk(row.actoruserid) : undefined,
   actorName: row.actordisplayname || undefined,
   title: row.title,
-  message: row.safepreviewtext || row.title,
+  message: normalizeActorMessage(row.safepreviewtext || row.title, row.actordisplayname),
   type: row.typecode as NotificationType,
   priority: DB_TO_API_PRIORITY[row.prioritycode],
   read: row.readatutc !== null,

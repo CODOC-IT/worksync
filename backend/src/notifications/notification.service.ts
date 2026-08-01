@@ -5,6 +5,7 @@ import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import {
   NotificationCategory,
   NotificationDTO,
@@ -86,7 +87,7 @@ const logPreferenceChanges = (
   requested: Partial<NotificationPreferencesDTO>
 ): void => {
   const actor = userStore.findById(userId);
-  const actorName = actor?.name || 'Someone';
+  const actorName = actorDisplayName(userId);
   (Object.keys(requested) as (keyof NotificationPreferencesDTO)[]).forEach((key) => {
     if (key === 'toast') return;
     if (current[key] === next[key]) return; // no actual change — never log a no-op

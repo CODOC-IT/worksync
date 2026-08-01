@@ -7,6 +7,7 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { ProjectApprovalRequestDTO, ProjectApprovalRequestRow, ProjectApprovalRequestType } from './projectApproval.types.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -23,7 +24,7 @@ import { ProjectApprovalRequestDTO, ProjectApprovalRequestRow, ProjectApprovalRe
 export { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError } from './project.service.js';
 import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError } from './project.service.js';
 
-const actorName = (userId: string): string => userStore.findById(userId)?.name || 'Someone';
+const actorName = (userId: string): string => actorDisplayName(userId);
 
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
   const project = await projectRepo.findProjectById(row.projectid);
