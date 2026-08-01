@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/pool.js';
-import { toProjectPkOrNull, toTaskPkOrNull, toUserPk, toUserPkOrNull } from '../utils/idMapping.js';
+import { toProjectPk, toProjectPkOrNull, toTaskPkOrNull, toUserPk, toUserPkOrNull } from '../utils/idMapping.js';
 import { NotificationRow } from './notification.mapper.js';
 import { ApiPriority, DbPriority, NotificationEvent } from './notification.types.js';
 
@@ -618,4 +618,23 @@ export const upsertPreference = async (
      DO UPDATE SET inappenabled = EXCLUDED.inappenabled, emailenabled = EXCLUDED.emailenabled`,
     [userId, typeMeta.notificationTypeId, inAppEnabled, emailEnabled]
   );
+};
+
+// When an event of `typeCode` was last raised for `projectId`, or null if never. Reads the
+// Notifications row itself (not per-recipient UserNotifications), so the answer is "was this
+// announced", independent of who received it or whether they cleared it. Exists so a caller can
+// make an event fire once per occurrence rather than once per triggering action — see
+// task.service.ts's maybeAnnounceProjectCompletion.
+export const findLatestNotificationTimeForProject = async (
+  projectId: string,
+  typeCode: string
+): Promise<Date | null> => {
+  const result = await query<{ latest: Date | null }>(
+    `SELECT MAX(n.createdatutc) AS latest
+       FROM notify.notifications n
+       JOIN notify.notificationtypes nt ON nt.notificationtypeid = n.notificationtypeid
+      WHERE n.projectid = $1 AND nt.typecode = $2`,
+    [toProjectPk(projectId), typeCode]
+  );
+  return result.rows[0]?.latest || null;
 };

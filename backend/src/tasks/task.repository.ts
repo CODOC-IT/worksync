@@ -465,3 +465,43 @@ export const findStatusHistoryForTask = async (taskId: number): Promise<TaskStat
   );
   return result.rows;
 };
+
+// How many of a project's tasks are finished. Counts top-level, non-archived tasks only — the
+// exact same population project.repository.ts's getProjectProgress uses for the project's
+// percentage, so "100% complete" and "project complete" can never disagree. Subtasks are
+// excluded deliberately: a parent task cannot reach a completed state while its own subtasks are
+// outstanding (see task.service.ts's syncParentFromSubtasks), so counting them would double-count
+// the same work.
+export const getProjectTaskCompletion = async (
+  projectId: number
+): Promise<{ total: number; completed: number }> => {
+  const result = await query<{ total: string; completed: string }>(
+    `SELECT COUNT(*)::text AS total,
+            SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END)::text AS completed
+       FROM work.tasks t
+       JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+      WHERE t.projectid = $1 AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL`,
+    [projectId]
+  );
+  return {
+    total: Number(result.rows[0]?.total || 0),
+    completed: Number(result.rows[0]?.completed || 0)
+  };
+};
+
+// When a task in this project most recently LEFT a completed state (a reopen, or a review
+// rejection sending it back to In Progress). Read from the same work.TaskStatusHistory audit
+// trail every status change already writes, so no extra bookkeeping is needed to answer
+// "has this project stopped being finished since we last said it was finished?".
+export const findLastProjectReopenTime = async (projectId: number): Promise<Date | null> => {
+  const result = await query<{ lastreopened: Date | null }>(
+    `SELECT MAX(h.changedatutc) AS lastreopened
+       FROM work.taskstatushistory h
+       JOIN work.tasks t ON t.taskid = h.taskid
+       JOIN work.taskstatuses fs ON fs.taskstatusid = h.fromtaskstatusid
+       JOIN work.taskstatuses ts ON ts.taskstatusid = h.totaskstatusid
+      WHERE t.projectid = $1 AND fs.iscompletedstate AND NOT ts.iscompletedstate`,
+    [projectId]
+  );
+  return result.rows[0]?.lastreopened || null;
+};
