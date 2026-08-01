@@ -15,7 +15,8 @@ import {
   TaskMutationData,
   TaskMutationResult,
   toStoredTaskPriority,
-  validateTaskInput
+  validateTaskInput,
+  validateTaskEditInput
 } from './taskRules';
 
 interface TaskMutationContext {
@@ -177,7 +178,7 @@ export const prepareTaskUpdate = (
     assigneeIds,
     status: updatedTask.status
   };
-  const fieldErrors = validateTaskInput(input, project, context.users, false);
+  const fieldErrors = validateTaskEditInput(input, project, context.users);
 
   if (Object.keys(fieldErrors).length > 0) {
     return {

@@ -170,6 +170,8 @@ export interface Task {
   tags: string[];
   attachments: TaskAttachment[];
   approvalStatus: 'Approved' | 'Pending Approval' | 'Rejected';
+  /** Server-derived unresolved task-edit approval state. */
+  hasPendingApproval?: boolean;
   pendingEdit?: ControlledEditRequest;
   blockerReason?: string;
   workSummary?: string;
