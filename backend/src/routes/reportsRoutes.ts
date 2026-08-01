@@ -124,10 +124,11 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
 
     // ── Workload ────────────────────────────────────────────
     const workloadRows = await repo.getWorkload(projectIds, from, to);
-    const assigneePks = workloadRows.map((w) => w.userid);
+    const assigneePks = [...new Set(workloadRows.map((w) => w.userid))];
     const userNames = assigneePks.length > 0 ? await repo.getUserNames(assigneePks) : [];
     const userNameMap = new Map(userNames.map((u) => [u.userid, u.displayname]));
     const workload = workloadRows.map((w) => ({
+      projectId: `prj-${w.projectid}`,
       userId: fromUserPk(w.userid),
       name: userNameMap.get(w.userid) || fromUserPk(w.userid),
       active: w.active,

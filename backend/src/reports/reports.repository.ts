@@ -389,6 +389,7 @@ export const getCompletionTrend = async (
 // ────────────────────────────────────────────────────────────
 
 export interface WorkloadRow {
+  projectid: number;
   userid: number;
   active: number;
   completed: number;
@@ -396,11 +397,16 @@ export interface WorkloadRow {
   overdue: number;
 }
 
+// Per-project × assignee task counts. Counting is per-assignee via work.taskassignees (multi-
+// assignee tasks count for each of their assignees, matching the Tasks tab). The per-project
+// granularity lets a lead's Workload tab filter data down to a single project they lead; each
+// assignee's cross-project total is simply the sum of their rows.
 export const getWorkload = async (projectIds: number[], from: string, to: string): Promise<WorkloadRow[]> => {
   if (projectIds.length === 0) return [];
 
   const result = await query<WorkloadRow>(
     `SELECT
+       t.projectid,
        ta.userid,
        COALESCE(SUM(CASE WHEN ts.statuscode NOT IN ('Done', 'Review') AND NOT ts.iscompletedstate THEN 1 ELSE 0 END), 0)::int AS active,
        COALESCE(SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END), 0)::int AS completed,
@@ -413,7 +419,7 @@ export const getWorkload = async (projectIds: number[], from: string, to: string
        AND t.projectid = ANY($1::int[])
        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
             OR NOT ts.iscompletedstate)
-     GROUP BY ta.userid
+     GROUP BY ta.userid, t.projectid
       ORDER BY active DESC`,
      [projectIds, from, to]
    );
