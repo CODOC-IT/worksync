@@ -66,14 +66,20 @@ const formatDateTime = (value: string | Date): string =>
 const parseChanges = (changes: AccountChangeRequestRow['requested_changes']): Record<string, string> =>
   typeof changes === 'string' ? JSON.parse(changes) : changes || {};
 
+export const sanitizeAccountRequestedChanges = (
+  changes: Record<string, string>
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(changes).filter(([key]) =>
+      !/(password|password_hash|current_password_verified|secret|token|credential)/i.test(key)
+    )
+  );
+
 const mapRow = (row: AccountChangeRequestRow) => {
   const changes = parseChanges(row.requested_changes);
-  const passwordChangeRequested = row.requested_field === 'password' || 'password_hash' in changes;
-  const displayChanges: Record<string, string> = {};
-  for (const [key, val] of Object.entries(changes)) {
-    if (key === 'password_hash' || key === 'current_password_verified') continue;
-    displayChanges[key] = val;
-  }
+  const passwordChangeRequested = row.requested_field === 'password' ||
+    Object.keys(changes).some((key) => /password/i.test(key));
+  const displayChanges = sanitizeAccountRequestedChanges(changes);
   return {
     id: row.id,
     userId: row.user_id,
@@ -139,6 +145,9 @@ export const buildAccountReviewMessages = (
     : 'Your account change request was approved.',
   activity: `${reviewerName} ${action.toLowerCase()} ${requesterName}'s account ${field} change request.`,
 });
+
+export const shouldApplyAccountProfileChange = (action: ReviewAction): boolean =>
+  action === 'Approved';
 
 const determineApproverRole = (requesterRole: string): string => {
   if (requesterRole === 'HR') return 'Admin';
@@ -434,7 +443,7 @@ const reviewRequest = async (
         throw new ReviewError(403, 'Only the assigned approver can review this account change request.');
       }
 
-      if (action === 'Approved') {
+      if (shouldApplyAccountProfileChange(action)) {
         const changes = parseChanges(request.requested_changes);
         let approvedChange: ReturnType<typeof getApprovedProfileChange>;
         try {
@@ -513,7 +522,7 @@ const reviewRequest = async (
       return updated.rows[0];
     });
 
-    if (action === 'Approved') {
+    if (shouldApplyAccountProfileChange(action)) {
       await userStore.refreshUserFromDb(reviewed.user_id);
     }
 
