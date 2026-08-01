@@ -158,3 +158,23 @@ export interface UpdateProjectInput {
   teamLeadId?: string;
   creationReason?: string;
 }
+
+export interface CreateMilestoneInput {
+  title: string;
+  description?: string;
+  dueDate: string;
+}
+
+export interface UpdateMilestoneInput {
+  title?: string;
+  description?: string;
+  dueDate?: string;
+}
+
+export interface CreateProjectFileInput {
+  name: string;
+  mimeType?: string;
+  // Base64 data URL (data:<mime>;base64,<content>) -- same convention already used for Project
+  // Chat attachments (see collab/fileStorage.ts's parseAttachmentDataUrl).
+  url: string;
+}

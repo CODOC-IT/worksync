@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
@@ -62,7 +62,10 @@ const formatBytes = (bytes: number): string => {
 };
 
 export const ProjectsView: React.FC = () => {
-  const { projects, tasks, users, currentRole, currentUser, createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject } = useApp();
+  const {
+    projects, tasks, users, currentRole, currentUser,
+    createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -103,6 +106,16 @@ export const ProjectsView: React.FC = () => {
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+
+  // The list-loaded `projects` array never carries milestones (see refreshProjectDetails's own
+  // comment) -- fetch the real detail whenever the Details popup opens so it reflects backend
+  // data instead of an always-empty milestones array.
+  useEffect(() => {
+    if (selectedProjectId) {
+      void refreshProjectDetails(selectedProjectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
@@ -162,24 +175,29 @@ export const ProjectsView: React.FC = () => {
     setFormOpen(true);
   };
 
-  const openEditForm = (project: Project) => {
+  const openEditForm = async (project: Project) => {
     setFormMode('edit');
     setEditingProjectId(project.id);
-    setForm({
-      title: project.title,
-      description: project.description,
-      startDate: project.startDate,
-      targetDate: project.targetDate,
-      priority: project.priority || 'Medium',
-      teamLeadId: project.teamLeadId,
-      memberIds: project.memberIds,
-      status: project.status === 'Pending Approval' ? 'Active' : project.status,
-      creationReason: project.creationReason || '',
-      milestones: project.milestones,
-      files: project.files
-    });
     setFormErrors({});
     setFileError('');
+    // `project` here is whatever ProjectCard was rendering, i.e. the list-cached snapshot that
+    // never carries milestones (see refreshProjectDetails's comment). Fetch the real detail first
+    // so the edit form opens with the project's actual current milestones, not an empty list.
+    const fresh = await refreshProjectDetails(project.id);
+    const source = fresh || project;
+    setForm({
+      title: source.title,
+      description: source.description,
+      startDate: source.startDate,
+      targetDate: source.targetDate,
+      priority: source.priority || 'Medium',
+      teamLeadId: source.teamLeadId,
+      memberIds: source.memberIds,
+      status: source.status === 'Pending Approval' ? 'Active' : source.status,
+      creationReason: source.creationReason || '',
+      milestones: source.milestones,
+      files: source.files
+    });
     setFormOpen(true);
   };
 
@@ -219,10 +237,14 @@ export const ProjectsView: React.FC = () => {
     setForm((prev) => ({ ...prev, milestones: prev.milestones.filter((m) => m.id !== id) }));
   };
 
-  const handleFileSelect = (fileList: FileList | null) => {
+  // Reads real content as a base64 data URL (same convention already used for Project Chat
+  // attachments -- see fileStorage.ts / discussion.repository.ts's upsertStoredFile), instead of
+  // only recording the file's name/size with a fake `url: '#'` placeholder. The backend persists
+  // these bytes for real and rejects anything with no readable content.
+  const handleFileSelect = async (fileList: FileList | null) => {
     if (!fileList) return;
     const rejected: string[] = [];
-    const accepted: ProjectFile[] = [];
+    const candidates: File[] = [];
 
     Array.from(fileList).forEach((file) => {
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
@@ -234,21 +256,34 @@ export const ProjectsView: React.FC = () => {
         rejected.push(`${file.name} (exceeds 10 MB limit)`);
         return;
       }
-      accepted.push({
-        id: `f-${Date.now()}-${file.name}`,
-        name: file.name,
-        size: formatBytes(file.size),
-        type: ext.toUpperCase(),
-        uploadedBy: currentUser.id,
-        uploadedAt: todayStr,
-        url: '#'
-      });
+      candidates.push(file);
     });
 
     setFileError(rejected.length > 0 ? `Rejected: ${rejected.join(', ')}` : '');
-    if (accepted.length > 0) {
-      setForm((prev) => ({ ...prev, files: [...prev.files, ...accepted] }));
-    }
+    if (candidates.length === 0) return;
+
+    const accepted: ProjectFile[] = await Promise.all(
+      candidates.map(
+        (file) =>
+          new Promise<ProjectFile>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                id: `f-${Date.now()}-${file.name}`,
+                name: file.name,
+                size: file.size,
+                mimeType: file.type || 'application/octet-stream',
+                uploadedBy: currentUser.id,
+                uploadedAt: todayStr,
+                dataUrl: reader.result as string
+              });
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+
+    setForm((prev) => ({ ...prev, files: [...prev.files, ...accepted] }));
   };
 
   const removeFile = (id: string) => {
@@ -814,7 +849,7 @@ export const ProjectsView: React.FC = () => {
                 <input
                   type="file"
                   multiple
-                  onChange={(e) => handleFileSelect(e.target.files)}
+                  onChange={(e) => void handleFileSelect(e.target.files)}
                   className="w-full text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:text-cyan-300 file:text-xs file:font-semibold"
                 />
                 {fileError && <p className="text-rose-400 mt-1">{fileError}</p>}
@@ -826,7 +861,7 @@ export const ProjectsView: React.FC = () => {
                         className="flex items-center justify-between text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5"
                       >
                         <span className="truncate">
-                          {f.name} <span className="text-slate-500">({f.size})</span>
+                          {f.name} <span className="text-slate-500">({formatBytes(f.size)})</span>
                         </span>
                         <button
                           type="button"

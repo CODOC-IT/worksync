@@ -3,6 +3,8 @@ import {
   UserRole,
   User,
   Project,
+  Milestone,
+  ProjectFile,
   Task,
   TaskStatus,
   AttendanceRecord,
@@ -63,7 +65,12 @@ import {
   permanentlyDeleteProjectApi,
   restoreProjectApi,
   addProjectMemberApi,
-  removeProjectMemberApi
+  removeProjectMemberApi,
+  addMilestoneApi,
+  updateMilestoneApi,
+  deleteMilestoneApi,
+  addProjectFileApi,
+  removeProjectFileApi
 } from '../features/projects/projectRepository';
 import {
   fetchActivities,
@@ -179,6 +186,11 @@ interface AppState {
   deleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   permanentlyDeleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   restoreProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  // Fetches this project's full server detail (includes real, persisted milestones -- the list
+  // endpoint backing `projects` deliberately doesn't, to avoid an N+1 query on every project list
+  // load), merges it in, and returns it -- called when the Project Details popup or the Edit form
+  // opens, so both show backend data rather than the list-cached snapshot.
+  refreshProjectDetails: (projectId: string) => Promise<Project | null>;
   projectApprovalRequests: ProjectApprovalRequest[];
   approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
@@ -1022,8 +1034,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         creationReason: data.creationReason
       });
 
+      // Milestones have their own dedicated endpoints (no bulk field on POST /api/projects,
+      // matching how membership already works above) -- the project must exist first, so these
+      // are created one at a time against the new project's real id, right after it's created.
+      const createdMilestones: Milestone[] = [];
+      const milestoneErrors: string[] = [];
+      for (const milestone of data.milestones || []) {
+        if (!milestone.title?.trim() || !milestone.dueDate) continue;
+        try {
+          createdMilestones.push(
+            await addMilestoneApi(created.id, { title: milestone.title.trim(), dueDate: milestone.dueDate })
+          );
+        } catch (error: any) {
+          milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+        }
+      }
+
+      // Same pattern as milestones just above -- attachments have their own dedicated endpoint,
+      // the project must exist first. `file.dataUrl` is only present for a file just selected in
+      // the form (see ProjectsView.tsx's handleFileSelect); anything without one has no content to
+      // upload and is skipped defensively.
+      const createdFiles: ProjectFile[] = [];
+      const fileErrors: string[] = [];
+      for (const file of data.files || []) {
+        if (!file.dataUrl) continue;
+        try {
+          createdFiles.push(
+            await addProjectFileApi(created.id, { name: file.name, mimeType: file.mimeType, url: file.dataUrl })
+          );
+        } catch (error: any) {
+          fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+        }
+      }
+
       setProjects((prev) => [
-        { ...created, milestones: data.milestones || [], files: data.files || [], pinnedMessagesCount: 0 },
+        { ...created, milestones: createdMilestones, files: createdFiles, pinnedMessagesCount: 0 },
         ...prev
       ]);
 
@@ -1047,12 +1092,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       pushActivity('Created project', 'Project', created.id, created.title);
 
-      const message =
+      const baseMessage =
         created.status === 'Pending Approval'
           ? `"${created.title}" was submitted for Admin approval successfully.`
           : `"${created.title}" was created successfully.`;
-      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
-      return { success: true, message };
+      const creationErrors = [...milestoneErrors, ...fileErrors];
+      if (creationErrors.length > 0) {
+        const message = `${baseMessage} Some items could not be saved: ${creationErrors.join(' ')}`;
+        confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
+        return { success: true, message };
+      }
+      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', baseMessage);
+      return { success: true, message: baseMessage };
     } catch (error: any) {
       console.error('Failed to create project.', error);
       return { success: false, message: error?.message || 'Failed to create the project. Please try again.' };
@@ -1155,11 +1206,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (!result.pendingApproval && result.project) {
         const updated = result.project;
+        // milestones: p.milestones (not data.milestones) -- the milestone diff block below is the
+        // single source of truth for persisting milestone changes and refreshing this array from
+        // the server; this merge must not race it with the form's raw (possibly unpersisted-id)
+        // local list.
+        // files: p.files (not data.files) -- same reasoning as milestones: the file diff block
+        // below is the single source of truth for persisting attachment changes and refreshing
+        // this array from the server.
         setProjects((prev) =>
           prev.map((p) =>
-            p.id === projectId
-              ? { ...p, ...updated, milestones: data.milestones ?? p.milestones, files: data.files ?? p.files }
-              : p
+            p.id === projectId ? { ...p, ...updated, milestones: p.milestones, files: p.files } : p
           )
         );
         pushActivity('Updated project', 'Project', projectId, updated.title);
@@ -1172,6 +1228,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // call per added/removed user, diffed against the project's current membership. Member
       // changes are never approval-gated (not one of this workflow's five integration points),
       // so they apply immediately regardless of whether the rest of this edit is pending.
+      const memberErrors: string[] = [];
+      let membershipChanged = false;
       if (data.memberIds) {
         // Both sides of this diff must go through the same eligibility filter. project.memberIds
         // (the "before" set) includes the project's Team Lead, whose account role is virtually
@@ -1185,7 +1243,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
         const removed = Array.from(beforeIds).filter((id) => !afterIds.includes(id));
-        const memberErrors: string[] = [];
 
         for (const userId of added) {
           try {
@@ -1201,26 +1258,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberErrors.push(error?.message || `Failed to remove member ${userId}.`);
           }
         }
+        membershipChanged = added.length > 0 || removed.length > 0;
+      }
 
-        if (added.length > 0 || removed.length > 0) {
-          const refreshed = await fetchProjectApi(projectId);
-          // `refreshed` is a fresh server DTO -- milestones/files/pinnedMessagesCount have no
-          // backend representation (see the Project Module comment above), so the server always
-          // reports them empty. Keep the locally-held values instead of letting this refresh wipe
-          // them out, same as the merge just above for the non-membership edit path.
-          setProjects((prev) =>
-            prev.map((p) =>
-              p.id === projectId
-                ? { ...p, ...refreshed, milestones: p.milestones, files: p.files, pinnedMessagesCount: p.pinnedMessagesCount }
-                : p
-            )
-          );
-        }
+      // Milestones now have their own dedicated endpoints (POST/PATCH/DELETE
+      // /api/projects/:id/milestones[/:milestoneId]), same "no bulk field, diff against current
+      // state, one call per change" pattern as membership above -- and same non-approval-gated
+      // treatment (reuses assertCanManage server-side, not the Team Lead approval workflow).
+      // A milestone not yet saved to the server has a client-generated id like "m-<timestamp>-<n>"
+      // (see ProjectsView.tsx's addMilestone); a real, persisted one has a plain numeric id (the
+      // DB's MilestoneId as a string) -- that shape difference is what tells "new" from "existing"
+      // apart, no separate tracking needed.
+      const milestoneErrors: string[] = [];
+      let milestonesChanged = false;
+      if (data.milestones) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextById = new Map(data.milestones.filter((m) => isPersistedId(m.id)).map((m) => [m.id, m]));
+        const removedMilestones = project.milestones.filter((m) => !nextById.has(m.id));
+        const addedMilestones = data.milestones.filter((m) => !isPersistedId(m.id));
+        const changedMilestones = project.milestones.filter((m) => {
+          const next = nextById.get(m.id);
+          return next && (next.title !== m.title || next.dueDate !== m.dueDate);
+        });
 
-        if (memberErrors.length > 0) {
-          const message = `Project details saved, but some membership changes failed: ${memberErrors.join(' ')}`;
-          return { success: false, message };
+        for (const milestone of removedMilestones) {
+          try {
+            await deleteMilestoneApi(projectId, milestone.id);
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to remove milestone "${milestone.title}".`);
+          }
         }
+        for (const milestone of changedMilestones) {
+          const next = nextById.get(milestone.id)!;
+          try {
+            await updateMilestoneApi(projectId, milestone.id, { title: next.title, dueDate: next.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to update milestone "${milestone.title}".`);
+          }
+        }
+        for (const milestone of addedMilestones) {
+          if (!milestone.title?.trim() || !milestone.dueDate) continue;
+          try {
+            await addMilestoneApi(projectId, { title: milestone.title.trim(), dueDate: milestone.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+          }
+        }
+        milestonesChanged =
+          removedMilestones.length > 0 || changedMilestones.length > 0 || addedMilestones.length > 0;
+      }
+
+      // Attachments have their own dedicated endpoints too, same pattern as milestones just above
+      // -- only add/remove exist (no "rename"/"replace content" in the current UI, so no "changed"
+      // case to diff). Same numeric-id-vs-client-generated-id discriminator: a file just selected
+      // in the form has an id like "f-<timestamp>-<name>" and carries its content in `dataUrl`
+      // (see ProjectsView.tsx's handleFileSelect); an already-persisted file has a plain numeric id
+      // (the DB's FileId) and no `dataUrl`.
+      const fileErrors: string[] = [];
+      let filesChanged = false;
+      if (data.files) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextIds = new Set(data.files.filter((f) => isPersistedId(f.id)).map((f) => f.id));
+        const removedFiles = project.files.filter((f) => !nextIds.has(f.id));
+        const addedFiles = data.files.filter((f) => !isPersistedId(f.id) && f.dataUrl);
+
+        for (const file of removedFiles) {
+          try {
+            await removeProjectFileApi(projectId, file.id);
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to remove file "${file.name}".`);
+          }
+        }
+        for (const file of addedFiles) {
+          try {
+            await addProjectFileApi(projectId, { name: file.name, mimeType: file.mimeType, url: file.dataUrl! });
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+          }
+        }
+        filesChanged = removedFiles.length > 0 || addedFiles.length > 0;
+      }
+
+      if (membershipChanged || milestonesChanged || filesChanged) {
+        const refreshed = await fetchProjectApi(projectId);
+        // `refreshed` is a fresh server DTO -- pinnedMessagesCount has no backend representation,
+        // so keep the locally-held value; milestones and files are now real, persisted,
+        // server-confirmed data, so take both from `refreshed`.
+        setProjects((prev) =>
+          prev.map((p) => (p.id === projectId ? { ...p, ...refreshed, pinnedMessagesCount: p.pinnedMessagesCount } : p))
+        );
+      }
+
+      if (memberErrors.length > 0 || milestoneErrors.length > 0 || fileErrors.length > 0) {
+        const message = `Project details saved, but some changes failed: ${[...memberErrors, ...milestoneErrors, ...fileErrors].join(' ')}`;
+        return { success: false, message };
       }
 
       if (result.pendingApproval) {
@@ -1234,6 +1365,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to update project.', error);
       return { success: false, message: error?.message || 'Failed to update the project. Please try again.' };
+    }
+  };
+
+  // GET /api/projects/:id returns the full detail DTO (milestones included -- see
+  // project.service.ts's buildDetailDTO), unlike GET /api/projects (the list `projects` is
+  // hydrated from), which omits milestones/files to avoid an N+1 query on every project list load.
+  // ProjectsView.tsx calls this when the Details popup or the Edit form opens (the Edit button on
+  // a card also only ever has the list-cached, milestone/file-less project), so both reflect real
+  // backend data instead of that snapshot. Returns the merged project so a caller that needs it
+  // synchronously (e.g. to seed an edit form) doesn't have to read back a stale closure of
+  // `projects` right after this resolves.
+  const refreshProjectDetails = async (projectId: string): Promise<Project | null> => {
+    try {
+      const detail = await fetchProjectApi(projectId);
+      const existing = projects.find((p) => p.id === projectId);
+      const merged: Project = existing ? { ...existing, ...detail } : detail;
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? merged : p)));
+      return merged;
+    } catch (error) {
+      console.warn('Failed to load project details.', error);
+      return null;
     }
   };
 
@@ -3052,6 +3204,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteProject,
         permanentlyDeleteProject,
         restoreProject,
+        refreshProjectDetails,
         projectApprovalRequests,
         approveProjectApprovalRequest,
         rejectProjectApprovalRequest,
