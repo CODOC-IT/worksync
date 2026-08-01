@@ -26,6 +26,7 @@ import {
   BreakType,
   WorkBreak,
   ControlledEditRequest,
+  SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
 
@@ -194,6 +195,10 @@ interface AppState {
       // -- Review -> Done must always go through an explicit reviewer decision).
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
+      // Only meaningful alongside reviewDecision: 'Reject' -- one Accept/Reject verdict per
+      // completed subtask, required whenever the task being rejected has any (see
+      // task.service.ts's decideReview).
+      subtaskDecisions?: SubtaskReviewDecision[];
     }
   ) => Promise<{ success: boolean; message: string }>;
   // Team-Lead-only reopen of a Done task. `reason` is mandatory and is persisted to
@@ -1708,6 +1713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       extraInfo?: {
         note?: string;
         reviewDecision?: 'Approve' | 'Reject';
+        subtaskDecisions?: SubtaskReviewDecision[];
       }
     ): Promise<{ success: boolean; message: string }> => {
       const task = tasks.find((t) => t.id === taskId);
@@ -1720,7 +1726,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           extraInfo?.reviewDecision === 'Approve'
             ? await approveTaskViaApi(taskId, note)
             : extraInfo?.reviewDecision === 'Reject'
-              ? await rejectTaskViaApi(taskId, note)
+              ? await rejectTaskViaApi(taskId, note, extraInfo?.subtaskDecisions)
               : await changeTaskStatusViaApi(taskId, newStatus, note);
 
         setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));

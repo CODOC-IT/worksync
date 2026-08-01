@@ -94,6 +94,14 @@ export interface Subtask {
   completed: boolean;
 }
 
+// A Project Lead's per-subtask verdict when rejecting a parent task's review — see
+// backend/src/tasks/task.service.ts's decideReview. Only completed subtasks need one.
+export interface SubtaskReviewDecision {
+  subtaskId: string;
+  decision: 'Accept' | 'Reject';
+  comment?: string;
+}
+
 export interface ControlledEditRequest {
   id: string;
   taskId: string;
