@@ -113,22 +113,22 @@ const visibilitySql = (
     return scopeClause;
   };
 
-  // ── HR: near-admin visibility — all organization events except those performed by Admins ──
-  // HR can see everything an Admin sees with one exclusion: events where the actor was an
-  // Administrator. This applies whether the HR role is permanent or temporary.
+  // ── HR: Admin-equivalent visibility — all organization events, including Admin-performed ──
+  // HR shares Admin's audit visibility. This applies whether the HR role is permanent or
+  // temporary, and also when combined with an active Team Lead grant.
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
+      clause: 'TRUE',
       extraParams: params.slice(1),
     };
   }
 
-  // ── HR + Team Lead combined: same near-admin scope ───────────────────────
+  // ── HR + Team Lead combined: same Admin-equivalent scope ──────────────────
   // When both are active the HR scope already covers everything the lead scope would; no
   // need to enumerate project membership predicates on top.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
+      clause: 'TRUE',
       extraParams: params.slice(1),
     };
   }
