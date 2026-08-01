@@ -427,6 +427,10 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
       res.status(403).json({ success: false, message: 'HR cannot create Administrator accounts.' });
       return;
     }
+    if (role === 'Team_Lead') {
+      res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
+      return;
+    }
 
     const resolvedPassword = typeof password === 'string' && password.trim().length >= 6
       ? password
@@ -461,16 +465,22 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
-    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || req.body?.role === 'Admin')) {
-      res.status(403).json({ success: false, message: 'HR cannot edit Administrator roles.' });
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR' || req.body?.role === 'Admin' || req.body?.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only edit member accounts.' });
+      return;
+    }
+    if ((req.body?.role === 'Team_Lead' && targetUser.role !== 'Team_Lead') || (targetUser.role === 'Team_Lead' && req.body?.role && req.body.role !== 'Team_Lead')) {
+      res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
       return;
     }
 
     const nextPassword = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
     const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword.trim() : '';
     if (nextPassword || confirmPassword) {
-      if (targetUser.role !== 'Team_Member') {
-        res.status(403).json({ success: false, message: 'Managed password changes are limited to Team Member accounts.' });
+      const adminCanManagePassword = req.user.role === 'Admin' && (targetUser.role === 'Team_Member' || targetUser.role === 'HR');
+      const hrCanManagePassword = req.user.role === 'HR' && targetUser.role === 'Team_Member';
+      if (!adminCanManagePassword && !hrCanManagePassword) {
+        res.status(403).json({ success: false, message: 'Managed password changes are limited to Team Member accounts, or HR accounts when updated by an Administrator.' });
         return;
       }
       if (nextPassword.length < 6) {
@@ -524,8 +534,8 @@ router.patch('/users/:id/deactivate', authenticateJWT, async (req: Authenticated
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
-    if (req.user.role === 'HR' && targetUser.role === 'Admin') {
-      res.status(403).json({ success: false, message: 'HR cannot deactivate Administrator accounts.' });
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only deactivate member accounts.' });
       return;
     }
 
@@ -543,6 +553,16 @@ router.patch('/users/:id/reactivate', authenticateJWT, async (req: Authenticated
   try {
     if (!req.user || !canManageAccounts(req.user.role)) {
       res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only reactivate member accounts.' });
       return;
     }
 
