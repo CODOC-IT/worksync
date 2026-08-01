@@ -1,4 +1,4 @@
-import { Project, ProjectApprovalRequest, User } from '../../types';
+import { Milestone, Project, ProjectApprovalRequest, ProjectFile, User } from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // projectApiClient — thin fetch wrapper over /api/projects (backend/src/projects/project.routes.ts).
@@ -168,4 +168,58 @@ export const removeProjectMemberApi = async (id: string, userId: string, reason?
     { method: 'DELETE', body: JSON.stringify({ reason }) }
   );
   return data;
+};
+
+export interface CreateMilestonePayload {
+  title: string;
+  dueDate: string;
+}
+
+export interface UpdateMilestonePayload {
+  title?: string;
+  dueDate?: string;
+}
+
+export const addMilestoneApi = async (projectId: string, payload: CreateMilestonePayload): Promise<Milestone> => {
+  const { data } = await apiFetch<{ data: Milestone }>(`/${encodeURIComponent(projectId)}/milestones`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return data;
+};
+
+export const updateMilestoneApi = async (
+  projectId: string,
+  milestoneId: string,
+  payload: UpdateMilestonePayload
+): Promise<Milestone> => {
+  const { data } = await apiFetch<{ data: Milestone }>(
+    `/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'PATCH', body: JSON.stringify(payload) }
+  );
+  return data;
+};
+
+export const deleteMilestoneApi = async (projectId: string, milestoneId: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`, {
+    method: 'DELETE'
+  });
+};
+
+export interface CreateProjectFilePayload {
+  name: string;
+  mimeType?: string;
+  url: string;
+}
+
+export const addProjectFileApi = async (projectId: string, payload: CreateProjectFilePayload): Promise<ProjectFile> => {
+  const { data } = await apiFetch<{ data: ProjectFile }>(`/${encodeURIComponent(projectId)}/files`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return data;
+};
+
+export const removeProjectFileApi = async (projectId: string, fileId: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
 };
