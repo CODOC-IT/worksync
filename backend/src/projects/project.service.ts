@@ -128,7 +128,9 @@ const isMemberOfRow = (row: ProjectRow, members: ProjectMemberRow[], userId: str
 // there's no separate task-level ACL in the schema) so Task Module authorization stays
 // consistent with Project Module authorization without duplicating the membership query.
 export const isProjectAccessible = async (projectId: string, userId: string, role: string): Promise<boolean> => {
-  if (role === 'Admin') return true;
+  // HR has organization-wide, read-only project/task visibility.  Mutations use the
+  // separate lead/manage guards below, so this read bypass cannot grant write access.
+  if (role === 'Admin' || role === 'HR') return true;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
   const members = await repo.findMembersForProject(row.projectid);

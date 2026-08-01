@@ -166,8 +166,9 @@ export const canDeleteTask = (
   teamLeadCanDeleteTasks = true
 ): boolean => {
   if (!teamLeadCanDeleteTasks || !isActiveProject(project) || task.isArchived) return false;
-  return getTaskAssigneeIds(task).includes(userId)
-    || (role !== 'HR' && project.teamLeadId === userId);
+  // Assignment grants work/edit access, not deletion.  Deleting a task remains a
+  // project-lead operation (with the server enforcing the same rule).
+  return role !== 'HR' && project.teamLeadId === userId;
 };
 
 export const validateTaskInput = (
@@ -222,6 +223,14 @@ export const validateTaskInput = (
 
   return errors;
 };
+
+// Editing deliberately has no "today" minimum.  Historical tasks must retain their
+// recorded dates when an unrelated field changes; the form confirms a changed past date.
+export const validateTaskEditInput = (
+  input: TaskFormInput,
+  project: Project | undefined,
+  users: User[]
+): Record<string, string> => validateTaskInput(input, project, users, false);
 
 export const filterAndSortTasks = (
   tasks: Task[],
