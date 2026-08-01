@@ -214,9 +214,11 @@ const buildWhere = (
   if (filters.taskId) add('a.taskid = ?', toTaskPkOrNull(filters.taskId));
   if (filters.module) add('a.modulecode = ?', filters.module);
   if (filters.action === 'Priority Changed') {
-    clauses.push("(a.actioncode = 'Priority Changed' OR EXISTS (SELECT 1 FROM audit.auditeventchanges pc WHERE pc.auditeventid = auditeventid AND lower(pc.fieldname) = 'priority'))");
+    clauses.push("(a.actioncode = 'Priority Changed' OR a.auditeventid IN (SELECT pc.auditeventid FROM audit.auditeventchanges pc WHERE lower(pc.fieldname) = 'priority'))");
   } else if (filters.action === 'Status Changed') {
-    clauses.push("(a.actioncode = 'Status Changed' OR EXISTS (SELECT 1 FROM audit.auditeventchanges sc WHERE sc.auditeventid = auditeventid AND lower(sc.fieldname) = 'status'))");
+    clauses.push("(a.actioncode = 'Status Changed' OR a.auditeventid IN (SELECT sc.auditeventid FROM audit.auditeventchanges sc WHERE lower(sc.fieldname) = 'status'))");
+  } else if (filters.action === 'Attendance Corrected') {
+    clauses.push("(a.actioncode = 'Attendance Corrected' OR a.actioncode = 'Corrected')");
   } else if (filters.action) {
     add('a.actioncode = ?', filters.action);
   }

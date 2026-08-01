@@ -32,7 +32,7 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS, 'Permission Granted', 'Permission Revoked', 'Permission Expired'];
 // Admin sees all actions including HR attendance and auth events
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Attachment Deleted', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
 
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];

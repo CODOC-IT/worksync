@@ -3,6 +3,8 @@ import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddlew
 import { query, withTransaction } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
 import { attendanceRole, getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
+import { userStore } from '../store/userStore.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -279,6 +281,24 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         JSON.stringify(cleanDetails)
       ]
     );
+
+    if (type === 'Leave') {
+      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Leave Requested',
+        module: 'Attendance',
+        entityType: 'Leave',
+        entityId: id,
+        entityName: `Leave ${requestDate}`,
+        description: `${actorName} requested leave for ${requestDate}.`,
+        source: 'Web',
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: `${type === 'Leave' ? 'Leave' : 'Attendance edit'} request submitted successfully.`,
@@ -398,6 +418,53 @@ const decideRequest = async (
         : `Request ${decision.toLowerCase()} successfully.`,
       request: mapRow(updated)
     });
+
+    if (updated.status !== 'Pending') {
+      const requesterName = updated.user_name || updated.user_id;
+      const deciderName = userStore.findById(req.user.id)?.name || req.user.email;
+      const requestDateStr = formatDate(updated.request_date);
+      if (updated.request_type === 'Leave') {
+        recordActivitySafe({
+          actorId: req.user.id,
+          actorName: deciderName,
+          actorEmail: req.user.email,
+          actorRole: req.user.role,
+          affectedUserId: updated.user_id,
+          affectedUserName: requesterName,
+          action: decision === 'Approved' ? 'Leave Approved' : 'Leave Rejected',
+          module: 'Attendance',
+          entityType: 'Leave',
+          entityId: updated.id,
+          entityName: `Leave ${requestDateStr}`,
+          description: decision === 'Approved'
+            ? `${deciderName} approved leave request for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected leave request for ${requesterName} on ${requestDateStr}.`,
+          source: 'Web',
+          important: true,
+          reason: decisionReason || undefined,
+        });
+      } else if (updated.request_type === 'Correction') {
+        recordActivitySafe({
+          actorId: req.user.id,
+          actorName: deciderName,
+          actorEmail: req.user.email,
+          actorRole: req.user.role,
+          affectedUserId: updated.user_id,
+          affectedUserName: requesterName,
+          action: decision === 'Approved' ? 'Attendance Corrected' : 'Rejected',
+          module: 'Attendance',
+          entityType: 'Attendance',
+          entityId: updated.id,
+          entityName: `Attendance ${requestDateStr}`,
+          description: decision === 'Approved'
+            ? `${deciderName} approved attendance correction for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected attendance correction for ${requesterName} on ${requestDateStr}.`,
+          source: 'Web',
+          important: true,
+          reason: decisionReason || undefined,
+        });
+      }
+    }
   } catch (error: any) {
     const statusCode = Number(error?.statusCode) || 500;
     if (statusCode === 500) console.error('[HR Request Decision Error]', error);
