@@ -1001,6 +1001,12 @@ const decideReview = async (
           throw new TaskValidationError(`A comment is required for the rejected subtask "${child.title}".`);
         }
       }
+      // Rejecting the overall review while accepting every completed subtask is contradictory --
+      // if the checklist was genuinely fine, the reviewer should Approve instead. At least one
+      // subtask must carry a Reject verdict for a Reject decision to be valid here.
+      if (!doneChildren.some((child) => decisionByTaskId.get(child.taskid)!.decision === 'Reject')) {
+        throw new TaskValidationError('Reject at least one subtask to reject this review, or approve it instead.');
+      }
 
       const doneMeta = await repo.getTaskStatusMeta('Done');
       const inProgressMeta = await repo.getTaskStatusMeta('InProgress');
@@ -1050,12 +1056,26 @@ const decideReview = async (
     taskId: dto.id
   });
 
-  // Each rejected subtask's own assignees additionally hear about that specific checklist item
-  // reopening, with the Project Lead's comment for that subtask — reuses the exact notification
-  // (and recipient set) the ordinary subtask-status-change path already sends, see changeTaskStatus.
+  // Each rejected subtask's own assignees hear specifically that THEIR subtask was rejected
+  // (not the generic "reopened" wording notifySubtaskStatusChange uses for an assignee reopening
+  // their own finished work — a Project Lead rejecting it during review is a different event and
+  // reads differently), with the Lead's comment for that subtask. The Team Lead is the actor
+  // here, so they're excluded from their own notification by publishSafely as usual.
   for (const childRow of rejectedSubtaskRows) {
     const childDecision = subtaskDecisions!.find((entry) => toTaskPk(entry.subtaskId) === childRow.taskid)!;
-    await notifySubtaskStatusChange(childRow, 'Done', 'In Progress', actorId, actorName, childDecision.comment);
+    const childAssignees = (await repo.findAssigneesForTask(childRow.taskid)).map((a) => fromUserPk(a.userid));
+    publishSafely(
+      {
+        type: 'subtask_reopened',
+        title: 'Subtask Rejected',
+        message: `${actorName} rejected your subtask "${childRow.title}" during review of "${dto.title}". ${childDecision.comment!.trim()}`,
+        actorId,
+        projectId: dto.projectId,
+        taskId: fromTaskPk(childRow.taskid)
+      },
+      childAssignees,
+      actorId
+    );
   }
 
   const projectRow = await projectRepo.findProjectById(row.projectid);
