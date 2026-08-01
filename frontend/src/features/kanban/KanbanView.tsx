@@ -195,6 +195,8 @@ export const KanbanView: React.FC = () => {
   const roleIntro =
     currentRole === 'Admin'
       ? 'Monitor every project workspace. Task editing stays with Team Leads and assignees.'
+      : currentRole === 'HR'
+      ? 'Read-only view of every project workspace.'
       : currentRole === 'Team_Lead'
       ? 'Track progress and approve reviewed work across the projects you lead.'
       : 'View your project context and move your own tasks through the workflow.';
@@ -1271,13 +1273,22 @@ const TaskDetailsModal: React.FC<{
     load(true);
   }, [load]);
 
-  // Per-subtask, not per-parent: everyone can *see* every subtask, but only the people it is
-  // assigned to may tick it — no role overrides it, not Team Lead and not Admin. Mirrors exactly
-  // what the backend enforces in task.authorization.ts's getTaskEditDenialReason ("Only users
-  // assigned to this subtask can edit it"), so the UI never enables a control the server will
-  // reject. This is UX only; the server check is the authoritative one.
-  const canToggleSubtask = (subtask: Subtask): boolean =>
-    (subtask.assigneeIds || []).includes(currentUserId);
+  // Everyone can *see* every subtask; who may tick one follows the task-STATUS rule, not the
+  // task-edit rule. Ticking a subtask calls AppContext.setSubtaskCompletion ->
+  // PATCH /api/tasks/:id/status, so the authoritative server check is task.service.ts's
+  // assertCanChangeTaskStatus — which allows the subtask's assignees *and* the project's Team
+  // Lead. This used to mirror getTaskEditDenialReason (the *edit* rule) instead, which is what
+  // left a Team Lead unable to tick subtasks the server would have accepted all along.
+  //
+  // The Team Lead qualifies whether or not they are also a listed project member: project
+  // .teamLeadId is the resolved per-project lead, which falls back to the project owner exactly
+  // as isProjectLead does server-side. HR is read-only across this board and is never an
+  // assignee (the API refuses to assign tasks to HR users).
+  const canToggleSubtask = (subtask: Subtask): boolean => {
+    if (currentRole === 'HR') return false;
+    if (project.teamLeadId === currentUserId) return true;
+    return (subtask.assigneeIds || []).includes(currentUserId);
+  };
 
   const submitSubtask = async (note: string) => {
     if (!task || !pendingSubtask) return;
@@ -1302,8 +1313,19 @@ const TaskDetailsModal: React.FC<{
   // A subtask's "completed by / completed at" is not a column on the subtask itself — it's the
   // history entry that moved it into Done, so it's read from that shared audit trail — the same
   // one rendered in full by the Status History section below.
-  const completionOf = (subtaskId: string) =>
-    history.find((entry) => entry.taskId === subtaskId && entry.toStatus === 'Done');
+  //
+  // Gated on the subtask still BEING complete: a rejected (or reopened) subtask keeps its old
+  // "moved to Done" entry in history forever, so matching on that alone left an In Progress
+  // subtask still claiming it had been completed. Scans newest-first so a subtask that was
+  // completed, rejected, then completed again reports its most recent completion, not its first.
+  const completionOf = (subtask: Subtask): TaskStatusHistoryEntry | undefined => {
+    if (!subtask.completed) return undefined;
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const entry = history[index];
+      if (entry.taskId === subtask.id && entry.toStatus === 'Done') return entry;
+    }
+    return undefined;
+  };
 
   return (
     <div
@@ -1397,7 +1419,7 @@ const TaskDetailsModal: React.FC<{
                 ) : (
                   <ul className="space-y-1.5">
                     {subtasks.map((subtask) => {
-                      const completion = completionOf(subtask.id);
+                      const completion = completionOf(subtask);
                       const busy = busySubtaskId === subtask.id;
                       const canToggle = canToggleSubtask(subtask);
                       return (
@@ -1425,7 +1447,7 @@ const TaskDetailsModal: React.FC<{
                                   ? subtask.completed
                                     ? 'Reopen this subtask'
                                     : 'Mark this subtask complete'
-                                  : 'Only this subtask\'s assignee can change it.'
+                                  : 'Only this subtask\'s assignees or the project\'s Team Lead can change it.'
                               }
                               className="mt-0.5 shrink-0 rounded transition disabled:cursor-not-allowed enabled:hover:scale-110"
                             >

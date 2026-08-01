@@ -52,6 +52,30 @@ const buildDTOs = async (rows: TaskRow[]): Promise<TaskDTO[]> => {
 
 const projectFrontendId = (row: TaskRow): string => `prj-${row.projectid}`;
 
+// Canonical key for matching a task primary key that came from a DB row against one derived from
+// a frontend `tsk-<n>` id. Necessary because `work.Tasks.TaskId` is a Postgres `bigint`, and
+// node-postgres returns bigint columns as JavaScript *strings* ('49') to avoid precision loss,
+// while toTaskPk() returns a *number* (49) — so `row.taskid === toTaskPk(id)` and
+// `map.get(row.taskid)` on a number-keyed Map both silently fail every time. TaskRow.taskid is
+// declared `number`, which hides this from the compiler (see task.types.ts). Normalizing both
+// sides through String() makes the comparison correct regardless of which representation the
+// driver hands back.
+const taskPkKey = (taskPk: number | string): string => String(taskPk);
+
+// Read-only visibility for a project's tasks. HR sees every project's tasks without being a
+// member, mirroring the identical bypass project.service.ts's listProjectsForUser/
+// getProjectForUser already grant for projects themselves — otherwise HR's Project Board is
+// permanently empty, since HR is never added as a project member.
+//
+// Deliberately a task-module helper rather than widening the shared isProjectAccessible: that
+// function also gates Project Chat's *write* path (discussion.service.ts's postMessage) and the
+// AI Assistant, so adding HR there would hand HR the ability to post in every project's chat.
+// Every write in this file rejects HR independently (assertCanEditTask/assertCanChangeTaskStatus/
+// assertCanDeleteTask, and isProjectLead which returns false for HR), so this can only ever
+// widen what HR may READ.
+const canReadProjectTasks = async (projectId: string, userId: string, role: string): Promise<boolean> =>
+  role === 'HR' || (await isProjectAccessible(projectId, userId, role));
+
 const assertTaskCanBeWorkedOn = (row: TaskRow): void => {
   if (row.archivedatutc) throw new TaskNotFoundError('Task not found.');
   if (row.projectarchivedatutc) {
@@ -199,7 +223,7 @@ export const listTasksForUser = async (
   archived = false
 ): Promise<TaskDTO[]> => {
   if (projectId) {
-    if (!(await isProjectAccessible(projectId, userId, role))) {
+    if (!(await canReadProjectTasks(projectId, userId, role))) {
       throw new TaskAuthorizationError('Project not found or access denied.');
     }
     const rows = await repo.findTasksForProject(toProjectPkOrNull(projectId)!, archived);
@@ -207,7 +231,9 @@ export const listTasksForUser = async (
   }
 
   const allRows = archived ? await repo.findArchivedProjectTasks() : await repo.findAllTasks();
-  if (role === 'Admin') return buildDTOs(allRows);
+  // HR shares Admin's org-wide read here for the same reason it shares it in
+  // project.service.ts's listProjectsForUser — read-only visibility of every project.
+  if (role === 'Admin' || role === 'HR') return buildDTOs(allRows);
 
   // Non-admins: filter down to only tasks in projects they can access (mirrors the old
   // projectStore.getTasksForProject's per-project scoping, generalized across all projects).
@@ -215,7 +241,7 @@ export const listTasksForUser = async (
   const checked = new Map<string, boolean>();
   for (const row of allRows) {
     const pid = projectFrontendId(row);
-    if (!checked.has(pid)) checked.set(pid, await isProjectAccessible(pid, userId, role));
+    if (!checked.has(pid)) checked.set(pid, await canReadProjectTasks(pid, userId, role));
     if (checked.get(pid)) accessible.push(row);
   }
   return buildDTOs(accessible);
@@ -224,7 +250,7 @@ export const listTasksForUser = async (
 export const getTaskForUser = async (taskId: string, userId: string, role: string): Promise<TaskDTO> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row || row.archivedatutc) throw new TaskNotFoundError('Task not found.');
-  if (!(await isProjectAccessible(projectFrontendId(row), userId, role))) {
+  if (!(await canReadProjectTasks(projectFrontendId(row), userId, role))) {
     throw new TaskAuthorizationError('You do not have access to this task.');
   }
   const children = row.parenttaskid ? [] : await repo.findChildTasks(row.taskid);
@@ -989,9 +1015,11 @@ const decideReview = async (
     const children = row.parenttaskid ? [] : await repo.findChildTasks(row.taskid);
     const doneChildren = children.filter((child) => child.statuscode === 'Done');
     if (doneChildren.length > 0) {
-      const decisionByTaskId = new Map((subtaskDecisions || []).map((entry) => [toTaskPk(entry.subtaskId), entry]));
+      const decisionByTaskId = new Map(
+        (subtaskDecisions || []).map((entry) => [taskPkKey(toTaskPk(entry.subtaskId)), entry])
+      );
       for (const child of doneChildren) {
-        const childDecision = decisionByTaskId.get(child.taskid);
+        const childDecision = decisionByTaskId.get(taskPkKey(child.taskid));
         if (!childDecision) {
           throw new TaskValidationError(
             `A decision (Accept or Reject) is required for every completed subtask, including "${child.title}".`
@@ -1004,14 +1032,14 @@ const decideReview = async (
       // Rejecting the overall review while accepting every completed subtask is contradictory --
       // if the checklist was genuinely fine, the reviewer should Approve instead. At least one
       // subtask must carry a Reject verdict for a Reject decision to be valid here.
-      if (!doneChildren.some((child) => decisionByTaskId.get(child.taskid)!.decision === 'Reject')) {
+      if (!doneChildren.some((child) => decisionByTaskId.get(taskPkKey(child.taskid))!.decision === 'Reject')) {
         throw new TaskValidationError('Reject at least one subtask to reject this review, or approve it instead.');
       }
 
       const doneMeta = await repo.getTaskStatusMeta('Done');
       const inProgressMeta = await repo.getTaskStatusMeta('InProgress');
       for (const child of doneChildren) {
-        const childDecision = decisionByTaskId.get(child.taskid)!;
+        const childDecision = decisionByTaskId.get(taskPkKey(child.taskid))!;
         if (childDecision.decision !== 'Reject') continue; // Accepted -- remains Done, untouched.
         await repo.changeTaskStatus({
           taskId: child.taskid,
@@ -1062,13 +1090,23 @@ const decideReview = async (
   // reads differently), with the Lead's comment for that subtask. The Team Lead is the actor
   // here, so they're excluded from their own notification by publishSafely as usual.
   for (const childRow of rejectedSubtaskRows) {
-    const childDecision = subtaskDecisions!.find((entry) => toTaskPk(entry.subtaskId) === childRow.taskid)!;
+    const childDecision = (subtaskDecisions || []).find(
+      (entry) => taskPkKey(toTaskPk(entry.subtaskId)) === taskPkKey(childRow.taskid)
+    );
+    // Only rows the loop above actually rejected land in rejectedSubtaskRows, so a decision is
+    // always present — but this stays defensive rather than asserting, because the status change
+    // and history write have already committed by this point and a notification lookup must
+    // never be what throws afterwards.
+    if (!childDecision) continue;
     const childAssignees = (await repo.findAssigneesForTask(childRow.taskid)).map((a) => fromUserPk(a.userid));
     publishSafely(
       {
         type: 'subtask_reopened',
         title: 'Subtask Rejected',
-        message: `${actorName} rejected your subtask "${childRow.title}" during review of "${dto.title}". ${childDecision.comment!.trim()}`,
+        message: withNote(
+          `${actorName} rejected your subtask "${childRow.title}" during review of "${dto.title}".`,
+          childDecision.comment
+        ),
         actorId,
         projectId: dto.projectId,
         taskId: fromTaskPk(childRow.taskid)
@@ -1109,7 +1147,7 @@ export const rejectTask = (
 export const getTaskHistory = async (taskId: string, userId: string, role: string): Promise<TaskStatusHistoryDTO[]> => {
   const row = await repo.findTaskById(toTaskPk(taskId));
   if (!row) throw new TaskNotFoundError('Task not found.');
-  if (!(await isProjectAccessible(projectFrontendId(row), userId, role))) {
+  if (!(await canReadProjectTasks(projectFrontendId(row), userId, role))) {
     throw new TaskAuthorizationError('You do not have access to this task.');
   }
   const rows = await repo.findStatusHistoryForTask(row.taskid);
