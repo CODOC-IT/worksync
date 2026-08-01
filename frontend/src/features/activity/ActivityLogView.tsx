@@ -542,7 +542,7 @@ interface FilterPanelProps {
   open: boolean;
   filters: ActivityFilters;
   setFilters: React.Dispatch<React.SetStateAction<ActivityFilters>>;
-  users: Array<{ id: string; name: string }>;
+  users: Array<{ id: string; name: string; role?: string }>;
   projects: Array<{ id: string; title: string }>;
   tasks: Array<{ id: string; title: string; projectId: string }>;
   ledProjects: Array<{ id: string; title: string }>;
@@ -564,6 +564,12 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
     setFilters((current) => ({ ...current, [key]: value }));
 
   const isLeadTab = activeTab === 'lead';
+
+  // Filter users by selected role for clean cascading UX
+  const filteredUsers = useMemo(() => {
+    if (!filters.userRole) return users;
+    return users.filter((u) => u.role === filters.userRole);
+  }, [users, filters.userRole]);
 
   return (
     <aside
@@ -593,22 +599,25 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           </div>
         )}
 
-        {/* 2. User / role — admin sees all + role filter; lead tab sees project members */}
+        {/* 2. Cascading User Role -> User selection */}
         {isAdmin ? (
           <>
+            <FilterSelect
+              label="User role"
+              value={filters.userRole}
+              onChange={(v) => {
+                setFilters((curr) => {
+                  const nextUser = v && curr.userId && users.find((u) => u.id === curr.userId)?.role !== v ? '' : curr.userId;
+                  return { ...curr, userRole: v, userId: nextUser };
+                });
+              }}
+              options={['Admin', 'HR', 'Team_Member']}
+            />
             <FilterSelect
               label="User"
               value={filters.userId}
               onChange={(v) => update('userId', v)}
-              options={users.map((u) => ({ value: u.id, label: u.name }))}
-            />
-            {/* Team_Lead is a project-level role, not a permanent DB role. Filter by
-                actorrolesnapshot: Admin, HR, or Team_Member (permanent roles only). */}
-            <FilterSelect
-              label="User role"
-              value={filters.userRole}
-              onChange={(v) => update('userRole', v)}
-              options={['Admin', 'HR', 'Team_Member']}
+              options={filteredUsers.map((u) => ({ value: u.id, label: u.name }))}
             />
           </>
         ) : isLeadTab ? (
