@@ -418,6 +418,59 @@ test('Action Filter: Priority Changed matches both actioncode and Priority field
   assert.ok(descriptions.includes('Direct priority change action'), 'Should match explicit Priority Changed actioncode');
   assert.ok(descriptions.includes('Updated task priority via field'), 'Should match Priority field changes');
 });
+
+test('Action Filter: Uploaded Attachment matches attachment-carrying events', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, metadatajson)
+    VALUES 
+    (101, 1, 4, 'Commented', 'Comment', 'cmt-att', '00000000-0000-0000-0000-000000000101', 'Project Chats', 'Comment with an uploaded file', 'Team_Member', '{"hasAttachments": true}'),
+    (102, 1, 4, 'Commented', 'Comment', 'cmt-plain', '00000000-0000-0000-0000-000000000102', 'Project Chats', 'Plain comment without attachments', 'Team_Member', '{}'),
+    (103, 1, 4, 'Created', 'ProjectFile', 'file-1', '00000000-0000-0000-0000-000000000103', 'Projects', 'Project file uploaded', 'Team_Member', '{}'),
+    (104, 1, 4, 'Updated', 'Task', 'tsk-att', '00000000-0000-0000-0000-000000000104', 'Tasks', 'Unrelated task update', 'Team_Member', '{}')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Uploaded Attachment', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Comment with an uploaded file'), 'Should match comments with attachment metadata');
+  assert.ok(descriptions.includes('Project file uploaded'), 'Should match ProjectFile Created events');
+  assert.ok(!descriptions.includes('Plain comment without attachments'), 'Should not match comments without attachments');
+  assert.ok(!descriptions.includes('Unrelated task update'), 'Should not match unrelated actions');
+});
+
+test('Action Filter: Deleted Attachment matches ProjectFile deletion events', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (111, 1, 4, 'Deleted', 'ProjectFile', 'file-2', '00000000-0000-0000-0000-000000000111', 'Projects', 'Project file deleted', 'Team_Member'),
+    (112, 1, 4, 'Deleted', 'Task', 'tsk-del', '00000000-0000-0000-0000-000000000112', 'Tasks', 'Unrelated task deletion', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Deleted Attachment', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Project file deleted'), 'Should match ProjectFile Deleted events');
+  assert.ok(!descriptions.includes('Unrelated task deletion'), 'Should not match unrelated deletions');
+});
+
+test('Action Filter: Assigned/Reassigned matches split project codes', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (121, 1, 4, 'Assigned', 'User', 'usr-5', '00000000-0000-0000-0000-000000000121', 'Projects', 'Member assigned to project', 'Team_Member'),
+    (122, 1, 4, 'Reassigned', 'User', 'usr-5', '00000000-0000-0000-0000-000000000122', 'Projects', 'Member reassigned', 'Team_Member'),
+    (123, 1, 4, 'Assigned/Reassigned', 'Task', 'tsk-are', '00000000-0000-0000-0000-000000000123', 'Tasks', 'Task assignee updated', 'Team_Member'),
+    (124, 1, 4, 'Updated', 'Task', 'tsk-plain', '00000000-0000-0000-0000-000000000124', 'Tasks', 'Plain task update', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Assigned/Reassigned', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Member assigned to project'), 'Should match Assigned code');
+  assert.ok(descriptions.includes('Member reassigned'), 'Should match Reassigned code');
+  assert.ok(descriptions.includes('Task assignee updated'), 'Should match Assigned/Reassigned code');
+  assert.ok(!descriptions.includes('Plain task update'), 'Should not match unrelated updates');
+});
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
