@@ -221,6 +221,68 @@ export const isMyDeadlineEntry = (
   return false;
 };
 
+// The four independently-toggleable personal filters. 'My Deadlines' stays the special combined
+// convenience filter above (active-project-only, excludes Done/archived tasks); the other three
+// are plain relationship filters with no completion/status narrowing, matching how the Kind
+// filter itself imposes no status opinion -- a completed item still renders (dimmed, see
+// entry.completed) rather than disappearing.
+export type PersonalFilterKind = 'My Assigned Tasks' | 'My Assigned Projects' | 'My Led Projects' | 'My Deadlines';
+
+export const isMyAssignedTaskEntry = (entry: CalendarEntry, tasks: Task[], currentUserId: string): boolean => {
+  if (entry.kind !== 'Task Due') return false;
+  const task = tasks.find((t) => t.id === entry.taskId);
+  if (!task) return false;
+  return task.assigneeId === currentUserId || (task.assigneeIds ?? []).includes(currentUserId);
+};
+
+export const isMyAssignedProjectEntry = (entry: CalendarEntry, projects: Project[], currentUserId: string): boolean => {
+  if (entry.kind !== 'Deadline' && entry.kind !== 'Milestone') return false;
+  const project = projects.find((p) => p.id === entry.projectId);
+  return Boolean(project && project.memberIds.includes(currentUserId));
+};
+
+// Team Lead is not a user role (see project.teamLeadId being the only source of truth throughout
+// the Projects module) -- "leads this project" is always this same per-project comparison, never
+// a role check, both here and in leadsAnyProject below.
+export const isMyLedProjectEntry = (entry: CalendarEntry, projects: Project[], currentUserId: string): boolean => {
+  if (entry.kind !== 'Deadline' && entry.kind !== 'Milestone') return false;
+  const project = projects.find((p) => p.id === entry.projectId);
+  return Boolean(project && project.teamLeadId === currentUserId);
+};
+
+// Whether the current user leads at least one project -- determines whether "My Led Projects" is
+// worth showing as a filter option at all (see CalendarView.tsx), reusing the exact
+// project.teamLeadId comparison every other lead check in this codebase already uses.
+export const leadsAnyProject = (projects: Project[], currentUserId: string): boolean =>
+  projects.some((project) => project.teamLeadId === currentUserId);
+
+// Independent-toggle combinator: entries matching ANY active personal filter are kept (same
+// union semantics as the existing Kind multi-select), and an empty selection applies no personal
+// restriction at all.
+export const matchesPersonalFilters = (
+  entry: CalendarEntry,
+  activePersonalFilters: Set<PersonalFilterKind>,
+  projects: Project[],
+  tasks: Task[],
+  currentUserId: string
+): boolean => {
+  if (activePersonalFilters.size === 0) return true;
+  return Array.from(activePersonalFilters).some((filter) => {
+    switch (filter) {
+      case 'My Assigned Tasks':
+        return isMyAssignedTaskEntry(entry, tasks, currentUserId);
+      case 'My Assigned Projects':
+        return isMyAssignedProjectEntry(entry, projects, currentUserId);
+      case 'My Led Projects':
+        return isMyLedProjectEntry(entry, projects, currentUserId);
+      case 'My Deadlines':
+        return isMyDeadlineEntry(entry, projects, tasks, currentUserId);
+      default:
+        return false;
+    }
+  });
+};
+
 // View-only filtering layered on top of buildCalendarEntries' output — never changes what data
 // enters the pipeline, only what's shown. originFilter narrows to project- or task-origin entries
 // ('other'-origin standalone events are unaffected by it, only by activeKinds). activeKinds narrows
