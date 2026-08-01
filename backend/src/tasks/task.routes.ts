@@ -32,10 +32,14 @@ router.patch('/:id/status', controller.changeStatus);
 // The only route out of Done, and Team-Lead-only (see task.service.ts's reopenTask).
 router.patch('/:id/reopen', controller.reopenTask);
 
-// PATCH /api/tasks/:id/approve — body: { note } — Review -> Done (Team Lead/Admin only)
+// PATCH /api/tasks/:id/approve — body: { note } — Review -> Done. This project's own Team Lead
+// only (ProjectMembers.MemberRoleCode = 'TeamLead'); Admin no longer gets a bypass, see
+// task.service.ts's decideReview.
 router.patch('/:id/approve', controller.approveTask);
 
-// PATCH /api/tasks/:id/reject — body: { note } — Review -> In Progress (Team Lead/Admin only)
+// PATCH /api/tasks/:id/reject — body: { note, subtaskDecisions? } — Review -> In Progress, same
+// Team-Lead-only rule as approve. `subtaskDecisions` (one { subtaskId, decision, comment? } per
+// completed subtask) is required whenever the task has Done subtasks — see task.service.ts.
 router.patch('/:id/reject', controller.rejectTask);
 
 // GET /api/tasks/:id/history

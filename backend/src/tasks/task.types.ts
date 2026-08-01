@@ -153,6 +153,16 @@ export interface ChangeStatusInput {
   note: string;
 }
 
+// A Project Lead's per-subtask verdict when rejecting a parent task's review — see
+// task.service.ts's decideReview. Only completed (`Done`) subtasks require a decision: accepted
+// ones stay Done untouched, rejected ones return to InProgress with `comment` persisted as their
+// own work.TaskStatusHistory entry (the same audit trail every other status change already uses).
+export interface SubtaskReviewDecisionInput {
+  subtaskId: string;
+  decision: 'Accept' | 'Reject';
+  comment?: string;
+}
+
 export interface TaskEditApprovalInput {
   title: string;
   description: string;

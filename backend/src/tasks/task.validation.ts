@@ -159,4 +159,41 @@ export const validateReviewDecisionBody = (body: unknown): ValidationResult => {
   return { valid: true };
 };
 
+// Reject carries everything validateReviewDecisionBody already checks (a mandatory overall
+// `note`), plus an optional `subtaskDecisions` array — one Accept/Reject verdict per completed
+// subtask, with a mandatory comment on every rejected one. Whether the array must actually cover
+// every completed subtask is a task-instance question (which subtasks exist, which are Done), so
+// that check lives in task.service.ts, not here — this only validates the shape of what was sent.
+export const validateRejectDecisionBody = (body: unknown): ValidationResult => {
+  const base = validateReviewDecisionBody(body);
+  if (!base.valid) return base;
+
+  const { subtaskDecisions } = body as { subtaskDecisions?: unknown };
+  if (subtaskDecisions === undefined) return { valid: true };
+  if (!Array.isArray(subtaskDecisions)) {
+    return { valid: false, message: 'subtaskDecisions must be an array.' };
+  }
+
+  for (let index = 0; index < subtaskDecisions.length; index++) {
+    const entry = subtaskDecisions[index];
+    if (!entry || typeof entry !== 'object') {
+      return { valid: false, message: `subtaskDecisions[${index}] is invalid.` };
+    }
+    const { subtaskId, decision, comment } = entry as { subtaskId?: unknown; decision?: unknown; comment?: unknown };
+    if (typeof subtaskId !== 'string' || !FRONTEND_TASK_ID_PATTERN.test(subtaskId)) {
+      return { valid: false, message: `subtaskDecisions[${index}].subtaskId must be a valid task id.` };
+    }
+    if (decision !== 'Accept' && decision !== 'Reject') {
+      return { valid: false, message: `subtaskDecisions[${index}].decision must be "Accept" or "Reject".` };
+    }
+    if (comment !== undefined && typeof comment !== 'string') {
+      return { valid: false, message: `subtaskDecisions[${index}].comment must be a string.` };
+    }
+    if (decision === 'Reject' && !(typeof comment === 'string' && comment.trim())) {
+      return { valid: false, message: 'A comment is required for every rejected subtask.' };
+    }
+  }
+  return { valid: true };
+};
+
 export const isValidTaskId = (value: string): boolean => FRONTEND_TASK_ID_PATTERN.test(value);

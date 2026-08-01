@@ -104,9 +104,20 @@ export const isProjectAccessible = async (projectId: string, userId: string, rol
 };
 
 // Whether `userId` leads (or, as Admin, may act on) the given project — used by task.service.ts
-// to gate task status-change review Approve/Reject the same way Project updates are gated.
-export const isProjectLead = async (projectId: string, userId: string, role: string): Promise<boolean> => {
-  if (role === 'Admin') return true;
+// to gate task creation/reopen the same way Project updates are gated. Pass
+// `{ allowAdmin: false }` for checks where Admin must NOT get a blanket bypass (e.g. task review
+// decisions, which are a per-project Team Lead responsibility, not a system-administration one —
+// see task.service.ts's decideReview) — the per-project `MemberRoleCode = 'TeamLead'` check
+// itself is unchanged either way, so a Team Member holding that membership row is always treated
+// as the project's lead regardless of their account role.
+export const isProjectLead = async (
+  projectId: string,
+  userId: string,
+  role: string,
+  options: { allowAdmin?: boolean } = {}
+): Promise<boolean> => {
+  const { allowAdmin = true } = options;
+  if (allowAdmin && role === 'Admin') return true;
   if (role === 'HR') return false;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
@@ -196,11 +207,20 @@ export const createProject = async (
   const dto = await buildDTO(row!, members);
   const actorName = actorDisplayName(actorId);
 
+  // The project's Team Lead reads a distinct "...as the Project Lead" message; every other
+  // recipient gets the plain "added you to it" wording — never the reverse (see
+  // docs/Notification_Module_Guide.md's Project Lead assignment section). `recipientMessages`
+  // is per-recipient, so this is one publishEvent call, not two.
+  const leadFrontendId = teamLeadPk ? fromUserPk(teamLeadPk) : undefined;
+
   if (statusCode === 'Active') {
     notifyRecipients(members, actorId, {
       type: 'project_created',
       title: 'Project Created',
       message: `${actorName} created "${dto.title}" and added you to it.`,
+      recipientMessages: leadFrontendId
+        ? { [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead.` }
+        : undefined,
       actorId,
       projectId: dto.id
     });
@@ -211,6 +231,12 @@ export const createProject = async (
       type: 'project_created',
       title: 'Project Created',
       message: `${actorName} created "${dto.title}" and added you to it (pending Admin activation).`,
+      recipientMessages: leadFrontendId
+        ? {
+            [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead ` +
+              '(pending Admin activation).'
+          }
+        : undefined,
       actorId,
       projectId: dto.id
     });
@@ -309,7 +335,9 @@ export const updateProject = async (
 
   // TeamLead is a ProjectMembers role, not a projects-table column (see reassignTeamLead's
   // comment), so it's handled as its own step rather than through the updates object above.
+  let previousLeadId: string | undefined;
   if (input.teamLeadId !== undefined) {
+    previousLeadId = resolveTeamLeadUserId(row, await repo.findMembersForProject(row.projectid));
     await repo.reassignTeamLead(row.projectid, toUserPk(input.teamLeadId), row.owneruserid, toUserPk(actorId));
   }
 
@@ -325,6 +353,21 @@ export const updateProject = async (
     actorId,
     projectId: dto.id
   });
+
+  // A member newly assigned as Team Lead through an edit (not project creation, see
+  // createProject) hears about it distinctly from the generic "Project Updated" notice above.
+  if (input.teamLeadId !== undefined && input.teamLeadId !== previousLeadId) {
+    notificationService
+      .publishEvent({
+        type: 'project_member_added',
+        title: 'Assigned as Project Lead',
+        message: `${actorName} assigned you as the Project Lead of "${dto.title}".`,
+        actorId,
+        projectId: dto.id,
+        recipientIds: [input.teamLeadId]
+      })
+      .catch((error) => console.error('[project.service] Failed to publish lead-assigned event.', error));
+  }
 
   const projectChanges = [
     input.title !== undefined && input.title.trim() !== row.projectname ? { field: 'Title', previousValue: row.projectname, newValue: dto.title } : null,
@@ -476,11 +519,16 @@ export const addMember = async (
   const dto = await buildDTO(row, members);
   const actorName = actorDisplayName(actorId);
 
+  // Only a member added specifically as the project's Team Lead reads "...as the Project Lead" —
+  // every other member role (plain Member, Reviewer, Observer) gets the plain wording.
+  const isLead = roleCode === 'TeamLead';
   notificationService
     .publishEvent({
       type: 'project_member_added',
       title: 'Added to Project',
-      message: `${actorName} added you to "${dto.title}".`,
+      message: isLead
+        ? `${actorName} added you to "${dto.title}" as the Project Lead.`
+        : `${actorName} added you to "${dto.title}".`,
       actorId,
       projectId: dto.id,
       recipientIds: [memberUserId]
