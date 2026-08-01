@@ -306,10 +306,15 @@ export interface CreateProjectRow {
   creationReason: string | null;
   teamLeadUserId?: number;
   memberUserIds: number[];
+  // False when the creator is an Admin: the project row still records them as OwnerUserId, but
+  // no 'Owner' ProjectMembers row is written, so the Admin isn't listed as a project member
+  // (Admins have org-wide access anyway). A Team Member/Lead creator always gets the row.
+  includeOwnerMembership?: boolean;
 }
 
 // Inserts the project row plus its TeamLead/Member ProjectMembers rows, atomically. The
-// creator is always added as 'Owner' (schema requires OwnerUserId anyway); TeamLead and each
+// creator is added as 'Owner' unless includeOwnerMembership is false (an Admin creator — see
+// createProject); schema requires OwnerUserId on the project row regardless. TeamLead and each
 // member get their own ProjectMembers row so work.ProjectMembers is the single source of truth
 // for "who can see this project," never derived from anywhere else.
 export const insertProject = async (input: CreateProjectRow): Promise<number> =>
@@ -346,11 +351,13 @@ export const insertProject = async (input: CreateProjectRow): Promise<number> =>
     );
     const projectId = inserted.rows[0].projectid;
 
-    await runQuery(
-      `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
-       VALUES ($1, $2, 'Owner', $2)`,
-      [projectId, input.ownerUserId]
-    );
+    if (input.includeOwnerMembership !== false) {
+      await runQuery(
+        `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+         VALUES ($1, $2, 'Owner', $2)`,
+        [projectId, input.ownerUserId]
+      );
+    }
 
     if (input.teamLeadUserId && input.teamLeadUserId !== input.ownerUserId) {
       await runQuery(
