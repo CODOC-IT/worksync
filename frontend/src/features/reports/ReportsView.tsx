@@ -188,6 +188,7 @@ export const ReportsView: React.FC = () => {
   const [detailMemberLoading, setDetailMemberLoading] = useState(false);
   const [workloadSearchQuery, setWorkloadSearchQuery] = useState('');
   const [workloadFilterRole, setWorkloadFilterRole] = useState('');
+  const [workloadFilterProject, setWorkloadFilterProject] = useState('');
   const [workloadFilterWorkload, setWorkloadFilterWorkload] = useState('');
   const [deadlineFilterProject, setDeadlineFilterProject] = useState('');
   const [deadlineFilterAssignee, setDeadlineFilterAssignee] = useState('');
@@ -281,6 +282,16 @@ export const ReportsView: React.FC = () => {
     );
     return { validProjects, validTasks, validAttendance, validHrRequests };
   }, [projects, tasks, attendanceRecords, hrRequests, dateRange]);
+
+  // Lead-ness is per-project (work.ProjectMembers 'TeamLead' membership, with the Owner as
+  // fallback — see project.mapper.ts's resolveTeamLeadUserId), never the global role. A global
+  // Team_Lead who leads no project is a plain member; a Team_Member who leads a project is a lead.
+  const leadProjectIdsAll = useMemo(() => {
+    const userId = currentUser.id;
+    return (projects as any[])
+      .filter((p: any) => p.teamLeadId === userId && p.status !== 'Archived')
+      .map((p: any) => p.id);
+  }, [projects, currentUser.id]);
 
   const roleFilteredLocal = useMemo(() => {
     const { validProjects, validTasks, validAttendance, validHrRequests } = filteredData;
@@ -504,6 +515,15 @@ export const ReportsView: React.FC = () => {
 
     const baseProjects = roleFiltered.projects as any[];
 
+    // Server workload is per project × assignee (multi-assignee counting preserved server-side).
+    // Index: projectId -> (userId -> row).
+    const projectWorkload: Record<string, Record<string, any>> = {};
+    const nameByUser: Record<string, string> = {};
+    (reportData.workload as any[]).forEach((w: any) => {
+      (projectWorkload[w.projectId] = projectWorkload[w.projectId] || {})[w.userId] = w;
+      if (w.name && !nameByUser[w.userId]) nameByUser[w.userId] = w.name;
+    });
+
     const userProjectMap: Record<string, Set<string>> = {};
     baseProjects.forEach((p: any) => {
       const allMemberIds = [p.teamLeadId, ...(p.memberIds || [])].filter(Boolean);
@@ -513,16 +533,56 @@ export const ReportsView: React.FC = () => {
       });
     });
 
-    const workloadById = new Map((reportData.workload as any[]).map((w: any) => [w.userId, w]));
+    const isLead = leadProjectIdsAll.length > 0;
 
-    const allUserIds = new Set([...workloadById.keys(), ...Object.keys(userProjectMap)]);
+    // Projects contributing to the current view. For a lead, "All Led Projects" or the single
+    // selected led project; for admin/hr, all visible projects.
+    let activeProjectIds: string[];
+    if (isLead) {
+      const baseIds = baseProjects.map((p: any) => p.id);
+      activeProjectIds = workloadFilterProject
+        ? baseIds.filter((id) => id === workloadFilterProject)
+        : baseIds;
+    } else {
+      activeProjectIds = baseProjects.map((p: any) => p.id);
+    }
 
-    return [...allUserIds].map((uid: string) => {
-      const w = workloadById.get(uid);
+    // Leads see only members of the projects they lead (assignees who aren't members are excluded);
+    // admin/hr keep the existing union of assignees + project members.
+    let allUserIds: string[];
+    if (isLead) {
+      allUserIds = Object.keys(userProjectMap).filter((uid) =>
+        [...(userProjectMap[uid] || [])].some((pid) => activeProjectIds.includes(pid))
+      );
+    } else {
+      const workloadUserIds = Object.keys(projectWorkload).flatMap((pid) => Object.keys(projectWorkload[pid]));
+      allUserIds = [...new Set([...workloadUserIds, ...Object.keys(userProjectMap)])];
+    }
+
+    const aggregate = (uid: string) => {
+      const counts = { active: 0, completed: 0, review: 0, overdue: 0 };
+      activeProjectIds.forEach((pid) => {
+        const row = projectWorkload[pid]?.[uid];
+        if (!row) return;
+        counts.active += row.active || 0;
+        counts.completed += row.completed || 0;
+        counts.review += row.review || 0;
+        counts.overdue += row.overdue || 0;
+      });
+      return counts;
+    };
+
+    const projectIdsOf = (uid: string): string[] => {
+      const set = userProjectMap[uid] || new Set<string>();
+      return activeProjectIds.filter((pid) => set.has(pid));
+    };
+
+    return allUserIds.map((uid: string) => {
       const u = users.find((u: any) => u.id === uid);
-      const name = u?.name || w?.name || uid;
-      const projectIds = [...(userProjectMap[uid] || new Set())] as string[];
-      const totalTasks = (w?.active || 0) + (w?.completed || 0) + (w?.review || 0) + (w?.overdue || 0);
+      const name = u?.name || nameByUser[uid] || uid;
+      const w = aggregate(uid);
+      const projectIds = projectIdsOf(uid);
+      const totalTasks = w.active + w.completed + w.review + w.overdue;
       return {
         userId: uid,
         name,
@@ -531,10 +591,10 @@ export const ReportsView: React.FC = () => {
         department: u?.department || '',
         title: u?.title || '',
         status: u?.status || 'active',
-        active: w?.active || 0,
-        completed: w?.completed || 0,
-        review: w?.review || 0,
-        overdue: w?.overdue || 0,
+        active: w.active,
+        completed: w.completed,
+        review: w.review,
+        overdue: w.overdue,
         projectIds,
         projectCount: projectIds.length,
         totalTasks,
@@ -542,7 +602,7 @@ export const ReportsView: React.FC = () => {
         workloadLabel: totalTasks >= 8 ? 'Heavy' : totalTasks >= 4 ? 'Moderate' : totalTasks > 0 ? 'Light' : 'No Tasks',
       };
     }).sort((a: any, b: any) => (b.active + b.review) - (a.active + a.review));
-  }, [apiAvailable, reportData, roleFiltered.projects, users]);
+  }, [apiAvailable, reportData, roleFiltered.projects, users, workloadFilterProject, leadProjectIdsAll]);
 
   const workloadKpiStats = useMemo(() => {
     const members = workloadData as any[];
@@ -577,6 +637,25 @@ export const ReportsView: React.FC = () => {
     const roles = new Set((workloadData as any[]).map((m: any) => m.role).filter(Boolean));
     return [...roles].sort();
   }, [workloadData]);
+
+  const workloadProjectOptions = useMemo(() => {
+    const isLead = leadProjectIdsAll.length > 0;
+    if (!isLead) return [];
+    return (roleFiltered.projects as any[])
+      .map((p: any) => ({ id: p.id, name: p.title || p.id }))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }, [leadProjectIdsAll, roleFiltered.projects]);
+
+  // Tasks backing a member's detail view. When a lead narrows the Workload tab to one project,
+  // the drill-down (and its PDF) must reflect that same project, not every led project.
+  const workloadDetailTasks = useMemo(() => {
+    if (!selectedMemberId) return [];
+    const tasks = (roleFiltered.tasks as any[]).filter((t: any) => isTaskAssignee(t, selectedMemberId));
+    if (leadProjectIdsAll.length > 0 && workloadFilterProject) {
+      return tasks.filter((t: any) => t.projectId === workloadFilterProject);
+    }
+    return tasks;
+  }, [selectedMemberId, roleFiltered.tasks, workloadFilterProject, leadProjectIdsAll]);
 
   const workloadWorkloadOptions = ['No Tasks', 'Light', 'Moderate', 'Heavy'];
 
@@ -791,19 +870,23 @@ export const ReportsView: React.FC = () => {
   ], [chartColors]);
 
   const visibleTabs = useMemo<ReportTab[]>(() => {
-    switch (currentRole) {
-      case 'Admin':
-        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
-      case 'HR':
-        return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
-      case 'Team_Lead':
-        return ['overview', 'projects', 'tasks', 'workload', 'deadlines'];
-      case 'Team_Member':
-        return ['overview', 'projects', 'tasks', 'workload', 'deadlines'];
-      default:
-        return ['overview'];
+    if (currentRole === 'Admin' || currentRole === 'HR') {
+      return ['overview', 'projects', 'tasks', 'workload', 'deadlines', 'attendance'];
     }
-  }, [currentRole]);
+    // Lead-ness is per-project: the Workload tab exists only for users who actually lead ≥1 project.
+    if (leadProjectIdsAll.length > 0) {
+      return ['overview', 'projects', 'tasks', 'workload', 'deadlines'];
+    }
+    return ['overview', 'projects', 'tasks', 'deadlines'];
+  }, [currentRole, leadProjectIdsAll]);
+
+  // Guard: never render a tab that isn't visible for the current user (e.g. Workload removed for
+  // members, or a lead whose led projects were archived). Falls back to the first visible tab.
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.includes(activeTab)) {
+      setActiveTab(visibleTabs[0]);
+    }
+  }, [visibleTabs, activeTab]);
 
   const tabLabels: Record<ReportTab, string> = {
     overview: 'Overview',
@@ -1291,7 +1374,7 @@ ${bodyHtml}
     const m = detailMember;
     if (!m) return;
     const now = new Date().toLocaleString();
-    const memberTasks = (roleFiltered.tasks as any[]).filter((t: any) => isTaskAssignee(t, m.userId));
+    const memberTasks = workloadDetailTasks;
     const activeTasks = memberTasks.filter((t: any) => t.status !== 'Done');
     const completedTasks = memberTasks.filter((t: any) => t.status === 'Done');
     const overdueTasks = memberTasks.filter((t: any) => t.status !== 'Done' && t.dueDate && t.dueDate < todayStr());
@@ -2264,16 +2347,29 @@ ${bodyHtml}
                   </button>
                 )}
               </div>
-              <select
-                value={workloadFilterRole}
-                onChange={(e) => setWorkloadFilterRole(e.target.value)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[100px]"
-              >
-                <option value="">All Roles</option>
-                {workloadRoleOptions.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
+              {leadProjectIdsAll.length > 0 ? (
+                <select
+                  value={workloadFilterProject}
+                  onChange={(e) => setWorkloadFilterProject(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+                >
+                  <option value="">All Led Projects</option>
+                  {workloadProjectOptions.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={workloadFilterRole}
+                  onChange={(e) => setWorkloadFilterRole(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[100px]"
+                >
+                  <option value="">All Roles</option>
+                  {workloadRoleOptions.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={workloadFilterWorkload}
                 onChange={(e) => setWorkloadFilterWorkload(e.target.value)}
@@ -2284,9 +2380,9 @@ ${bodyHtml}
                   <option key={l} value={l}>{l}</option>
                 ))}
               </select>
-              {(workloadSearchQuery || workloadFilterRole || workloadFilterWorkload) && (
+              {(workloadSearchQuery || workloadFilterRole || workloadFilterProject || workloadFilterWorkload) && (
                 <button
-                  onClick={() => { setWorkloadSearchQuery(''); setWorkloadFilterRole(''); setWorkloadFilterWorkload(''); }}
+                  onClick={() => { setWorkloadSearchQuery(''); setWorkloadFilterRole(''); setWorkloadFilterProject(''); setWorkloadFilterWorkload(''); }}
                   className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
                 >
                   <X size={11} /> Clear
@@ -3044,7 +3140,7 @@ ${bodyHtml}
       );
     }
 
-    const memberTasks = (roleFiltered.tasks as any[]).filter((t: any) => isTaskAssignee(t, m.userId));
+    const memberTasks = workloadDetailTasks;
     const activeTasks = memberTasks.filter((t: any) => t.status !== 'Done');
     const completedTasks = memberTasks.filter((t: any) => t.status === 'Done');
     const overdueTasks = memberTasks.filter((t: any) => t.status !== 'Done' && t.dueDate && t.dueDate < todayStr());
