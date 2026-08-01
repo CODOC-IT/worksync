@@ -599,26 +599,29 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           </div>
         )}
 
-        {/* 2. Cascading User Role -> User selection */}
+        {/* 2. Cascading User Role -> User selection (User field appears ONLY when a role is selected) */}
         {isAdmin ? (
           <>
             <FilterSelect
               label="User role"
               value={filters.userRole}
               onChange={(v) => {
-                setFilters((curr) => {
-                  const nextUser = v && curr.userId && users.find((u) => u.id === curr.userId)?.role !== v ? '' : curr.userId;
-                  return { ...curr, userRole: v, userId: nextUser };
-                });
+                setFilters((curr) => ({
+                  ...curr,
+                  userRole: v,
+                  userId: v ? (curr.userId && users.find((u) => u.id === curr.userId)?.role === v ? curr.userId : '') : '',
+                }));
               }}
               options={['Admin', 'HR', 'Team_Member']}
             />
-            <FilterSelect
-              label="User"
-              value={filters.userId}
-              onChange={(v) => update('userId', v)}
-              options={filteredUsers.map((u) => ({ value: u.id, label: u.name }))}
-            />
+            {filters.userRole && (
+              <FilterSelect
+                label="User"
+                value={filters.userId}
+                onChange={(v) => update('userId', v)}
+                options={filteredUsers.map((u) => ({ value: u.id, label: u.name }))}
+              />
+            )}
           </>
         ) : isLeadTab ? (
           <FilterSelect
