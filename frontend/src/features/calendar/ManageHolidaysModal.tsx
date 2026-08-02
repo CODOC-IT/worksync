@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { X, Plus, Pencil, Trash2, Check, AlertCircle } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { Holiday } from '../../types';
+import { todayDateKey } from './calendarRules';
+import { isPastDate } from '../attendance/attendanceValidation';
 
 // Holiday CRUD UI, reached only from CalendarView's "Manage Holidays" button (itself rendered
 // only for currentRole === 'HR'). The `currentRole !== 'HR'` guard below is a harmless second
@@ -21,8 +23,6 @@ const EMPTY_FORM: HolidayFormState = { name: '', date: '', isRecurringAnnual: fa
 
 // Matches the backend's UTC "today" cutoff (calendar.service.ts's createHoliday) so a date this
 // input allows is never rejected by the server, and vice versa.
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
-
 export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClose }) => {
   const { currentRole, holidays, createHoliday, updateHoliday, deleteHoliday } = useApp();
 
@@ -50,6 +50,13 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
     if (submitting) return;
     if (!form.name.trim() || !form.date) {
       setNotice({ type: 'error', message: 'Name and date are required.' });
+      return;
+    }
+    const originalDate = editingId
+      ? holidays.find((holiday) => holiday.id === editingId)?.date
+      : undefined;
+    if (isPastDate(form.date, todayDateKey()) && form.date !== originalDate) {
+      setNotice({ type: 'error', message: 'Holiday date cannot be in the past.' });
       return;
     }
     setSubmitting(true);
@@ -129,7 +136,7 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
                 // Only enforced while adding a new holiday -- editing an existing (possibly
                 // already-past) holiday's name/recurrence must still work without forcing its
                 // date to change, matching updateHoliday's unchanged backend behavior.
-                min={editingId ? undefined : todayIso()}
+                min={editingId ? undefined : todayDateKey()}
                 onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
               />

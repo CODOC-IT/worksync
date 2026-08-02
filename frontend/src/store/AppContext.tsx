@@ -83,6 +83,7 @@ import {
   deleteHolidayApi
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
+import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -597,12 +598,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: `att-${r.userId}-${r.date}`,
             userId: r.userId,
             date: r.date,
-            checkIn: r.checkIn
-              ? new Date(r.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : '',
-            checkOut: r.checkOut
-              ? new Date(r.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : undefined,
+            checkIn: r.checkIn ? new Date(r.checkIn).toISOString().slice(11, 16) : '',
+            checkOut: r.checkOut ? new Date(r.checkOut).toISOString().slice(11, 16) : undefined,
             totalHours: r.totalHours || 0,
             status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
             breaks: Array.isArray(r.breaks) ? r.breaks : [],
@@ -2548,7 +2545,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!record) {
         return { success: false, message: 'Attendance record not found.' };
       }
-      if (!record.checkOut) {
+      if (!record.checkOut && record.status !== 'Absent') {
         return { success: false, message: 'Active attendance sessions cannot be edited. Check out first.' };
       }
 
@@ -2562,26 +2559,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-      if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
-        return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
-      }
-
       const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
-        const duration = Number(workBreak.durationMinutes);
+        const [startHour, startMinute] = workBreak.startTime.split(':').map(Number);
+        const [endHour, endMinute] = (workBreak.endTime || '').split(':').map(Number);
+        const duration = endHour * 60 + endMinute - (startHour * 60 + startMinute);
         return {
           ...workBreak,
           id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
           type: 'Other',
-          startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
-          endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
-          durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+          startTime: workBreak.startTime,
+          endTime: workBreak.endTime,
+          durationMinutes: Number.isFinite(duration) ? duration : 0,
+          durationSeconds: Number.isFinite(duration) ? duration * 60 : 0
         };
       });
-
-      if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
-        return { success: false, message: 'Every saved break must have valid start and end times.' };
-      }
+      const validationError = validateAttendanceCorrection(
+        updates.checkIn,
+        updates.checkOut || '',
+        normalizedBreaks
+      );
+      if (validationError) return { success: false, message: validationError };
 
       const cleanReason = reason?.trim() || '';
       if (!cleanReason) {
@@ -2615,13 +2612,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       requestDate?: string
     ): Promise<{ success: boolean; message: string }> => {
       try {
+        if (type === 'Leave' && isPastDate(requestDate || todayDateKey(), todayDateKey())) {
+          return { success: false, message: 'Leave date cannot be in the past.' };
+        }
         const response = await fetch('/api/hr-requests', {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
             userName: currentUser.name,
             type,
-            date: requestDate || new Date().toISOString().split('T')[0],
+            date: requestDate || todayDateKey(),
             reason,
             details
           })
@@ -2781,16 +2781,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (updatedRequest.type === 'Correction') {
-          setAttendanceRecords((prev) => prev.map((record) =>
-            record.userId === updatedRequest.userId && record.date === updatedRequest.date
-              ? {
-                  ...record,
-                  checkIn: updatedRequest.details.requestedCheckIn || record.checkIn,
-                  checkOut: updatedRequest.details.requestedCheckOut || undefined,
-                  breaks: updatedRequest.details.requestedBreaks || []
-                }
-              : record
-          ));
+          const attendanceResponse = await fetch(
+            `/api/attendance?from=${encodeURIComponent(updatedRequest.date)}&to=${encodeURIComponent(updatedRequest.date)}`,
+            { headers: getAuthHeaders() }
+          );
+          const attendanceData = await attendanceResponse.json();
+          if (!attendanceResponse.ok || !attendanceData.success || !Array.isArray(attendanceData.data)) {
+            throw new Error(attendanceData.message || 'Correction was approved, but attendance could not be refreshed.');
+          }
+          const refreshed: AttendanceRecord[] = attendanceData.data.map((record: any) => ({
+            id: `att-${record.userId}-${record.date}`,
+            userId: record.userId,
+            date: record.date,
+            checkIn: record.checkIn ? new Date(record.checkIn).toISOString().slice(11, 16) : '',
+            checkOut: record.checkOut ? new Date(record.checkOut).toISOString().slice(11, 16) : undefined,
+            totalHours: record.totalHours || 0,
+            status: (record.status === 'Leave' ? 'On Leave' : record.status || 'Present') as AttendanceRecord['status'],
+            breaks: Array.isArray(record.breaks) ? record.breaks : []
+          }));
+          setAttendanceRecords((previous) => [
+            ...previous.filter((record) => record.date !== updatedRequest.date),
+            ...refreshed
+          ]);
         } else if (updatedRequest.type === 'Leave') {
           const status = updatedRequest.details.leaveType === 'Half Day Leave' ? 'Half Day' : 'On Leave';
           setAttendanceRecords((prev) => {

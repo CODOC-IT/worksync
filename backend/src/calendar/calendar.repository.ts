@@ -39,6 +39,11 @@ export const findApprovedLeave = async (): Promise<ApprovedLeaveRow[]> => {
 // OrganizationId = 1 convention as project.repository.ts.
 const ORGANIZATION_ID = 1;
 
+export const getBusinessDate = async (): Promise<string> => {
+  const result = await query<{ today: string }>('SELECT CURRENT_DATE::text AS today');
+  return result.rows[0].today;
+};
+
 export interface HolidayRow {
   holidayid: number;
   holidayname: string;

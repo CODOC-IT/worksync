@@ -43,6 +43,15 @@ export const listApprovedLeave = async (): Promise<ApprovedLeaveEntry[]> => {
 };
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+export const validateHolidayDate = (
+  date: string,
+  today: string,
+  existingDate?: string
+): string | null => {
+  if (!ISO_DATE_PATTERN.test(date || '')) return 'A valid holiday date is required.';
+  if (date < today && date !== existingDate) return 'Holiday date cannot be in the past.';
+  return null;
+};
 
 export interface HolidayDTO {
   id: string;
@@ -95,15 +104,8 @@ export const createHoliday = async (
 ): Promise<HolidayDTO> => {
   await assertIsHR(actorId);
   if (!name?.trim()) throw new CalendarValidationError('Holiday name is required.');
-  if (!ISO_DATE_PATTERN.test(date || '')) throw new CalendarValidationError('A valid holiday date is required.');
-  // Same UTC "today" convention already used for overdue checks elsewhere (see
-  // task.service.ts's `row.duedate < new Date().toISOString().slice(0, 10)`) -- today's date is
-  // allowed, only strictly-before-today is rejected. This only guards creation, matching the
-  // frontend's date input `min`; updateHoliday intentionally still allows editing a holiday that
-  // already has a past date (e.g. fixing its name) without also being forced to change the date.
-  if (date < new Date().toISOString().slice(0, 10)) {
-    throw new CalendarValidationError('Holiday date cannot be in the past.');
-  }
+  const dateError = validateHolidayDate(date, await repo.getBusinessDate());
+  if (dateError) throw new CalendarValidationError(dateError);
 
   const id = await repo.insertHoliday({
     name: name.trim(),
@@ -133,8 +135,13 @@ export const updateHoliday = async (
   if (updates.name !== undefined && !updates.name.trim()) {
     throw new CalendarValidationError('Holiday name cannot be empty.');
   }
-  if (updates.date !== undefined && !ISO_DATE_PATTERN.test(updates.date)) {
-    throw new CalendarValidationError('A valid holiday date is required.');
+  if (updates.date !== undefined) {
+    const dateError = validateHolidayDate(
+      updates.date,
+      await repo.getBusinessDate(),
+      existing.holidaydate
+    );
+    if (dateError) throw new CalendarValidationError(dateError);
   }
 
   await repo.updateHoliday(id, {
