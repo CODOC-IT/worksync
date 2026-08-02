@@ -175,7 +175,8 @@ export const deleteMilestone = async (milestoneId: number, projectId: number): P
 };
 
 const PROJECT_FILE_COLUMNS = `
-  sf.fileid, sf.originalfilename, sf.mimetype, sf.sizebytes, sf.uploadedbyuserid, sf.uploadedatutc
+  sf.fileid, sf.originalfilename, sf.mimetype, sf.sizebytes, sf.uploadedbyuserid, sf.uploadedatutc,
+  sf.storageobjectkey
 `;
 
 export const findProjectFiles = async (projectId: number): Promise<ProjectFileRow[]> => {

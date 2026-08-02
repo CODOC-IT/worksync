@@ -837,6 +837,41 @@ export const addProjectFile = async (
   return dto;
 };
 
+export interface ProjectFileDownload {
+  originalFileName: string;
+  mimeType: string;
+  storageObjectKey: string;
+}
+
+// Read-only lookup for streaming/redirecting to a file's stored bytes — deliberately reuses
+// isProjectAccessible (the same gate getProjectForUser already uses to decide whether a caller
+// may see this project's files list at all) rather than assertCanManage, since opening/downloading
+// an attachment isn't a "manage the project" action. This is why HR and any active project member
+// (which already covers a Team Lead, per resolveTeamLeadUserId's membership-row/owner-fallback
+// resolution) can download here even though only Admin/the project's lead can attach or remove one.
+export const getProjectFileForDownload = async (
+  projectId: string,
+  fileId: string,
+  actorId: string,
+  actorRole: string
+): Promise<ProjectFileDownload> => {
+  if (!(await isProjectAccessible(projectId, actorId, actorRole))) {
+    throw new ProjectAuthorizationError('You do not have access to this project.');
+  }
+
+  const filePk = Number(fileId);
+  if (!Number.isInteger(filePk)) throw new ProjectValidationError('Invalid file id.');
+
+  const row = await repo.findProjectFileById(toProjectPk(projectId), filePk);
+  if (!row) throw new ProjectNotFoundError('Attachment not found for this project.');
+
+  return {
+    originalFileName: row.originalfilename,
+    mimeType: row.mimetype,
+    storageObjectKey: row.storageobjectkey
+  };
+};
+
 export const removeProjectFile = async (
   projectId: string,
   fileId: string,

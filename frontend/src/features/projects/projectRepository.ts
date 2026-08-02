@@ -223,3 +223,28 @@ export const addProjectFileApi = async (projectId: string, payload: CreateProjec
 export const removeProjectFileApi = async (projectId: string, fileId: string): Promise<void> => {
   await apiFetch(`/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
 };
+
+// Fetches the attachment as a Bearer-authenticated request (a plain <a href> can't carry the auth
+// header) and hands the caller back an object URL plus a revoke callback -- 'open' lets the browser
+// render supported types (PDF/images) inline in a new tab, 'download' feeds the same bytes to an
+// anchor with a `download` attribute to force a save-as. Mirrors the existing blob-download
+// convention in features/activity/activityApi.ts.
+export const fetchProjectFileBlob = async (
+  projectId: string,
+  fileId: string,
+  mode: 'open' | 'download'
+): Promise<{ objectUrl: string; revoke: () => void }> => {
+  const token = localStorage.getItem('worksync_auth_token');
+  const query = mode === 'download' ? '?mode=download' : '';
+  const res = await fetch(
+    `${API_BASE}/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download${query}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+  );
+  if (!res.ok) {
+    const json = await res.json().catch(() => null);
+    throw new Error(json?.message || `Could not load attachment (${res.status}).`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  return { objectUrl, revoke: () => URL.revokeObjectURL(objectUrl) };
+};

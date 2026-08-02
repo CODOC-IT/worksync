@@ -59,4 +59,8 @@ router.post('/:id/files', controller.addProjectFile);
 // DELETE /api/projects/:id/files/:fileId
 router.delete('/:id/files/:fileId', controller.removeProjectFile);
 
+// GET /api/projects/:id/files/:fileId/download?mode=download — streams the attachment's bytes
+// (or redirects to a signed storage URL); default opens inline, ?mode=download forces a save-as.
+router.get('/:id/files/:fileId/download', controller.downloadProjectFile);
+
 export default router;
