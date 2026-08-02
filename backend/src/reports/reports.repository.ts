@@ -173,9 +173,9 @@ export const getProjectStats = async (projectIds: number[], from: string, to: st
     `SELECT
        p.projectid, p.projectname, p.projectcode, ps.statuscode,
        p.startdate::text, p.enddate::text, p.owneruserid,
-       COALESCE(task_stats.total_tasks, 0)::int AS totalTasks,
-       COALESCE(task_stats.completed_tasks, 0)::int AS completedTasks,
-       COALESCE(task_stats.overdue_tasks, 0)::int AS overdueTasks
+       COALESCE(task_stats.total_tasks, 0)::int AS "totalTasks",
+       COALESCE(task_stats.completed_tasks, 0)::int AS "completedTasks",
+       COALESCE(task_stats.overdue_tasks, 0)::int AS "overdueTasks"
      FROM work.projects p
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
      LEFT JOIN (
