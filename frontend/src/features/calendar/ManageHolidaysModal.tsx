@@ -19,6 +19,10 @@ interface HolidayFormState {
 
 const EMPTY_FORM: HolidayFormState = { name: '', date: '', isRecurringAnnual: false };
 
+// Matches the backend's UTC "today" cutoff (calendar.service.ts's createHoliday) so a date this
+// input allows is never rejected by the server, and vice versa.
+const todayIso = (): string => new Date().toISOString().slice(0, 10);
+
 export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClose }) => {
   const { currentRole, holidays, createHoliday, updateHoliday, deleteHoliday } = useApp();
 
@@ -122,6 +126,10 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
               <input
                 type="date"
                 value={form.date}
+                // Only enforced while adding a new holiday -- editing an existing (possibly
+                // already-past) holiday's name/recurrence must still work without forcing its
+                // date to change, matching updateHoliday's unchanged backend behavior.
+                min={editingId ? undefined : todayIso()}
                 onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
               />
