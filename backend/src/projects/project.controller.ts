@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
 import * as approvalService from './projectApproval.service.js';
+import { getAttachmentUrl, parseAttachmentDataUrl } from '../collab/fileStorage.js';
 import { getProjectUpdateApprovalType, PROJECT_ARCHIVE_APPROVAL_TYPE } from './projectApproval.routing.js';
 import {
   validateCreateMilestoneBody,
@@ -326,5 +327,48 @@ export const removeProjectFile = async (req: AuthenticatedRequest, res: Response
     res.json({ success: true, message: 'File removed successfully.' });
   } catch (error) {
     handleServiceError(error, res, 'Failed to remove file.');
+  }
+};
+
+// Gated by service.getProjectFileForDownload's isProjectAccessible check -- the same read gate
+// getProject already uses -- not assertCanManage, so every role that can view the project (Admin,
+// HR, any active member, which already covers a Team Lead) can open/download its attachments, same
+// as they can view/list them. ?mode=download forces a save-as; anything else opens inline so
+// supported types (PDF/images) render directly in the browser tab the frontend opens.
+export const downloadProjectFile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const file = await service.getProjectFileForDownload(req.params.id, req.params.fileId, user.id, user.role);
+    const url = await getAttachmentUrl(file.storageObjectKey, file.mimeType);
+    if (!url) {
+      res.status(404).json({ success: false, message: 'Attachment content is unavailable.' });
+      return;
+    }
+
+    const disposition = req.query.mode === 'download' ? 'attachment' : 'inline';
+    const safeName = file.originalFileName.replace(/["\r\n]/g, '');
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.originalFileName)}`
+    );
+
+    // Local disk (getAttachmentUrl falls back to a data: URL) -- send the bytes directly with real
+    // headers rather than making the browser fetch a data URL. Supabase Storage returns a real
+    // signed URL instead -- redirect there directly.
+    if (url.startsWith('data:')) {
+      const parsed = parseAttachmentDataUrl(url);
+      if (!parsed) {
+        res.status(404).json({ success: false, message: 'Attachment content is unavailable.' });
+        return;
+      }
+      res.setHeader('Content-Type', parsed.mimeType);
+      res.send(parsed.buffer);
+      return;
+    }
+    res.redirect(url);
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to download attachment.');
   }
 };

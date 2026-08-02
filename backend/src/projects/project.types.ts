@@ -65,6 +65,7 @@ export interface ProjectFileRow {
   sizebytes: string;
   uploadedbyuserid: number;
   uploadedatutc: Date;
+  storageobjectkey: string;
 }
 
 // Row shapes returned by the repository's raw SQL (lowercase columns — Postgres folds unquoted
