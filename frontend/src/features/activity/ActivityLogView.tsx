@@ -213,15 +213,23 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     // projects and only events by those projects' current members — never the wider
     // member/task-project scope (which would surface every member's logs). The
     // "My activity only" toggle stays live here: ON = own events inside led
-    // projects, OFF = all led-project members' events.
+    // projects, OFF = all led-project members' events. Selecting a specific project
+    // or project member narrows the feed to that context — a concrete selection
+    // must never be silently emptied by the self-only toggle, so it overrides it.
     if (activeTab === 'lead') {
-      return { ...f, hrActivityOnly: false, ledActivityOnly: true };
+      return {
+        ...f,
+        hrActivityOnly: false,
+        ledActivityOnly: true,
+        myActivityOnly: f.userId || f.projectId ? false : f.myActivityOnly,
+      };
     }
     // Admin or HR: org-wide by default (backend enforces the Admin-actor exclusion for HR).
     // The user's own "My activity only" toggle is respected — toggling it restricts the feed
-    // to events the current admin/HR user performed themselves.
+    // to events the current admin/HR user performed themselves. Picking a specific user in
+    // the User filter overrides the toggle for the same reason as above.
     if (scope?.permanentRole === 'Admin' || scope?.isActiveHR) {
-      return { ...f, hrActivityOnly: false };
+      return { ...f, hrActivityOnly: false, myActivityOnly: f.userId ? false : f.myActivityOnly };
     }
     // My Work Activity (default): the viewer's own events. Turning "My activity only"
     // off widens the feed to the viewer's project scope — shared projects and assigned
@@ -671,7 +679,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
               <FilterSelect
                 label="User"
                 value={filters.userId}
-                onChange={(v) => update('userId', v)}
+                onChange={(v) => { update('userId', v); if (v) update('myActivityOnly', false); }}
                 options={filteredUsers.map((u) => ({ value: u.id, label: u.name }))}
               />
             )}
@@ -680,7 +688,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           <FilterSelect
             label="Project member"
             value={filters.userId}
-            onChange={(v) => update('userId', v)}
+            onChange={(v) => { update('userId', v); if (v) update('myActivityOnly', false); }}
             options={users.map((u) => ({ value: u.id, label: u.name }))}
           />
         ) : null}
@@ -695,7 +703,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
             <FilterSelect
               label="Led project"
               value={filters.projectId}
-              onChange={(v) => { update('projectId', v); update('taskId', ''); }}
+              onChange={(v) => { update('projectId', v); update('taskId', ''); if (v) update('myActivityOnly', false); }}
               options={ledProjects.map((p) => ({ value: p.id, label: p.title }))}
             />
           )
@@ -760,7 +768,13 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         <div className="border-t border-white/5 pt-2 space-y-2">
           <Toggle
             checked={filters.myActivityOnly}
-            onChange={(v) => update('myActivityOnly', v)}
+            onChange={(v) => {
+              update('myActivityOnly', v);
+              if (v) {
+                update('userId', '');
+                if (isLeadTab) update('projectId', '');
+              }
+            }}
             label="My activity only"
           />
           {isAdmin && (
