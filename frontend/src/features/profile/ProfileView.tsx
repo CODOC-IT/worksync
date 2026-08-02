@@ -1440,31 +1440,9 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
           </div>
         </div>
 
-        <div className="glass-panel p-6 border border-white/5">
-          <div className="flex items-center gap-2.5 mb-6">
-            <div className="p-2 rounded-lg bg-slate-800/80">
-              <Send size={16} className="text-cyan-400" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Request a Change</h2>
-              <p className="text-[11px] text-slate-500">Submit a request to update your account information.</p>
-            </div>
-          </div>
-
-          {requestSuccess && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300">
-              <CheckCircle2 size={14} />
-              <span>{requestSuccess}</span>
-            </div>
-          )}
-
-          {requestError && (
-            <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-xs text-rose-300">
-              <AlertCircle size={14} />
-              <span>{requestError}</span>
-            </div>
-          )}
-
+        {/* Collapsible Change Password — Admin only (hidden for HR, Lead, Member) */}
+        {currentUser.role === 'Admin' && (
+        <div>
           <button
             onClick={() => {
               setRequestExpanded(!requestExpanded);
@@ -1562,6 +1540,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
             </div>
           )}
         </div>
+        )}
+      </div>
 
         <div className="glass-panel border border-white/5 p-6 lg:col-span-2">
           <div className="mb-5 flex items-center gap-2.5">
