@@ -203,8 +203,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
 
-  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'all'>('today');
-
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
@@ -394,44 +392,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       .catch(() => setDetailTask(null))
       .finally(() => setDetailTaskLoading(false));
   }, [selectedTaskId, apiAvailable, roleFiltered.tasks]);
-
-  // ── Attendance-specific date window (overrides global Reports range) ───
-  const attendanceWindow = useMemo(() => {
-    const today = todayStr();
-    switch (attendanceRange) {
-      case 'today':
-        return { from: today, to: today };
-      case 'lastWeek':
-        return { from: new Date(Date.now() - 6 * 86400000).toISOString().split('T')[0], to: today };
-      case 'last30':
-        return { from: new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0], to: today };
-      case 'all':
-      default:
-        return { from: undefined as string | undefined, to: undefined as string | undefined };
-    }
-  }, [attendanceRange]);
-
-  // Role-scoped attendance without the global date restriction (raw source)
-  const roleScopedAttendance = useMemo(() => {
-    const userId = currentUser.id;
-    if (currentRole === 'Admin' || currentRole === 'HR') return attendanceRecords;
-    if (currentRole === 'Team_Lead') {
-      const leadProjectIds = projects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
-      return attendanceRecords.filter((a) => leadProjectIds.some((pid) => {
-        const proj = projects.find((p) => p.id === pid);
-        return proj?.memberIds.includes(a.userId) || proj?.teamLeadId === a.userId;
-      }));
-    }
-    return attendanceRecords.filter((a) => a.userId === userId);
-  }, [attendanceRecords, currentRole, currentUser.id, projects]);
-
-  // Attendance records for the tab, constrained by the attendance filter only
-  const attendanceTabRecords = useMemo(() => {
-    const { from, to } = attendanceWindow;
-    const source: any[] = apiAvailable ? (reportData.attendance?.records || []) : (roleScopedAttendance as any[]);
-    if (from === undefined) return source;
-    return source.filter((a) => isInDateRange(a.date, from, to));
-  }, [apiAvailable, reportData, attendanceWindow, roleScopedAttendance]);
 
   // ── Derived metrics from API when available, else from local ──────────
   const buildStatusDist = (tasks: any[]): { name: string; value: number }[] => {
@@ -920,16 +880,19 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   }, [deadlineBaseTasks, users]);
 
   const attendanceStats = useMemo(() => {
-    const att = attendanceTabRecords;
-    const present = att.filter((a) => a.status === 'Present').length;
-    const late = att.filter((a) => a.status === 'Late').length;
-    const absent = att.filter((a) => a.status === 'Absent').length;
-    const onLeave = att.filter((a) => a.status === 'On Leave').length;
-    const halfDay = att.filter((a) => a.status === 'Half Day').length;
-    const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
-    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections: 0, pendingLeaves: 0 };
-  }, [attendanceTabRecords]);
+    if (apiAvailable && reportData?.attendance) {
+      const a = reportData.attendance;
+      return {
+        present: a.present ?? 0, late: a.late ?? 0, absent: a.absent ?? 0,
+        onLeave: a.onLeave ?? 0, halfDay: a.halfDay ?? 0,
+        avgHours: a.avgHours ?? '0',
+        total: a.total ?? 0,
+        pendingCorrections: a.pendingCorrections ?? 0,
+        pendingLeaves: a.pendingLeaves ?? 0,
+      };
+    }
+    return { present: 0, late: 0, absent: 0, onLeave: 0, halfDay: 0, avgHours: '0', total: 0, pendingCorrections: 0, pendingLeaves: 0 };
+  }, [apiAvailable, reportData]);
 
   const hrOverviewStats = useMemo(() => {
     if (apiAvailable && reportData.hrOverviewStats) {
@@ -1036,49 +999,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   };
 
   const hasError = validationError !== null;
-
-  const handleCsvExport = () => {
-    const tab = activeTab;
-    let headers: string[] = [];
-    let rows: string[][] = [];
-
-    if (tab === 'projects') {
-      headers = ['Project', 'Code', 'Status', 'Progress %', 'Start Date', 'Target Date', 'Members', 'Team Lead'];
-      rows = roleFiltered.projects.map((p: any) => [
-        p.title, p.code, p.status, String(p.progress), p.startDate, p.targetDate,
-        String(p.memberIds?.length || 0), users.find((u) => u.id === p.teamLeadId)?.name || p.teamLeadId
-      ]);
-    } else if (tab === 'workload') {
-      headers = ['Member', 'Active Tasks', 'Completed', 'In Review', 'Overdue'];
-      rows = workloadData.map((w: any) => [w.name, String(w.active), String(w.completed), String(w.review), String(w.overdue)]);
-    } else if (tab === 'deadlines') {
-      headers = ['Task', 'Status', 'Priority', 'Due Date', 'Assignee'];
-      rows = [...deadlineData.overdue, ...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming].map((t: any) => [
-        t.title, t.status, t.priority, t.dueDate, users.find((u) => u.id === t.assigneeId)?.name || t.assigneeId
-      ]);
-    } else if (tab === 'attendance') {
-      headers = ['User', 'Date', 'Status', 'Check In', 'Check Out', 'Total Hours'];
-      rows = attendanceTabRecords.map((a: any) => [
-        users.find((u) => u.id === a.userId)?.name || a.userId, a.date, a.status, a.checkIn, a.checkOut || '\u2014', String(a.totalHours)
-      ]);
-    } else if (tab === 'teams') {
-      headers = ['Department', 'Members', 'Projects', 'Tasks', 'Completed', 'Completion Rate'];
-      rows = teamStats.map((t: any) => [t.department, String(t.members), String(t.projects), String(t.tasks), String(t.completed), `${t.rate}%`]);
-    } else {
-      headers = ['Metric', 'Value'];
-      rows = [
-        ['Total Projects', String(kpiStats.totalProjects)],
-        ['Active Tasks', String(kpiStats.activeTasks)],
-        ['Completed Tasks', String(kpiStats.completedTasks)],
-        ['Overdue Tasks', String(kpiStats.overdueTasks)],
-        ['Completion Rate', `${kpiStats.completionRate}%`],
-        ['Active Members', String(kpiStats.activeMembers)]
-      ];
-    }
-
-    const csv = prepareCsv(headers, rows);
-    downloadBlob(csv, `report_${tab}_${dateRange.from}_${dateRange.to}.csv`, 'text/csv');
-  };
 
   const handlePdfExport = () => {
     const tab = activeTab;
@@ -1205,7 +1125,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       bodyHtml += section('Attendance Records');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
-      (attendanceTabRecords || []).forEach((a: any) => {
+      (roleFiltered.attendance || []).forEach((a: any) => {
         const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
         bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date || '\u2014')}${td(a.status || '\u2014')}${td(a.checkIn || '\u2014')}${td(a.checkOut || '\u2014')}${td(a.totalHours ?? 0)}</tr>`;
       });
@@ -2049,9 +1969,13 @@ ${bodyHtml}
         </>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-3">
-            {renderKPICard('Completed', kpiStats.completedTasks, <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-            {renderKPICard('Completion Rate', `${kpiStats.completionRate}%`, <TrendingUp size={14} className="text-purple-400" />, 'magenta')}
+          {!apiAvailable && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-300">
+              <AlertTriangle size={14} />
+              <span>Attendance data unavailable — API request failed.</span>
+            </div>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
             {renderKPICard('Present Today', hrOverviewStats.presentToday, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
             {renderKPICard('Absent', hrOverviewStats.absentToday, <UserX size={14} className="text-rose-400" />, 'rose')}
             {renderKPICard('On Leave', hrOverviewStats.onLeaveToday, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
@@ -3653,25 +3577,6 @@ ${bodyHtml}
 
   const renderAttendanceTab = () => (
     <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold text-white">Attendance Date Range</p>
-          <p className="text-[10px] text-slate-500 font-mono">
-            Overrides the global Report date range for this tab only
-          </p>
-        </div>
-        <select
-          value={attendanceRange}
-          onChange={(e) => setAttendanceRange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'all')}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-mono border border-white/10 bg-slate-900/60 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
-        >
-          <option value="today">Today</option>
-          <option value="lastWeek">Last Week</option>
-          <option value="last30">Last 30 Days</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {renderKPICard('Present', attendanceStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Late', attendanceStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
@@ -3682,34 +3587,43 @@ ${bodyHtml}
         {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
-          <div className="mt-3" style={{ height: 260 }}>
-            {attendanceTabRecords.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={[
-                  { name: 'Present', value: attendanceStats.present },
-                  { name: 'Late', value: attendanceStats.late },
-                  { name: 'Absent', value: attendanceStats.absent },
-                  { name: 'On Leave', value: attendanceStats.onLeave },
-                  { name: 'Half Day', value: attendanceStats.halfDay }
-                ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
-                  <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
-                  <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {[chartColors.emerald, chartColors.amber, chartColors.rose, chartColors.cyan, chartColors.violet].map((color, i) => (
-                      <Cell key={i} fill={color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+      <div className="flex justify-end">
+        <button
+          onClick={handleAttendancePdfExport}
+          className="px-2.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+        >
+          <FileText size={11} />
+          Export Filtered PDF
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-slate-400">Filter by status:</span>
+        <div className="flex flex-wrap gap-1.5">
+          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+            const isActive = attendanceStatusFilter === s;
+            if (s === '') {
+              return (
+                <button key={s} onClick={() => setAttendanceStatusFilter('')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${isActive
+                    ? 'bg-slate-600/60 text-slate-200 border border-white/10'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/60 hover:text-slate-200'}`}>
+                  All
+                </button>
+              );
+            }
+            const colorClass = s === 'Present' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              : s === 'Late' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+              : s === 'Absent' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              : s === 'On Leave' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+              : 'bg-violet-500/20 text-violet-400 border-violet-500/30';
+            return (
+              <button key={s} onClick={() => setAttendanceStatusFilter(s === attendanceStatusFilter ? '' : s)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
+                {s}
+              </button>
+            );
+          })}
         </div>
         <select
           value={attendanceSearchQuery}
@@ -3758,10 +3672,16 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {(attendanceTabRecords || []).length === 0 ? (
-              <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
-            ) : (
-              (attendanceTabRecords as any[]).map((a: any) => (
+              {(() => {
+                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
+                if (attendanceSearchQuery) {
+                  filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
+                }
+                if (filtered.length === 0) {
+                  return <tr><td colSpan={7} className="text-center text-slate-500 py-6">{attendanceStatusFilter ? `No "${attendanceStatusFilter}" records in range` : 'No records in range'}</td></tr>;
+                }
+                return filtered.map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs truncate">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
@@ -3776,59 +3696,25 @@ ${bodyHtml}
           </tbody>
         </table>
       </div>
-    </div>
-  );
 
-  const renderExportTab = () => (
-    <div className="space-y-5">
-      <div className="p-6 text-center space-y-4 bg-slate-900/30 border border-white/10 rounded-xl">
-        <FileSpreadsheet size={40} className="mx-auto text-cyan-400" />
-        <div>
-          <h3 className="text-sm font-bold text-white">CSV Export</h3>
-          <p className="text-xs text-slate-400 mt-1">Export the current report as a CSV spreadsheet</p>
-        </div>
-        <div className="text-[10px] text-slate-500 font-mono">
-          {tabLabels[activeTab]} Report | {dateRange.from} \u2013 {dateRange.to}
-        </div>
-        <button
-          onClick={handleCsvExport}
-          disabled={hasError}
-          className="w-full py-2.5 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2 shadow"
-        >
-          <Download size={14} />
-          <span>Download CSV</span>
-        </button>
-      </div>
-
-      <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-        <div className="glass-panel p-4 rounded-lg">
-          {renderSectionHeader(<FileSpreadsheet size={16} className="text-cyan-400" />, 'Export Summary')}
-          <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Current View</span>
-              <span className="text-white font-bold">{tabLabels[activeTab]}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Date Range</span>
-              <span className="text-white font-bold font-mono text-[10px]">{dateRange.from} \u2013 {dateRange.to}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Role</span>
-              <span className="text-white font-bold">{currentRole.replace('_', ' ')}</span>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-900/60 border border-white/5">
-              <span className="text-slate-400 block mb-1">Data Records</span>
-              <span className="text-white font-bold">
-                {activeTab === 'projects' ? roleFiltered.projects.length :
-                 activeTab === 'workload' ? workloadData.length :
-                 activeTab === 'deadlines' ? deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length + deadlineData.overdue.length :
-                 activeTab === 'attendance' ? attendanceTabRecords.length :
-                 activeTab === 'teams' ? teamStats.length : (kpiStats.completedTasks + kpiStats.activeTasks)}
-              </span>
+      {roleFiltered.hrRequests.length > 0 && (
+        <GlassCard glowColor="amber" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+          <div className="glass-panel p-4 rounded-lg">
+            {renderSectionHeader(<ListTodo size={16} className="text-amber-400" />, 'Pending HR Requests', `${roleFiltered.hrRequests.length} pending`)}
+            <div className="mt-3 space-y-2">
+              {roleFiltered.hrRequests.map((r: any) => (
+                <div key={r.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={r.type.replace('_', ' ')} size="sm" />
+                    <span className="text-slate-300">{r.reason.slice(0, 60)}{r.reason.length > 60 ? '...' : ''}</span>
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-400">{r.submittedAt || r.date}</span>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
-      </GlassCard>
+        </GlassCard>
+      )}
     </div>
   );
 
