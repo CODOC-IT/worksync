@@ -44,6 +44,12 @@ function todayStr(): string {
   return new Date().toISOString().split('T')[0];
 }
 
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
 // Mirrors NotificationsView: linkRoute may reference a pre-rename tab id (e.g. 'chat').
 const NOTIFICATION_ROUTE_ALIASES: Record<string, string> = { chat: 'project-chats' };
 function notificationTarget(linkRoute?: string): string {
@@ -162,6 +168,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   const [profileActivityTotal, setProfileActivityTotal] = useState(0);
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>('');
   const [projectStatusFilter, setProjectStatusFilter] = useState<string>('');
+  const [deadlineFilter, setDeadlineFilter] = useState<string>('all');
 
   useEffect(() => {
     setNameInput(currentUser.name);
@@ -283,7 +290,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   };
 
   const myUpcomingDeadlines = myTasks
-    .filter((t) => t.status !== 'Done' && t.dueDate)
+    .filter((t) => t.status !== 'Done' && t.dueDate && t.dueDate >= todayStr())
     .map((t) => ({
       id: `task-${t.id}`,
       title: t.title,
@@ -294,6 +301,25 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
       taskId: t.id,
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Dedicated deadline filter that bypasses the global date range (for Upcoming Deadlines tab)
+  const filteredUpcomingDeadlines = myUpcomingDeadlines.filter((d) => {
+    if (deadlineFilter === 'all') return true;
+    const today = todayStr();
+    const tomorrow = addDays(today, 1);
+    const endDate = deadlineFilter === 'today' ? today
+      : deadlineFilter === 'tomorrow' ? tomorrow
+      : deadlineFilter === 'next7' ? addDays(today, 7)
+      : deadlineFilter === 'next30' ? addDays(today, 30)
+      : null;
+    if (!endDate) return true;
+    return d.date >= today && d.date <= endDate;
+  });
+
+  // Global date range filtered deadlines (for Overview tab)
+  const dateFilteredDeadlines = hasDateError
+    ? myUpcomingDeadlines
+    : myUpcomingDeadlines.filter((d) => isInDateRange(d.date, dateRange.from, dateRange.to));
 
   const dateFilteredTasks = hasDateError
     ? myTasks
@@ -314,10 +340,6 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   const dateFilteredNotifications = hasDateError
     ? myNotifications
     : myNotifications.filter((n) => isInDateRange(n.createdAt || '', dateRange.from, dateRange.to));
-
-  const dateFilteredDeadlines = hasDateError
-    ? myUpcomingDeadlines
-    : myUpcomingDeadlines.filter((d) => isInDateRange(d.date, dateRange.from, dateRange.to));
 
   const daysUntil = (dateStr: string): string => {
     const now = new Date();
@@ -611,6 +633,32 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
         {options.map((status) => (
           <option key={status} value={status}>{status}</option>
         ))}
+      </select>
+    </div>
+  );
+
+  /* ───────── Compact Deadline Filter ───────── */
+  const DeadlineFilter = ({
+    value,
+    onChange,
+    allLabel,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    allLabel: string;
+  }) => (
+    <div className="mb-4 flex items-center gap-2">
+      <span className="text-[11px] font-mono text-slate-500 shrink-0">Deadline</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500/40"
+      >
+        <option value="all">{allLabel}</option>
+        <option value="today">Due Today</option>
+        <option value="tomorrow">Due Tomorrow</option>
+        <option value="next7">Next 7 Days</option>
+        <option value="next30">Next 30 Days</option>
       </select>
     </div>
   );
@@ -957,13 +1005,14 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   /* ───────── Upcoming Deadlines Tab ───────── */
   const renderUpcomingDeadlines = () => (
     <div>
-      <SectionHeader icon={Calendar} label="Upcoming Deadlines" count={dateFilteredDeadlines.length} />
-      {dateFilteredDeadlines.length === 0 ? (
+      <SectionHeader icon={Calendar} label="Upcoming Deadlines" count={filteredUpcomingDeadlines.length} />
+      <DeadlineFilter value={deadlineFilter} onChange={setDeadlineFilter} allLabel="All Deadlines" />
+      {filteredUpcomingDeadlines.length === 0 ? (
         <EmptyState icon={Calendar} title="No upcoming deadlines" message="Deadlines from your assigned tasks will appear here." />
       ) : (
         <>
           <div className="max-h-[400px] overflow-y-auto space-y-2">
-          {dateFilteredDeadlines.map((dl) => {
+          {filteredUpcomingDeadlines.map((dl) => {
             const dayLabel = daysUntil(dl.date);
             const isOverdue = dayLabel.includes('overdue');
             const task = tasks.find((t) => t.id === dl.taskId);
