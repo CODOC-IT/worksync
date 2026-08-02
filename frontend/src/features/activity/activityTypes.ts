@@ -56,6 +56,7 @@ export interface ActivityFilters {
   deletedOnly: boolean;
   failedOrBlockedOnly: boolean;
   hrActivityOnly: boolean;
+  ledActivityOnly: boolean;
   sort: 'newest' | 'oldest';
 }
 
@@ -74,6 +75,6 @@ export const DEFAULT_ACTIVITY_FILTERS: ActivityFilters = {
   priority: '', result: '', source: '', search: '', changedField: '',
   myActivityOnly: false, importantOnly: false, hasAttachments: false,
   hasMentions: false, deletedOnly: false, failedOrBlockedOnly: false,
-  hrActivityOnly: false, sort: 'newest'
+  hrActivityOnly: false, ledActivityOnly: false, sort: 'newest'
 };
 

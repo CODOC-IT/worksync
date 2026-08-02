@@ -51,6 +51,7 @@ export const toActivityQuery = (filters: ActivityFilters, page: number, pageSize
     deletedOnly: filters.deletedOnly || undefined,
     failedOrBlockedOnly: filters.failedOrBlockedOnly || undefined,
     hrActivityOnly: filters.hrActivityOnly || undefined,
+    ledActivityOnly: filters.ledActivityOnly || undefined,
   };
   Object.entries(values).forEach(([key, value]) => {
     if (value !== undefined && value !== '') params.set(key, String(value));

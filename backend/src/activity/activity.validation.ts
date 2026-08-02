@@ -124,6 +124,7 @@ export const parseActivityFilters = (query: Record<string, unknown>): ActivityFi
     deletedOnly: bool(query.deletedOnly, 'deletedOnly'),
     failedOrBlockedOnly: bool(query.failedOrBlockedOnly, 'failedOrBlockedOnly'),
     hrActivityOnly: bool(query.hrActivityOnly, 'hrActivityOnly'),
+    ledActivityOnly: bool(query.ledActivityOnly, 'ledActivityOnly'),
     sort: enumValue(query.sort, 'sort', ['newest', 'oldest'] as const) || 'newest',
     page,
     pageSize,

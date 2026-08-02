@@ -363,6 +363,56 @@ test('Team Lead: lead scope grants visibility in led project, not elsewhere', as
   assert.ok(descriptions.includes('Led project perm change'), 'Team Lead scope should grant visibility in led project even for restricted modules');
 });
 
+test('Led Project tab: member leading via projectmembers rows sees only led-project activity from its members', async () => {
+  // usr-4 is a plain Team_Member who leads Project B via the projectmembers TeamLead
+  // row (the app's normal way to record leads) and is only a plain member of Project A.
+  memDb.public.none(`INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+    VALUES (2, 4, 'TeamLead', 2)`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
+    (1, 5, 'Updated', 'Task', 'tsk-led', 2, '00000000-0000-0000-0000-000000000081', 'Tasks', 'Led project member event', 'Team_Member'),
+    (1, 5, 'Updated', 'Task', 'tsk-member', 1, '00000000-0000-0000-0000-000000000082', 'Tasks', 'Non-led member project event', 'Team_Member'),
+    (1, 3, 'Updated', 'Task', 'tsk-outsider', 2, '00000000-0000-0000-0000-000000000083', 'Tasks', 'Outsider event in led project', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(!effectiveRoles.isActiveTeamLead, 'usr-4 should not be an iam Team Lead');
+
+  const led = await findActivities({ page: 1, pageSize: 50, ledActivityOnly: true }, effectiveRoles, 'usr-4');
+  const ledDescs = led.rows.map((r: any) => r.description);
+  assert.ok(ledDescs.includes('Led project member event'), 'Led tab should show member activity within the led project');
+  assert.ok(!ledDescs.includes('Non-led member project event'), 'Led tab must not include events from other member projects');
+  assert.ok(!ledDescs.includes('Outsider event in led project'), 'Led tab must not include events by non-members of the led project');
+
+  const plain = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const plainDescs = plain.rows.map((r: any) => r.description);
+  assert.ok(plainDescs.includes('Non-led member project event'), 'Sanity check: plain member scope still includes other member projects');
+});
+
+test('Led Project tab (temporary Team Lead grant): feed restricted to led projects and their members', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  const tlUrId = memDb.public.one(`SELECT ur.userroleid FROM iam.userroles ur
+    JOIN iam.roles r ON r.roleid = ur.roleid
+    WHERE ur.userid = 4 AND r.rolecode = 'TeamLead'`).userroleid;
+  memDb.public.none(`INSERT INTO iam.teamleadprojectscopes (userroleid, projectid) VALUES (${tlUrId}, 2)`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
+    (1, 5, 'Updated', 'Task', 'tsk-led2', 2, '00000000-0000-0000-0000-000000000090', 'Tasks', 'Led member event two', 'Team_Member'),
+    (1, 5, 'Updated', 'Task', 'tsk-other', 1, '00000000-0000-0000-0000-000000000091', 'Tasks', 'Other member project event', 'Team_Member'),
+    (1, 3, 'Updated', 'Task', 'tsk-stranger', 2, '00000000-0000-0000-0000-000000000092', 'Tasks', 'Stranger event in led project', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(effectiveRoles.isActiveTeamLead, 'usr-4 should be an active Team Lead');
+
+  const result = await findActivities({ page: 1, pageSize: 50, ledActivityOnly: true }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Led member event two'), 'Led tab should show member activity within the led project');
+  assert.ok(!descriptions.includes('Other member project event'), 'Led tab must not include events from non-led projects');
+  assert.ok(!descriptions.includes('Stranger event in led project'), 'Led tab must not include events by non-members');
+});
+
 test('Team Lead: loses visibility after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
