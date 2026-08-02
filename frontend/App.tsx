@@ -34,6 +34,7 @@ const AppContent: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
+  const [reportsInitialTab, setReportsInitialTab] = useState<string | undefined>(undefined);
 
   const {
     currentRole,
@@ -179,7 +180,10 @@ const AppContent: React.FC = () => {
     );
   }
 
-  const handleNavigate = (tab: string, _filterId?: string) => {
+  const handleNavigate = (tab: string, filterId?: string) => {
+    if (tab === 'reports') {
+      setReportsInitialTab(filterId || undefined);
+    }
     setCurrentTab(tab);
   };
 
@@ -237,7 +241,12 @@ const AppContent: React.FC = () => {
           {currentTab === 'kanban' && <KanbanView />}
           {currentTab === 'approvals' && <ApprovalsInboxView />}
           {currentTab === 'notifications' && <NotificationsView onNavigate={handleNavigate} />}
-          {currentTab === 'reports' && <ReportsView />}
+          {currentTab === 'reports' && (
+            <ReportsView
+              initialTab={reportsInitialTab}
+              onInitialTabConsumed={() => setReportsInitialTab(undefined)}
+            />
+          )}
           {currentTab === 'project-chats' && <ProjectChatsView />}
           {currentTab === 'members' && <TeamMembersView />}
           {currentTab === 'activity' && <ActivityLogView onNavigate={handleNavigate} />}

@@ -160,7 +160,12 @@ function CustomTooltip({ active, payload, label }: any) {
   );
 }
 
-export const ReportsView: React.FC = () => {
+interface ReportsViewProps {
+  initialTab?: string;
+  onInitialTabConsumed?: () => void;
+}
+
+export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialTabConsumed }) => {
   const { currentRole, currentUser, projects, tasks, users, attendanceRecords, hrRequests, theme } = useApp();
 
   const [activeTab, setActiveTab] = useState<ReportTab>('overview');
@@ -967,6 +972,15 @@ export const ReportsView: React.FC = () => {
       setActiveTab(visibleTabs[0]);
     }
   }, [visibleTabs, activeTab]);
+
+  // A caller (e.g. My Profile → Upcoming Deadlines → View All) can request Reports open directly
+  // on a specific tab (its "Deadlines" page). Honor that once, then let the user navigate freely.
+  useEffect(() => {
+    if (initialTab && visibleTabs.includes(initialTab as ReportTab)) {
+      setActiveTab(initialTab as ReportTab);
+    }
+    if (initialTab) onInitialTabConsumed?.();
+  }, [initialTab, visibleTabs]);
 
   const tabLabels: Record<ReportTab, string> = {
     overview: 'Overview',
@@ -1787,7 +1801,24 @@ ${bodyHtml}
     </div>
   );
 
-  const renderOverviewTab = () => (
+  const renderOverviewTab = () => {
+    // Overview preview shows the next 3 DISTINCT due dates (not 3 records): group the
+    // due-today/tomorrow/upcoming buckets by due date, then cap the date groups at 3.
+    const deadlinePreviewItems = [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming];
+    const deadlinePreviewDates: string[] = [];
+    for (const t of deadlinePreviewItems) {
+      if (!t.dueDate || deadlinePreviewDates.includes(t.dueDate)) continue;
+      if (deadlinePreviewDates.length >= 3) break;
+      deadlinePreviewDates.push(t.dueDate);
+    }
+    const deadlinePreviewGrouped: Record<string, any[]> = {};
+    deadlinePreviewItems.forEach((t) => {
+      if (t.dueDate && deadlinePreviewDates.includes(t.dueDate)) {
+        (deadlinePreviewGrouped[t.dueDate] = deadlinePreviewGrouped[t.dueDate] || []).push(t);
+      }
+    });
+
+    return (
     <div className="space-y-6">
       {currentRole !== 'HR' ? (
         <>
@@ -1880,42 +1911,30 @@ ${bodyHtml}
 
           <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
             <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Upcoming Deadlines', `${Math.min(3, deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length)} upcoming`)}
+              {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Upcoming Deadlines', `${deadlinePreviewDates.length} upcoming`)}
               <div className="mt-3">
-                {(() => {
-                  const grouped: Record<string, any[]> = {};
-                  const allItems = [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming]
-                    .slice(0, 3);
-                  allItems.forEach((t: any) => {
-                    const d = t.dueDate;
-                    if (!grouped[d]) grouped[d] = [];
-                    grouped[d].push(t);
-                  });
-                  const sortedDates = Object.keys(grouped).sort();
-                  if (sortedDates.length === 0) {
-                    return <p className="text-xs text-slate-500 text-center py-4">No upcoming deadlines in this range</p>;
-                  }
-                  return (
-                    <div className="max-h-72 overflow-y-auto space-y-3 pr-1">
-                      {sortedDates.map((date) => (
-                        <div key={date}>
-                          <div className="text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-2">
-                            <span>{date}</span>
-                            {date === todayStr() && <span className="text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded text-[9px]">TODAY</span>}
-                          </div>
-                          {grouped[date].map((t: any) => (
-                            <div key={t.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900/60 border border-white/5 text-xs mb-1">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <StatusBadge status={t.priority} size="sm" />
-                                <span className="text-slate-200 truncate">{t.title}</span>
-                              </div>
-                            </div>
-                          ))}
+                {deadlinePreviewDates.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-4">No upcoming deadlines in this range</p>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto space-y-3 pr-1">
+                    {deadlinePreviewDates.map((date) => (
+                      <div key={date}>
+                        <div className="text-[10px] font-mono text-slate-400 mb-1.5 flex items-center gap-2">
+                          <span>{date}</span>
+                          {date === todayStr() && <span className="text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded text-[9px]">TODAY</span>}
                         </div>
-                      ))}
-                    </div>
-                  );
-                })()}
+                        {deadlinePreviewGrouped[date].map((t: any) => (
+                          <div key={t.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-900/60 border border-white/5 text-xs mb-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <StatusBadge status={t.priority} size="sm" />
+                              <span className="text-slate-200 truncate">{t.title}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </GlassCard>
@@ -1995,7 +2014,8 @@ ${bodyHtml}
         </>
       )}
     </div>
-  );
+    );
+  };
 
 
   const renderProjectsTab = () => (
