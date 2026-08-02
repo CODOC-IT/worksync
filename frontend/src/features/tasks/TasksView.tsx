@@ -93,7 +93,12 @@ const toEditableSubtask = (parent: Task, subtask: Subtask, index: number): Task 
   };
 };
 
-export const TasksView: React.FC = () => {
+interface TasksViewProps {
+  initialTaskId?: string;
+  onInitialTaskConsumed?: () => void;
+}
+
+export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTaskConsumed }) => {
   const {
     currentRole,
     currentUser,
@@ -148,6 +153,18 @@ export const TasksView: React.FC = () => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  // Deep-link support: a caller (e.g. My Profile → Upcoming Deadlines) can ask the Tasks tab to
+  // open a specific task's detail drawer on mount. Honor it once, then let the user navigate freely.
+  useEffect(() => {
+    if (!initialTaskId) return;
+    const task = tasks.find((t) => t.id === initialTaskId);
+    if (task) {
+      void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
+    }
+    onInitialTaskConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTaskId]);
 
   // A project lead still has a Team_Member account.  Never leave an invisible
   // assigned-to-me predicate behind when the signed-in role changes.
