@@ -232,7 +232,7 @@ const AppContent: React.FC = () => {
           {currentTab === 'projects' && <ProjectsView />}
           {currentTab === 'tasks' && <TasksView />}
           {currentTab === 'attendance' && <AttendanceView />}
-          {currentTab === 'profile' && <ProfileView />}
+          {currentTab === 'profile' && <ProfileView onNavigate={handleNavigate} />}
           {currentTab === 'ai-assistant' && <AIAssistantView />}
           {currentTab === 'kanban' && <KanbanView />}
           {currentTab === 'approvals' && <ApprovalsInboxView />}

@@ -1880,11 +1880,12 @@ ${bodyHtml}
 
           <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
             <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Upcoming Deadlines', `${deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length} upcoming`)}
+              {renderSectionHeader(<Clock size={16} className="text-cyan-400" />, 'Upcoming Deadlines', `${Math.min(3, deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length)} upcoming`)}
               <div className="mt-3">
                 {(() => {
                   const grouped: Record<string, any[]> = {};
-                  const allItems = [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming];
+                  const allItems = [...deadlineData.dueToday, ...deadlineData.dueTomorrow, ...deadlineData.upcoming]
+                    .slice(0, 3);
                   allItems.forEach((t: any) => {
                     const d = t.dueDate;
                     if (!grouped[d]) grouped[d] = [];
