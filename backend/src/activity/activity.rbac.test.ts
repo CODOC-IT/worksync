@@ -473,6 +473,120 @@ test('Action Filter: Assigned/Reassigned matches split project codes', async () 
   assert.ok(descriptions.includes('Task assignee updated'), 'Should match Assigned/Reassigned code');
   assert.ok(!descriptions.includes('Plain task update'), 'Should not match unrelated updates');
 });
+
+test('Action Filter: Assigned matches task (re)assignments too', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (131, 1, 4, 'Assigned', 'User', 'usr-5', '00000000-0000-0000-0000-000000000131', 'Projects', 'Member assigned to project', 'Team_Member'),
+    (132, 1, 4, 'Assigned/Reassigned', 'Task', 'tsk-are2', '00000000-0000-0000-0000-000000000132', 'Tasks', 'Task assignee updated', 'Team_Member'),
+    (133, 1, 4, 'Reassigned', 'User', 'usr-5', '00000000-0000-0000-0000-000000000133', 'Projects', 'Member removed from project', 'Team_Member'),
+    (134, 1, 4, 'Updated', 'Task', 'tsk-plain2', '00000000-0000-0000-0000-000000000134', 'Tasks', 'Plain task update', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Assigned', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Member assigned to project'), 'Should match Assigned code');
+  assert.ok(descriptions.includes('Task assignee updated'), 'Should match Assigned/Reassigned task assignments');
+  assert.ok(!descriptions.includes('Member removed from project'), 'Should not match removal-only Reassigned events');
+  assert.ok(!descriptions.includes('Plain task update'), 'Should not match unrelated updates');
+});
+
+test('Action Filter: Archived matches archive events recorded as Deleted, Deleted excludes them', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (141, 1, 1, 'Deleted', 'Project', 'prj-arch', '00000000-0000-0000-0000-000000000141', 'Projects', 'Admin archived project Alpha', 'Admin'),
+    (142, 1, 1, 'Deleted', 'Project', 'prj-hard', '00000000-0000-0000-0000-000000000142', 'Projects', 'Admin permanently deleted project Beta', 'Admin'),
+    (143, 1, 1, 'Archived', 'Project', 'prj-explicit', '00000000-0000-0000-0000-000000000143', 'Projects', 'Explicit archived code', 'Admin'),
+    (144, 1, 1, 'Deleted', 'Task', 'tsk-del2', '00000000-0000-0000-0000-000000000144', 'Tasks', 'Task deletion', 'Admin')`);
+  memDb.public.none(`INSERT INTO audit.auditeventchanges (auditeventid, fieldname, oldvalue, newvalue)
+    VALUES (141, 'Status', 'Active', 'Archived'), (142, 'Status', 'Archived', 'Permanently Deleted')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+
+  const archived = await findActivities({ action: 'Archived', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const archivedDescs = archived.rows.map((r: any) => r.description);
+  assert.ok(archivedDescs.includes('Admin archived project Alpha'), 'Archived filter must include archive-as-Deleted events');
+  assert.ok(archivedDescs.includes('Explicit archived code'), 'Archived filter must match explicit Archived codes');
+  assert.ok(!archivedDescs.includes('Admin permanently deleted project Beta'), 'Archived filter must not include permanent deletes');
+
+  const deleted = await findActivities({ action: 'Deleted', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const deletedDescs = deleted.rows.map((r: any) => r.description);
+  assert.ok(deletedDescs.includes('Admin permanently deleted project Beta'), 'Deleted filter must include permanent deletes');
+  assert.ok(deletedDescs.includes('Task deletion'), 'Deleted filter must include plain deletions');
+  assert.ok(!deletedDescs.includes('Admin archived project Alpha'), 'Deleted filter must not include archive events');
+  assert.ok(!deletedDescs.includes('Explicit archived code'), 'Deleted filter must not include explicit Archived codes');
+});
+
+test('Action Filter: Completed matches status changes to completed/done', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (151, 1, 1, 'Completed', 'Project', 'prj-comp', '00000000-0000-0000-0000-000000000151', 'Projects', 'Explicit completed code', 'Admin'),
+    (152, 1, 4, 'Status Changed', 'Task', 'tsk-done', '00000000-0000-0000-0000-000000000152', 'Tasks', 'Task moved to Done', 'Team_Member'),
+    (153, 1, 4, 'Status Changed', 'Project', 'prj-projcomp', '00000000-0000-0000-0000-000000000153', 'Projects', 'Project marked Completed', 'Team_Member'),
+    (154, 1, 4, 'Status Changed', 'Task', 'tsk-review', '00000000-0000-0000-0000-000000000154', 'Tasks', 'Task moved to Review', 'Team_Member')`);
+  memDb.public.none(`INSERT INTO audit.auditeventchanges (auditeventid, fieldname, oldvalue, newvalue)
+    VALUES (152, 'Status', 'In Progress', 'Done'), (153, 'Status', 'Active', 'Completed'), (154, 'Status', 'Todo', 'Review')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ action: 'Completed', page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Explicit completed code'), 'Should match explicit Completed code');
+  assert.ok(descriptions.includes('Task moved to Done'), 'Should match status change to Done');
+  assert.ok(descriptions.includes('Project marked Completed'), 'Should match status change to Completed');
+  assert.ok(!descriptions.includes('Task moved to Review'), 'Should not match non-completing status changes');
+});
+
+test('Important filter: matches high-impact activity (failed/blocked/destructive)', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, resultcode, isimportant)
+    VALUES 
+    (161, 1, NULL, 'Login', 'User', 'u1@test.com', '00000000-0000-0000-0000-000000000161', 'Authentication', 'Failed login attempt', NULL, 'Failed', FALSE),
+    (162, 1, 1, 'Deleted', 'Task', 'tsk-del3', '00000000-0000-0000-0000-000000000162', 'Tasks', 'Task deleted', 'Admin', 'Successful', FALSE),
+    (163, 1, 4, 'Updated', 'Task', 'tsk-plain3', '00000000-0000-0000-0000-000000000163', 'Tasks', 'Plain update', 'Team_Member', 'Successful', FALSE),
+    (164, 1, 4, 'Checked In', 'Attendance', 'att-x', '00000000-0000-0000-0000-000000000164', 'Attendance', 'Flagged important check-in', 'Team_Member', 'Successful', TRUE)`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ importantOnly: true, page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Failed login attempt'), 'Important must include Failed results');
+  assert.ok(descriptions.includes('Task deleted'), 'Important must include destructive deletions');
+  assert.ok(descriptions.includes('Flagged important check-in'), 'Important must include explicitly flagged events');
+  assert.ok(!descriptions.includes('Plain update'), 'Important must not include ordinary updates');
+});
+
+test('Admin: My activity only restricts the feed to the viewer\'s own events', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES 
+    (1, 1, 'Created', 'Project', 'prj-mine', '00000000-0000-0000-0000-000000000171', 'Projects', 'Admin own action', 'Admin'),
+    (1, 5, 'Updated', 'Task', 'tsk-theirs', '00000000-0000-0000-0000-000000000172', 'Tasks', 'Other user action', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-1');
+  const result = await findActivities({ myActivityOnly: true, page: 1, pageSize: 50 }, effectiveRoles, 'usr-1');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Admin own action'), 'Admin should see their own events with My activity only');
+  assert.ok(!descriptions.includes('Other user action'), 'Admin must not see other users with My activity only');
+});
+
+test('Activity DTO: affected-user names resolve from IAM when snapshots are missing', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, affecteduseridtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (181, 1, 1, 'Assigned', 'User', 'usr-5', 'usr-5', '00000000-0000-0000-0000-000000000181', 'Projects', 'usr-1 added usr-5 to the project', 'Admin')`);
+
+  const { listActivities } = await import('./activity.service.js');
+  const result = await listActivities({ page: 1, pageSize: 50 }, 'usr-1', 'Admin');
+  const item = result.items[0];
+  assert.equal(item.affectedUser?.name, 'Other User', 'Affected user name should resolve from IAM');
+  assert.equal(item.entityName, 'Other User', 'User entity name should resolve from IAM');
+  assert.equal(item.description, 'Admin User added Other User to the project', 'Description ids should be replaced with names');
+});
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);

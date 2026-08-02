@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../db/pool.js';
-import { toProjectPkOrNull, toTaskPkOrNull, toUserPkOrNull } from '../utils/idMapping.js';
+import { fromUserPk, toProjectPkOrNull, toTaskPkOrNull, toUserPkOrNull } from '../utils/idMapping.js';
 import { ActivityChange, ActivityFilters, ActivityRecordInput } from './activity.types.js';
 import { EffectiveRoles } from './activity.rbac.js';
 
@@ -227,6 +227,26 @@ const buildWhere = (
     // Tasks record 'Assigned/Reassigned' directly; project member changes are split
     // into separate 'Assigned' and 'Reassigned' codes. Match all three.
     clauses.push("(a.actioncode = 'Assigned/Reassigned' OR a.actioncode = 'Assigned' OR a.actioncode = 'Reassigned')");
+  } else if (filters.action === 'Archived') {
+    // Project (and task) archives are stored with the 'Deleted' actioncode plus a status
+    // field change to 'Archived' — see project.service.archiveProject. Match both the
+    // explicit 'Archived' code and archive-as-deleted events so everything actually
+    // archived appears under 'Archived' instead of 'Deleted'.
+    clauses.push("(a.actioncode = 'Archived' OR a.auditeventid IN (SELECT c.auditeventid FROM audit.auditeventchanges c WHERE lower(c.fieldname) = 'status' AND lower(c.newvalue) = 'archived'))");
+  } else if (filters.action === 'Deleted') {
+    // 'Deleted' shares its actioncode with archive events; exclude status->'Archived' rows
+    // so archives surface only under the 'Archived' option.
+    clauses.push("(a.actioncode = 'Deleted' AND a.auditeventid NOT IN (SELECT c.auditeventid FROM audit.auditeventchanges c WHERE lower(c.fieldname) = 'status' AND lower(c.newvalue) = 'archived'))");
+  } else if (filters.action === 'Assigned') {
+    // Project member additions are recorded as 'Assigned'; task (re)assignments are recorded
+    // as 'Assigned/Reassigned' (see task.service.updateTask). Both are assignment events, so
+    // the 'Assigned' filter matches them together.
+    clauses.push("(a.actioncode IN ('Assigned', 'Assigned/Reassigned'))");
+  } else if (filters.action === 'Completed') {
+    // Completion is recorded as an explicit 'Completed' code (projects that auto-complete)
+    // or as a status field change to 'Completed'/'Done' (projects and tasks). Match all
+    // real completions instead of only the explicit code.
+    clauses.push("(a.actioncode = 'Completed' OR a.auditeventid IN (SELECT c.auditeventid FROM audit.auditeventchanges c WHERE lower(c.fieldname) = 'status' AND lower(c.newvalue) IN ('completed', 'done')))");
   } else if (filters.action === 'Uploaded Attachment') {
     // No code records 'Uploaded Attachment' as an actioncode. Uploads are captured as
     // 'Commented' events with metadatajson.hasAttachments=true (project chats) and as
@@ -242,7 +262,12 @@ const buildWhere = (
   if (filters.entityType) add('a.entitytypecode = ?', filters.entityType);
   if (filters.result) add('a.resultcode = ?', filters.result);
   if (filters.source) add('a.sourcecode = ?', filters.source);
-  if (filters.importantOnly) clauses.push('a.isimportant = TRUE');
+  if (filters.importantOnly) {
+    // "Important" means high-impact activity: events the recording site explicitly flagged as
+    // important, plus failed/blocked operations and destructive or security-sensitive actions
+    // regardless of how they were flagged at write time.
+    clauses.push("(a.isimportant = TRUE OR a.resultcode IN ('Failed', 'Blocked') OR a.actioncode IN ('Deleted', 'Archived', 'Unauthorized Access', 'Failed Operation'))");
+  }
   if (filters.deletedOnly) clauses.push("a.actioncode IN ('Deleted', 'Archived', 'Attachment Deleted', 'Deleted Attachment')");
   if (filters.failedOrBlockedOnly) clauses.push("a.resultcode IN ('Failed', 'Blocked')");
   if (filters.hrActivityOnly) clauses.push("a.modulecode IN ('Attendance', 'HR')");
@@ -328,4 +353,21 @@ export const findChanges = async (eventIds: string[]): Promise<Map<string, Activ
     grouped.set(String(row.auditeventid), list);
   }
   return grouped;
+};
+
+// Resolves current IAM display names for affected-user / user-entity references. Older events
+// were recorded with a bare frontend id (e.g. "usr-46") when the in-memory user store had not
+// warmed up, so the Activity Log falls back to the live IAM row at read time.
+export const findUserDisplayNames = async (frontendIds: string[]): Promise<Map<string, string>> => {
+  const map = new Map<string, string>();
+  const unique = [...new Set(frontendIds.filter(Boolean))];
+  const pks = unique.map((id) => toUserPkOrNull(id)).filter((n): n is number => n !== null);
+  if (pks.length === 0) return map;
+  const placeholders = pks.map((_, index) => `$${index + 1}`).join(', ');
+  const result = await query<{ userid: number; displayname: string }>(
+    `SELECT userid, displayname FROM iam.users WHERE organizationid = 1 AND userid IN (${placeholders})`,
+    pks
+  );
+  for (const row of result.rows) map.set(fromUserPk(row.userid), row.displayname);
+  return map;
 };

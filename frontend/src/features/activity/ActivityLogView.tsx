@@ -22,11 +22,12 @@ import {
 } from './activityTypes';
 
 // ─── Per-role module whitelists ─────────────────────────────────────────────
-// 'Settings' and 'HR' removed from module filter: Settings is internal admin-only
-// and HR is attendance-scoped; neither is a useful filter option for end users.
+// 'Settings', 'HR' and 'System' removed from module filter: Settings is internal admin-only,
+// HR is attendance-scoped, and System carries internal task-workflow codes (moved-to-review
+// etc.) — none is a useful filter option for end users.
 const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Reports'];
 const LEAD_MODULES   = [...MEMBER_MODULES];
-const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Authentication', 'Activity Log', 'Reports', 'System'];
+const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Authentication', 'Activity Log', 'Reports'];
 
 // Action lists. Every option below must map to an actioncode the backend actually records in
 // audit.auditevents — an option that never matches a real stored code would always return an
@@ -192,9 +193,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     if (showLeadTab && activeTab === 'lead') {
       return { ...f, myActivityOnly: false, hrActivityOnly: false };
     }
-    // Admin or HR: org-wide (backend enforces the Admin-actor exclusion for HR)
+    // Admin or HR: org-wide by default (backend enforces the Admin-actor exclusion for HR).
+    // The user's own "My activity only" toggle is respected — toggling it restricts the feed
+    // to events the current admin/HR user performed themselves.
     if (scope?.permanentRole === 'Admin' || scope?.isActiveHR) {
-      return { ...f, myActivityOnly: false, hrActivityOnly: false };
+      return { ...f, hrActivityOnly: false };
     }
     // My Work Activity (default): restrict to the viewer's own events
     return { ...f, myActivityOnly: true, hrActivityOnly: false };
