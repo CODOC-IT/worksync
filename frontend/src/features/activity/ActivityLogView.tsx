@@ -91,7 +91,15 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const [activeTab, setActiveTab] = useState<ActivityTab>('my-work');
 
   // ── Filter / pagination state ────────────────────────────────────────────
-  const [filters, setFilters] = useState<ActivityFilters>({ ...DEFAULT_ACTIVITY_FILTERS });
+  // "My activity only" defaults to ON for Team Members/Leads (own events first) and
+  // OFF for Admin/HR (org-wide first). Members can turn it off to widen their feed to
+  // their project scope — other members' events included, Admin events never.
+  const memberLike = currentRole !== 'Admin' && currentRole !== 'HR';
+  const defaultFilters = useMemo<ActivityFilters>(
+    () => ({ ...DEFAULT_ACTIVITY_FILTERS, myActivityOnly: memberLike }),
+    [memberLike],
+  );
+  const [filters, setFilters] = useState<ActivityFilters>({ ...DEFAULT_ACTIVITY_FILTERS, myActivityOnly: memberLike });
   const [searchInput, setSearchInput] = useState('');
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [selected, setSelected] = useState<ActivityItem | null>(null);
@@ -176,7 +184,7 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
       setPage(1);
       setTotal(0);
       setTotalPages(1);
-      setFilters({ ...DEFAULT_ACTIVITY_FILTERS });
+      setFilters({ ...DEFAULT_ACTIVITY_FILTERS, myActivityOnly: memberLike });
       setActiveTab('my-work');
     }
   }, [currentRole]);
@@ -203,8 +211,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     if (scope?.permanentRole === 'Admin' || scope?.isActiveHR) {
       return { ...f, hrActivityOnly: false };
     }
-    // My Work Activity (default): restrict to the viewer's own events
-    return { ...f, myActivityOnly: true, hrActivityOnly: false };
+    // My Work Activity (default): the viewer's own events. Turning "My activity only"
+    // off widens the feed to the viewer's project scope — shared projects and assigned
+    // tasks — which includes other members' events. Admin-performed events are always
+    // excluded by the backend, regardless of this toggle.
+    return { ...f, hrActivityOnly: false };
   }, [filters, scope, showLeadTab, activeTab]);
 
   // ── Debounced search ─────────────────────────────────────────────────────
@@ -300,11 +311,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
     });
   };
 
-  const clearAllFilters = () => { setSearchInput(''); setFilters({ ...DEFAULT_ACTIVITY_FILTERS }); setPage(1); };
+  const clearAllFilters = () => { setSearchInput(''); setFilters({ ...defaultFilters }); setPage(1); };
 
   const changeTab = (tab: ActivityTab) => {
     setActiveTab(tab);
-    setFilters((f) => ({ ...f, module: '', action: '', status: '', myActivityOnly: false, hrActivityOnly: false }));
+    setFilters((f) => ({ ...f, module: '', action: '', status: '', hrActivityOnly: false }));
     setPage(1);
   };
 
@@ -730,24 +741,22 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           />
         )}
 
-        {/* 8. Quick toggles. "My activity only" only makes sense for Admin/HR: a Team
-            Member's "My Work Activity" feed is always their own events (the backend member
-            scope is personal + shared-project events, and admin-performed events are never
-            shown to members), so the toggle must not be able to widen a member's view. */}
+        {/* 8. Quick toggles. "My activity only" defaults to ON for Team Members/Leads
+            (own events only) and OFF for Admin/HR (org-wide); turning it off for a member
+            widens the feed to their project scope — other members' events included, but
+            never Admin-performed events (backend-enforced). */}
         <div className="border-t border-white/5 pt-2 space-y-2">
+          <Toggle
+            checked={filters.myActivityOnly}
+            onChange={(v) => update('myActivityOnly', v)}
+            label="My activity only"
+          />
           {isAdmin && (
-            <>
-              <Toggle
-                checked={filters.myActivityOnly}
-                onChange={(v) => update('myActivityOnly', v)}
-                label="My activity only"
-              />
-              <Toggle
-                checked={filters.importantOnly}
-                onChange={(v) => update('importantOnly', v)}
-                label="Important activity only"
-              />
-            </>
+            <Toggle
+              checked={filters.importantOnly}
+              onChange={(v) => update('importantOnly', v)}
+              label="Important activity only"
+            />
           )}
         </div>
 
