@@ -587,6 +587,21 @@ test('Activity DTO: affected-user names resolve from IAM when snapshots are miss
   assert.equal(item.entityName, 'Other User', 'User entity name should resolve from IAM');
   assert.equal(item.description, 'Admin User added Other User to the project', 'Description ids should be replaced with names');
 });
+
+test('Activity feed: User entities with email entityidtext do not break the outcome filter', async () => {
+  // Failed-login events store the attempted email in entityidtext (not a usr-<n> id). The
+  // read-time name resolution must skip such references instead of throwing, otherwise the
+  // Outcome=Failed feed fails entirely for Admin/HR.
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, resultcode)
+    VALUES 
+    (191, 1, NULL, 'Login', 'User', 'failed@example.com', '00000000-0000-0000-0000-000000000191', 'Authentication', 'Failed login attempt for failed@example.com', NULL, 'Failed'),
+    (192, 1, 4, 'Created', 'Project', 'prj-ok', '00000000-0000-0000-0000-000000000192', 'Projects', 'Successful project creation', 'Team_Member', 'Successful')`);
+
+  const { listActivities } = await import('./activity.service.js');
+  const result = await listActivities({ result: 'Failed', page: 1, pageSize: 50 }, 'usr-1', 'Admin');
+  assert.equal(result.total, 1, 'Failed outcome should return only the failed event');
+  assert.equal(result.items[0].entityName, 'failed@example.com', 'Email entity id should be kept as the entity name');
+});
 test('HR: loses attendance scope after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);

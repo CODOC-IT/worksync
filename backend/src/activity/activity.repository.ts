@@ -361,7 +361,17 @@ export const findChanges = async (eventIds: string[]): Promise<Map<string, Activ
 export const findUserDisplayNames = async (frontendIds: string[]): Promise<Map<string, string>> => {
   const map = new Map<string, string>();
   const unique = [...new Set(frontendIds.filter(Boolean))];
-  const pks = unique.map((id) => toUserPkOrNull(id)).filter((n): n is number => n !== null);
+  // Not every "User" entity reference is a usr-<n> id — failed-login events, for example,
+  // store the attempted email in entityidtext. Non-usr ids must be skipped, never thrown on,
+  // or the whole feed fails for the filter that surfaces them.
+  const pks = unique.flatMap((id) => {
+    try {
+      const pk = toUserPkOrNull(id);
+      return pk === null ? [] : [pk];
+    } catch {
+      return [];
+    }
+  });
   if (pks.length === 0) return map;
   const placeholders = pks.map((_, index) => `$${index + 1}`).join(', ');
   const result = await query<{ userid: number; displayname: string }>(
