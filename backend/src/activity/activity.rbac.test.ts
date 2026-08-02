@@ -520,7 +520,7 @@ test('Action Filter: Assigned matches task (re)assignments too', async () => {
   const descriptions = result.rows.map((r: any) => r.description);
   assert.ok(descriptions.includes('Member assigned to project'), 'Should match Assigned code');
   assert.ok(descriptions.includes('Task assignee updated'), 'Should match Assigned/Reassigned task assignments');
-  assert.ok(!descriptions.includes('Member removed from project'), 'Should not match removal-only Reassigned events');
+  assert.ok(descriptions.includes('Member removed from project'), 'Should match removal-only Reassigned events');
   assert.ok(!descriptions.includes('Plain task update'), 'Should not match unrelated updates');
 });
 

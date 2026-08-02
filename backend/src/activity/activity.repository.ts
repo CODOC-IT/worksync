@@ -256,10 +256,11 @@ const buildWhere = (
     // so archives surface only under the 'Archived' option.
     clauses.push("(a.actioncode = 'Deleted' AND a.auditeventid NOT IN (SELECT c.auditeventid FROM audit.auditeventchanges c WHERE lower(c.fieldname) = 'status' AND lower(c.newvalue) = 'archived'))");
   } else if (filters.action === 'Assigned') {
-    // Project member additions are recorded as 'Assigned'; task (re)assignments are recorded
-    // as 'Assigned/Reassigned' (see task.service.updateTask). Both are assignment events, so
-    // the 'Assigned' filter matches them together.
-    clauses.push("(a.actioncode IN ('Assigned', 'Assigned/Reassigned'))");
+    // Project member changes are split into separate 'Assigned' (additions) and 'Reassigned'
+    // (removals) codes; task (re)assignments are recorded as 'Assigned/Reassigned'
+    // (see task.service.updateTask). All three are assignment events, so the 'Assigned'
+    // filter matches them together.
+    clauses.push("(a.actioncode IN ('Assigned', 'Assigned/Reassigned', 'Reassigned'))");
   } else if (filters.action === 'Completed') {
     // Completion is recorded as an explicit 'Completed' code (projects that auto-complete)
     // or as a status field change to 'Completed'/'Done' (projects and tasks). Match all

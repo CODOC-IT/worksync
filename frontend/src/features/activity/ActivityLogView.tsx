@@ -34,7 +34,11 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 // empty feed. Breaks and permission grants/revocations are not written to the audit table, so
 // they are deliberately absent here. Attachment uploads/deletions are represented by the
 // metadata/entity matches wired into backend/src/activity/activity.repository.ts.
-const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
+// Dead/duplicate options removed: 'Assigned/Reassigned' (reassignments and removals surface
+// under 'Assigned'), 'Mentioned' (a single legacy event; mentions are captured on 'Commented'
+// events), 'Deleted Attachment' (no ProjectFile deletions are ever recorded), 'Preference
+// Changed' (preference changes are not written to the audit table).
+const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Uploaded Attachment', 'Checked In', 'Checked Out'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS];
 // Admin and HR share one option set: every actioncode recorded across all modules.
 // 'Preference Changed', 'Assigned/Reassigned', permission events, and break events are
