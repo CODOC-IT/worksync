@@ -93,7 +93,12 @@ const toEditableSubtask = (parent: Task, subtask: Subtask, index: number): Task 
   };
 };
 
-export const TasksView: React.FC = () => {
+interface TasksViewProps {
+  initialTaskId?: string;
+  onInitialTaskConsumed?: () => void;
+}
+
+export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTaskConsumed }) => {
   const {
     currentRole,
     currentUser,
@@ -149,6 +154,18 @@ export const TasksView: React.FC = () => {
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
+  // Deep-link support: a caller (e.g. My Profile → Upcoming Deadlines) can ask the Tasks tab to
+  // open a specific task's detail drawer on mount. Honor it once, then let the user navigate freely.
+  useEffect(() => {
+    if (!initialTaskId) return;
+    const task = tasks.find((t) => t.id === initialTaskId);
+    if (task) {
+      void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
+    }
+    onInitialTaskConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTaskId]);
+
   // A project lead still has a Team_Member account.  Never leave an invisible
   // assigned-to-me predicate behind when the signed-in role changes.
   useEffect(() => {
@@ -172,6 +189,22 @@ export const TasksView: React.FC = () => {
     ),
     [currentRole, currentUser.id, projects]
   );
+  // The project filter must mirror the task API scope. Team Members can browse work
+  // for projects they participate in or lead; Admin and HR retain organization-wide
+  // task visibility. Archived projects are intentionally absent from the active list.
+  const taskFilterProjects = useMemo(() => projects.filter((project) => {
+    if (project.status === 'Archived') return false;
+    if (currentRole === 'Admin' || currentRole === 'HR') return true;
+    return project.memberIds.includes(currentUser.id)
+      || project.teamLeadId === currentUser.id
+      || project.createdBy === currentUser.id;
+  }), [currentRole, currentUser.id, projects]);
+
+  useEffect(() => {
+    if (projectFilter && !taskFilterProjects.some((project) => project.id === projectFilter)) {
+      setProjectFilter('');
+    }
+  }, [projectFilter, taskFilterProjects]);
 
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const taskEditApprovals = useMemo(() => systemApprovals.filter((approval) =>
@@ -1109,7 +1142,7 @@ export const TasksView: React.FC = () => {
             </label>
 
             <FilterSelect value={projectFilter} onChange={setProjectFilter} label="All projects">
-              {projects.map((project) => (
+              {taskFilterProjects.map((project) => (
                 <option key={project.id} value={project.id}>{getProjectName(project)}</option>
               ))}
             </FilterSelect>

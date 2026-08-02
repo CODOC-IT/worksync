@@ -35,6 +35,7 @@ const AppContent: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
   const [reportsInitialTab, setReportsInitialTab] = useState<string | undefined>(undefined);
+  const [tasksInitialId, setTasksInitialId] = useState<string | undefined>(undefined);
 
   const {
     currentRole,
@@ -184,6 +185,9 @@ const AppContent: React.FC = () => {
     if (tab === 'reports') {
       setReportsInitialTab(filterId || undefined);
     }
+    if (tab === 'tasks') {
+      setTasksInitialId(filterId || undefined);
+    }
     setCurrentTab(tab);
   };
 
@@ -234,7 +238,12 @@ const AppContent: React.FC = () => {
         <main className={`min-h-0 flex-1 min-w-0 overflow-y-auto p-4 md:p-6 ${currentTab === 'project-chats' ? '' : 'space-y-6'}`}>
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
           {currentTab === 'projects' && <ProjectsView />}
-          {currentTab === 'tasks' && <TasksView />}
+          {currentTab === 'tasks' && (
+            <TasksView
+              initialTaskId={tasksInitialId}
+              onInitialTaskConsumed={() => setTasksInitialId(undefined)}
+            />
+          )}
           {currentTab === 'attendance' && <AttendanceView />}
           {currentTab === 'profile' && <ProfileView onNavigate={handleNavigate} />}
           {currentTab === 'ai-assistant' && <AIAssistantView />}
