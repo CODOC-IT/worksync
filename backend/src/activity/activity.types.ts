@@ -58,6 +58,9 @@ export interface ActivityFilters {
   deletedOnly?: boolean;
   failedOrBlockedOnly?: boolean;
   hrActivityOnly?: boolean;
+  // Led Project Activity tab: restrict the feed to the viewer's led projects and
+  // events performed by current members of those projects only.
+  ledActivityOnly?: boolean;
   sort?: 'newest' | 'oldest';
   page: number;
   pageSize: number;

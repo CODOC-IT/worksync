@@ -92,7 +92,8 @@ export const insertActivity = async (input: ActivityRecordInput): Promise<string
 const visibilitySql = (
   viewerPk: number,
   effectiveRoles: EffectiveRoles,
-  paramIndex: number
+  paramIndex: number,
+  ledActivityOnly = false
 ): { clause: string; extraParams: unknown[] } => {
   const params: unknown[] = [viewerPk];
   const pi = paramIndex;
@@ -100,6 +101,43 @@ const visibilitySql = (
   // ── Admin: unrestricted within the organization ──────────────────────────────
   if (effectiveRoles.permanentRole === 'Admin') {
     return { clause: 'TRUE', extraParams: [] };
+  }
+
+  // ── Led Project Activity tab (non-Admin/non-HR viewers) ────────────────────
+  // The tab must show ONLY activity inside the viewer's led projects, performed by
+  // current members of those projects (Admin actors stay excluded everywhere).
+  // Led projects are the projectmembers rows carrying memberrolecode='TeamLead'
+  // (how project leads are recorded in this app) plus any iam-scoped temporary
+  // Team Lead assignments. Without this flag the lead tab would widen into the
+  // viewer's other member/task projects — every member's logs from unrelated
+  // projects. Both subqueries are non-correlated (outer-table independent) so the
+  // clause composes with the same param slots used elsewhere.
+  if (ledActivityOnly && effectiveRoles.permanentRole !== 'Admin' && !effectiveRoles.isActiveHR) {
+    const ledPredicates: string[] = [
+      `pmv.projectid IN (
+        SELECT pmlead.projectid FROM work.projectmembers pmlead
+        WHERE pmlead.userid = $${pi} AND pmlead.leftatutc IS NULL
+          AND pmlead.memberrolecode = 'TeamLead'
+      )`,
+    ];
+    if (effectiveRoles.leadProjectPks.length > 0) {
+      const leadIdx = params.length + 1;
+      params.push(effectiveRoles.leadProjectPks);
+      ledPredicates.push(`pmv.projectid = ANY($${leadIdx}::int[])`);
+    }
+    const ledProjectsSql = ledPredicates.join(' OR ');
+    return {
+      clause: `(a.projectid IN (
+          SELECT pmv.projectid FROM work.projectmembers pmv
+          WHERE pmv.leftatutc IS NULL AND (${ledProjectsSql})
+        )
+        AND a.actoruserid IN (
+          SELECT pmv.userid FROM work.projectmembers pmv
+          WHERE pmv.leftatutc IS NULL AND (${ledProjectsSql})
+        )
+        AND ${ADMIN_ACTOR_EXCLUSION})`,
+      extraParams: params.slice(1),
+    };
   }
 
   // ── Base scope: events the viewer is the actor for (all roles) ──────────────
@@ -196,7 +234,7 @@ const buildWhere = (
   const viewerPk = toUserPkOrNull(viewerId);
   if (viewerPk === null) throw new Error('Invalid authenticated user identifier.');
 
-  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1);
+  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1, filters.ledActivityOnly);
 
   // For Admin and HR the visibility clause needs no $1 viewerPk parameter.
   // For all other roles $1 is the viewerPk used inside the scoped predicates.

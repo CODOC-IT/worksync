@@ -140,7 +140,10 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
 
   const accessibleUsers = useMemo(() => {
     if (isAdmin || isHR) return users;
-    if (isTeamLead) {
+    // Anyone who leads a project via its projectmembers TeamLead row (not only iam
+    // Team Leads) gets the led-project member list — the Led tab's "Project member"
+    // dropdown and chips must reflect who actually belongs to the led projects.
+    if (isTeamLead || ledProjects.length > 0) {
       const ids = new Set(ledProjects.flatMap((p) => [...(p.memberIds || []), p.teamLeadId].filter(Boolean)));
       return users.filter((u) => ids.has(u.id) || u.id === currentUser.id);
     }
@@ -201,9 +204,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   const activeFiltersForRole = useMemo((): ActivityFilters => {
     const f = { ...filters };
 
-    // Led Project Activity tab: backend visibility covers it via RBAC, send no extra flags
-    if (showLeadTab && activeTab === 'lead') {
-      return { ...f, myActivityOnly: false, hrActivityOnly: false };
+    // Led Project Activity tab: the backend narrows the feed to the viewer's led
+    // projects and only events by those projects' current members — never the wider
+    // member/task-project scope (which would surface every member's logs).
+    if (activeTab === 'lead') {
+      return { ...f, myActivityOnly: false, hrActivityOnly: false, ledActivityOnly: true };
     }
     // Admin or HR: org-wide by default (backend enforces the Admin-actor exclusion for HR).
     // The user's own "My activity only" toggle is respected — toggling it restricts the feed
