@@ -1278,11 +1278,6 @@
   border-color: #80652E;
 }
 
-:root:not(.light) [data-login-page] {
-  background: #171A18 !important;
-  background-image: none !important;
-}
-
 :root:not(.light) [data-login-page] .blur-3xl {
   display: none;
 }
