@@ -213,3 +213,48 @@ export const getAnalytics = async (req: AuthenticatedRequest, res: Response): Pr
     res.status(500).json({ success: false, message: error.message || 'Failed to load analytics.' });
   }
 };
+
+// GET /notifications/analytics/users — Admin-only, per-user delivery/read analytics with
+// search + pagination + sort (see notification.service.ts's getUserAnalytics for the "which
+// user saw which notification, their interest, and their read percentage" breakdown).
+export const getUserAnalytics = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  if (req.user!.role !== 'Admin') {
+    res.status(403).json({ success: false, message: 'Only Admins can view notification delivery analytics.' });
+    return;
+  }
+
+  try {
+    const { search, page, pageSize, sortBy } = req.query;
+    const result = await service.getUserAnalytics({
+      search: typeof search === 'string' ? search : undefined,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+      sortBy: sortBy === 'readRate' || sortBy === 'name' ? sortBy : 'total'
+    });
+    res.json({ success: true, data: result.items, total: result.total });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load per-user analytics.' });
+  }
+};
+
+// GET /notifications/analytics/users/:userId — Admin-only drill-down: one user's full
+// category/type read breakdown, backing the analytics panel's per-user detail chart.
+export const getUserAnalyticsDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  if (req.user!.role !== 'Admin') {
+    res.status(403).json({ success: false, message: 'Only Admins can view notification delivery analytics.' });
+    return;
+  }
+
+  try {
+    const data = await service.getUserAnalyticsDetail(req.params.userId);
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load user analytics detail.' });
+  }
+};

@@ -4,7 +4,7 @@ import { motion } from 'motion/react';
 interface GlassCardProps {
   children: React.ReactNode;
   className?: string;
-  glowColor?: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'none';
+  glowColor?: 'cyan' | 'violet' | 'emerald' | 'amber' | 'magenta' | 'slate' | 'none';
   onClick?: () => void;
   hover3dTilt?: boolean;
 }

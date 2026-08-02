@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -11,15 +13,63 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Shield,
+  User as UserIcon,
   X,
   XCircle
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { Project, SystemApproval, Task } from '../../types';
+import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+
+// Account Change Requests -- HR/Lead/Member request a single-field change to their own account
+// (name, email, username, password). Rendered with friendly labels; requested passwords are never
+// displayed -- only "Password change requested".
+const ACCOUNT_FIELD_LABELS: Record<string, string> = {
+  name: 'Display Name',
+  email: 'Email',
+  username: 'Username',
+  password: 'Password',
+};
+
+function getAccountRequestedChanges(request: AccountChangeRequest): { field: string; value?: string }[] {
+  const list: { field: string; value?: string }[] = [];
+  if (request.passwordChangeRequested) {
+    list.push({ field: 'password' });
+  }
+  for (const [field, value] of Object.entries(request.requestedChanges || {})) {
+    if (field === 'password_hash' || field === 'password' || field === 'current_password_verified') continue;
+    list.push({ field, value });
+  }
+  return list;
+}
+
+// Project Management Approval Workflow (Team Lead -> Admin) -- rendered as its own section
+// below, separate from the legacy SystemApproval cards. See AppContext's projectApprovalRequests
+// / approveProjectApprovalRequest / rejectProjectApprovalRequest, backed by
+// backend/src/projects/projectApproval.*.
+const PROJECT_REQUEST_TYPE_META: Record<
+  ProjectApprovalRequestType,
+  { label: string; icon: React.ReactNode; description?: string }
+> = {
+  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
+  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
+  PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
+  PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
+  PROJECT_DELETE: {
+    label: 'Project Delete',
+    icon: <Trash2 size={13} />,
+    description: 'Remove this project from active work while keeping it recoverable.'
+  },
+  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
+};
 
 type StatusFilter = 'Pending' | 'Approved' | 'Rejected' | 'All';
 type TypeFilter = 'All' | SystemApproval['type'];
+type ReviewTarget =
+  | { kind: 'system'; action: 'approve' | 'reject'; item: SystemApproval }
+  | { kind: 'hr'; action: 'approve' | 'reject'; item: HRRequest }
+  | { kind: 'project'; action: 'approve' | 'reject'; item: ProjectApprovalRequest };
 
 const TYPE_META: Record<
   SystemApproval['type'],
@@ -55,7 +105,18 @@ const getApprovalProject = (
     return projects.find((project) => project.id === approval.targetId);
   }
 
-  const task = tasks.find((item) => item.id === approval.targetId);
+  if (approval.type === 'Task_Creation' && approval.projectId) {
+    return projects.find((project) => project.id === approval.projectId);
+  }
+
+  if (approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate && approval.projectId) {
+    return projects.find((project) => project.id === approval.projectId);
+  }
+
+  const task = tasks.find((item) =>
+    item.id === approval.targetId ||
+    item.subtasks.some((subtask) => subtask.id === approval.targetId)
+  );
 
   return task
     ? projects.find((project) => project.id === task.projectId)
@@ -68,18 +129,42 @@ const canDecide = (
   approval: SystemApproval,
   project: Project | undefined
 ): boolean => {
-  if (role === 'Admin') {
-    return true;
+  if (approval.requestedBy === userId) {
+    return false;
   }
 
   if (
     approval.type === 'Project_Creation' ||
     approval.type === 'Project_Deletion'
   ) {
-    return false;
+    return role === 'Admin';
   }
 
-  return Boolean(project && project.teamLeadId === userId);
+  if (approval.type === 'Task_Creation') {
+    return Boolean(
+      role === 'Team_Lead' &&
+      project &&
+      project.teamLeadId === userId
+    );
+  }
+
+  if (approval.type === 'Controlled_Edit') {
+    if (approval.proposedTaskUpdate) {
+      return Boolean(
+        role === 'Team_Lead' &&
+        project &&
+        project.teamLeadId === userId
+      );
+    }
+    return Boolean(
+      role === 'Admin' ||
+      (role === 'Team_Lead' &&
+        project &&
+        project.teamLeadId === userId)
+    );
+  }
+
+  return false;
 };
 
 export const ApprovalsInboxView: React.FC = () => {
@@ -91,10 +176,16 @@ export const ApprovalsInboxView: React.FC = () => {
     users,
     systemApprovals,
     hrRequests,
+    accountChangeRequests,
+    projectApprovalRequests,
     approveApprovalItem,
     rejectApprovalItem,
     approveHRRequest,
-    rejectHRRequest
+    rejectHRRequest,
+    approveProjectApprovalRequest,
+    rejectProjectApprovalRequest,
+    approveAccountChangeRequest,
+    rejectAccountChangeRequest
   } = useApp();
 
   const [statusFilter, setStatusFilter] =
@@ -107,6 +198,14 @@ export const ApprovalsInboxView: React.FC = () => {
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+  const [reviewingAccountRequestId, setReviewingAccountRequestId] = useState<string | null>(null);
+  const [rejectingAccountRequest, setRejectingAccountRequest] = useState<AccountChangeRequest | null>(null);
+  const [accountRejectionReason, setAccountRejectionReason] = useState('');
+  const [accountRejectionError, setAccountRejectionError] = useState('');
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewError, setReviewError] = useState('');
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
@@ -119,6 +218,9 @@ export const ApprovalsInboxView: React.FC = () => {
     }
 
     return systemApprovals.filter((approval) => {
+      if (approval.type === 'Task_Creation' || approval.type === 'Controlled_Edit') {
+        return false;
+      }
       const project = getApprovalProject(
         approval,
         projects,
@@ -133,6 +235,7 @@ export const ApprovalsInboxView: React.FC = () => {
       );
 
       const isOwnRequest =
+        !approval.proposedTaskUpdate &&
         approval.requestedBy === currentUser.id;
 
       return isDecidable || isOwnRequest;
@@ -160,89 +263,277 @@ export const ApprovalsInboxView: React.FC = () => {
     }
   );
 
-  const filteredHRRequests = hrRequests.filter(
+  const reviewableHRRequests = hrRequests.filter((request) => {
+    if (request.userId === currentUser.id) return false;
+    if (currentRole === 'HR') {
+      return request.approvalStage === 'HR';
+    }
+    if (currentRole === 'Admin') {
+      return request.approvalStage === 'Admin';
+    }
+    return false;
+  });
+
+  const filteredHRRequests = reviewableHRRequests.filter(
     (request) =>
-      statusFilter === 'All' ||
-      request.status === statusFilter
+      typeFilter === 'All' &&
+      (statusFilter === 'All' || request.status === statusFilter)
   );
 
   const pendingSystemCount = visibleApprovals.filter(
     (approval) => approval.status === 'Pending'
   ).length;
 
-  const pendingHRCount = hrRequests.filter(
+  const pendingHRCount = reviewableHRRequests.filter(
+    (request) => request.status === 'Pending'
+  ).length;
+
+  // Admin sees every request here (fetched pre-scoped to Pending by AppContext); a Team Lead
+  // sees only their own submitted requests (any status), fetched the same way -- so no further
+  // client-side visibility filtering is needed here, unlike systemApprovals above.
+  const filteredProjectApprovalRequests = projectApprovalRequests.filter(
+    (request) =>
+      (statusFilter === 'All' || request.status === statusFilter) &&
+      (typeFilter === 'All' ||
+        (typeFilter === 'Project_Creation' && request.requestType === 'PROJECT_CREATE') ||
+        (typeFilter === 'Project_Deletion' &&
+          (request.requestType === 'PROJECT_DELETE' ||
+            request.requestType === 'PROJECT_PERMANENT_DELETE')))
+  );
+  const pendingProjectApprovalCount = projectApprovalRequests.filter(
+    (request) => request.status === 'Pending'
+  ).length;
+
+  const reviewableAccountChangeRequests = accountChangeRequests.filter((request) => {
+    if (request.userId === currentUser.id) return false;
+    if (currentRole === 'Admin') {
+      return request.assignedApproverRole === 'Admin';
+    }
+    if (currentRole === 'HR') {
+      return request.assignedApproverRole === 'HR';
+    }
+    return false;
+  });
+
+  const filteredAccountChangeRequests = reviewableAccountChangeRequests.filter(
+    (request) => typeFilter === 'All' && (statusFilter === 'All' || request.status === statusFilter)
+  );
+
+  const pendingAccountChangeCount = reviewableAccountChangeRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
 
   const handleApprove = async (
     approval: SystemApproval
   ) => {
-    const result = await approveApprovalItem(approval.id);
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    setReviewTarget({ kind: 'system', action: 'approve', item: approval });
+    setReviewReason('');
+    setReviewError('');
   };
 
   const handleReject = async (
     approval: SystemApproval
   ) => {
-    const confirmed = window.confirm(
-      `Reject "${approval.targetTitle}"? This cannot be undone.`
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const result = await rejectApprovalItem(approval.id);
-
-    setNotice({
-      type: result.success ? 'success' : 'error',
-      message: result.message
-    });
+    setReviewTarget({ kind: 'system', action: 'reject', item: approval });
+    setReviewReason('');
+    setReviewError('');
   };
 
-  const handleHRApprove = (requestId: string) => {
-    const approvalNote = window.prompt(
-      'Enter an optional approval note:'
-    );
-
-    approveHRRequest(
-      requestId,
-      approvalNote?.trim() || undefined
-    );
-
-    setNotice({
-      type: 'success',
-      message: 'HR request approved successfully.'
-    });
+  const handleHRApprove = async (requestId: string) => {
+    const item = hrRequests.find((request) => request.id === requestId);
+    if (item) setReviewTarget({ kind: 'hr', action: 'approve', item });
+    setReviewReason('');
+    setReviewError('');
   };
 
-  const handleHRReject = (requestId: string) => {
-    const rejectionReason = window.prompt(
-      'Enter a reason for rejecting this request:'
-    );
+  const handleHRReject = async (requestId: string) => {
+    const item = hrRequests.find((request) => request.id === requestId);
+    if (item) setReviewTarget({ kind: 'hr', action: 'reject', item });
+    setReviewReason('');
+    setReviewError('');
+  };
 
-    if (!rejectionReason?.trim()) {
-      setNotice({
-        type: 'error',
-        message: 'A rejection reason is required.'
-      });
+  const handleProjectRequestApprove = async (request: ProjectApprovalRequest) => {
+    setReviewTarget({ kind: 'project', action: 'approve', item: request });
+    setReviewReason('');
+    setReviewError('');
+  };
 
+  const handleProjectRequestReject = async (request: ProjectApprovalRequest) => {
+    setReviewTarget({ kind: 'project', action: 'reject', item: request });
+    setReviewReason('');
+    setReviewError('');
+  };
+
+  const confirmReview = async () => {
+    if (!reviewTarget) return;
+    const reason = reviewReason.trim();
+    if (reviewTarget.action === 'reject' && !reason) {
+      setReviewError('A rejection reason is required.');
       return;
     }
+    setReviewLoading(true);
+    let result: { success: boolean; message: string };
+    if (reviewTarget.kind === 'system') {
+      result = reviewTarget.action === 'approve'
+        ? await approveApprovalItem(reviewTarget.item.id)
+        : await rejectApprovalItem(reviewTarget.item.id);
+    } else if (reviewTarget.kind === 'hr') {
+      result = reviewTarget.action === 'approve'
+        ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
+        : await rejectHRRequest(reviewTarget.item.id, reason);
+    } else {
+      result = reviewTarget.action === 'approve'
+        ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
+        : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+    }
+    setReviewLoading(false);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) setReviewTarget(null);
+  };
 
-    rejectHRRequest(
-      requestId,
-      rejectionReason.trim()
+  const renderReviewModal = () => reviewTarget && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div role="dialog" aria-modal="true" className="glass-panel w-full max-w-lg space-y-4 p-5">
+        <div>
+          <h2 className="text-lg font-bold text-white">
+            {reviewTarget.action === 'approve' ? 'Approve Request' : 'Reject Request'}
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            {reviewTarget.kind === 'system'
+              ? `${TYPE_META[reviewTarget.item.type].label}: ${reviewTarget.item.targetTitle}`
+              : reviewTarget.kind === 'project'
+                ? `${PROJECT_REQUEST_TYPE_META[reviewTarget.item.requestType].label}: ${reviewTarget.item.projectTitle}`
+                : `${reviewTarget.item.type.replace('_', ' ')} for ${reviewTarget.item.date}`}
+          </p>
+        </div>
+        <label className="block text-xs font-semibold text-slate-300">
+          Reason {reviewTarget.action === 'reject' ? '(required)' : '(optional)'}
+          <textarea value={reviewReason} onChange={(event) => { setReviewReason(event.target.value); setReviewError(''); }} rows={4} disabled={reviewLoading} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 p-3 text-sm text-white outline-none focus:border-cyan-500/50" />
+        </label>
+        {reviewError && <p className="text-xs text-rose-300">{reviewError}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" disabled={reviewLoading} onClick={() => setReviewTarget(null)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-slate-300 disabled:opacity-50">Cancel</button>
+          <button type="button" disabled={reviewLoading} onClick={confirmReview} className="glass-button-neon rounded-lg px-4 py-2 text-xs font-bold disabled:opacity-50">
+            {reviewLoading ? 'Processing…' : reviewTarget.action === 'approve' ? 'Confirm Approval' : 'Confirm Rejection'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const handleAccountApprove = async (request: AccountChangeRequest) => {
+    setReviewingAccountRequestId(request.id);
+    const result = await approveAccountChangeRequest(request.id);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    setReviewingAccountRequestId(null);
+  };
+
+  const openAccountRejectModal = (request: AccountChangeRequest) => {
+    setRejectingAccountRequest(request);
+    setAccountRejectionReason('');
+    setAccountRejectionError('');
+  };
+
+  const closeAccountRejectModal = () => {
+    if (reviewingAccountRequestId) return;
+    setRejectingAccountRequest(null);
+    setAccountRejectionReason('');
+    setAccountRejectionError('');
+  };
+
+  const handleAccountReject = async () => {
+    if (!rejectingAccountRequest) return;
+    const reason = accountRejectionReason.trim();
+    if (!reason) {
+      setAccountRejectionError('A rejection reason is required.');
+      return;
+    }
+    setReviewingAccountRequestId(rejectingAccountRequest.id);
+    const result = await rejectAccountChangeRequest(rejectingAccountRequest.id, reason);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    setReviewingAccountRequestId(null);
+    if (result.success) closeAccountRejectModal();
+  };
+
+  const renderAccountActions = (request: AccountChangeRequest) => {
+    if (request.status !== 'Pending') return null;
+    const submitting = reviewingAccountRequestId === request.id;
+    return (
+      <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => openAccountRejectModal(request)}
+          className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => handleAccountApprove(request)}
+          className="glass-button-neon rounded-lg px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? 'Submitting…' : 'Approve'}
+        </button>
+      </div>
     );
+  };
 
-    setNotice({
-      type: 'success',
-      message: 'HR request rejected successfully.'
-    });
+  const renderAccountRejectModal = () => {
+    if (!rejectingAccountRequest) return null;
+    const submitting = reviewingAccountRequestId === rejectingAccountRequest.id;
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-rejection-title"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeAccountRejectModal();
+        }}
+      >
+        <div className="glass-panel w-full max-w-lg space-y-4 p-5">
+          <div>
+            <h2 id="account-rejection-title" className="text-lg font-bold text-white">
+              Reject account change request
+            </h2>
+            <p className="mt-1 text-xs text-slate-400">
+              The requester will receive this reason in their notification.
+            </p>
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-slate-300">Reason</span>
+            <textarea
+              required
+              autoFocus
+              maxLength={1000}
+              rows={5}
+              value={accountRejectionReason}
+              disabled={submitting}
+              onChange={(event) => {
+                setAccountRejectionReason(event.target.value);
+                if (event.target.value.trim()) setAccountRejectionError('');
+              }}
+              className="w-full resize-y rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/50 disabled:opacity-60"
+              placeholder="Explain why this request is being rejected"
+            />
+          </label>
+          {accountRejectionError && (
+            <p className="text-xs text-rose-300" role="alert">{accountRejectionError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={submitting} onClick={closeAccountRejectModal} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="button" disabled={submitting || !accountRejectionReason.trim()} onClick={handleAccountReject} className="rounded-lg border border-rose-500/30 bg-rose-500/15 px-3 py-2 text-xs font-bold text-rose-300 disabled:cursor-not-allowed disabled:opacity-50">
+              {submitting ? 'Rejecting…' : 'Reject request'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderNotice = () => {
@@ -309,7 +600,7 @@ export const ApprovalsInboxView: React.FC = () => {
 
   if (isHR) {
     return (
-      <section className="mx-auto max-w-[1200px] space-y-5">
+      <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
         <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -322,16 +613,16 @@ export const ApprovalsInboxView: React.FC = () => {
             </h1>
 
             <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Review attendance corrections, leave requests
-              and break exception requests.
+              Review Team Member leave requests before they are forwarded
+              to Admin for final approval.
             </p>
           </div>
 
-          {pendingHRCount > 0 && (
+          {pendingHRCount + pendingAccountChangeCount > 0 && (
             <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
               <Clock size={13} />
-              {pendingHRCount} pending request
-              {pendingHRCount !== 1 ? 's' : ''}
+              {pendingHRCount + pendingAccountChangeCount} pending request
+              {pendingHRCount + pendingAccountChangeCount !== 1 ? 's' : ''}
             </span>
           )}
         </header>
@@ -391,7 +682,7 @@ export const ApprovalsInboxView: React.FC = () => {
                       </div>
 
                       <h3 className="font-semibold text-slate-100">
-                        {employee?.name || 'Unknown Employee'}
+                        {employee?.name || (request as any).userName || 'Unknown Employee'}
                       </h3>
 
                       <p className="text-xs text-slate-400">
@@ -518,6 +809,63 @@ export const ApprovalsInboxView: React.FC = () => {
             })}
           </div>
         )}
+
+        {currentRole === 'HR' && filteredAccountChangeRequests.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <UserIcon size={16} className="text-cyan-400" />
+              Account Change Requests
+            </h2>
+            {filteredAccountChangeRequests.map((request) => {
+              const employee = users.find((user) => user.id === request.userId);
+              return (
+                <div key={request.id} className="glass-panel space-y-4 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                          <UserIcon size={13} />
+                          Account Change
+                        </span>
+                        <StatusBadge status={request.status} size="sm" />
+                      </div>
+                      <h3 className="font-semibold text-slate-100">
+                        {employee?.name || request.userName || 'Unknown Employee'}
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+                  </div>
+
+                  {getAccountRequestedChanges(request).length > 0 && (
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
+                      <div className="space-y-1">
+                        {getAccountRequestedChanges(request).map(({ field, value }) => (
+                          <div key={field} className="flex items-baseline gap-2">
+                            <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
+                            <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
+                              {field === 'password' ? 'Password change requested' : value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {renderAccountActions(request)}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {renderAccountRejectModal()}
+        {renderReviewModal()}
       </section>
     );
   }
@@ -545,7 +893,7 @@ export const ApprovalsInboxView: React.FC = () => {
   }
 
   return (
-    <section className="mx-auto max-w-[1200px] space-y-5">
+    <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -559,16 +907,16 @@ export const ApprovalsInboxView: React.FC = () => {
 
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
             {currentRole === 'Admin'
-              ? 'Review project creation, task creation and controlled edit requests across every project.'
+              ? 'Review project management, attendance and leave requests that require Admin approval.'
               : 'Review requests for the projects you lead. Project creation proposals route to Admin.'}
           </p>
         </div>
 
-        {pendingSystemCount > 0 && (
+        {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount > 0 && (
           <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300">
             <Clock size={13} />
-            {pendingSystemCount} pending decision
-            {pendingSystemCount !== 1 ? 's' : ''}
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount} pending decision
+            {pendingSystemCount + pendingHRCount + pendingProjectApprovalCount + pendingAccountChangeCount !== 1 ? 's' : ''}
           </span>
         )}
       </header>
@@ -604,9 +952,7 @@ export const ApprovalsInboxView: React.FC = () => {
           [
             'All',
             'Project_Creation',
-            'Project_Deletion',
-            'Task_Creation',
-            'Controlled_Edit'
+            'Project_Deletion'
           ] as TypeFilter[]
         ).map((type) => (
           <button
@@ -626,7 +972,216 @@ export const ApprovalsInboxView: React.FC = () => {
         ))}
       </div>
 
-      {filteredApprovals.length === 0 ? (
+      {filteredProjectApprovalRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <FolderKanban size={16} className="text-cyan-400" />
+            Project Management Requests
+          </h2>
+          {filteredProjectApprovalRequests.map((request) => (
+            <div key={request.id} className="glass-panel space-y-3 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].icon}
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].label}
+                    </span>
+                    <StatusBadge status={request.status} size="sm" />
+                  </div>
+                  <h3 className="truncate font-semibold text-slate-100">{request.projectTitle}</h3>
+                  {PROJECT_REQUEST_TYPE_META[request.requestType].description && (
+                    <p className="text-xs text-slate-500">
+                      {PROJECT_REQUEST_TYPE_META[request.requestType].description}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-400">
+                    Requested by {request.requestedByName} · {new Date(request.createdAt).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</span>
+                <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+              </div>
+
+              {request.requestType === 'PROJECT_EDIT' && request.requestedChanges && (
+                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested changes</span>
+                  <div className="mt-1 space-y-1">
+                    {Object.entries(request.requestedChanges)
+                      .filter(([, value]) => value !== undefined)
+                      .map(([field, value]) => (
+                        <div key={field} className="flex items-center gap-2">
+                          <span className="text-slate-500">{field}:</span>
+                          <span className="text-emerald-300">{String(value)}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {request.decisionReason && (
+                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Decision note</span>
+                  <p className="mt-1 text-xs text-slate-300">{request.decisionReason}</p>
+                </div>
+              )}
+
+              {currentRole === 'Admin' && request.status === 'Pending' && (
+                <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => handleProjectRequestReject(request)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                  >
+                    <XCircle size={14} />
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleProjectRequestApprove(request)}
+                    className="glass-button-neon inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold"
+                  >
+                    <CheckCircle2 size={14} />
+                    Approve
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {currentRole === 'Admin' && filteredHRRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <Clock size={16} className="text-cyan-400" />
+            Attendance and Leave Requests
+          </h2>
+          {filteredHRRequests.map((request) => {
+            const employee = users.find((user) => user.id === request.userId);
+            return (
+              <div key={request.id} className="glass-panel space-y-4 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-300">
+                        {request.type === 'Leave' ? 'Leave Request' : 'Attendance Edit'}
+                      </span>
+                      <StatusBadge status={request.status} size="sm" />
+                    </div>
+                    <h3 className="mt-2 font-semibold text-white">
+                      {employee?.name || request.userName || 'Unknown Employee'}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Attendance date: {request.date} · Requested by {request.userName || employee?.name || 'Unknown'} · {request.submittedAt}
+                    </p>
+                  </div>
+                </div>
+
+                {request.type === 'Correction' ? (
+                  <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-2">
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">Current values</span>
+                      <p className="mt-1 text-slate-300">Check-in: {request.details.currentCheckIn === '' ? 'Not recorded' : request.details.currentCheckIn}</p>
+                      <p className="text-slate-300">Check-out: {request.details.currentCheckOut === '' ? 'Not recorded' : request.details.currentCheckOut}</p>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested values</span>
+                      <p className="mt-1 text-emerald-300">Check-in: {request.details.requestedCheckIn === '' ? 'Not recorded' : request.details.requestedCheckIn}</p>
+                      <p className="text-emerald-300">Check-out: {request.details.requestedCheckOut === '' ? 'Not recorded' : request.details.requestedCheckOut}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-3">
+                    <div><span className="block text-[10px] uppercase text-slate-500">Employee</span><span className="mt-1 block text-slate-200">{employee?.name || request.userName || 'Unknown'}</span></div>
+                    <div><span className="block text-[10px] uppercase text-slate-500">Leave type</span><span className="mt-1 block text-slate-200">{request.details.leaveType || 'Not provided'}</span></div>
+                    <div><span className="block text-[10px] uppercase text-slate-500">Date</span><span className="mt-1 block text-slate-200">{request.date}</span></div>
+                  </div>
+                )}
+
+                <div>
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Reason</span>
+                  <p className="mt-1 text-xs text-slate-300">{request.reason}</p>
+                </div>
+
+                {request.status === 'Pending' && (
+                  <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
+                    <button type="button" onClick={() => handleHRReject(request.id)} className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300">
+                      Reject
+                    </button>
+                    <button type="button" onClick={() => handleHRApprove(request.id)} className="glass-button-neon rounded-lg px-3 py-1.5 text-xs font-bold">
+                      Approve
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {currentRole === 'Admin' && filteredAccountChangeRequests.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <Shield size={16} className="text-cyan-400" />
+            Account Change Requests
+          </h2>
+          {filteredAccountChangeRequests.map((request) => {
+            const employee = users.find((user) => user.id === request.userId);
+            return (
+              <div key={request.id} className="glass-panel space-y-4 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                        <UserIcon size={13} />
+                        Account Change
+                      </span>
+                      <StatusBadge status={request.status} size="sm" />
+                    </div>
+                    <h3 className="font-semibold text-slate-100">
+                      {employee?.name || request.userName || 'Unknown Employee'}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
+                </div>
+
+                {getAccountRequestedChanges(request).length > 0 && (
+                  <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
+                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
+                    <div className="space-y-1">
+                      {getAccountRequestedChanges(request).map(({ field, value }) => (
+                        <div key={field} className="flex items-baseline gap-2">
+                          <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
+                          <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
+                            {field === 'password' ? 'Password change requested' : value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {renderAccountActions(request)}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {filteredApprovals.length === 0 &&
+      filteredProjectApprovalRequests.length === 0 &&
+      filteredAccountChangeRequests.length === 0 &&
+      !(currentRole === 'Admin' && filteredHRRequests.length > 0) ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <CheckCircle2
             className="text-slate-500"
@@ -706,7 +1261,44 @@ export const ApprovalsInboxView: React.FC = () => {
                   {approval.details}
                 </p>
 
-                {approval.proposedDiff && (
+                {approval.proposedTaskUpdate && approval.previousTaskSnapshot && (
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/40 text-xs">
+                    {([
+                      ['Title', 'title'],
+                      ['Description', 'description'],
+                      ['Priority', 'priority'],
+                      ['Start date', 'startDate'],
+                      ['Due date', 'dueDate']
+                    ] as const).map(([label, field]) => {
+                      const currentValue = approval.previousTaskSnapshot![field];
+                      const proposedValue = approval.proposedTaskUpdate![field];
+                      const changed = currentValue !== proposedValue;
+                      const displayValue = (value: string) => value === '' ? '(empty)' : value;
+                      return (
+                        <div key={field} className="grid gap-2 border-b border-white/5 p-3 last:border-b-0 sm:grid-cols-[7rem_1fr_1fr]">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                            {label}
+                          </span>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Current</span>
+                            <span className={changed ? 'text-slate-300' : 'text-slate-400'}>
+                              {displayValue(currentValue)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="mb-1 block text-[10px] text-slate-500">Proposed</span>
+                            <span className={changed ? 'text-emerald-300' : 'text-slate-400'}>
+                              {displayValue(proposedValue)}
+                              {!changed && <span className="ml-2 text-[10px] text-slate-600">(unchanged)</span>}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!approval.proposedTaskUpdate && approval.proposedDiff && (
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
                     <span className="block text-[10px] uppercase tracking-wider text-slate-500">
                       Proposed change —{' '}
@@ -759,6 +1351,8 @@ export const ApprovalsInboxView: React.FC = () => {
           })}
         </div>
       )}
+      {renderAccountRejectModal()}
+      {renderReviewModal()}
     </section>
   );
 };

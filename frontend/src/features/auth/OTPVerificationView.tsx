@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mail, RefreshCw, CheckCircle, AlertCircle, ArrowLeft, Shield } from 'lucide-react';
+import { UserRole } from '../../types';
 
 interface OTPVerificationViewProps {
   email: string;
   name: string;
   registrationData: {
     password: string;
-    role: string;
+    role: UserRole;
     department: string;
     title?: string;
   };
@@ -112,7 +113,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
       const res = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, name })
+        body: JSON.stringify({ email, name, role: registrationData.role })
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message);
@@ -130,6 +131,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
 
   return (
     <div
+      data-login-page
       className="min-h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 relative overflow-hidden"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(9,10,15,0.92), rgba(9,10,15,0.97)), url('/assets/images/auth-bg.png')`,

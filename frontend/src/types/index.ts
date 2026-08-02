@@ -4,12 +4,21 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  username?: string;
   role: UserRole;
   department: string;
-  avatar: string;
   title: string;
   status: 'active' | 'inactive' | 'away';
+  accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
+  invitationSentAtUtc?: string | null;
   lastActive?: string;
+  githubUsername?: string;
+  passwordHash?: string;
+  createdAt?: string;
+  activePermissions?: {
+    teamLead: boolean;
+    hr: boolean;
+  };
 }
 
 // 'Draft' and 'On Hold' mirror work.ProjectStatuses.StatusCode values ('Draft'/'OnHold') that
@@ -27,11 +36,14 @@ export interface Milestone {
 export interface ProjectFile {
   id: string;
   name: string;
-  size: string;
-  type: string;
+  size: number;
+  mimeType: string;
   uploadedBy: string;
   uploadedAt: string;
-  url: string;
+  // Only ever set locally, for a file just selected in the create/edit form and not yet uploaded
+  // -- the base64 data URL read via FileReader (see ProjectsView.tsx's handleFileSelect). A file
+  // already persisted (returned from the backend) never has this.
+  dataUrl?: string;
 }
 
 export interface Project {
@@ -53,6 +65,7 @@ export interface Project {
   pinnedMessagesCount?: number;
   tags: string[];
   creationReason?: string;
+  createdAt?: string;
 }
 
 export type TaskStatus = 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
@@ -79,7 +92,21 @@ export interface TaskComment {
 export interface Subtask {
   id: string;
   title: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  startDate?: string;
+  dueDate?: string;
+  assigneeIds?: string[];
   completed: boolean;
+}
+
+// A Project Lead's per-subtask verdict when rejecting a parent task's review — see
+// backend/src/tasks/task.service.ts's decideReview. Only completed subtasks need one.
+export interface SubtaskReviewDecision {
+  subtaskId: string;
+  decision: 'Accept' | 'Reject';
+  comment?: string;
 }
 
 export interface ControlledEditRequest {
@@ -94,11 +121,22 @@ export interface ControlledEditRequest {
   createdAt: string;
 }
 
+export interface ProposedTaskUpdate {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  startDate: string;
+  dueDate: string;
+}
+
 // Project Board (Kanban) status-change audit trail. Mirrors work.TaskStatusHistory
 // in the PostgreSQL schema (see database/04_work_tables.sql) so a future write-path
 // can persist these entries without reshaping them.
 export interface TaskStatusHistoryEntry {
   id: string;
+  /** The task this entry belongs to. A parent task's history also includes its subtasks'
+   *  entries, so the board's task detail can attribute "completed by / at" per subtask. */
+  taskId?: string;
   fromStatus: TaskStatus;
   toStatus: TaskStatus;
   note: string;
@@ -113,19 +151,31 @@ export interface Task {
   id: string;
   taskNumber: string;
   projectId: string;
+  parentTaskId?: string;
   title: string;
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string;
+  assigneeIds?: string[];
   creatorId: string;
   dueDate: string;
   estimatedHours: number;
+  subtaskCount?: number;
+  /** Subtask progress, all server-computed (see backend/src/tasks/task.repository.ts) — the
+   *  board renders these directly and never recounts from local state, so a card's progress is
+   *  always what the database says it is. */
+  completedSubtaskCount?: number;
+  subtaskProgress?: number; // 0-100 whole-number percentage
+  /** When this task itself entered a completed state (ISO). */
+  completedAt?: string;
   subtasks: Subtask[];
   dependencies: string[]; // array of Task IDs
   tags: string[];
   attachments: TaskAttachment[];
   approvalStatus: 'Approved' | 'Pending Approval' | 'Rejected';
+  /** Server-derived unresolved task-edit approval state. */
+  hasPendingApproval?: boolean;
   pendingEdit?: ControlledEditRequest;
   blockerReason?: string;
   workSummary?: string;
@@ -135,6 +185,10 @@ export interface Task {
   // Project Board fields — populated by AppContext.updateTaskStatus (Kanban & task details).
   statusHistory?: TaskStatusHistoryEntry[];
   reviewApproval?: ReviewApprovalStatus;
+  /** True when this task is read-only because its parent project is archived. */
+  isArchived?: boolean;
+  /** Project-driven archive time supplied by the Task API. */
+  archivedAt?: string;
 }
 
 export type BreakType = 'Lunch' | 'Short Break' | 'Other';
@@ -145,6 +199,9 @@ export interface WorkBreak {
   startTime: string;
   endTime?: string;
   durationMinutes: number;
+  durationSeconds?: number;
+  startedAtUtc?: string;
+  endedAtUtc?: string;
 }
 
 export interface AttendanceRecord {
@@ -154,7 +211,7 @@ export interface AttendanceRecord {
   checkIn: string; // HH:mm
   checkOut?: string; // HH:mm
   totalHours: number;
-  status: 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
+  status: 'In Session' | 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
   breaks: WorkBreak[];
 }
 
@@ -163,20 +220,79 @@ export type HRRequestType = 'Correction' | 'Leave' | 'Break_Exception';
 export interface HRRequest {
   id: string;
   userId: string;
+  userName?: string;
   type: HRRequestType;
   date: string;
   reason: string;
   status: 'Pending' | 'Approved' | 'Rejected';
+  approvalStage?: 'HR' | 'Admin';
+  requesterRole?: UserRole;
   details: {
+    currentCheckIn?: string;
+    currentCheckOut?: string;
     requestedCheckIn?: string;
     requestedCheckOut?: string;
-    leaveType?: 'Casual' | 'Sick' | 'Annual' | 'Unpaid';
+    currentBreaks?: WorkBreak[];
+    requestedBreaks?: WorkBreak[];
+    attendanceChangeReason?: string;
+    leaveType?: 'Full Day Leave' | 'Half Day Leave';
+    leavePeriod?: 'First Half' | 'Second Half';
     leaveDays?: number;
     extraBreakMinutes?: number;
   };
   submittedAt: string;
   decidedBy?: string;
   decisionReason?: string;
+}
+
+// Account Change Request — submitted from My Profile when HR/Lead/Member need to modify
+// their own account information (name, username, email, password). Exactly one field is
+// requested per request. Routed to the appropriate approver based on the requester's role
+// and displayed in the existing Approval Inbox.
+export interface AccountChangeRequest {
+  id: string;
+  userId: string;
+  userName?: string;
+  requesterRole?: UserRole;
+  requestType: 'Account_Change';
+  requestedField?: 'name' | 'email' | 'username' | 'password';
+  requestedChanges: Record<string, string>;
+  passwordChangeRequested?: boolean;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  assignedApproverRole: 'Admin' | 'HR';
+  submittedAt: string;
+  decidedBy?: string;
+  decisionReason?: string;
+  decidedAt?: string;
+}
+
+// Persisted Project Management Approval Workflow (Team Lead -> Admin). SystemApproval below
+// remains the legacy UI shape; these six discriminators are the authoritative API/database
+// request types backed by work.ProjectApprovalRequests.
+export type ProjectApprovalRequestType =
+  | 'PROJECT_CREATE'
+  | 'PROJECT_EDIT'
+  | 'PROJECT_ARCHIVE'
+  | 'PROJECT_RESTORE'
+  | 'PROJECT_DELETE'
+  | 'PROJECT_PERMANENT_DELETE';
+
+export interface ProjectApprovalRequest {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  requestType: ProjectApprovalRequestType;
+  requestedByUserId: string;
+  requestedByName: string;
+  requestedChanges: Record<string, unknown> | null;
+  reason: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  reviewedByUserId?: string;
+  reviewedByName?: string;
+  decisionReason?: string;
+  createdAt: string;
+  decidedAt?: string;
 }
 
 export interface SystemApproval {
@@ -189,11 +305,25 @@ export interface SystemApproval {
   createdAt: string;
   details: string;
   status: 'Pending' | 'Approved' | 'Rejected' | 'Clarification_Requested';
+  projectId?: string;
+  proposedTask?: {
+    projectId: string;
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    startDate?: string;
+    dueDate: string;
+    assigneeIds: string[];
+    status: TaskStatus;
+    parentTaskId?: string;
+  };
   proposedDiff?: {
     field: string;
     oldValue: string;
     newValue: string;
   };
+  proposedTaskUpdate?: ProposedTaskUpdate;
+  previousTaskSnapshot?: ProposedTaskUpdate;
 }
 
 export interface ChatMessage {
@@ -326,6 +456,12 @@ export type NotificationType =
   | 'task_due_tomorrow'
   | 'task_overdue'
   | 'checklist_completed'
+  | 'subtask_assigned'
+  | 'subtask_completed'
+  | 'subtask_reopened'
+  | 'subtask_due_today'
+  | 'subtask_overdue'
+  | 'task_reopened'
   | 'comment_added'
   | 'mention'
   | 'attachment_uploaded'
@@ -423,6 +559,31 @@ export interface NotificationAnalyticsRow {
   readRate: number; // percentage, 0-100
 }
 
+// One row per user — who received/read what, and their "interest" (the category they read the
+// most of), for the Admin-only per-user analytics drill-down (backend's getUserAnalytics).
+export interface UserNotificationAnalyticsRow {
+  userId: string;
+  name: string;
+  email: string;
+  totalReceived: number;
+  totalDelivered: number;
+  totalRead: number;
+  readRate: number; // percentage, 0-100
+  topInterest: string | null;
+  lastNotifiedAt: string | null;
+  lastReadAt: string | null;
+}
+
+// One row per notification type, for a single user — backs the analytics drawer's interest
+// breakdown chart.
+export interface UserNotificationCategoryBreakdown {
+  category: string;
+  type: NotificationType;
+  total: number;
+  read: number;
+  readRate: number;
+}
+
 export type ToastTone = 'success' | 'info' | 'warning' | 'error';
 
 export interface ToastItem {
@@ -436,7 +597,6 @@ export interface ActivityLogItem {
   id: string;
   userId: string;
   userName: string;
-  userAvatar: string;
   action: string;
   targetType: 'Project' | 'Task' | 'Attendance' | 'Approval' | 'Settings';
   targetId: string;
@@ -454,20 +614,34 @@ export interface CalendarEvent {
   title: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  type: 'Deadline' | 'Milestone' | 'Leave' | 'Meeting' | 'Review';
+  type: 'Deadline' | 'Milestone' | 'Leave';
   projectId?: string;
   taskId?: string;
 }
 
-export interface WeeklySummaryDraft {
+// An approved HR leave request, read-only on the Calendar. Backed by
+// GET /api/calendar/approved-leave (backend/src/calendar/), which reads the same
+// public.worksync_hr_requests rows the HR approval flow already writes -- this is a display-only
+// projection, not a duplicate leave record.
+export interface ApprovedLeaveEntry {
   id: string;
-  projectId: string;
-  weekEnding: string;
-  progressSummary: string;
-  blockersText: string;
-  overdueTasksCount: number;
-  completedTasksCount: number;
-  keyHighlights: string[];
-  recipientChannel: 'Project Chat' | 'Email Digest' | 'Executive Report';
-  generatedAt: string;
+  userId: string;
+  userName: string;
+  date: string; // YYYY-MM-DD
+  leaveType: 'Full Day Leave' | 'Half Day Leave';
+}
+
+// A Calendar-displayed holiday. hr.Holidays (database/06_hr_tables.sql) is the single source of
+// truth via GET/POST/PUT/DELETE /api/calendar/holidays (backend/src/calendar/) -- HR-only for
+// create/update/delete (enforced server-side via effectiveRoles.ts), visible to every role.
+// `date` for a recurring holiday is one representative occurrence; the Calendar re-derives
+// month/day from it and repeats across every displayed year (see calendarRules.ts's
+// buildHolidayEntries).
+export interface Holiday {
+  id: string;
+  name: string;
+  date: string; // YYYY-MM-DD
+  isRecurringAnnual: boolean;
+  createdByUserId: string;
+  createdAt: string;
 }

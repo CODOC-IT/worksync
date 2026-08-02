@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../../store/AppContext';
 import {
+  Users,
   LayoutDashboard,
   FolderKanban,
   CheckSquare,
@@ -11,10 +12,8 @@ import {
   Clock,
   Sparkles,
   MessageSquare,
-  FileSpreadsheet,
   CheckCircle,
   Bell,
-  Settings,
   User,
   ShieldCheck,
   ChevronLeft,
@@ -39,11 +38,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   mobileOpen,
   onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, notifications } = useApp();
+  const { currentRole, currentUser, systemApprovals, hrRequests, accountChangeRequests, notifications, logoutUser } = useApp();
 
-  const pendingApprovalsCount = systemApprovals.filter((sa) => sa.status === 'Pending').length;
-  const pendingHrCount = hrRequests.filter((r) => r.status === 'Pending').length;
+  const pendingApprovalsCount = systemApprovals.filter((sa) =>
+    sa.status === 'Pending' &&
+    sa.type !== 'Task_Creation' &&
+    sa.type !== 'Controlled_Edit'
+  ).length;
+  const pendingHrCount = hrRequests.filter((request) =>
+    request.status === 'Pending' &&
+    request.userId !== currentUser.id &&
+    ((currentRole === 'HR' && request.approvalStage === 'HR') ||
+      (currentRole === 'Admin' && request.approvalStage === 'Admin'))
+  ).length;
+  const pendingAccountChangeCount = accountChangeRequests.filter((request) =>
+    request.status === 'Pending' &&
+    request.userId !== currentUser.id &&
+    ((currentRole === 'HR' && request.assignedApproverRole === 'HR') ||
+      (currentRole === 'Admin' && request.assignedApproverRole === 'Admin'))
+  ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
+
+  const totalPendingHR = pendingHrCount + pendingAccountChangeCount;
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -56,23 +72,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   label: 'Approvals Inbox',
   icon: CheckCircle,
   badge:
-    currentRole === 'HR' && pendingHrCount > 0
-      ? pendingHrCount
+    currentRole === 'HR' && totalPendingHR > 0
+        ? totalPendingHR
       : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
-          pendingApprovalsCount > 0
-        ? pendingApprovalsCount
+          pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0) > 0
+        ? pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0)
         : undefined,
   hidden: currentRole === 'Team_Member'
 },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, highlight: true },
     { id: 'project-chats', label: 'Project Chats', icon: MessageSquare },
-    { id: 'weekly-summary', label: 'Weekly Summary', icon: FileSpreadsheet },
+    { id: 'members', label: 'Members', icon: Users },
     { id: 'calendar', label: 'Calendar', icon: Calendar },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
     { id: 'activity', label: 'Activity Log', icon: Activity },
     { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadNotifsCount > 0 ? unreadNotifsCount : undefined },
-    { id: 'profile', label: 'My Profile', icon: User },
-    { id: 'settings', label: 'Settings', icon: Settings }
+    { id: 'profile', label: 'My Profile', icon: User }
   ];
 
 const sidebarContent = (
@@ -197,7 +212,7 @@ const sidebarContent = (
       <div className="p-3 border-t border-white/10 shrink-0">
         <button
           data-sidebar-logout
-          onClick={() => onTabChange('login')}
+          onClick={() => { logoutUser(); onTabChange('login'); }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/20 border border-transparent transition-colors"
           title={collapsed ? 'Switch / Logout' : undefined}
         >

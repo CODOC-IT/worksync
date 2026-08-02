@@ -1,14 +1,39 @@
 import { query, withTransaction } from '../db/pool.js';
 import { getPriorityId } from '../projects/project.repository.js';
-import { TaskAssigneeRow, TaskRow, TaskStatusHistoryRow } from './task.types.js';
+import {
+  TaskAssigneeRow,
+  TaskEditApprovalInput,
+  TaskEditApprovalRow,
+  TaskRow,
+  TaskStatusHistoryRow
+} from './task.types.js';
 
 export { getPriorityId };
 
 const TASK_COLUMNS = `
-  t.taskid, t.projectid, t.tasknumber, t.title, t.description,
+  t.taskid, t.projectid, t.parenttaskid, t.tasknumber, t.title, t.description,
   ts.statuscode, pr.prioritycode, t.startdate::text, t.duedate::text,
   t.createdbyuserid, t.completedatutc, t.completionsummary, t.archivedatutc,
-  t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode
+  t.projectarchivedatutc,
+  t.createdatutc, t.updatedatutc, t.rowversion, p.projectcode,
+  (SELECT COUNT(*)::int FROM work.tasks st WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL) AS subtaskcount,
+  -- Completed-subtask tally, derived from work.TaskStatuses.IsCompletedState rather than a
+  -- hardcoded 'Done' string, so it stays correct if another completed state is ever added.
+  -- Selected alongside subtaskcount so the board's progress bar comes from the database on
+  -- every read (list AND detail) instead of being recomputed from client state.
+  (SELECT COUNT(*)::int FROM work.tasks st
+     JOIN work.taskstatuses sts ON sts.taskstatusid = st.taskstatusid
+   WHERE st.parenttaskid = t.taskid AND st.archivedatutc IS NULL AND sts.iscompletedstate) AS completedsubtaskcount,
+  EXISTS (
+    SELECT 1
+    FROM work.taskchangerequests cr
+    JOIN work.changerequesttypes crt ON crt.changerequesttypeid = cr.changerequesttypeid
+    WHERE cr.taskid = t.taskid
+      AND cr.requeststatus = 'Pending'
+      AND cr.cancelledatutc IS NULL
+      AND crt.typecode = 'Description'
+      AND cr.requestreason = 'Controlled task edit approval'
+  ) AS haspendingeditapproval
 `;
 
 const TASK_JOINS = `
@@ -41,14 +66,30 @@ export const getTaskStatusMeta = async (
 
 export const findAllTasks = async (): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.archivedatutc IS NULL ORDER BY t.taskid`
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL AND t.projectarchivedatutc IS NULL
+     ORDER BY t.taskid`
   );
   return result.rows;
 };
 
-export const findTasksForProject = async (projectId: number): Promise<TaskRow[]> => {
+export const findArchivedProjectTasks = async (): Promise<TaskRow[]> => {
   const result = await query<TaskRow>(
-    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.projectid = $1 AND t.archivedatutc IS NULL ORDER BY t.taskid`,
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.parenttaskid IS NULL AND t.archivedatutc IS NULL AND t.projectarchivedatutc IS NOT NULL
+     ORDER BY t.taskid`
+  );
+  return result.rows;
+};
+
+export const findTasksForProject = async (projectId: number, archived = false): Promise<TaskRow[]> => {
+  const result = await query<TaskRow>(
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS}
+     WHERE t.projectid = $1
+       AND t.parenttaskid IS NULL
+       AND t.archivedatutc IS NULL
+       AND t.projectarchivedatutc IS ${archived ? 'NOT NULL' : 'NULL'}
+     ORDER BY t.taskid`,
     [projectId]
   );
   return result.rows;
@@ -57,6 +98,24 @@ export const findTasksForProject = async (projectId: number): Promise<TaskRow[]>
 export const findTaskById = async (taskId: number): Promise<TaskRow | null> => {
   const result = await query<TaskRow>(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.taskid = $1`, [taskId]);
   return result.rows[0] || null;
+};
+
+export const findChildTasks = async (parentTaskId: number): Promise<TaskRow[]> => {
+  const result = await query<TaskRow>(
+    `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parenttaskid = $1 AND t.archivedatutc IS NULL ORDER BY t.taskid`,
+    [parentTaskId]
+  );
+  return result.rows;
+};
+
+export const findSubtaskCounts = async (parentTaskIds: number[]): Promise<Array<{ parenttaskid: number; subtaskcount: number }>> => {
+  if (parentTaskIds.length === 0) return [];
+  const result = await query<{ parenttaskid: number; subtaskcount: number }>(
+    `SELECT parenttaskid, COUNT(*)::int AS subtaskcount FROM work.tasks
+     WHERE parenttaskid = ANY($1::bigint[]) AND archivedatutc IS NULL GROUP BY parenttaskid`,
+    [parentTaskIds]
+  );
+  return result.rows;
 };
 
 export const findAssigneesForTask = async (taskId: number): Promise<TaskAssigneeRow[]> => {
@@ -86,6 +145,7 @@ const getNextTaskNumber = async (runQuery: typeof query, projectId: number): Pro
 
 export interface InsertTaskRow {
   projectId: number;
+  parentTaskId?: number;
   title: string;
   description: string;
   statusId: number;
@@ -96,18 +156,18 @@ export interface InsertTaskRow {
   assigneeUserIds: number[];
 }
 
-export const insertTask = async (input: InsertTaskRow): Promise<number> =>
-  withTransaction(async (runQuery) => {
+const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow): Promise<number> => {
     const taskNumber = await getNextTaskNumber(runQuery, input.projectId);
 
     const inserted = await runQuery<{ taskid: number }>(
       `INSERT INTO work.tasks
-         (projectid, tasknumber, title, description, taskstatusid, priorityid, startdate,
+         (projectid, parenttaskid, tasknumber, title, description, taskstatusid, priorityid, startdate,
           duedate, createdbyuserid)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING taskid`,
       [
         input.projectId,
+        input.parentTaskId || null,
         taskNumber,
         input.title,
         input.description,
@@ -138,7 +198,157 @@ export const insertTask = async (input: InsertTaskRow): Promise<number> =>
       [taskId, input.statusId, input.createdByUserId]
     );
 
-    return taskId;
+  return taskId;
+};
+
+export const insertTask = async (input: InsertTaskRow): Promise<number> =>
+  withTransaction((runQuery) => insertTaskWithQuery(runQuery, input));
+
+export const insertTaskEditApproval = async (
+  task: TaskRow,
+  requestedByUserId: number,
+  reviewerUserId: number,
+  previous: TaskEditApprovalInput,
+  proposed: TaskEditApprovalInput
+): Promise<number> => withTransaction(async (runQuery) => {
+  await runQuery('SELECT taskid FROM work.tasks WHERE taskid = $1 FOR UPDATE', [task.taskid]);
+  const type = await runQuery<{ changerequesttypeid: number }>(
+    `SELECT changerequesttypeid FROM work.changerequesttypes
+     WHERE typecode = 'Description' AND isenabled`
+  );
+  if (!type.rows[0]) throw new Error('Task change request type is not configured.');
+  const existing = await runQuery<{ changerequestid: number }>(
+    `SELECT cr.changerequestid
+       FROM work.taskchangerequests cr
+      WHERE cr.taskid = $1
+        AND cr.changerequesttypeid = $2
+        AND cr.requeststatus = 'Pending'
+        AND cr.cancelledatutc IS NULL`,
+    [task.taskid, type.rows[0].changerequesttypeid]
+  );
+  if (existing.rows[0]) throw new Error('This task already has a pending edit request.');
+
+  const inserted = await runQuery<{ changerequestid: number }>(
+    `INSERT INTO work.taskchangerequests
+       (taskid, changerequesttypeid, requestedbyuserid, requestreason, requeststatus,
+        assignedrevieweruserid, submittedatutc)
+     VALUES ($1, $2, $3, $4, 'Pending', $5, CURRENT_TIMESTAMP)
+     RETURNING changerequestid`,
+    [
+      task.taskid,
+      type.rows[0].changerequesttypeid,
+      requestedByUserId,
+      'Controlled task edit approval',
+      reviewerUserId
+    ]
+  );
+  const requestId = inserted.rows[0].changerequestid;
+
+  await runQuery(
+    `INSERT INTO work.taskchangerequestitems
+       (changerequestid, fieldcode, oldvaluejson, proposedvaluejson)
+     VALUES ($1, 'taskUpdate', $2, $3)`,
+    [requestId, JSON.stringify(previous), JSON.stringify(proposed)]
+  );
+  return requestId;
+});
+
+export const findPendingTaskEditApprovalsForReviewer = async (
+  reviewerUserId: number
+): Promise<TaskEditApprovalRow[]> => {
+  const result = await query<TaskEditApprovalRow>(
+    `SELECT cr.changerequestid, cr.taskid, t.projectid, t.title AS tasktitle,
+            cr.requestedbyuserid, cr.requeststatus, cr.submittedatutc,
+            i.fieldcode, i.oldvaluejson, i.proposedvaluejson
+       FROM work.taskchangerequests cr
+       JOIN work.tasks t ON t.taskid = cr.taskid
+       JOIN work.projects p ON p.projectid = t.projectid
+       JOIN work.changerequesttypes ct ON ct.changerequesttypeid = cr.changerequesttypeid
+       LEFT JOIN work.taskchangerequestitems i ON i.changerequestid = cr.changerequestid
+      WHERE cr.assignedrevieweruserid = $1
+        AND cr.requeststatus = 'Pending'
+        AND cr.cancelledatutc IS NULL
+        AND t.archivedatutc IS NULL
+        AND t.projectarchivedatutc IS NULL
+        AND p.archivedatutc IS NULL
+        AND ct.typecode = 'Description'
+        AND cr.requestreason = 'Controlled task edit approval'
+      ORDER BY cr.submittedatutc DESC, cr.changerequestid DESC`,
+    [reviewerUserId]
+  );
+  return result.rows;
+};
+
+export const decideTaskEditApproval = async (
+  requestId: number,
+  reviewerUserId: number,
+  decision: 'Approved' | 'Rejected',
+  proposed: TaskEditApprovalInput
+): Promise<number | null> => withTransaction(async (runQuery) => {
+  const locked = await runQuery<{ taskid: number }>(
+    `SELECT taskid FROM work.taskchangerequests
+      WHERE changerequestid = $1
+        AND assignedrevieweruserid = $2
+        AND requeststatus = 'Pending'
+      FOR UPDATE`,
+    [requestId, reviewerUserId]
+  );
+  if (!locked.rows[0]) return null;
+
+  if (decision === 'Approved') {
+    const priority = await runQuery<{ priorityid: number }>(
+      'SELECT priorityid FROM work.priorities WHERE prioritycode = $1',
+      [proposed.priority === 'Urgent' ? 'Critical' : proposed.priority]
+    );
+    if (!priority.rows[0]) throw new Error('Unknown task priority.');
+    await runQuery(
+      `UPDATE work.tasks
+          SET title = $1, description = $2, priorityid = $3, startdate = $4, duedate = $5
+        WHERE taskid = $6 AND archivedatutc IS NULL`,
+      [
+        proposed.title,
+        proposed.description,
+        priority.rows[0].priorityid,
+        proposed.startDate,
+        proposed.dueDate,
+        locked.rows[0].taskid
+      ]
+    );
+  }
+
+  await runQuery(
+    `UPDATE work.taskchangerequests
+        SET requeststatus = $1, decisionatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP
+      WHERE changerequestid = $2`,
+    [decision, requestId]
+  );
+  await runQuery(
+    `INSERT INTO work.changerequestreviews
+       (changerequestid, revieweruserid, reviewaction, reviewerrolecode)
+     VALUES ($1, $2, $3, 'TeamLead')`,
+    [requestId, reviewerUserId, decision]
+  );
+  return locked.rows[0].taskid;
+});
+
+// Parent and children are persisted in one transaction, so a failed child validation/write
+// cannot leave an orphaned parent task behind.
+export const insertTaskBundle = async (
+  parent: InsertTaskRow,
+  children: Omit<InsertTaskRow, 'projectId' | 'parentTaskId' | 'createdByUserId'>[]
+): Promise<{ parentTaskId: number; childTaskIds: number[] }> =>
+  withTransaction(async (runQuery) => {
+    const parentTaskId = await insertTaskWithQuery(runQuery, parent);
+    const childTaskIds: number[] = [];
+    for (const child of children) {
+      childTaskIds.push(await insertTaskWithQuery(runQuery, {
+        ...child,
+        projectId: parent.projectId,
+        parentTaskId,
+        createdByUserId: parent.createdByUserId
+      }));
+    }
+    return { parentTaskId, childTaskIds };
   });
 
 export interface UpdateTaskRow {
@@ -198,7 +408,7 @@ export const archiveTask = async (taskId: number): Promise<boolean> => {
   const result = await query(
     `UPDATE work.tasks SET archivedatutc = CURRENT_TIMESTAMP, updatedatutc = CURRENT_TIMESTAMP,
        rowversion = rowversion + 1
-     WHERE taskid = $1 AND archivedatutc IS NULL`,
+     WHERE (taskid = $1 OR parenttaskid = $1) AND archivedatutc IS NULL`,
     [taskId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -249,8 +459,49 @@ export const findStatusHistoryForTask = async (taskId: number): Promise<TaskStat
      LEFT JOIN work.taskstatuses fs ON fs.taskstatusid = h.fromtaskstatusid
      LEFT JOIN iam.users u ON u.userid = h.changedbyuserid
      WHERE h.taskid = $1
+        OR h.taskid IN (SELECT taskid FROM work.tasks WHERE parenttaskid = $1 AND archivedatutc IS NULL)
      ORDER BY h.changedatutc ASC, h.taskstatushistoryid ASC`,
     [taskId]
   );
   return result.rows;
+};
+
+// How many of a project's tasks are finished. Counts top-level, non-archived tasks only — the
+// exact same population project.repository.ts's getProjectProgress uses for the project's
+// percentage, so "100% complete" and "project complete" can never disagree. Subtasks are
+// excluded deliberately: a parent task cannot reach a completed state while its own subtasks are
+// outstanding (see task.service.ts's syncParentFromSubtasks), so counting them would double-count
+// the same work.
+export const getProjectTaskCompletion = async (
+  projectId: number
+): Promise<{ total: number; completed: number }> => {
+  const result = await query<{ total: string; completed: string }>(
+    `SELECT COUNT(*)::text AS total,
+            SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END)::text AS completed
+       FROM work.tasks t
+       JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+      WHERE t.projectid = $1 AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL`,
+    [projectId]
+  );
+  return {
+    total: Number(result.rows[0]?.total || 0),
+    completed: Number(result.rows[0]?.completed || 0)
+  };
+};
+
+// When a task in this project most recently LEFT a completed state (a reopen, or a review
+// rejection sending it back to In Progress). Read from the same work.TaskStatusHistory audit
+// trail every status change already writes, so no extra bookkeeping is needed to answer
+// "has this project stopped being finished since we last said it was finished?".
+export const findLastProjectReopenTime = async (projectId: number): Promise<Date | null> => {
+  const result = await query<{ lastreopened: Date | null }>(
+    `SELECT MAX(h.changedatutc) AS lastreopened
+       FROM work.taskstatushistory h
+       JOIN work.tasks t ON t.taskid = h.taskid
+       JOIN work.taskstatuses fs ON fs.taskstatusid = h.fromtaskstatusid
+       JOIN work.taskstatuses ts ON ts.taskstatusid = h.totaskstatusid
+      WHERE t.projectid = $1 AND fs.iscompletedstate AND NOT ts.iscompletedstate`,
+    [projectId]
+  );
+  return result.rows[0]?.lastreopened || null;
 };

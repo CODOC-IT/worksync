@@ -7,6 +7,7 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "server": "tsx backend/src/server.ts",
     "build": "vite build",
+    "test:accounts": "node --import tsx --test backend/src/accounts/accounts.validation.test.ts backend/src/accounts/accounts.service.test.ts backend/src/accounts/accounts.constraints.test.ts backend/src/accounts/accounts.email.test.ts frontend/src/features/members/accountFormRules.test.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
@@ -28,6 +29,7 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "nodemailer": "^9.0.3",
+    "pdfkit": "^0.19.1",
     "pg": "^8.13.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -37,6 +39,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pdfkit": "^0.17.6",
     "@types/pg": "^8.11.10",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

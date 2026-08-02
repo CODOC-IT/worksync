@@ -15,6 +15,8 @@ export type NotificationType =
   | 'task_priority_changed' | 'task_due_date_changed' | 'task_review_requested'
   | 'task_review_approved' | 'task_review_rejected' | 'task_completed' | 'task_deleted'
   | 'task_due_today' | 'task_due_tomorrow' | 'task_overdue' | 'checklist_completed'
+  | 'subtask_assigned' | 'subtask_completed' | 'subtask_reopened' | 'subtask_due_today'
+  | 'subtask_overdue' | 'task_reopened'
   | 'comment_added' | 'mention' | 'attachment_uploaded'
   | 'project_created' | 'project_updated' | 'project_archived' | 'project_restored'
   | 'project_deleted' | 'project_member_added' | 'project_member_removed'
@@ -101,4 +103,34 @@ export interface NotificationListQuery {
   search?: string;
   page?: number;
   pageSize?: number;
+}
+
+// Admin per-user analytics — "which user saw which notification, their interest, and their
+// read percentage" (see notification.repository.ts's getUserAnalyticsList/getTopCategoriesForUsers).
+export interface UserAnalyticsListQuery {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'total' | 'readRate' | 'name';
+}
+
+export interface UserNotificationAnalyticsDTO {
+  userId: string;
+  name: string;
+  email: string;
+  totalReceived: number;
+  totalDelivered: number;
+  totalRead: number;
+  readRate: number; // read / delivered, 0..100, 0 when nothing delivered yet
+  topInterest: NotificationCategory | null; // the category this user reads the most of
+  lastNotifiedAt: string | null;
+  lastReadAt: string | null;
+}
+
+export interface UserNotificationCategoryBreakdownDTO {
+  category: NotificationCategory;
+  type: NotificationType;
+  total: number;
+  read: number;
+  readRate: number;
 }

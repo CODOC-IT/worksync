@@ -3,11 +3,18 @@ import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.
 import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
+import { recordActivitySafe } from '../activity/activity.service.js';
+import { userStore } from '../store/userStore.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import {
+  NotificationCategory,
   NotificationDTO,
   NotificationEvent,
   NotificationListQuery,
-  NotificationPreferencesDTO
+  NotificationPreferencesDTO,
+  UserAnalyticsListQuery,
+  UserNotificationAnalyticsDTO,
+  UserNotificationCategoryBreakdownDTO
 } from './notification.types.js';
 
 export interface NotificationAnalyticsDTO {
@@ -55,6 +62,54 @@ const TYPE_TO_PREFERENCE_CATEGORY: Partial<Record<string, 'assignments' | 'menti
   task_overdue: 'dueReminders'
 };
 
+// Human-readable label for each persisted preference toggle, used only for Activity Log
+// descriptions below. `toast` is deliberately absent — it's never persisted (see comment
+// above) so a toast change never produces an Activity Log entry.
+const PREFERENCE_ACTIVITY_LABELS: Record<Exclude<keyof NotificationPreferencesDTO, 'toast'>, string> = {
+  inApp: 'in-app notifications',
+  dueReminders: 'due reminder notifications',
+  mentions: 'mention notifications',
+  comments: 'comment notifications',
+  assignments: 'assignment notifications',
+  email: 'email notifications'
+};
+
+// Activity Log entry per changed preference, so a member/lead/HR/admin toggling notification
+// settings shows up as e.g. "Bilal turned off in-app notifications." Module is 'Notifications'
+// rather than 'Settings' so a plain Team Member's own change stays visible to them — the
+// Activity Log's module blocklist for plain Team Members excludes 'Settings' entirely (see
+// activity.repository.ts's buildMemberClause), and this event carries no projectId/taskId, so
+// only the actor themselves, HR, and Admin ever match its visibility scope.
+const logPreferenceChanges = (
+  userId: string,
+  current: NotificationPreferencesDTO,
+  next: NotificationPreferencesDTO,
+  requested: Partial<NotificationPreferencesDTO>
+): void => {
+  const actor = userStore.findById(userId);
+  const actorName = actorDisplayName(userId);
+  (Object.keys(requested) as (keyof NotificationPreferencesDTO)[]).forEach((key) => {
+    if (key === 'toast') return;
+    if (current[key] === next[key]) return; // no actual change — never log a no-op
+    const label = PREFERENCE_ACTIVITY_LABELS[key];
+    const turnedOn = next[key];
+    recordActivitySafe({
+      actorId: userId,
+      actorName: actor?.name,
+      actorEmail: actor?.email,
+      actorRole: actor?.role,
+      action: 'Preference Changed',
+      module: 'Notifications',
+      entityType: 'Notification Preference',
+      entityId: `notification-preference-${key}`,
+      entityName: label,
+      description: `${actorName} turned ${turnedOn ? 'on' : 'off'} ${label}.`,
+      changes: [{ field: label, previousValue: String(current[key]), newValue: String(next[key]) }],
+      source: 'Web'
+    });
+  });
+};
+
 const isSuppressedForRecipient = async (recipientUserId: number, typeCode: string): Promise<boolean> => {
   const category = TYPE_TO_PREFERENCE_CATEGORY[typeCode];
   const typeCodesToCheck = new Set<string>([REPRESENTATIVE_TYPE_CODES.inApp]);
@@ -74,6 +129,14 @@ const isSuppressedForRecipient = async (recipientUserId: number, typeCode: strin
   return false;
 };
 
+// When an event of `type` was last published for a project, or null if never. Lets a producer
+// make an event idempotent per real-world occurrence instead of per triggering action, without
+// needing its own state or reaching into notify.* itself (this module owns that SQL).
+export const getLatestEventTimeForProject = async (
+  projectId: string,
+  type: NotificationEvent['type']
+): Promise<Date | null> => repo.findLatestNotificationTimeForProject(projectId, type);
+
 // The single entry point every module (existing or new) calls to raise an event. Resolves the
 // NotificationType's category/default priority, evaluates each recipient's preferences to
 // decide delivered-vs-suppressed, persists via the repository, and returns the created rows as
@@ -90,10 +153,19 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
   }
 
   const priority = event.priority ?? typeMeta.defaultPriority;
-  const recipientPks = Array.from(new Set(event.recipientIds.map(toUserPk)));
+  const requestedPks = Array.from(new Set(event.recipientIds.map(toUserPk)));
+
+  // Drop recipients who could never read the notification anyway (locked service accounts,
+  // deactivated/pending users) before anything is written — see filterDeliverableRecipients.
+  const deliverablePks = new Set(await repo.filterDeliverableRecipients(requestedPks));
+  const recipientIds = Array.from(new Set(event.recipientIds)).filter((id) =>
+    deliverablePks.has(toUserPk(id))
+  );
+  if (recipientIds.length === 0) return [];
+  event = { ...event, recipientIds };
 
   const suppressedUserIds = new Set<number>();
-  for (const recipientPk of recipientPks) {
+  for (const recipientPk of deliverablePks) {
     if (await isSuppressedForRecipient(recipientPk, event.type)) {
       suppressedUserIds.add(recipientPk);
     }
@@ -198,6 +270,48 @@ export const getDeliveryAnalytics = async (): Promise<NotificationAnalyticsDTO[]
   }));
 };
 
+// Admin per-user analytics — who saw which notification, what they're actually reading
+// ("interest" = the category they read the most of), and their personal read percentage.
+// Two queries (list + top-category) rather than one combined window-function query, matching
+// this file's existing preference for readable, separately-testable repository calls.
+export const getUserAnalytics = async (
+  filters: UserAnalyticsListQuery = {}
+): Promise<{ items: UserNotificationAnalyticsDTO[]; total: number }> => {
+  const { rows, total } = await repo.getUserAnalyticsList(filters);
+  if (rows.length === 0) return { items: [], total };
+
+  const topCategories = await repo.getTopCategoriesForUsers(rows.map((row) => row.userid));
+  const topCategoryByUser = new Map(topCategories.map((row) => [row.userid, row.categorycode]));
+
+  const items = rows.map((row) => ({
+    userId: fromUserPk(row.userid),
+    name: row.displayname,
+    email: row.email,
+    totalReceived: row.total,
+    totalDelivered: row.delivered,
+    totalRead: row.read,
+    readRate: row.delivered > 0 ? Math.round((row.read / row.delivered) * 1000) / 10 : 0,
+    topInterest: (topCategoryByUser.get(row.userid) as NotificationCategory) ?? null,
+    lastNotifiedAt: row.lastnotifiedatutc,
+    lastReadAt: row.lastreadatutc
+  }));
+
+  return { items, total };
+};
+
+export const getUserAnalyticsDetail = async (
+  userId: string
+): Promise<UserNotificationCategoryBreakdownDTO[]> => {
+  const rows = await repo.getUserAnalyticsDetail(toUserPk(userId));
+  return rows.map((row) => ({
+    category: row.categorycode as NotificationCategory,
+    type: row.typecode as UserNotificationCategoryBreakdownDTO['type'],
+    total: row.total,
+    read: row.read,
+    readRate: row.total > 0 ? Math.round((row.read / row.total) * 1000) / 10 : 0
+  }));
+};
+
 export const getNotificationsForUser = async (
   userId: string,
   filters: NotificationListQuery = {}
@@ -242,7 +356,7 @@ export const getPreferences = async (userId: string): Promise<NotificationPrefer
     mentions: byType.get(REPRESENTATIVE_TYPE_CODES.mentions)?.inAppEnabled ?? true,
     comments: byType.get(REPRESENTATIVE_TYPE_CODES.comments)?.inAppEnabled ?? true,
     assignments: byType.get(REPRESENTATIVE_TYPE_CODES.assignments)?.inAppEnabled ?? true,
-    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? false
+    email: byType.get(REPRESENTATIVE_TYPE_CODES.email)?.emailEnabled ?? true
   };
 };
 
@@ -265,5 +379,6 @@ export const updatePreferences = async (
   }
 
   await Promise.all(writes);
+  logPreferenceChanges(userId, current, next, data);
   return next;
 };

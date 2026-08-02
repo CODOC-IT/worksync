@@ -1,5 +1,15 @@
 import { fromProjectPk, fromUserPk } from '../utils/idMapping.js';
-import { ProjectMemberRow, ProjectRow, DB_TO_API_PRIORITY, DB_TO_API_PROJECT_STATUS, ProjectDTO } from './project.types.js';
+import {
+  MilestoneDTO,
+  MilestoneRow,
+  ProjectFileDTO,
+  ProjectFileRow,
+  ProjectMemberRow,
+  ProjectRow,
+  DB_TO_API_PRIORITY,
+  DB_TO_API_PROJECT_STATUS,
+  ProjectDTO
+} from './project.types.js';
 
 const formatDate = (value: string | Date): string =>
   typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
@@ -17,13 +27,40 @@ export const resolveTeamLeadUserId = (row: ProjectRow, members: ProjectMemberRow
   return teamLead ? fromUserPk(teamLead.userid) : fromUserPk(row.owneruserid);
 };
 
+// Shared by rowToProjectDTO below (list/detail fetches) and project.service.ts's
+// addMilestone/updateMilestone (which return the single row they just wrote) -- one mapping,
+// not two copies that could drift.
+export const rowToMilestoneDTO = (m: MilestoneRow): MilestoneDTO => ({
+  id: String(m.milestoneid),
+  title: m.milestonename,
+  description: m.description,
+  dueDate: m.duedate.slice(0, 10),
+  completed: m.completedatutc !== null,
+  completedAt: m.completedatutc ? m.completedatutc.toISOString() : null,
+  createdBy: fromUserPk(m.createdbyuserid),
+  createdAt: m.createdatutc.toISOString()
+});
+
+// Shared by rowToProjectDTO below and project.service.ts's addProjectFile (which returns the
+// single row it just wrote) -- one mapping, not two copies that could drift.
+export const rowToProjectFileDTO = (f: ProjectFileRow): ProjectFileDTO => ({
+  id: String(f.fileid),
+  name: f.originalfilename,
+  size: Number(f.sizebytes),
+  mimeType: f.mimetype,
+  uploadedBy: fromUserPk(f.uploadedbyuserid),
+  uploadedAt: f.uploadedatutc.toISOString()
+});
+
 // `progress` has no column in work.Projects (schema wasn't redesigned to add one) — the service
 // layer computes it from task completion ratios and passes it in here, same "derive, don't
 // store" approach already used for other frontend-only display fields.
 export const rowToProjectDTO = (
   row: ProjectRow,
   members: ProjectMemberRow[],
-  progress: number
+  progress: number,
+  milestones?: MilestoneRow[],
+  files?: ProjectFileRow[]
 ): ProjectDTO => {
   const isPendingActivation = row.statuscode === 'PendingActivation';
 
@@ -55,6 +92,9 @@ export const rowToProjectDTO = (
     priority: DB_TO_API_PRIORITY[row.prioritycode],
     progress,
     tags: [],
-    creationReason: row.creationreason || undefined
+    creationReason: row.creationreason || undefined,
+    createdAt: formatDate(row.createdatutc),
+    milestones: (milestones || []).map(rowToMilestoneDTO),
+    files: (files || []).map(rowToProjectFileDTO)
   };
 };

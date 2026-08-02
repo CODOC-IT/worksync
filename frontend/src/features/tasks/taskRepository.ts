@@ -1,4 +1,11 @@
-import { Task, TaskStatus, TaskStatusHistoryEntry } from '../../types';
+import {
+  ProposedTaskUpdate,
+  SubtaskReviewDecision,
+  SystemApproval,
+  Task,
+  TaskStatus,
+  TaskStatusHistoryEntry
+} from '../../types';
 import {
   TaskMutationData,
   TaskMutationResult,
@@ -43,6 +50,33 @@ export const loadTasksFromApi = async (): Promise<Task[] | null> => {
   return payload.data as Task[];
 };
 
+export const loadArchivedTasksFromApi = async (): Promise<Task[]> => {
+  const token = getAuthToken();
+  if (!token) return [];
+
+  const response = await fetch('/api/tasks?archived=true', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const payload = await parseResponse(response);
+
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.message || 'Unable to load archived tasks.');
+  }
+
+  return payload.data as Task[];
+};
+
+export const loadTaskDetailFromApi = async (taskId: string): Promise<Task> => {
+  const token = getAuthToken();
+  if (!token) throw new Error('Sign in before viewing task details.');
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { headers: { Authorization: `Bearer ${token}` } });
+  const payload = await parseResponse(response);
+  if (!response.ok || !payload.success || Array.isArray(payload.data) || !payload.data) throw new Error(payload.message || 'Unable to load task details.');
+  return { ...(payload.data as Task), subtasks: Array.isArray(payload.data.subtasks) ? payload.data.subtasks : [] };
+};
+
 export const createTaskViaApi = async (
   data: TaskMutationData
 ): Promise<TaskMutationResult> => {
@@ -55,26 +89,35 @@ export const createTaskViaApi = async (
   }
 
   try {
+    const body: Record<string, unknown> = {
+      projectId: data.projectId,
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      startDate: data.startDate,
+      dueDate: data.dueDate,
+      assigneeIds: data.assigneeIds?.length
+        ? data.assigneeIds
+        : data.assigneeId
+          ? [data.assigneeId]
+          : [],
+      status: data.status || 'Todo'
+    };
+
+    if (data.parentTaskId) {
+      body.parentTaskId = data.parentTaskId;
+    }
+    if (data.subtasks && data.subtasks.length > 0) {
+      body.subtasks = data.subtasks;
+    }
+
     const response = await fetch('/api/tasks', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        projectId: data.projectId,
-        title: data.title,
-        description: data.description,
-        priority: data.priority,
-        startDate: data.startDate,
-        dueDate: data.dueDate,
-        assigneeIds: data.assigneeIds?.length
-          ? data.assigneeIds
-          : data.assigneeId
-            ? [data.assigneeId]
-            : [],
-        status: data.status || 'Todo'
-      })
+      body: JSON.stringify(body)
     });
     const payload = await parseResponse(response);
     const task = !Array.isArray(payload.data) ? payload.data : undefined;
@@ -132,6 +175,51 @@ export const updateTaskViaApi = async (taskId: string, data: TaskMutationData): 
   return payload.data as Task;
 };
 
+export const createTaskEditApprovalViaApi = async (
+  taskId: string,
+  proposedTaskUpdate: ProposedTaskUpdate
+): Promise<SystemApproval> => {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/edit-approvals`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(proposedTaskUpdate)
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.success || !payload.data) {
+    throw new Error(payload?.message || 'Unable to submit the task update request.');
+  }
+  return payload.data as SystemApproval;
+};
+
+export const loadTaskEditApprovalsViaApi = async (): Promise<SystemApproval[]> => {
+  const token = getAuthToken();
+  if (!token) return [];
+  const response = await fetch('/api/tasks/edit-approvals', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+    throw new Error(payload?.message || 'Unable to load task update requests.');
+  }
+  return payload.data as SystemApproval[];
+};
+
+export const decideTaskEditApprovalViaApi = async (
+  approvalId: string,
+  decision: 'Approved' | 'Rejected'
+): Promise<Task | null> => {
+  const response = await fetch(`/api/tasks/edit-approvals/${encodeURIComponent(approvalId)}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ decision })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.success) {
+    throw new Error(payload?.message || 'Unable to decide the task update request.');
+  }
+  return (payload.data || null) as Task | null;
+};
+
 export const deleteTaskViaApi = async (taskId: string): Promise<void> => {
   const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: 'DELETE',
@@ -162,8 +250,17 @@ export const changeTaskStatusViaApi = (taskId: string, status: TaskStatus, note:
 export const approveTaskViaApi = (taskId: string, note: string): Promise<Task> =>
   patchTaskStatus(taskId, '/approve', { note });
 
-export const rejectTaskViaApi = (taskId: string, note: string): Promise<Task> =>
-  patchTaskStatus(taskId, '/reject', { note });
+export const rejectTaskViaApi = (
+  taskId: string,
+  note: string,
+  subtaskDecisions?: SubtaskReviewDecision[]
+): Promise<Task> =>
+  patchTaskStatus(taskId, '/reject', subtaskDecisions ? { note, subtaskDecisions } : { note });
+
+// Team-Lead-only route out of Done. Sends `reason` (not `note`) to match the endpoint's own
+// contract — see backend/src/tasks/task.validation.ts's validateReopenBody for why they differ.
+export const reopenTaskViaApi = (taskId: string, status: TaskStatus, reason: string): Promise<Task> =>
+  patchTaskStatus(taskId, '/reopen', { status, reason });
 
 export const fetchTaskHistoryViaApi = async (taskId: string): Promise<TaskStatusHistoryEntry[]> => {
   const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/history`, {

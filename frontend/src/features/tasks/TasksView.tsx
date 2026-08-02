@@ -1,14 +1,18 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  Archive,
   ArrowDownAZ,
   Check,
   CheckSquare,
   ChevronDown,
   ClipboardList,
+  Clock3,
   Filter,
+  Layers,
   LoaderCircle,
   MoreHorizontal,
+  Pencil,
   Plus,
   Search,
   UserRound,
@@ -16,14 +20,14 @@ import {
   X
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
-import { Task, TaskPriority, TaskStatus } from '../../types';
+import { Project, Subtask, Task, TaskPriority, TaskStatus, User, UserRole } from '../../types';
 import {
   canCreateTaskForProject,
   canDeleteTask,
   canEditTask,
   filterAndSortTasks,
   getProjectEndDate,
-  getProjectMemberIds,
+  getAssignableProjectUsers,
   getProjectName,
   getLatestDate,
   getTaskAssigneeIds,
@@ -35,9 +39,13 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   TaskFormInput,
+  TaskMutationResult,
   TaskModulePriority,
-  validateTaskInput
+  SubtaskFormInput,
+  validateTaskInput,
+  validateTaskEditInput
 } from './taskRules';
+import { loadArchivedTasksFromApi, loadTaskDetailFromApi } from './taskRepository';
 
 const today = getTodayIsoDate();
 
@@ -62,13 +70,44 @@ const formatDate = (value: string) =>
     year: 'numeric'
   });
 
-export const TasksView: React.FC = () => {
+const formatOptionalDate = (value?: string) => value ? formatDate(value) : 'Not set';
+
+const toEditableSubtask = (parent: Task, subtask: Subtask, index: number): Task => {
+  const detailedSubtask = subtask as Subtask & Partial<Task> & { assigneeIds?: string[] };
+  const assigneeIds = detailedSubtask.assigneeIds || [];
+  return {
+    ...parent,
+    ...detailedSubtask,
+    id: subtask.id,
+    taskNumber: detailedSubtask.taskNumber || `${parent.taskNumber}.${index + 1}`,
+    parentTaskId: parent.id,
+    title: subtask.title,
+    description: subtask.description || '',
+    status: subtask.status || (subtask.completed ? 'Done' : 'Todo'),
+    priority: subtask.priority || parent.priority,
+    assigneeId: assigneeIds[0] || '',
+    dueDate: subtask.dueDate || parent.dueDate,
+    subtasks: [],
+    subtaskCount: 0,
+    createdAt: detailedSubtask.createdAt || parent.createdAt
+  };
+};
+
+interface TasksViewProps {
+  initialTaskId?: string;
+  onInitialTaskConsumed?: () => void;
+}
+
+export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTaskConsumed }) => {
   const {
     currentRole,
     currentUser,
     users,
     projects,
     tasks,
+    systemApprovals,
+    approveApprovalItem,
+    rejectApprovalItem,
     createTask,
     updateTask,
     deleteTask
@@ -78,6 +117,7 @@ export const TasksView: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingTaskSource, setEditingTaskSource] = useState<Task | null>(null);
   const [viewingTask, setViewingTask] = useState<Task | null>(null);
   const [taskPendingDeletion, setTaskPendingDeletion] = useState<Task | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -94,11 +134,43 @@ export const TasksView: React.FC = () => {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [dueDateDirection, setDueDateDirection] = useState<'asc' | 'desc'>('asc');
+  const [subtaskStep, setSubtaskStep] = useState<'ask' | 'count' | 'details' | null>(null);
+  const [subtaskCount, setSubtaskCount] = useState(1);
+  const [subtaskDrafts, setSubtaskDrafts] = useState<SubtaskFormInput[]>([]);
+  const [subtaskErrors, setSubtaskErrors] = useState<Record<string, string>>({});
+  const [isCreatingSubtasks, setIsCreatingSubtasks] = useState(false);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [expandedTaskDetails, setExpandedTaskDetails] = useState<Record<string, Task>>({});
+  const [expandingTaskId, setExpandingTaskId] = useState<string | null>(null);
+  const [expandedTaskError, setExpandedTaskError] = useState<{ taskId: string; message: string } | null>(null);
+  const [showArchivedTasks, setShowArchivedTasks] = useState(false);
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [archivedTasksLoading, setArchivedTasksLoading] = useState(false);
+  const [archivedTasksError, setArchivedTasksError] = useState<string | null>(null);
+  const [showApprovals, setShowApprovals] = useState(false);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  // Deep-link support: a caller (e.g. My Profile → Upcoming Deadlines) can ask the Tasks tab to
+  // open a specific task's detail drawer on mount. Honor it once, then let the user navigate freely.
+  useEffect(() => {
+    if (!initialTaskId) return;
+    const task = tasks.find((t) => t.id === initialTaskId);
+    if (task) {
+      void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
+    }
+    onInitialTaskConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTaskId]);
+
+  // A project lead still has a Team_Member account.  Never leave an invisible
+  // assigned-to-me predicate behind when the signed-in role changes.
+  useEffect(() => {
+    if (currentRole !== 'Team_Member') setMyTasksOnly(false);
+  }, [currentRole]);
 
   useEffect(() => {
     const closeTaskMenu = (event: PointerEvent) => {
@@ -117,19 +189,46 @@ export const TasksView: React.FC = () => {
     ),
     [currentRole, currentUser.id, projects]
   );
+  // The project filter must mirror the task API scope. Team Members can browse work
+  // for projects they participate in or lead; Admin and HR retain organization-wide
+  // task visibility. Archived projects are intentionally absent from the active list.
+  const taskFilterProjects = useMemo(() => projects.filter((project) => {
+    if (project.status === 'Archived') return false;
+    if (currentRole === 'Admin' || currentRole === 'HR') return true;
+    return project.memberIds.includes(currentUser.id)
+      || project.teamLeadId === currentUser.id
+      || project.createdBy === currentUser.id;
+  }), [currentRole, currentUser.id, projects]);
+
+  useEffect(() => {
+    if (projectFilter && !taskFilterProjects.some((project) => project.id === projectFilter)) {
+      setProjectFilter('');
+    }
+  }, [projectFilter, taskFilterProjects]);
 
   const selectedProject = projects.find((project) => project.id === form.projectId);
+  const taskEditApprovals = useMemo(() => systemApprovals.filter((approval) =>
+    approval.type === 'Controlled_Edit'
+    && approval.proposedTaskUpdate
+    && approval.status === 'Pending'
+    && approval.projectId
+    && projects.some((project) => project.id === approval.projectId && project.teamLeadId === currentUser.id)
+  ), [currentUser.id, projects, systemApprovals]);
+  const isActingTeamLead = projects.some((project) => project.teamLeadId === currentUser.id);
   const availableAssignees = useMemo(
     () => selectedProject
-      ? users.filter((user) =>
-          user.status !== 'inactive' && getProjectMemberIds(selectedProject).includes(user.id)
-        )
+      ? getAssignableProjectUsers(selectedProject, users)
       : [],
     [selectedProject, users]
   );
+  const availableSubtaskAssignees = useMemo(
+    () => availableAssignees.filter((user) => form.assigneeIds.includes(user.id)),
+    [availableAssignees, form.assigneeIds]
+  );
 
+  const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
-    () => filterAndSortTasks(tasks, projects, {
+    () => filterAndSortTasks(taskSource, projects, {
       search,
       projectId: projectFilter,
       status: statusFilter,
@@ -149,16 +248,28 @@ export const TasksView: React.FC = () => {
       projects,
       search,
       statusFilter,
-      tasks
+      taskSource
     ]
+  );
+  const parentTasks = useMemo(
+    () => taskSource.filter((task) => !task.parentTaskId),
+    [taskSource]
+  );
+  const visibleTasks = useMemo(
+    () => filteredTasks.filter((task) => !task.parentTaskId),
+    [filteredTasks]
   );
 
   const resetForm = () => {
     setForm(emptyForm());
     setEditingTaskId(null);
+    setEditingTaskSource(null);
     setFieldErrors({});
     setFormError(null);
     setIsFormOpen(false);
+    setSubtaskStep(null);
+    setSubtaskDrafts([]);
+    setSubtaskErrors({});
   };
 
   const openCreateForm = () => {
@@ -175,10 +286,12 @@ export const TasksView: React.FC = () => {
     setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
+    setExpandedTaskId(null);
   };
 
   const openEditForm = (task: Task) => {
     setEditingTaskId(task.id);
+    setEditingTaskSource(task);
     setForm({
       projectId: task.projectId,
       title: task.title,
@@ -193,6 +306,7 @@ export const TasksView: React.FC = () => {
     setFormError(null);
     setNotice(null);
     setIsFormOpen(true);
+    setViewingTask(null);
   };
 
   const handleProjectChange = (projectId: string) => {
@@ -228,42 +342,45 @@ export const TasksView: React.FC = () => {
     event.preventDefault();
     if (isSubmitting) return;
 
-    const clientErrors = validateTaskInput(
+    const existingTask = editingTaskId
+      ? editingTaskSource || tasks.find((task) => task.id === editingTaskId)
+      : undefined;
+    const clientErrors = editingTaskId
+      ? validateTaskEditInput(form, selectedProject, users)
+      : validateTaskInput(
       form,
       selectedProject,
       users,
-      editingTaskId === null,
-      editingTaskId === null ? today : undefined
+      true,
+      today
     );
     if (Object.keys(clientErrors).length > 0) {
       setFieldErrors(clientErrors);
       setFormError(null);
       return;
     }
-
+    if (!editingTaskId && subtaskStep === null) {
+      setSubtaskStep('ask');
+      return;
+    }
+    const changedToPastDate = Boolean(existingTask) && (
+      (form.startDate !== getTaskStartDate(existingTask!) && form.startDate < today)
+      || (form.dueDate !== existingTask!.dueDate && form.dueDate < today)
+    );
+    if (changedToPastDate && !window.confirm('This date is in the past. Save it as a historical correction?')) {
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const existingTask = editingTaskId
-        ? tasks.find((task) => task.id === editingTaskId)
-        : undefined;
-      const isMemberStatusOnly = Boolean(existingTask && currentRole === 'Team_Member');
-      const result = await (
+      const result: TaskMutationResult = await (
         editingTaskId
-          ? updateTask(
-              editingTaskId,
-              isMemberStatusOnly
-                ? { status: form.status }
-                : {
-                    title: form.title,
-                    description: form.description,
-                    priority: form.priority as TaskModulePriority,
-                    startDate: form.startDate,
-                    dueDate: form.dueDate,
-                    assigneeId: form.assigneeIds[0],
-                    assigneeIds: form.assigneeIds,
-                    status: form.status
-                  }
-            )
+          ? updateTask(editingTaskId, {
+                title: form.title,
+                description: form.description,
+                priority: form.priority as TaskModulePriority,
+                startDate: form.startDate,
+                dueDate: form.dueDate
+              })
           : createTask({
               projectId: form.projectId,
               title: form.title,
@@ -290,10 +407,127 @@ export const TasksView: React.FC = () => {
         return;
       }
 
+      if (existingTask?.parentTaskId && result.task) {
+        const parentTaskId = existingTask.parentTaskId;
+        setExpandedTaskDetails((current) => {
+          const parent = current[parentTaskId];
+          if (!parent) return current;
+          return {
+            ...current,
+            [parentTaskId]: {
+              ...parent,
+              subtasks: parent.subtasks.map((subtask) =>
+                subtask.id === result.task!.id
+                  ? {
+                      ...subtask,
+                      ...result.task!,
+                      completed: result.task!.status === 'Done'
+                    }
+                  : subtask
+              )
+            }
+          };
+        });
+      }
+
       resetForm();
       setNotice({ type: 'success', message: result.message });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const startSubtasks = () => {
+    const draft = (): SubtaskFormInput => ({ title: '', description: '', priority: form.priority, startDate: form.startDate, dueDate: form.dueDate, assigneeIds: [], status: 'Todo' });
+    setSubtaskDrafts(Array.from({ length: subtaskCount }, draft));
+    setSubtaskErrors({});
+    setSubtaskStep('details');
+  };
+
+  const updateSubtask = (index: number, patch: Partial<SubtaskFormInput>) => {
+    setSubtaskDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? { ...draft, ...patch } : draft));
+    setSubtaskErrors((current) => {
+      const next = { ...current };
+      Object.keys(patch).forEach((field) => delete next[`${index}.${field}`]);
+      return next;
+    });
+  };
+
+  const handleSubtasksSubmit = async () => {
+    if (isCreatingSubtasks) return;
+    const nextErrors: Record<string, string> = {};
+    subtaskDrafts.forEach((draft, index) => {
+      const errors = validateTaskInput(
+        { ...draft, projectId: form.projectId },
+        selectedProject,
+        users,
+        true,
+        form.startDate
+      );
+      Object.entries(errors).forEach(([field, message]) => {
+        if (field !== 'projectId') nextErrors[`${index}.${field}`] = message;
+      });
+      if (draft.dueDate > form.dueDate) {
+        nextErrors[`${index}.dueDate`] = 'Due date cannot be after the parent task due date.';
+      }
+    });
+    if (Object.keys(nextErrors).length > 0) {
+      setSubtaskErrors(nextErrors);
+      return;
+    }
+
+    setIsCreatingSubtasks(true);
+    try {
+      const result = await createTask({
+        projectId: form.projectId,
+        title: form.title,
+        description: form.description,
+        priority: form.priority as TaskModulePriority,
+        startDate: form.startDate,
+        dueDate: form.dueDate,
+        assigneeId: form.assigneeIds[0],
+        assigneeIds: form.assigneeIds,
+        status: form.status,
+        subtasks: subtaskDrafts
+      });
+      if (!result.success) {
+        setNotice({ type: 'error', message: result.message });
+        return;
+      }
+      resetForm();
+      setNotice({ type: 'success', message: 'Task and subtasks created successfully.' });
+    } catch {
+      setNotice({ type: 'error', message: 'Task and subtasks could not be created. Please try again.' });
+    } finally {
+      setIsCreatingSubtasks(false);
+    }
+  };
+
+  const handleCancelSubtasks = async () => {
+    if (isCreatingSubtasks) return;
+    setIsCreatingSubtasks(true);
+    try {
+      const result = await createTask({
+        projectId: form.projectId,
+        title: form.title,
+        description: form.description,
+        priority: form.priority as TaskModulePriority,
+        startDate: form.startDate,
+        dueDate: form.dueDate,
+        assigneeId: form.assigneeIds[0],
+        assigneeIds: form.assigneeIds,
+        status: form.status
+      });
+      if (!result.success) {
+        setNotice({ type: 'error', message: result.message });
+        return;
+      }
+      resetForm();
+      setNotice({ type: 'success', message: 'Task created successfully.' });
+    } catch {
+      setNotice({ type: 'error', message: 'Task could not be created. Please try again.' });
+    } finally {
+      setIsCreatingSubtasks(false);
     }
   };
 
@@ -324,7 +558,47 @@ export const TasksView: React.FC = () => {
     setDueDateDirection('asc');
   };
 
-  const memberStatusOnly = editingTaskId !== null && currentRole === 'Team_Member';
+  const toggleArchivedTasks = async () => {
+    if (showArchivedTasks) {
+      setShowArchivedTasks(false);
+      setArchivedTasksError(null);
+      return;
+    }
+
+    setShowArchivedTasks(true);
+    setArchivedTasksLoading(true);
+    setArchivedTasksError(null);
+    try {
+      setArchivedTasks(await loadArchivedTasksFromApi());
+    } catch (error) {
+      setArchivedTasksError(error instanceof Error ? error.message : 'Unable to load archived tasks.');
+    } finally {
+      setArchivedTasksLoading(false);
+    }
+  };
+
+  const toggleTaskExpansion = async (task: Task) => {
+    if (expandedTaskId === task.id) {
+      setExpandedTaskId(null);
+      setExpandedTaskError(null);
+      return;
+    }
+
+    setExpandedTaskId(task.id);
+    setExpandedTaskError(null);
+    if (expandedTaskDetails[task.id]) return;
+
+    setExpandingTaskId(task.id);
+    try {
+      const detail = await loadTaskDetailFromApi(task.id);
+      setExpandedTaskDetails((current) => ({ ...current, [task.id]: detail }));
+    } catch {
+      setExpandedTaskError({ taskId: task.id, message: 'Subtask details could not be loaded. Please try again.' });
+    } finally {
+      setExpandingTaskId((current) => current === task.id ? null : current);
+    }
+  };
+
   const isCreatePage = isFormOpen && editingTaskId === null;
   const hasActiveFilters = Boolean(
     search || projectFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
@@ -343,7 +617,12 @@ export const TasksView: React.FC = () => {
           </p>
         </div>
 
-        {currentRole === 'Team_Lead' && (
+        <div className="flex flex-wrap gap-2">
+        {currentRole === 'Team_Member' && <button type="button" onClick={() => setShowApprovals(true)} className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/5">
+          <Clock3 size={16} /> Pending Approvals
+          {isActingTeamLead && taskEditApprovals.length > 0 && <span className="rounded-full bg-amber-400/20 px-1.5 text-xs text-amber-200">{taskEditApprovals.length}</span>}
+        </button>}
+        {availableProjects.length > 0 && (
           <button
             type="button"
             onClick={openCreateForm}
@@ -354,7 +633,15 @@ export const TasksView: React.FC = () => {
             Create task
           </button>
         )}
+        </div>
       </header>}
+
+      {showApprovals && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onMouseDown={(event) => event.target === event.currentTarget && setShowApprovals(false)}>
+        <div role="dialog" aria-modal="true" aria-labelledby="task-approvals-title" className="glass-panel max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-5">
+          <div className="flex items-center justify-between"><h2 id="task-approvals-title" className="text-lg font-bold text-white">Pending task approvals</h2><button type="button" onClick={() => setShowApprovals(false)} aria-label="Close approvals"><X /></button></div>
+          {!isActingTeamLead ? <p className="mt-5 rounded-xl border border-white/10 p-4 text-sm text-slate-400">Task edit approvals will appear here when you are assigned as Team Lead for a project.</p> : taskEditApprovals.length === 0 ? <p className="mt-5 text-sm text-slate-400">No pending task edit approvals for your active projects.</p> : <div className="mt-4 space-y-3">{taskEditApprovals.map((approval) => <article key={approval.id} className="rounded-xl border border-white/10 p-4"><p className="font-semibold text-white">{approval.targetTitle}</p><p className="mt-1 text-xs text-slate-400">Requested by {users.find((user) => user.id === approval.requestedBy)?.name || approval.requestedBy} · {projects.find((project) => project.id === approval.projectId)?.title}</p><p className="mt-3 text-xs text-slate-300">Previous: {JSON.stringify(approval.previousTaskSnapshot)}<br />Proposed: {JSON.stringify(approval.proposedTaskUpdate)}</p><div className="mt-3 flex gap-2"><button type="button" onClick={() => void approveApprovalItem(approval.id)} className="rounded bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200">Approve</button><button type="button" onClick={() => { const reason = window.prompt('Rejection reason'); if (reason?.trim()) void rejectApprovalItem(approval.id, reason); }} className="rounded bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200">Reject</button></div></article>)}</div>}
+        </div>
+      </div>}
 
       {!isCreatePage && notice && (
         <div
@@ -382,7 +669,7 @@ export const TasksView: React.FC = () => {
             if (editingTaskId && event.target === event.currentTarget) resetForm();
           }}
         >
-        <form onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
+        <form id="task-form" onSubmit={handleSubmit} className="glass-panel-glow mx-auto w-full max-w-5xl overflow-hidden">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Tasks</p>
@@ -390,8 +677,8 @@ export const TasksView: React.FC = () => {
                 {editingTaskId ? 'Edit task' : 'Create task'}
               </h1>
               <p className="mt-1 text-sm text-slate-400">
-                {memberStatusOnly
-                  ? 'Update progress for your assigned work.'
+                {editingTaskId
+                  ? 'Update the details and schedule for work assigned to you.'
                   : 'Add the work details, schedule, and assignees, then return to your task list.'}
               </p>
             </div>
@@ -426,7 +713,6 @@ export const TasksView: React.FC = () => {
                     priority: event.target.value as TaskModulePriority
                   }))
                 }
-                disabled={memberStatusOnly}
                 className={inputClass}
               >
                 {TASK_PRIORITIES.map((priority) => (
@@ -435,7 +721,11 @@ export const TasksView: React.FC = () => {
               </select>
             </Field>
 
-            <Field label="Status *" error={fieldErrors.status}>
+            <Field
+              label="Status *"
+              error={fieldErrors.status}
+              hint={editingTaskId ? 'Status changes remain in the audited task workflow.' : undefined}
+            >
               <select
                 value={form.status}
                 onChange={(event) =>
@@ -444,6 +734,7 @@ export const TasksView: React.FC = () => {
                     status: event.target.value as TaskStatus
                   }))
                 }
+                disabled={Boolean(editingTaskId)}
                 className={inputClass}
               >
                 {TASK_STATUSES.map((status) => (
@@ -459,7 +750,6 @@ export const TasksView: React.FC = () => {
                   setForm((current) => ({ ...current, title: event.target.value }));
                   setFieldErrors((current) => ({ ...current, title: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
                 placeholder="e.g. Build task creation endpoint"
               />
@@ -473,13 +763,12 @@ export const TasksView: React.FC = () => {
               <input
                 type="date"
                 value={form.startDate}
-                min={getLatestDate(today, selectedProject?.startDate)}
+                min={editingTaskId ? selectedProject?.startDate : getLatestDate(today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, startDate: event.target.value }));
                   setFieldErrors((current) => ({ ...current, startDate: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
               />
             </Field>
@@ -492,13 +781,14 @@ export const TasksView: React.FC = () => {
               <input
                 type="date"
                 value={form.dueDate}
-                min={getLatestDate(form.startDate, today, selectedProject?.startDate)}
+                min={editingTaskId
+                  ? getLatestDate(form.startDate, selectedProject?.startDate)
+                  : getLatestDate(form.startDate, today, selectedProject?.startDate)}
                 max={selectedProject ? getProjectEndDate(selectedProject) : undefined}
                 onChange={(event) => {
                   setForm((current) => ({ ...current, dueDate: event.target.value }));
                   setFieldErrors((current) => ({ ...current, dueDate: '' }));
                 }}
-                disabled={memberStatusOnly}
                 className={inputClass}
               />
             </Field>
@@ -514,14 +804,26 @@ export const TasksView: React.FC = () => {
                   setForm((current) => ({ ...current, description: event.target.value }));
                   setFieldErrors((current) => ({ ...current, description: '' }));
                 }}
-                disabled={memberStatusOnly}
                 rows={3}
                 className={inputClass}
                 placeholder="Describe the expected outcome and relevant context."
               />
             </Field>
 
-            {!memberStatusOnly && (
+            {editingTaskId ? (
+              <Field label={`Assigned to (${form.assigneeIds.length})`} className="md:col-span-2 xl:col-span-4">
+                <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3">
+                  {form.assigneeIds.map((userId) => {
+                    const user = users.find((candidate) => candidate.id === userId);
+                    return (
+                      <span key={userId} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300">
+                        {user?.name || userId}
+                      </span>
+                    );
+                  })}
+                </div>
+              </Field>
+            ) : (
               <Field
                 label={`Assignees * (${form.assigneeIds.length} selected)`}
                 error={fieldErrors.assigneeIds}
@@ -604,6 +906,183 @@ export const TasksView: React.FC = () => {
         </div>
       )}
 
+      {subtaskStep && subtaskStep === 'ask' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) handleCancelSubtasks();
+          }}
+        >
+          <div className="glass-panel-glow w-full max-w-lg p-6">
+            <div className="flex items-center gap-2 text-cyan-400">
+              <Layers size={20} />
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">Subtasks</p>
+            </div>
+            <h2 className="mt-2 text-lg font-bold text-white">Add subtasks?</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Break this task into smaller pieces, or skip to view the task list.
+            </p>
+            <div className="mt-4">
+              <label className="block text-xs font-semibold text-slate-300">Number of subtasks</label>
+              <div className="mt-2 flex items-center gap-3">
+                <button type="button" onClick={() => setSubtaskCount(Math.max(1, subtaskCount - 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-slate-300 hover:bg-white/5">-</button>
+                <span className="w-12 text-center text-lg font-bold text-white">{subtaskCount}</span>
+                <button type="button" onClick={() => setSubtaskCount(Math.min(10, subtaskCount + 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 text-slate-300 hover:bg-white/5">+</button>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" onClick={handleCancelSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5">Skip</button>
+              <button type="button" onClick={() => { if (subtaskCount <= 0) handleCancelSubtasks(); else startSubtasks(); }} className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold">Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {subtaskStep === 'details' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) handleCancelSubtasks();
+          }}
+        >
+          <div className="glass-panel-glow flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden">
+            <div className="border-b border-white/10 px-5 py-4">
+              <div className="flex items-center gap-2 text-cyan-400">
+                <Layers size={18} />
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">Subtasks</p>
+              </div>
+              <h2 className="mt-1 text-lg font-bold text-white">
+                Create {subtaskDrafts.length} subtask{subtaskDrafts.length > 1 ? 's' : ''}
+              </h2>
+            </div>
+            <div className="flex-1 space-y-3 overflow-y-auto p-5">
+              {subtaskDrafts.map((sub, index) => (
+                <div key={index} className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="flex flex-col gap-3 border-b border-white/5 pb-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
+                        Subtask {index + 1}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">Set this subtask's workflow details here.</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:w-[300px]">
+                      <Field label="Priority *" error={subtaskErrors[`${index}.priority`]}>
+                        <select
+                          value={sub.priority}
+                          onChange={(event) => updateSubtask(index, { priority: event.target.value as TaskModulePriority })}
+                          className={`${inputClass} py-1.5 text-xs`}
+                        >
+                          {TASK_PRIORITIES.map((priority) => (
+                            <option key={priority} value={priority}>{priority}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Status *" error={subtaskErrors[`${index}.status`]}>
+                        <select
+                          value={sub.status}
+                          onChange={(event) => updateSubtask(index, { status: event.target.value as TaskStatus })}
+                          className={`${inputClass} py-1.5 text-xs`}
+                        >
+                          {TASK_STATUSES.map((status) => (
+                            <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Field label="Subtask name *" error={subtaskErrors[`${index}.title`]} className="sm:col-span-2">
+                      <input
+                        value={sub.title}
+                        onChange={(event) => updateSubtask(index, { title: event.target.value })}
+                        className={inputClass}
+                        placeholder="What needs to be done?"
+                      />
+                    </Field>
+                    <Field label="Description *" error={subtaskErrors[`${index}.description`]} className="sm:col-span-2">
+                      <textarea
+                        value={sub.description}
+                        onChange={(event) => updateSubtask(index, { description: event.target.value })}
+                        rows={2}
+                        className={inputClass}
+                        placeholder="Describe the expected outcome."
+                      />
+                    </Field>
+                    <Field label="Start date *" error={subtaskErrors[`${index}.startDate`]}>
+                      <input
+                        type="date"
+                        value={sub.startDate}
+                        min={getLatestDate(form.startDate, selectedProject?.startDate)}
+                        max={form.dueDate}
+                        onChange={(event) => updateSubtask(index, { startDate: event.target.value })}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field label="Due date *" error={subtaskErrors[`${index}.dueDate`]}>
+                      <input
+                        type="date"
+                        value={sub.dueDate}
+                        min={getLatestDate(sub.startDate, form.startDate)}
+                        max={form.dueDate}
+                        onChange={(event) => updateSubtask(index, { dueDate: event.target.value })}
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label={`Assignees * (${sub.assigneeIds.length} selected)`}
+                      error={subtaskErrors[`${index}.assigneeIds`]}
+                      className="sm:col-span-2"
+                    >
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {availableSubtaskAssignees.map((user) => {
+                          const selected = sub.assigneeIds.includes(user.id);
+                          return (
+                            <button
+                              key={user.id}
+                              type="button"
+                              onClick={() => updateSubtask(index, {
+                                assigneeIds: selected
+                                  ? sub.assigneeIds.filter((id) => id !== user.id)
+                                  : [...sub.assigneeIds, user.id]
+                              })}
+                              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                                selected
+                                  ? 'border-cyan-400/45 bg-cyan-500/10 text-white'
+                                  : 'border-white/10 bg-slate-950/40 text-slate-300 hover:border-white/20'
+                              }`}
+                            >
+                              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                selected ? 'border-cyan-400 bg-cyan-400 text-slate-950' : 'border-slate-600'
+                              }`}>
+                                {selected && <Check size={11} />}
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate text-xs font-semibold">{user.name}</span>
+                                <span className="block truncate text-[10px] text-slate-500">{user.title}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </Field>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-white/10 bg-black/10 px-5 py-4">
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={handleCancelSubtasks} disabled={isCreatingSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50">Cancel</button>
+                <button type="button" onClick={handleSubtasksSubmit} disabled={isCreatingSubtasks} className="glass-button-neon inline-flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-bold disabled:opacity-60">
+                  {isCreatingSubtasks && <LoaderCircle size={14} className="animate-spin" />}
+                  {isCreatingSubtasks ? 'Creating...' : `Create ${subtaskDrafts.length} subtask${subtaskDrafts.length > 1 ? 's' : ''}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!isCreatePage && <div className="glass-panel overflow-hidden">
         <div className="border-b border-white/10 p-4">
           <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -612,7 +1091,7 @@ export const TasksView: React.FC = () => {
                 <CheckSquare size={17} className="text-cyan-400" />
                 Task list
                 <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
-                  {filteredTasks.length}
+                  {visibleTasks.length}
                 </span>
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
@@ -620,18 +1099,32 @@ export const TasksView: React.FC = () => {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setMyTasksOnly((value) => !value)}
-              className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                myTasksOnly
-                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
-                  : 'border-white/10 text-slate-300 hover:bg-white/5'
-              }`}
-            >
-              <UserRound size={14} />
-              My Tasks
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {currentRole === 'Team_Member' && <button
+                type="button"
+                onClick={() => setMyTasksOnly((value) => !value)}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                  myTasksOnly
+                    ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
+                    : 'border-white/10 text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                <UserRound size={14} />
+                My Tasks
+              </button>}
+              <button
+                type="button"
+                onClick={() => void toggleArchivedTasks()}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                  showArchivedTasks
+                    ? 'border-slate-400/50 bg-slate-500/20 text-slate-200'
+                    : 'border-white/10 text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                <Archive size={14} />
+                {showArchivedTasks ? 'Show active tasks' : 'Show archived tasks'}
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
@@ -649,7 +1142,7 @@ export const TasksView: React.FC = () => {
             </label>
 
             <FilterSelect value={projectFilter} onChange={setProjectFilter} label="All projects">
-              {projects.map((project) => (
+              {taskFilterProjects.map((project) => (
                 <option key={project.id} value={project.id}>{getProjectName(project)}</option>
               ))}
             </FilterSelect>
@@ -664,11 +1157,11 @@ export const TasksView: React.FC = () => {
               {TASK_PRIORITIES.map((priority) => <option key={priority}>{priority}</option>)}
             </FilterSelect>
 
-            <FilterSelect value={assigneeFilter} onChange={setAssigneeFilter} label="All assignees">
-              {users.map((user) => (
-                <option key={user.id} value={user.id}>{user.name}</option>
-              ))}
-            </FilterSelect>
+            <AssigneeFilter
+              value={assigneeFilter}
+              onChange={setAssigneeFilter}
+              users={users}
+            />
           </div>
 
           <div className="mt-2 flex items-center justify-between">
@@ -694,58 +1187,78 @@ export const TasksView: React.FC = () => {
           </div>
         </div>
 
-        {isLoading ? (
+        {isLoading || archivedTasksLoading ? (
           <StateMessage
             icon={<LoaderCircle className="animate-spin text-cyan-400" size={24} />}
-            title="Loading tasks"
-            description="Preparing the current task workspace."
+            title={showArchivedTasks ? 'Loading archived tasks' : 'Loading tasks'}
+            description={showArchivedTasks ? 'Gathering tasks from archived projects.' : 'Preparing the current task workspace.'}
           />
-        ) : tasks.length === 0 ? (
+        ) : archivedTasksError ? (
           <StateMessage
-            icon={<ClipboardList className="text-slate-500" size={26} />}
-            title="No tasks yet"
-            description="Create the first task for an active project."
+            icon={<AlertCircle className="text-rose-400" size={24} />}
+            title="Archived tasks unavailable"
+            description={archivedTasksError}
           />
-        ) : filteredTasks.length === 0 ? (
+        ) : parentTasks.length === 0 ? (
+          <StateMessage
+            icon={showArchivedTasks ? <Archive className="text-slate-500" size={26} /> : <ClipboardList className="text-slate-500" size={26} />}
+            title={showArchivedTasks ? 'No archived tasks' : 'No tasks yet'}
+            description={showArchivedTasks ? 'Tasks will appear here when their project is archived.' : 'Create the first task for an active project.'}
+          />
+        ) : visibleTasks.length === 0 ? (
           <StateMessage
             icon={<Filter className="text-slate-500" size={24} />}
             title="No matching tasks"
             description="Try changing or clearing the current filters."
           />
         ) : (
-          <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {filteredTasks.map((task) => {
+          <div className="max-h-[calc(100vh-290px)] min-h-[420px] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/25 p-4">
+            <div className="grid items-start gap-5 sm:grid-cols-2 xl:grid-cols-3">
+            {visibleTasks.map((task) => {
               const project = projects.find((item) => item.id === task.projectId);
               if (!project) return null;
               const assignees = getTaskAssigneeIds(task)
                 .map((id) => users.find((user) => user.id === id))
                 .filter(Boolean);
-              const overdue = isTaskOverdue(task, today);
-              const mayEdit = canEditTask(currentRole, currentUser.id, project, task);
-              const mayDelete = canDeleteTask(currentRole, currentUser.id, project);
+              const overdue = !task.isArchived && isTaskOverdue(task, today);
+              const mayEdit = !task.isArchived && canEditTask(currentRole, currentUser.id, project, task);
+              const mayDelete = !task.isArchived && canDeleteTask(currentRole, currentUser.id, project, task);
+
+              const loadedTask = expandedTaskDetails[task.id];
+              const subtasks = loadedTask?.subtasks || task.subtasks || [];
+              const subtaskCount = Math.max(task.subtaskCount || 0, subtasks.length);
+              const completedSubtasks = subtasks.filter((subtask) => subtask.completed || subtask.status === 'Done').length;
+              const isExpanded = expandedTaskId === task.id;
+              const isExpanding = expandingTaskId === task.id;
 
               return (
                 <article
                   key={task.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setViewingTask(task)}
+                  onClick={() => void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task))}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') setViewingTask(task);
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') void loadTaskDetailFromApi(task.id).then(setViewingTask).catch(() => setViewingTask(task));
                   }}
-                  className="group relative flex min-h-[250px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-4 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
+                  className="group relative flex min-h-[340px] flex-col rounded-xl border border-white/10 bg-slate-950/55 p-5 text-left shadow-lg shadow-black/15 transition hover:-translate-y-0.5 hover:border-cyan-400/35 hover:bg-slate-950/75 focus:outline-none focus:ring-2 focus:ring-cyan-400/30"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 pr-12">
                       <p className="truncate text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-300">
                         {getProjectName(project)}
                       </p>
-                      <p className="mt-1 font-mono text-[10px] text-slate-500">{task.taskNumber}</p>
                     </div>
+                    {task.isArchived && (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-400/25 bg-slate-400/10 px-2 py-1 text-[10px] font-semibold text-slate-300">
+                        <Archive size={11} />
+                        Archived
+                      </span>
+                    )}
                     {(mayEdit || mayDelete) && (
                       <div
                         data-task-actions
-                        className="absolute right-3 top-3 z-10"
+                        className="absolute right-4 top-4 z-10"
                         onClick={(event) => event.stopPropagation()}
                       >
                         <button
@@ -791,27 +1304,41 @@ export const TasksView: React.FC = () => {
                     )}
                   </div>
 
-                  <h3 title={task.title} className="mt-4 truncate pr-12 text-lg font-bold leading-6 text-white">
+                  <h3 title={task.title} className="mt-4 break-words pr-10 text-xl font-bold leading-7 text-white">
                     {task.title}
                   </h3>
-                  <p className="mt-2 line-clamp-3 min-h-[60px] text-sm leading-5 text-slate-400">
-                    {task.description}
-                  </p>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <TaskBadge value={task.status} kind="status" />
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <TaskBadge value={task.priority} kind="priority" />
-                    {overdue && (
-                      <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-300">
-                        Overdue
+                    {subtaskCount > 0 && (
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-semibold text-slate-300">
+                        {subtaskCount} Subtask{subtaskCount === 1 ? '' : 's'}
                       </span>
                     )}
                   </div>
+                  <p className="mt-3 line-clamp-2 min-h-[40px] text-sm leading-5 text-slate-400">
+                    {task.description}
+                  </p>
+
+                  <div className="mt-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <TaskBadge value={task.status} kind="status" />
+                      {(task.hasPendingApproval || task.approvalStatus === 'Pending Approval') && (
+                        <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                          <Clock3 size={11} />Pending approval
+                        </span>
+                      )}
+                    </div>
+
+                  </div>
 
                   <div className="mt-auto border-t border-white/10 pt-4">
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <Detail label="Starts" value={formatDate(getTaskStartDate(task))} compact />
-                      <Detail label="Due" value={formatDate(task.dueDate)} compact />
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-semibold text-slate-300">Due {formatDate(task.dueDate)}</span>
+                      {overdue && (
+                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-300">
+                          Overdue
+                        </span>
+                      )}
                     </div>
                     <div className="mt-4 flex min-w-0 items-center gap-2">
                       <UsersRound size={14} className="shrink-0 text-slate-500" />
@@ -820,24 +1347,118 @@ export const TasksView: React.FC = () => {
                       </span>
                     </div>
                   </div>
+
+                  {isExpanded && subtaskCount > 0 && (
+                    <div
+                      className="mt-4 border-t border-white/10 pt-4"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Subtasks ({completedSubtasks}/{subtaskCount} complete)
+                        </p>
+                      </div>
+
+                      {isExpanding ? (
+                        <div className="flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-slate-950/30 px-3 py-6 text-xs text-slate-400">
+                          <LoaderCircle size={15} className="animate-spin text-cyan-400" />
+                          Loading subtask details...
+                        </div>
+                      ) : expandedTaskError?.taskId === task.id ? (
+                        <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.06] px-3 py-3 text-xs text-rose-300">
+                          {expandedTaskError.message}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {subtasks.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-5 text-center text-xs text-slate-500">
+                              No subtask details are available.
+                            </div>
+                          )}
+                          {subtasks.map((subtask, index) => {
+                            const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
+                            const subtaskPriority = subtask.priority || task.priority;
+                            const editableSubtask = toEditableSubtask(task, subtask, index);
+                            const mayEditSubtask = canEditTask(
+                              currentRole,
+                              currentUser.id,
+                              project,
+                              editableSubtask
+                            );
+                            const subtaskOverdue = Boolean(
+                              subtask.dueDate
+                              && subtaskStatus !== 'Done'
+                              && subtask.dueDate < today
+                            );
+                            const subtaskAssignees = (subtask.assigneeIds || [])
+                              .map((id) => users.find((user) => user.id === id)?.name)
+                              .filter((name): name is string => Boolean(name));
+
+                            return (
+                              <div key={subtask.id} className="rounded-xl border border-white/10 bg-slate-950/45 p-3.5">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="text-[9px] font-bold uppercase tracking-[0.13em] text-slate-500">
+                                      Subtask {index + 1}
+                                    </p>
+                                    <h4 className="mt-1 break-words text-sm font-bold leading-5 text-slate-100">
+                                      {subtask.title}
+                                    </h4>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    <TaskBadge value={subtaskPriority} kind="priority" />
+                                    <TaskBadge value={subtaskStatus} kind="status" />
+                                    {mayEditSubtask && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditForm(editableSubtask)}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                                      >
+                                        <Pencil size={11} />
+                                        Edit
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-400">
+                                  {subtask.description || 'No description provided.'}
+                                </p>
+
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                  <DetailBox label="Assigned to" value={subtaskAssignees.join(', ') || 'Unassigned'} compact />
+                                  <DetailBox label="Start date" value={formatOptionalDate(subtask.startDate)} compact />
+                                  <DetailBox
+                                    label="Due date"
+                                    value={`${formatOptionalDate(subtask.dueDate)}${subtaskOverdue ? ' · Overdue' : ''}`}
+                                    overdue={subtaskOverdue}
+                                    compact
+                                  />
+                                  <DetailBox label="Status" value={getTaskStatusLabel(subtaskStatus)} compact />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </article>
               );
             })}
           </div>
+        </div>
         )}
-      </div>}
+      </div>
+      }
       {viewingTask && (
         <TaskDetailsModal
           task={viewingTask}
-          projectName={
-            (() => {
-              const project = projects.find((item) => item.id === viewingTask.projectId);
-              return project ? getProjectName(project) : 'Unknown project';
-            })()
-          }
-          assigneeNames={getTaskAssigneeIds(viewingTask)
-            .map((id) => users.find((user) => user.id === id)?.name)
-            .filter((name): name is string => Boolean(name))}
+          project={projects.find((item) => item.id === viewingTask.projectId)}
+          users={users}
+          currentRole={currentRole}
+          currentUserId={currentUser.id}
+          onEditTask={openEditForm}
           onClose={() => setViewingTask(null)}
         />
       )}
@@ -890,6 +1511,33 @@ const FilterSelect: React.FC<{
     />
   </label>
 );
+
+const AssigneeFilter: React.FC<{ value: string; onChange: (value: string) => void; users: User[] }> = ({ value, onChange, users }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = users.find((user) => user.id === value);
+  const validUsers = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return users.filter((user) => user.status !== 'inactive' && user.role !== 'Admin' && user.role !== 'HR')
+      .filter((user) => !needle || user.name.toLowerCase().includes(needle));
+  }, [query, users]);
+  return (
+    <div className="relative">
+      <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className={`${inputClass} flex items-center justify-between text-left text-xs`}>
+        <span className="truncate">{selected?.name || 'All assignees'}</span><ChevronDown size={13} className="text-slate-500" />
+      </button>
+      {open && <div className="absolute z-30 mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-2 shadow-xl">
+        <input autoFocus aria-label="Search assignees" value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search member name" />
+        <div role="listbox" aria-label="Assignees" className="mt-2 max-h-52 overflow-y-auto">
+          <button role="option" aria-selected={!value} type="button" onClick={() => { onChange(''); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">Clear selection — All assignees</button>
+          {selected && !validUsers.some((user) => user.id === selected.id) && <button role="option" aria-selected type="button" onClick={() => { onChange(selected.id); setOpen(false); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">{selected.name}</button>}
+          {validUsers.map((user) => <button key={user.id} role="option" aria-selected={value === user.id} type="button" onClick={() => { onChange(user.id); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-200 hover:bg-white/10">{user.name}</button>)}
+          {validUsers.length === 0 && <p className="px-2 py-3 text-xs text-slate-500">No members found</p>}
+        </div>
+      </div>}
+    </div>
+  );
+};
 
 const TaskBadge: React.FC<{
   value: TaskStatus | TaskPriority;
@@ -977,67 +1625,228 @@ const DeleteTaskModal: React.FC<{
 
 const TaskDetailsModal: React.FC<{
   task: Task;
-  projectName: string;
-  assigneeNames: string[];
+  project?: Project;
+  users: User[];
+  currentRole: UserRole;
+  currentUserId: string;
+  onEditTask: (task: Task) => void;
   onClose: () => void;
-}> = ({ task, projectName, assigneeNames, onClose }) => (
-  <div
-    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-    onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}
-  >
-    <div className="glass-panel-glow w-full max-w-2xl overflow-hidden">
-      <div className="flex items-start justify-between border-b border-white/10 px-5 py-4">
-        <div className="min-w-0">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-cyan-400">
-            {task.taskNumber}
-          </span>
-          <h2 className="mt-1 text-lg font-bold text-white">{task.title}</h2>
-          <p className="mt-1 text-xs text-slate-400">{projectName}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white"
-          aria-label="Close task details"
-        >
-          <X size={18} />
-        </button>
-      </div>
-      <div className="space-y-5 p-5">
-        <div className="flex flex-wrap gap-2">
-          <TaskBadge value={task.status} kind="status" />
-          <TaskBadge value={task.priority} kind="priority" />
-          {isTaskOverdue(task, today) && (
-            <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
-              Overdue
-            </span>
-          )}
-        </div>
-        <div>
-          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Description
-          </h3>
-          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">{task.description}</p>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Detail label="Start date" value={formatDate(getTaskStartDate(task))} />
-          <Detail label="Due date" value={formatDate(task.dueDate)} />
-          <Detail label="Assignees" value={assigneeNames.join(', ') || 'Unassigned'} />
+}> = ({ task, project, users, currentRole, currentUserId, onEditTask, onClose }) => {
+  const teamLead = project
+    ? users.find((user) => user.id === project.teamLeadId)
+    : undefined;
+  const taskAssignees = getTaskAssigneeIds(task)
+    .map((id) => users.find((user) => user.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
+  const taskOverdue = isTaskOverdue(task, today);
+  const mayEditTask = Boolean(
+    project && canEditTask(currentRole, currentUserId, project, task)
+  );
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="task-details-title"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-x-hidden bg-black/70 p-3 pt-[5vh] backdrop-blur-sm sm:items-center sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="glass-panel flex max-h-[86vh] w-full max-w-[680px] min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl sm:max-h-[80vh]">
+        <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-slate-950/25 px-5 py-3.5 sm:px-6">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task overview</p>
+            <div className="mt-0.5 flex min-w-0 items-center gap-2">
+              <h2 id="task-details-title" className="text-base font-bold text-white">Details</h2>
+              <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                {task.taskNumber}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+            aria-label="Close task details"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+          <div className="space-y-7">
+            <section aria-labelledby="project-context-heading">
+              <SectionHeading id="project-context-heading" eyebrow="Project" title={project ? getProjectName(project) : 'Unknown project'} />
+              {project?.description && (
+                <p className="mt-2 max-w-2xl break-all text-sm leading-6 text-slate-400">{project.description}</p>
+              )}
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <DetailBox label="Status" value={project?.status || 'Unknown'} />
+                <DetailBox label="Start date" value={formatOptionalDate(project?.startDate)} />
+                <DetailBox label="Due date" value={formatOptionalDate(project?.targetDate)} />
+                <DetailBox label="Team lead" value={teamLead?.name || 'Not assigned'} />
+              </div>
+            </section>
+
+            <section aria-labelledby="task-information-heading" className="border-t border-white/10 pt-6">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Task</p>
+              <div className="mt-1.5 flex items-start justify-between gap-4">
+                <h3 id="task-information-heading" className="break-words text-xl font-bold leading-7 text-white sm:text-2xl">
+                  {task.title}
+                </h3>
+                {mayEditTask && (
+                  <button
+                    type="button"
+                    onClick={() => onEditTask(task)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                  >
+                    <Pencil size={12} />
+                    Edit task
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-3">
+                <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Priority</span>
+                <TaskBadge value={task.priority} kind="priority" />
+                {(task.hasPendingApproval || task.approvalStatus === 'Pending Approval') && (
+                  <span title="Pending Team Lead approval" className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                    <Clock3 size={11} />Pending approval
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-5">
+                <h4 className="text-xs font-semibold text-slate-300">Description</h4>
+                <p className="mt-1.5 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">{task.description}</p>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <DetailBox label="Status" value={getTaskStatusLabel(task.status)} />
+                <DetailBox label="Assigned to" value={taskAssignees.join(', ') || 'Unassigned'} />
+                <DetailBox label="Start date" value={formatOptionalDate(getTaskStartDate(task))} />
+                <DetailBox
+                  label="Due date"
+                  value={`${formatOptionalDate(task.dueDate)}${taskOverdue ? ' · Overdue' : ''}`}
+                  overdue={taskOverdue}
+                />
+              </div>
+            </section>
+
+            <section aria-labelledby="subtasks-heading" className="border-t border-white/10 pt-6">
+              <div className="flex items-end justify-between gap-3">
+                <SectionHeading
+                  id="subtasks-heading"
+                  eyebrow="Breakdown"
+                  title={`Subtasks (${task.subtasks.length})`}
+                />
+                {task.subtasks.length > 0 && (
+                  <span className="text-xs font-medium text-slate-500">
+                    {task.subtasks.filter((subtask) => subtask.completed || subtask.status === 'Done').length} complete
+                  </span>
+                )}
+              </div>
+
+              {task.subtasks.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-6 text-center">
+                  <p className="text-sm font-medium text-slate-300">No subtasks yet</p>
+                  <p className="mt-1 text-xs text-slate-500">This task has not been broken into smaller work items.</p>
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {task.subtasks.map((subtask, index) => {
+                    const subtaskStatus = subtask.status || (subtask.completed ? 'Done' : 'Todo');
+                    const subtaskPriority = subtask.priority || task.priority;
+                    const editableSubtask = toEditableSubtask(task, subtask, index);
+                    const mayEditSubtask = Boolean(
+                      project && canEditTask(
+                        currentRole,
+                        currentUserId,
+                        project,
+                        editableSubtask
+                      )
+                    );
+                    const subtaskOverdue = Boolean(
+                      subtask.dueDate
+                      && subtaskStatus !== 'Done'
+                      && subtask.dueDate < today
+                    );
+                    const subtaskAssignees = (subtask.assigneeIds || [])
+                      .map((id) => users.find((user) => user.id === id)?.name)
+                      .filter((name): name is string => Boolean(name));
+
+                    return (
+                      <article key={subtask.id} className="rounded-2xl border border-white/10 bg-slate-950/30 p-4 sm:p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Subtask {index + 1}</p>
+                            <h4 className="mt-1 break-words text-base font-bold leading-6 text-white">{subtask.title}</h4>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <TaskBadge value={subtaskStatus} kind="status" />
+                            <TaskBadge value={subtaskPriority} kind="priority" />
+                            {((subtask as Subtask & Partial<Task>).hasPendingApproval || (subtask as Subtask & Partial<Task>).approvalStatus === 'Pending Approval') && (
+                              <span title="Pending Team Lead approval" className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-200">
+                                <Clock3 size={11} />Pending approval
+                              </span>
+                            )}
+                            {mayEditSubtask && (
+                              <button
+                                type="button"
+                                onClick={() => onEditTask(editableSubtask)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/35 hover:text-cyan-200"
+                              >
+                                <Pencil size={12} />
+                                Edit
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <p className="mt-3 break-all whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                          {subtask.description?.trim() || 'No description provided.'}
+                        </p>
+
+                        <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                          <DetailBox label="Assigned to" value={subtaskAssignees.join(', ') || 'Unassigned'} compact />
+                          <DetailBox label="Status" value={getTaskStatusLabel(subtaskStatus)} compact />
+                          <DetailBox label="Start date" value={formatOptionalDate(subtask.startDate)} compact />
+                          <DetailBox
+                            label="Due date"
+                            value={`${formatOptionalDate(subtask.dueDate)}${subtaskOverdue ? ' · Overdue' : ''}`}
+                            compact
+                            overdue={subtaskOverdue}
+                          />
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
         </div>
       </div>
     </div>
+  );
+};
+
+const SectionHeading: React.FC<{ id: string; eyebrow: string; title: string }> = ({ id, eyebrow, title }) => (
+  <div>
+    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">{eyebrow}</p>
+    <h3 id={id} className="mt-1 break-words text-lg font-bold leading-6 text-white">{title}</h3>
   </div>
 );
 
-const Detail: React.FC<{ label: string; value: string; compact?: boolean }> = ({
-  label,
-  value,
-  compact = false
-}) => (
-  <div className={`rounded-xl border border-white/10 bg-slate-950/40 ${compact ? 'p-2' : 'p-3'}`}>
-    <span className="block text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
-    <span className="mt-1 block text-xs font-semibold text-slate-200">{value}</span>
+const DetailBox: React.FC<{
+  label: string;
+  value: string;
+  compact?: boolean;
+  overdue?: boolean;
+}> = ({ label, value, compact = false, overdue = false }) => (
+  <div className={`rounded-xl border ${overdue ? 'border-rose-500/25 bg-rose-500/[0.06]' : 'border-white/10 bg-white/[0.025]'} ${compact ? 'px-3 py-2.5' : 'p-3.5'}`}>
+    <span className="block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</span>
+    <span className={`mt-1 block break-words text-xs font-semibold leading-5 ${overdue ? 'text-rose-300' : 'text-slate-200'}`}>{value}</span>
   </div>
 );

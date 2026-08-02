@@ -15,13 +15,13 @@ export const TASK_STATUSES: TaskStatus[] = [
   'Done'
 ];
 
-export type TaskModulePriority = Exclude<TaskPriority, 'Urgent'> | 'Critical';
+export type TaskModulePriority = TaskPriority;
 
 export const TASK_PRIORITIES: TaskModulePriority[] = [
   'Low',
   'Medium',
   'High',
-  'Critical'
+  'Urgent'
 ];
 
 export interface TaskFormInput {
@@ -35,6 +35,8 @@ export interface TaskFormInput {
   status: TaskStatus;
 }
 
+export interface SubtaskFormInput extends Omit<TaskFormInput, 'projectId'> {}
+
 export type TaskModuleTask = Task & Partial<{
   assigneeIds: string[];
   startDate: string;
@@ -47,10 +49,12 @@ export interface TaskMutationResult {
   fieldErrors?: Record<string, string>;
 }
 
-export type TaskMutationData = Partial<Omit<Task, 'priority'>> & {
+export type TaskMutationData = Partial<Omit<Task, 'priority' | 'subtasks'>> & {
   priority?: TaskModulePriority;
   assigneeIds?: string[];
   startDate?: string;
+  parentTaskId?: string;
+  subtasks?: SubtaskFormInput[];
 };
 
 type CompatibleProject = Project & Partial<{
@@ -78,11 +82,9 @@ export const getTaskAssigneeIds = (task: Task): string[] =>
 export const getTaskStartDate = (task: Task): string =>
   (task as TaskModuleTask).startDate || task.createdAt;
 
-export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority =>
-  priority === 'Urgent' ? 'Critical' : priority;
+export const getTaskPriorityValue = (priority: TaskPriority): TaskModulePriority => priority;
 
-export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority =>
-  priority === 'Critical' ? 'Urgent' : priority;
+export const toStoredTaskPriority = (priority: TaskModulePriority): TaskPriority => priority;
 
 export const getProjectName = (project: Project): string =>
   (project as CompatibleProject).name || project.title;
@@ -92,6 +94,19 @@ export const getProjectEndDate = (project: Project): string =>
 
 export const getProjectMemberIds = (project: Project): string[] =>
   (project as CompatibleProject).members || project.memberIds;
+
+export const getAssignableProjectUsers = (project: Project, users: User[]): User[] => {
+  const memberIds = new Set(getProjectMemberIds(project));
+  // Administrative and HR accounts may belong to a project for oversight, but are not
+  // work assignees. Keeping this in the shared selector also protects validation and
+  // every task/subtask creation control that consumes it.
+  return users.filter((user) =>
+    user.status !== 'inactive'
+    && memberIds.has(user.id)
+    && user.role !== 'Admin'
+    && user.role !== 'HR'
+  );
+};
 
 export const getTaskStatusLabel = (status: TaskStatus): string =>
   status === 'Todo' ? 'To Do' : status;
@@ -119,10 +134,13 @@ export const canCreateTaskForProject = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  isActiveProject(project)
-  && role === 'Team_Lead'
-  && project.teamLeadId === userId;
+): boolean => {
+  if (!isActiveProject(project)) {
+    return false;
+  }
+
+  return role !== 'HR' && project.teamLeadId === userId;
+};
 
 export const canEditTask = (
   role: UserRole,
@@ -130,22 +148,27 @@ export const canEditTask = (
   project: Project,
   task: Task
 ): boolean => {
-  if (role === 'Team_Lead') {
-    return isActiveProject(project) && project.teamLeadId === userId;
+  if (!isActiveProject(project) || task.isArchived) return false;
+  if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
+
+  const isProjectLead = role !== 'HR' && project.teamLeadId === userId;
+  if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
+    return isProjectLead;
   }
-  return role === 'Team_Member' && getTaskAssigneeIds(task).includes(userId);
+  return getTaskAssigneeIds(task).includes(userId) || isProjectLead;
 };
 
 export const canDeleteTask = (
   role: UserRole,
   userId: string,
   project: Project,
+  task: Task,
   teamLeadCanDeleteTasks = true
 ): boolean => {
-  return role === 'Team_Lead'
-    && teamLeadCanDeleteTasks
-    && isActiveProject(project)
-    && project.teamLeadId === userId;
+  if (!teamLeadCanDeleteTasks || !isActiveProject(project) || task.isArchived) return false;
+  // Assignment grants work/edit access, not deletion.  Deleting a task remains a
+  // project-lead operation (with the server enforcing the same rule).
+  return role !== 'HR' && project.teamLeadId === userId;
 };
 
 export const validateTaskInput = (
@@ -191,11 +214,7 @@ export const validateTaskInput = (
     errors.assigneeIds = 'Duplicate assignees are not allowed.';
   } else if (project) {
     const validMemberIds = new Set(
-      users
-        .filter((user) =>
-          user.status !== 'inactive' && getProjectMemberIds(project).includes(user.id)
-        )
-        .map((user) => user.id)
+      getAssignableProjectUsers(project, users).map((user) => user.id)
     );
     if (input.assigneeIds.some((id) => !validMemberIds.has(id))) {
       errors.assigneeIds = 'Every assignee must be an active project member.';
@@ -204,6 +223,14 @@ export const validateTaskInput = (
 
   return errors;
 };
+
+// Editing deliberately has no "today" minimum.  Historical tasks must retain their
+// recorded dates when an unrelated field changes; the form confirms a changed past date.
+export const validateTaskEditInput = (
+  input: TaskFormInput,
+  project: Project | undefined,
+  users: User[]
+): Record<string, string> => validateTaskInput(input, project, users, false);
 
 export const filterAndSortTasks = (
   tasks: Task[],

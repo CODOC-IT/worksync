@@ -15,7 +15,8 @@ import {
   TaskMutationData,
   TaskMutationResult,
   toStoredTaskPriority,
-  validateTaskInput
+  validateTaskInput,
+  validateTaskEditInput
 } from './taskRules';
 
 interface TaskMutationContext {
@@ -25,6 +26,32 @@ interface TaskMutationContext {
   tasks: Task[];
   users: User[];
 }
+
+const findTaskForMutation = (tasks: Task[], taskId: string): (Task & Partial<{ startDate: string }>) | undefined => {
+  const directTask = tasks.find((task) => task.id === taskId);
+  if (directTask) return directTask;
+
+  const parent = tasks.find((task) => task.subtasks.some((subtask) => subtask.id === taskId));
+  const subtask = parent?.subtasks.find((item) => item.id === taskId);
+  if (!parent || !subtask) return undefined;
+
+  return {
+    ...parent,
+    ...subtask,
+    id: subtask.id,
+    parentTaskId: parent.id,
+    title: subtask.title,
+    description: subtask.description || '',
+    status: subtask.status || (subtask.completed ? 'Done' : 'Todo'),
+    priority: subtask.priority || parent.priority,
+    assigneeId: subtask.assigneeIds?.[0] || '',
+    assigneeIds: subtask.assigneeIds || [],
+    startDate: subtask.startDate || getTaskStartDate(parent),
+    dueDate: subtask.dueDate || parent.dueDate,
+    subtasks: [],
+    subtaskCount: 0
+  };
+};
 
 export const toTaskFormInput = (data: TaskMutationData): TaskFormInput => {
   const assigneeIds = data.assigneeIds?.length
@@ -88,7 +115,7 @@ export const prepareTaskCreation = (
     assigneeIds: input.assigneeIds,
     creatorId: context.currentUserId,
     estimatedHours: data.estimatedHours || 8,
-    subtasks: data.subtasks || [],
+    subtasks: [],
     dependencies: data.dependencies || [],
     tags: data.tags || ['Task'],
     attachments: [],
@@ -108,7 +135,7 @@ export const prepareTaskUpdate = (
   data: TaskMutationData,
   context: TaskMutationContext
 ): TaskMutationResult => {
-  const task = context.tasks.find((item) => item.id === taskId);
+  const task = findTaskForMutation(context.tasks, taskId);
   if (!task) return { success: false, message: 'Task not found.' };
 
   const project = context.projects.find((item) => item.id === task.projectId);
@@ -119,23 +146,11 @@ export const prepareTaskUpdate = (
     return { success: false, message: 'You do not have permission to edit this task.' };
   }
 
-  if (context.currentRole === 'Team_Member') {
-    const restrictedFields: Array<keyof TaskMutationData> = [
-      'projectId',
-      'title',
-      'description',
-      'priority',
-      'startDate',
-      'dueDate',
-      'assigneeId',
-      'assigneeIds'
-    ];
-    if (restrictedFields.some((field) => data[field] !== undefined)) {
-      return {
-        success: false,
-        message: 'You can only update the status for this task.'
-      };
-    }
+  if (data.assigneeId !== undefined || data.assigneeIds !== undefined) {
+    return {
+      success: false,
+      message: 'Task assignments cannot be changed from the assignee edit form.'
+    };
   }
 
   const assigneeIds = data.assigneeIds?.length
@@ -143,7 +158,7 @@ export const prepareTaskUpdate = (
     : data.assigneeId
       ? [data.assigneeId]
       : getTaskAssigneeIds(task);
-  const { priority, ...otherChanges } = data;
+  const { priority, subtasks: _subtasks, ...otherChanges } = data;
   const updatedTask: Task & Partial<{ startDate: string; assigneeIds: string[] }> = {
     ...task,
     ...otherChanges,
@@ -163,7 +178,7 @@ export const prepareTaskUpdate = (
     assigneeIds,
     status: updatedTask.status
   };
-  const fieldErrors = validateTaskInput(input, project, context.users, false);
+  const fieldErrors = validateTaskEditInput(input, project, context.users);
 
   if (Object.keys(fieldErrors).length > 0) {
     return {
@@ -191,7 +206,7 @@ export const prepareTaskDeletion = (
 
   if (
     !project
-    || !canDeleteTask(context.currentRole, context.currentUserId, project)
+    || !canDeleteTask(context.currentRole, context.currentUserId, project, task)
   ) {
     return { success: false, message: 'You do not have permission to delete this task.' };
   }

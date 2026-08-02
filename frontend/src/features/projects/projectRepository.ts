@@ -1,4 +1,4 @@
-import { Project } from '../../types';
+import { Milestone, Project, ProjectApprovalRequest, ProjectFile, User } from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // projectApiClient — thin fetch wrapper over /api/projects (backend/src/projects/project.routes.ts).
@@ -52,6 +52,24 @@ export const fetchProject = async (id: string): Promise<Project> => {
   return data;
 };
 
+export type ProjectMemberSummary = Pick<
+  User,
+  'id' | 'name' | 'role' | 'department' | 'title' | 'status'
+>;
+
+export interface ProjectMemberDirectory {
+  teamLeadId: string;
+  memberIds: string[];
+  members: ProjectMemberSummary[];
+}
+
+export const fetchProjectMemberDirectory = async (id: string): Promise<ProjectMemberDirectory> => {
+  const { data } = await apiFetch<{ data: ProjectMemberDirectory }>(
+    `/${encodeURIComponent(id)}/members`
+  );
+  return data;
+};
+
 export interface CreateProjectPayload {
   title: string;
   description: string;
@@ -75,18 +93,61 @@ export interface UpdateProjectPayload {
   startDate?: string;
   targetDate?: string;
   status?: Project['status'];
+  teamLeadId?: string;
+  creationReason?: string;
+  // Approval-request reason, only meaningful (and required) when the caller is a Team Lead --
+  // see backend/src/projects/project.controller.ts's updateProject. Ignored for Admin's direct
+  // edits, which apply immediately as before.
+  reason?: string;
 }
 
-export const updateProjectApi = async (id: string, payload: UpdateProjectPayload): Promise<Project> => {
-  const { data } = await apiFetch<{ data: Project }>(`/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload)
-  });
-  return data;
+// Every gated action (Edit/Archive/Restore/Permanent Delete) now returns one of two shapes,
+// distinguished by `pendingApproval`: an Admin's call executes immediately and returns the
+// resulting `project` (or nothing, for archive/restore/permanent-delete which never returned
+// project data even before this change); a Team Lead's call instead creates a request and
+// returns it as `approvalRequest`, with the underlying project left untouched. See
+// backend/src/projects/projectApproval.service.ts for the workflow this mirrors.
+export interface ProjectActionResult {
+  pendingApproval: boolean;
+  message: string;
+  project?: Project;
+  approvalRequest?: ProjectApprovalRequest;
+}
+
+export const updateProjectApi = async (id: string, payload: UpdateProjectPayload): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data: Project | ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data as ProjectApprovalRequest }
+    : { pendingApproval: false, message: response.message, project: response.data as Project };
 };
 
-export const archiveProjectApi = async (id: string, reason: string): Promise<void> => {
-  await apiFetch(`/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+export const archiveProjectApi = async (id: string, reason: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
+};
+
+export const permanentlyDeleteProjectApi = async (id: string, reason?: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}/permanent`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
+};
+
+export const restoreProjectApi = async (id: string, reason?: string): Promise<ProjectActionResult> => {
+  const response = await apiFetch<{
+    pendingApproval?: boolean; message: string; data?: ProjectApprovalRequest;
+  }>(`/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ reason }) });
+  return response.pendingApproval
+    ? { pendingApproval: true, message: response.message, approvalRequest: response.data }
+    : { pendingApproval: false, message: response.message };
 };
 
 export const addProjectMemberApi = async (
@@ -107,4 +168,83 @@ export const removeProjectMemberApi = async (id: string, userId: string, reason?
     { method: 'DELETE', body: JSON.stringify({ reason }) }
   );
   return data;
+};
+
+export interface CreateMilestonePayload {
+  title: string;
+  dueDate: string;
+}
+
+export interface UpdateMilestonePayload {
+  title?: string;
+  dueDate?: string;
+}
+
+export const addMilestoneApi = async (projectId: string, payload: CreateMilestonePayload): Promise<Milestone> => {
+  const { data } = await apiFetch<{ data: Milestone }>(`/${encodeURIComponent(projectId)}/milestones`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return data;
+};
+
+export const updateMilestoneApi = async (
+  projectId: string,
+  milestoneId: string,
+  payload: UpdateMilestonePayload
+): Promise<Milestone> => {
+  const { data } = await apiFetch<{ data: Milestone }>(
+    `/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'PATCH', body: JSON.stringify(payload) }
+  );
+  return data;
+};
+
+export const deleteMilestoneApi = async (projectId: string, milestoneId: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`, {
+    method: 'DELETE'
+  });
+};
+
+export interface CreateProjectFilePayload {
+  name: string;
+  mimeType?: string;
+  url: string;
+}
+
+export const addProjectFileApi = async (projectId: string, payload: CreateProjectFilePayload): Promise<ProjectFile> => {
+  const { data } = await apiFetch<{ data: ProjectFile }>(`/${encodeURIComponent(projectId)}/files`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return data;
+};
+
+export const removeProjectFileApi = async (projectId: string, fileId: string): Promise<void> => {
+  await apiFetch(`/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+};
+
+// Fetches the attachment as a Bearer-authenticated request (a plain <a href> can't carry the auth
+// header) and hands the caller back an object URL plus a revoke callback -- 'open' lets the browser
+// render supported types (PDF/images) inline in a new tab, 'download' feeds the same bytes to an
+// anchor with a `download` attribute to force a save-as. Mirrors the existing blob-download
+// convention in features/activity/activityApi.ts.
+export const fetchProjectFileBlob = async (
+  projectId: string,
+  fileId: string,
+  mode: 'open' | 'download'
+): Promise<{ objectUrl: string; revoke: () => void }> => {
+  const token = localStorage.getItem('worksync_auth_token');
+  const query = mode === 'download' ? '?mode=download' : '';
+  const res = await fetch(
+    `${API_BASE}/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download${query}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : undefined }
+  );
+  if (!res.ok) {
+    const json = await res.json().catch(() => null);
+    throw new Error(json?.message || `Could not load attachment (${res.status}).`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  return { objectUrl, revoke: () => URL.revokeObjectURL(objectUrl) };
 };

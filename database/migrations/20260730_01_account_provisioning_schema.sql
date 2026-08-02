@@ -1,0 +1,195 @@
+-- Account-provisioning schema preparation.
+--
+-- Apply after database/setup.sql to an existing Supabase Postgres database. This migration is
+-- intentionally additive: existing IAM users, bcrypt credentials, role grants, projects, and
+-- history remain intact while Supabase identities are linked during the later reconciliation
+-- and provisioning rollout.
+
+BEGIN;
+
+ALTER TABLE iam.Users
+    ADD COLUMN IF NOT EXISTS AuthUserId uuid NULL,
+    ADD COLUMN IF NOT EXISTS Username varchar(80) NULL,
+    ADD COLUMN IF NOT EXISTS CreatedByUserId int NULL,
+    ADD COLUMN IF NOT EXISTS InvitationSentAtUtc timestamptz(0) NULL,
+    ADD COLUMN IF NOT EXISTS ActivatedAtUtc timestamptz(0) NULL;
+
+-- The system actor is deliberately left without an AuthUserId. Existing people are linked to
+-- auth.users only after their normalized email has been reconciled by a protected server job.
+ALTER TABLE iam.Users
+    DROP CONSTRAINT IF EXISTS FK_Users_AuthUser;
+
+ALTER TABLE iam.Users
+    ADD CONSTRAINT FK_Users_AuthUser
+    FOREIGN KEY (AuthUserId) REFERENCES auth.users(id);
+
+ALTER TABLE iam.Users
+    DROP CONSTRAINT IF EXISTS FK_Users_CreatedBy;
+
+ALTER TABLE iam.Users
+    ADD CONSTRAINT FK_Users_CreatedBy
+    FOREIGN KEY (CreatedByUserId) REFERENCES iam.Users(UserId);
+
+-- Produce stable, human-readable usernames for existing records. The suffix only depends on
+-- the current, deterministic UserId ordering, so re-running this migration does not reshuffle
+-- already assigned usernames.
+WITH username_bases AS (
+    SELECT
+        UserId,
+        OrganizationId,
+        left(
+            nullif(
+                regexp_replace(
+                    lower(coalesce(nullif(split_part(Email, '@', 1), ''), DisplayName, 'member')),
+                    '[^a-z0-9._-]+', '-', 'g'
+                ),
+                ''
+            ),
+            68
+        ) AS base_username
+    FROM iam.Users
+    WHERE Username IS NULL
+), numbered AS (
+    SELECT
+        UserId,
+        OrganizationId,
+        coalesce(base_username, 'member') AS base_username,
+        row_number() OVER (
+            PARTITION BY OrganizationId, coalesce(base_username, 'member')
+            ORDER BY UserId
+        ) AS collision_number
+    FROM username_bases
+)
+UPDATE iam.Users AS users
+SET Username = CASE
+    WHEN numbered.collision_number = 1 THEN numbered.base_username
+    ELSE left(numbered.base_username, 68 - length(numbered.collision_number::text))
+         || '-' || numbered.collision_number::text
+END
+FROM numbered
+WHERE users.UserId = numbered.UserId;
+
+ALTER TABLE iam.Users
+    ALTER COLUMN Username SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS UX_Users_Organization_Username_CI
+    ON iam.Users (OrganizationId, lower(Username));
+
+CREATE UNIQUE INDEX IF NOT EXISTS UX_Users_AuthUserId
+    ON iam.Users (AuthUserId)
+    WHERE AuthUserId IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS IX_Users_Organization_AuthStatus
+    ON iam.Users (OrganizationId, AccountStatus, AuthUserId)
+    INCLUDE (DisplayName, Email, Username);
+
+-- HR is an enduring base role. The historical RoleCode is retained so existing foreign keys
+-- and application records remain valid; later application code maps it to the public "HR"
+-- base role. TeamLead remains temporary and is authorized only through project scope checks.
+UPDATE iam.Roles
+SET RoleName = 'HR',
+    IsTemporary = FALSE,
+    Description = 'Organization-wide HR account provisioning and attendance responsibility'
+WHERE RoleCode = 'HRRepresentative';
+
+UPDATE iam.UserRoles AS user_roles
+SET EndsAtUtc = NULL
+FROM iam.Roles AS roles
+WHERE roles.RoleId = user_roles.RoleId
+  AND roles.RoleCode = 'HRRepresentative'
+  AND user_roles.RevokedAtUtc IS NULL;
+
+-- The old generic temporary-scope trigger is correct for TeamLead but no longer for permanent
+-- HR. Replace only the HR trigger with a role-code check that preserves all existing scopes.
+DROP TRIGGER IF EXISTS tr_hr_scope_role_type ON iam.HrDepartmentScopes;
+
+CREATE OR REPLACE FUNCTION iam.validate_hr_scope_role()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    assigned_role_code text;
+BEGIN
+    SELECT r.RoleCode
+      INTO assigned_role_code
+      FROM iam.UserRoles ur
+      JOIN iam.Roles r ON r.RoleId = ur.RoleId
+     WHERE ur.UserRoleId = NEW.UserRoleId;
+
+    IF assigned_role_code IS DISTINCT FROM 'HRRepresentative' THEN
+        RAISE EXCEPTION 'HR scope requires an HR role assignment.'
+            USING ERRCODE = '23514', CONSTRAINT = 'CK_HrScope_RoleType';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tr_hr_scope_role_type
+BEFORE INSERT OR UPDATE OF UserRoleId ON iam.HrDepartmentScopes
+FOR EACH ROW
+EXECUTE FUNCTION iam.validate_hr_scope_role();
+
+-- A durable, non-secret queue for IAM/Auth reconciliation. It records only identifiers and a
+-- safe reason; invitation tokens, passwords, hashes, and service credentials never belong here.
+CREATE TABLE IF NOT EXISTS iam.AuthIdentityReconciliationIssues
+(
+    ReconciliationIssueId bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    OrganizationId       int NOT NULL,
+    IamUserId            int NULL,
+    AuthUserId           uuid NULL,
+    NormalizedEmail      varchar(254) NOT NULL,
+    IssueCode            varchar(40) NOT NULL,
+    Details              varchar(500) NULL,
+    ResolvedAtUtc        timestamptz(0) NULL,
+    ResolvedByUserId     int NULL,
+    CreatedAtUtc         timestamptz(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT CK_AuthIdentityReconciliationIssues_Code
+        CHECK (IssueCode IN ('IamOnly', 'AuthOnly', 'EmailConflict', 'LinkFailure', 'CompensationFailure'))
+);
+
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    DROP CONSTRAINT IF EXISTS FK_AuthIdentityIssues_Organization;
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    ADD CONSTRAINT FK_AuthIdentityIssues_Organization
+    FOREIGN KEY (OrganizationId) REFERENCES org.Organizations(OrganizationId);
+
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    DROP CONSTRAINT IF EXISTS FK_AuthIdentityIssues_IamUser;
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    ADD CONSTRAINT FK_AuthIdentityIssues_IamUser
+    FOREIGN KEY (IamUserId) REFERENCES iam.Users(UserId);
+
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    DROP CONSTRAINT IF EXISTS FK_AuthIdentityIssues_AuthUser;
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    ADD CONSTRAINT FK_AuthIdentityIssues_AuthUser
+    FOREIGN KEY (AuthUserId) REFERENCES auth.users(id);
+
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    DROP CONSTRAINT IF EXISTS FK_AuthIdentityIssues_ResolvedBy;
+ALTER TABLE iam.AuthIdentityReconciliationIssues
+    ADD CONSTRAINT FK_AuthIdentityIssues_ResolvedBy
+    FOREIGN KEY (ResolvedByUserId) REFERENCES iam.Users(UserId);
+
+CREATE INDEX IF NOT EXISTS IX_AuthIdentityReconciliationIssues_Open
+    ON iam.AuthIdentityReconciliationIssues (OrganizationId, IssueCode, CreatedAtUtc DESC)
+    WHERE ResolvedAtUtc IS NULL;
+
+-- Browser clients authenticate with Supabase but must not be able to query or mutate IAM
+-- profiles directly. The server connection remains the only writer; these revokes are guarded
+-- so local Postgres setups without Supabase roles can still apply the migration.
+DO $$
+DECLARE
+    browser_role text;
+BEGIN
+    FOREACH browser_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = browser_role) THEN
+            EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA iam FROM %I', browser_role);
+            EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA iam FROM %I', browser_role);
+        END IF;
+    END LOOP;
+END;
+$$;
+
+COMMIT;

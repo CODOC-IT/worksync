@@ -25,15 +25,15 @@ export interface DiscussionComment {
 export interface DiscussionThread {
   id: string;
   projectId: string;
+  projectName: string;
   taskId?: string;
+  taskName?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;
-  resolved: boolean;
-  resolvedBy?: string;
-  resolvedAt?: string;
   createdAt: string;
   updatedAt: string;
+  mentionableUserIds: string[];
   comments: DiscussionComment[];
 }
 
@@ -43,7 +43,6 @@ export interface DiscussionFilters {
   taskId: string;
   type: string;
   authorId: string;
-  state: '' | 'resolved' | 'unresolved';
   mentionedOnly: boolean;
   mineOnly: boolean;
   from: string;

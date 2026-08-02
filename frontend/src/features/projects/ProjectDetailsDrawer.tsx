@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -10,9 +10,11 @@ import {
   Paperclip,
   StickyNote,
   CheckCircle2,
-  Circle
+  Circle,
+  Download
 } from 'lucide-react';
-import { Project, ProjectStatus, TaskPriority, User } from '../../types';
+import { Project, ProjectFile, ProjectStatus, TaskPriority, User } from '../../types';
+import { fetchProjectFileBlob } from './projectRepository';
 
 interface ProjectDetailsDrawerProps {
   project: Project | null;
@@ -55,6 +57,13 @@ const formatFullDate = (iso: string): string => {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+// project.files[].size is raw bytes (matches the backend's ProjectFileDTO) -- mirrors
+// ProjectsView.tsx's own formatBytes for the same display convention.
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const SectionLabel: React.FC<{ icon?: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
   <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
     {icon}
@@ -81,6 +90,56 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
 
   const teamLead = project ? users.find((u) => u.id === project.teamLeadId) : undefined;
   const members = project ? project.memberIds.map((id) => users.find((u) => u.id === id)).filter(Boolean) as User[] : [];
+
+  const [pendingFileId, setPendingFileId] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  // How long to keep the object URL alive after opening it in a new tab. Unlike the download flow
+  // (where the browser starts consuming the blob synchronously on anchor.click(), so it's safe to
+  // revoke on the next tick), a new tab has to navigate to and fetch the blob URL first -- revoking
+  // immediately would race that and can blank out the tab before it finishes loading. Revoking
+  // eagerly on click/download is inline with the anchor-click pattern; this timer is the equivalent
+  // "done being used" signal for the open-in-new-tab path.
+  const OPEN_OBJECT_URL_REVOKE_DELAY_MS = 30000;
+
+  // Opens the attachment in a new tab (browser renders supported types like PDF/images inline;
+  // anything else falls back to its own download-or-view default) using an authenticated blob
+  // fetch, since a plain <a href> can't carry the Bearer token the backend route requires.
+  const handleOpenFile = async (file: ProjectFile) => {
+    if (!project) return;
+    setFileError(null);
+    setPendingFileId(file.id);
+    try {
+      const { objectUrl, revoke } = await fetchProjectFileBlob(project.id, file.id, 'open');
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      window.setTimeout(revoke, OPEN_OBJECT_URL_REVOKE_DELAY_MS);
+    } catch (error) {
+      setFileError((error as Error).message || 'Could not open attachment.');
+    } finally {
+      setPendingFileId(null);
+    }
+  };
+
+  const handleDownloadFile = async (file: ProjectFile) => {
+    if (!project) return;
+    setFileError(null);
+    setPendingFileId(file.id);
+    try {
+      const { objectUrl, revoke } = await fetchProjectFileBlob(project.id, file.id, 'download');
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = file.name;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(revoke, 0);
+    } catch (error) {
+      setFileError((error as Error).message || 'Could not download attachment.');
+    } finally {
+      setPendingFileId(null);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -235,14 +294,33 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                   <div className="flex flex-col gap-1.5">
                     {project.files.map((f) => {
                       const uploader = users.find((u) => u.id === f.uploadedBy);
+                      const isPending = pendingFileId === f.id;
                       return (
                         <div
                           key={f.id}
-                          className="flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2"
+                          className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2"
                         >
-                          <span className="min-w-0 truncate text-slate-200">{f.name}</span>
-                          <span className="shrink-0 pl-2 text-[11px] text-slate-500">
-                            {f.size} · {uploader?.name || 'Unknown'}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenFile(f)}
+                            disabled={isPending}
+                            title={`Open ${f.name}`}
+                            className="min-w-0 truncate text-left text-slate-200 hover:text-cyan-300 hover:underline disabled:cursor-wait disabled:opacity-60"
+                          >
+                            {f.name}
+                          </button>
+                          <span className="flex shrink-0 items-center gap-2 pl-2 text-[11px] text-slate-500">
+                            {formatBytes(f.size)} · {uploader?.name || 'Unknown'}
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadFile(f)}
+                              disabled={isPending}
+                              aria-label={`Download ${f.name}`}
+                              title="Download"
+                              className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              <Download size={13} />
+                            </button>
                           </span>
                         </div>
                       );
@@ -251,6 +329,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                 ) : (
                   <p className="text-xs text-slate-500">No files attached.</p>
                 )}
+                {fileError && <p className="mt-1.5 text-xs text-rose-400">{fileError}</p>}
               </div>
 
               {/* Notes */}

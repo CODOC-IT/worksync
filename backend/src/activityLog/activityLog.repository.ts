@@ -5,7 +5,6 @@ export interface ActivityLogRow {
   id: string;
   userId: string;
   userName: string;
-  userAvatar: string;
   action: string;
   targetType: string;
   targetId: string;
@@ -18,8 +17,6 @@ export interface ActivityLogFullRow extends ActivityLogRow {
   diffOldVal?: string;
   diffNewVal?: string;
 }
-
-const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
 
 export const getActivityLogs = async (
   userPk: number,
@@ -67,7 +64,6 @@ export const getActivityLogs = async (
     id: `act-${r.auditeventid}`,
     userId: r.actoruserid ? fromUserPk(r.actoruserid) : '',
     userName: r.displayname || 'System',
-    userAvatar: DEFAULT_AVATAR,
     action: r.actioncode,
     targetType: mapEntityType(r.entitytypecode),
     targetId: r.entityidtext || '',

@@ -7,6 +7,141 @@ export const isEmailConfigured = (): boolean => {
   return Boolean(smtpUser && smtpPass && smtpPass !== 'your_gmail_app_password_here');
 };
 
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  })[character] || character);
+
+const accountTransport = () => {
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  if (!smtpUser || !smtpPass || smtpPass === 'your_gmail_app_password_here') {
+    throw new Error('SMTP credentials are not configured.');
+  }
+  return {
+    smtpUser,
+    organization: process.env.ORGANIZATION_NAME?.trim() || 'WorkSync',
+    transporter: nodemailer.createTransport({ service: 'gmail', auth: { user: smtpUser, pass: smtpPass } })
+  };
+};
+
+export interface CredentialEmailInput {
+  toEmail: string;
+  recipientName: string;
+  password: string;
+  role: string;
+}
+
+export interface AccountUpdateEmailInput {
+  toEmail: string;
+  recipientName: string;
+  role: string;
+  changedBy: string;
+  password?: string;
+}
+
+export const buildCredentialEmailContent = (
+  input: CredentialEmailInput,
+  organization: string,
+  loginUrl: string
+): { subject: string; text: string; html: string } => {
+  const safe = {
+    organization: escapeHtml(organization),
+    name: escapeHtml(input.recipientName),
+    email: escapeHtml(input.toEmail),
+    password: escapeHtml(input.password),
+    role: escapeHtml(input.role),
+    loginUrl: escapeHtml(loginUrl)
+  };
+  return {
+    subject: `Your ${organization} account credentials`,
+    text: [
+      `Hello ${input.recipientName},`,
+      '',
+      `Your ${organization} account is ready.`,
+      `Email: ${input.toEmail}`,
+      `Password: ${input.password}`,
+      `Role: ${input.role}`,
+      'This is your permanent sign-in password.',
+      loginUrl ? `Sign in: ${loginUrl}` : '',
+      '',
+      'Keep your password secure and do not share it with anyone.'
+    ].filter(Boolean).join('\n'),
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+      <h1 style="font-size:22px">Welcome to ${safe.organization}</h1>
+      <p>Hello ${safe.name},</p>
+      <p>Your account has been created. Use these credentials to sign in:</p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
+        <tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>
+        <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
+      </table>
+      <p>This is your permanent sign-in password.</p>
+      ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
+      <p>Keep your password secure and do not share it with anyone.</p>
+    </div>`
+  };
+};
+
+export const sendCredentialEmail = async (input: CredentialEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    ...buildCredentialEmailContent(input, organization, loginUrl)
+  });
+};
+
+export const sendAccountUpdateEmail = async (input: AccountUpdateEmailInput): Promise<void> => {
+  const { smtpUser, organization, transporter } = accountTransport();
+  const loginUrl = process.env.APP_LOGIN_URL?.trim() || '';
+  const safe = {
+    organization: escapeHtml(organization),
+    name: escapeHtml(input.recipientName),
+    email: escapeHtml(input.toEmail),
+    role: escapeHtml(input.role),
+    changedBy: escapeHtml(input.changedBy),
+    password: input.password ? escapeHtml(input.password) : '',
+    loginUrl: escapeHtml(loginUrl)
+  };
+
+  const textLines = [
+    `Hello ${input.recipientName},`,
+    '',
+    `Your ${organization} account request has been fulfilled and your account details were updated by ${input.changedBy}.`,
+    `Email: ${input.toEmail}`,
+    `Role: ${input.role}`,
+    input.password ? `Password: ${input.password}` : '',
+    loginUrl ? `Sign in: ${loginUrl}` : '',
+    '',
+    'If you did not expect this change, contact your administrator immediately.'
+  ].filter(Boolean);
+
+  await transporter.sendMail({
+    from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
+    to: input.toEmail,
+    subject: `Your ${organization} account details were updated`,
+    text: textLines.join('\n'),
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+      <h1 style="font-size:22px">Your ${safe.organization} account was updated</h1>
+      <p>Hello ${safe.name},</p>
+      <p>Your account request has been fulfilled and your account details were updated by ${safe.changedBy}.</p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
+        <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
+        ${input.password ? `<tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>` : ''}
+      </table>
+      ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
+      <p>If you did not expect this change, contact your administrator immediately.</p>
+    </div>`
+  });
+};
+
 export const sendOTPEmail = async (toEmail: string, name: string, otp: string): Promise<void> => {
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;

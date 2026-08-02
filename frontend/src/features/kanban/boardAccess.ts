@@ -5,25 +5,48 @@ import { Project, TaskStatus, UserRole } from '../../types';
 // (see docs/BoardModuleGuide.md §8/§12).
 export const BOARD_COLUMNS: TaskStatus[] = ['Todo', 'In Progress', 'Review', 'Done'];
 
-// Admin: every project ("workspace"). Team Lead: only projects they lead, so they can
-// switch between the ones they manage. Team Member: only projects they belong to.
+// Admin: every project ("workspace"). HR: every project too, but strictly read-only — every
+// mutating helper below (canDecideReview/canReopenTask) and taskRules.ts's canEditTask
+// independently return false for HR, and the backend rejects HR on every write path
+// (assertCanEditTask/assertCanChangeTaskStatus/assertCanDeleteTask/isProjectLead), so widening
+// visibility here cannot widen what HR may change. Without this HR fell through to the
+// membership filter below and — never being a project member — saw an empty board.
+// Team Lead: only projects they lead. Team Member: only projects they belong to.
 export const getAccessibleProjects = (
   role: UserRole,
   userId: string,
   projects: Project[]
 ): Project[] => {
-  if (role === 'Admin') return projects;
-  if (role === 'Team_Lead') return projects.filter((project) => project.teamLeadId === userId);
-  return projects.filter((project) => project.memberIds.includes(userId));
+  const activeProjects = projects.filter((project) => project.status !== 'Archived');
+  if (role === 'Admin' || role === 'HR') return activeProjects;
+  if (role === 'Team_Lead') return activeProjects.filter((project) => project.teamLeadId === userId);
+  return activeProjects.filter((project) => project.memberIds.includes(userId));
 };
 
-// Who may Approve/Reject a task sitting in Review with a Pending decision.
+// Who may Approve/Reject a task sitting in Review with a Pending decision. Deliberately no Admin
+// bypass: only this specific project's Team Lead (a per-project membership, not an account role —
+// see project.teamLeadId) may decide a review. Matches canReopenTask's rule below and the
+// server-authoritative check in backend/src/tasks/task.service.ts's decideReview
+// (isProjectLead(..., { allowAdmin: false })), which is what actually enforces this.
 export const canDecideReview = (
   role: UserRole,
   userId: string,
   project: Project
-): boolean =>
-  role === 'Admin' || (role === 'Team_Lead' && project.teamLeadId === userId);
+): boolean => role !== 'HR' && project.teamLeadId === userId;
+
+// Who may reopen a Done task. Deliberately stricter than canDecideReview: an Admin can approve
+// a review but may NOT reopen a completed task — reversing a delivered outcome belongs to the
+// Team Lead who owns that project. Mirrors the same rule the backend enforces independently in
+// task.service.ts's reopenTask, which is the authoritative check (this one is UX only).
+export const canReopenTask = (
+  role: UserRole,
+  userId: string,
+  project: Project
+): boolean => role !== 'HR' && project.teamLeadId === userId;
+
+// Where a reopened task may land. Never 'Done' (that's where it is) and never 'Blocked'
+// (Task Module territory) — matches REOPEN_TARGETS in backend/src/tasks/task.service.ts.
+export const REOPEN_TARGETS: TaskStatus[] = ['Review', 'In Progress', 'Todo'];
 
 export interface DueDateIndicator {
   label: string;

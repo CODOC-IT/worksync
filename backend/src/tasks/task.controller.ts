@@ -4,10 +4,19 @@ import * as service from './task.service.js';
 import {
   validateChangeStatusBody,
   validateCreateTaskBody,
+  validateRejectDecisionBody,
+  validateReopenBody,
   validateReviewDecisionBody,
   validateUpdateTaskBody
 } from './task.validation.js';
-import { ChangeStatusInput, CreateTaskInput, UpdateTaskInput } from './task.types.js';
+import {
+  ApiTaskStatus,
+  ChangeStatusInput,
+  CreateTaskInput,
+  SubtaskReviewDecisionInput,
+  TaskEditApprovalInput,
+  UpdateTaskInput
+} from './task.types.js';
 
 // Controller = thin HTTP adapter (matches backend/src/notifications / backend/src/projects).
 
@@ -37,7 +46,8 @@ export const listTasks = async (req: AuthenticatedRequest, res: Response): Promi
   if (!user) return;
   try {
     const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-    const data = await service.listTasksForUser(user.id, user.role, projectId);
+    const archived = req.query.archived === 'true';
+    const data = await service.listTasksForUser(user.id, user.role, projectId, archived);
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load tasks.');
@@ -120,6 +130,26 @@ export const changeStatus = async (req: AuthenticatedRequest, res: Response): Pr
   }
 };
 
+// PATCH /api/tasks/:id/reopen — the only route out of Done (Team Lead only, reason mandatory).
+export const reopenTask = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateReopenBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { status, reason } = req.body as { status: ApiTaskStatus; reason: string };
+    const data = await service.reopenTask(req.params.id, { status, reason }, user.id, user.role);
+    res.json({ success: true, message: `Task reopened to ${status}.`, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to reopen task.');
+  }
+};
+
 export const approveTask = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = requireUser(req, res);
   if (!user) return;
@@ -143,15 +173,15 @@ export const rejectTask = async (req: AuthenticatedRequest, res: Response): Prom
   const user = requireUser(req, res);
   if (!user) return;
 
-  const validation = validateReviewDecisionBody(req.body);
+  const validation = validateRejectDecisionBody(req.body);
   if (!validation.valid) {
     res.status(400).json({ success: false, message: validation.message });
     return;
   }
 
   try {
-    const { note } = req.body as { note: string };
-    const data = await service.rejectTask(req.params.id, note, user.id, user.role);
+    const { note, subtaskDecisions } = req.body as { note: string; subtaskDecisions?: SubtaskReviewDecisionInput[] };
+    const data = await service.rejectTask(req.params.id, note, user.id, user.role, subtaskDecisions);
     res.json({ success: true, message: 'Task rejected and returned to In Progress.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to reject task.');
@@ -166,5 +196,48 @@ export const getHistory = async (req: AuthenticatedRequest, res: Response): Prom
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load task history.');
+  }
+};
+
+export const createTaskEditApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.createTaskEditApproval(
+      req.params.id,
+      req.body as TaskEditApprovalInput,
+      user.id,
+      user.role
+    );
+    res.status(201).json({ success: true, message: 'Task update requested.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to submit task update request.');
+  }
+};
+
+export const listTaskEditApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.listTaskEditApprovals(user.id, user.role);
+    res.json({ success: true, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to load task update requests.');
+  }
+};
+
+export const decideTaskEditApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const decision = req.body?.decision;
+  if (decision !== 'Approved' && decision !== 'Rejected') {
+    res.status(400).json({ success: false, message: 'Decision must be Approved or Rejected.' });
+    return;
+  }
+  try {
+    const data = await service.decideTaskEditApproval(req.params.approvalId, decision, user.id, user.role);
+    res.json({ success: true, message: `Task update ${decision.toLowerCase()}.`, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to decide task update request.');
   }
 };

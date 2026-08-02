@@ -45,6 +45,29 @@ export const API_TO_DB_PRIORITY: Record<ApiProjectPriority, ProjectPriorityCode>
   Urgent: 'Critical'
 };
 
+// Row shapes for sub-entities (milestones, project files) queried alongside a project's own row.
+
+export interface MilestoneRow {
+  milestoneid: number;
+  projectid: number;
+  milestonename: string;
+  description: string | null;
+  duedate: string;
+  completedatutc: Date | null;
+  createdbyuserid: number;
+  createdatutc: Date;
+}
+
+export interface ProjectFileRow {
+  fileid: number;
+  originalfilename: string;
+  mimetype: string;
+  sizebytes: string;
+  uploadedbyuserid: number;
+  uploadedatutc: Date;
+  storageobjectkey: string;
+}
+
 // Row shapes returned by the repository's raw SQL (lowercase columns — Postgres folds unquoted
 // identifiers, matching every other table in database/*.sql).
 export interface ProjectRow {
@@ -73,9 +96,27 @@ export interface ProjectMemberRow {
   memberrolecode: ProjectMemberRoleCode;
 }
 
-// Shape returned to the frontend — matches frontend/src/types/index.ts's Project (minus
-// milestones/files/pinnedMessagesCount, which stay frontend-only/mock for now; not part of
-// this branch's scope).
+export interface MilestoneDTO {
+  id: string;
+  title: string;
+  description?: string | null;
+  dueDate: string;
+  completed: boolean;
+  completedAt?: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ProjectFileDTO {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
+// Shape returned to the frontend — matches frontend/src/types/index.ts's Project.
 export interface ProjectDTO {
   id: string;
   code: string;
@@ -92,6 +133,9 @@ export interface ProjectDTO {
   progress: number;
   tags: string[];
   creationReason?: string;
+  createdAt?: string;
+  milestones: MilestoneDTO[];
+  files: ProjectFileDTO[];
 }
 
 export interface CreateProjectInput {
@@ -112,4 +156,26 @@ export interface UpdateProjectInput {
   startDate?: string;
   targetDate?: string;
   status?: ApiProjectStatus;
+  teamLeadId?: string;
+  creationReason?: string;
+}
+
+export interface CreateMilestoneInput {
+  title: string;
+  description?: string;
+  dueDate: string;
+}
+
+export interface UpdateMilestoneInput {
+  title?: string;
+  description?: string;
+  dueDate?: string;
+}
+
+export interface CreateProjectFileInput {
+  name: string;
+  mimeType?: string;
+  // Base64 data URL (data:<mime>;base64,<content>) -- same convention already used for Project
+  // Chat attachments (see collab/fileStorage.ts's parseAttachmentDataUrl).
+  url: string;
 }

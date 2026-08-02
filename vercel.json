@@ -1,3 +1,4 @@
+
 {
   "framework": "vite",
   "buildCommand": "npm run build",
@@ -6,6 +7,11 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/(.*)", "destination": "/" }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "*": false
+    }
+  }
 }
-

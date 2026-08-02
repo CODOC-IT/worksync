@@ -4,8 +4,17 @@ import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
+import { recordActivity, recordActivitySafe } from '../activity/activity.service.js';
+import { sendAccountUpdateEmail } from '../services/emailService.js';
+import { getSupabaseServiceClient } from '../db/supabase.js';
+import { query } from '../db/pool.js';
+import { toUserPk } from '../utils/idMapping.js';
+import { getEffectiveRoles } from '../auth/effectiveRoles.js';
 
 const router = Router();
+
+const canManageAccounts = (role?: string) => role === 'Admin' || role === 'HR';
+const DEFAULT_TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
 
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void> => {
@@ -18,19 +27,30 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       return;
     }
 
-    const user = userStore.findByEmail(email);
-    if (!user) {
+    const user = await userStore.findByEmailAsync(email);
+    if (!user || !user.passwordHash) {
+      recordActivitySafe({ action: 'Login', module: 'Authentication', entityType: 'User', entityId: String(email),
+        entityName: String(email), actorEmail: String(email), description: `Failed login attempt for ${email}.`,
+        result: 'Failed', source: 'Web', important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
 
     if (user.status !== 'active') {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Blocked login attempt for deactivated account ${user.email}.`, result: 'Blocked',
+        source: 'Web', important: true, ipAddress: ip });
       res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
       return;
     }
 
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     if (!isValidPassword) {
+      recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+        action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+        description: `Failed login attempt for ${user.email}.`, result: 'Failed', source: 'Web',
+        important: true, ipAddress: ip });
       res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
@@ -42,6 +62,9 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       getJwtSecret(),
       { expiresIn: JWT_EXPIRES_IN as any }
     );
+    recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
+      action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
+      description: `${user.name} signed in.`, result: 'Successful', source: 'Web', ipAddress: ip });
 
     res.status(200).json({
       success: true,
@@ -49,195 +72,32 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       token,
       user: userStore.sanitizeUser(user)
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Internal server error.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'Login failed. Please try again.' });
   }
 });
 
-// GET /api/auth/role-status
-router.get('/role-status', (_req, res: Response): void => {
-  res.status(200).json({
-    success: true,
-    hasAdmin: userStore.hasRole('Admin'),
-    hasHR: userStore.hasRole('HR')
-  });
-});
-
-// POST /api/auth/register
-router.post('/register', async (req, res: Response): Promise<void> => {
+// POST /api/auth/migrate-legacy-credentials
+// Migrates a legacy user (bcrypt password in WorkSync DB, no Supabase Auth identity yet) into
+// Supabase Auth. Called by LoginView.tsx when the direct Supabase sign-in fails — this bridges
+// the gap for accounts created before the Supabase Auth cutover.
+router.post('/migrate-legacy-credentials', async (req, res: Response): Promise<void> => {
   try {
-    const { name, email, password, role, department, title } = req.body;
-
-    if (!name || !email || !password || !role || !department) {
-      res.status(400).json({
-        success: false,
-        message: 'Name, email, password, role, and department are required.'
-      });
+    const { email, password } = req.body;
+    if (!email || !password) {
+      res.status(400).json({ success: false, message: 'Email and password are required.' });
       return;
     }
 
-    const sanitizedName = name.replace(/<[^>]*>/g, '').trim();
-
-    if (sanitizedName.length < 4) {
-      res.status(400).json({ success: false, message: 'Full Name must be at least 4 characters long.' });
+    const user = await userStore.findByEmailAsync(email.trim().toLowerCase());
+    if (!user || !user.passwordHash) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
 
-    const nameParts = sanitizedName.split(/\s+/).filter(Boolean);
-    if (nameParts.length < 2) {
-      res.status(400).json({ success: false, message: 'Full Name must include both first and last name (e.g. "John Doe").' });
-      return;
-    }
-
-    if (nameParts[0].toLowerCase() === nameParts[nameParts.length - 1].toLowerCase()) {
-      res.status(400).json({ success: false, message: 'First name and last name cannot be the same.' });
-      return;
-    }
-
-    if (userStore.findByName(sanitizedName)) {
-      res.status(409).json({
-        success: false,
-        message: `The name "${sanitizedName}" is already registered. Please choose a different name.`
-      });
-      return;
-    }
-
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email)) {
-      res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
-      return;
-    }
-
-    if (role === 'Admin' && userStore.hasRole('Admin')) {
-      res.status(409).json({
-        success: false,
-        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-      });
-      return;
-    }
-
-    if (role === 'HR' && userStore.hasRole('HR')) {
-      res.status(409).json({
-        success: false,
-        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
-      });
-      return;
-    }
-
-    if (password.length < 6) {
-      res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long.'
-      });
-      return;
-    }
-
-    const newUser = await userStore.createUser({ name: sanitizedName, email, password, role, department, title });
-
-    const token = jwt.sign(
-      { id: newUser.id, email: newUser.email, role: newUser.role },
-      getJwtSecret(),
-      { expiresIn: JWT_EXPIRES_IN as any }
-    );
-
-    res.status(201).json({
-      success: true,
-      message: 'Registration successful.',
-      token,
-      user: userStore.sanitizeUser(newUser)
-    });
-  } catch (error: any) {
-    res.status(400).json({ success: false, message: error.message || 'Registration failed.' });
-  }
-});
-
-// POST /api/auth/forgot-password
-// Body: { email }
-// Sends OTP to the user's email if account exists (don't reveal whether it exists)
-router.post('/forgot-password', async (req, res: Response): Promise<void> => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      res.status(400).json({ success: false, message: 'Email is required.' });
-      return;
-    }
-
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(email.trim())) {
-      res.status(400).json({ success: false, message: 'Invalid email address format.' });
-      return;
-    }
-
-    const user = userStore.findByEmail(email.trim().toLowerCase());
-
-    if (user && user.status === 'active') {
-      const { otpStore } = await import('../store/otpStore.js');
-      const { sendOTPEmail, isEmailConfigured } = await import('../services/emailService.js');
-
-      if (!isEmailConfigured()) {
-        res.status(503).json({ success: false, message: 'Email service is not configured.' });
-        return;
-      }
-
-      const { allowed, secondsLeft } = otpStore.canResend(email);
-      if (!allowed) {
-        res.status(429).json({
-          success: false,
-          message: `Please wait ${secondsLeft} seconds before requesting a new OTP.`,
-          secondsLeft
-        });
-        return;
-      }
-
-      const otp = otpStore.generate(email);
-      await sendOTPEmail(email, user.name, otp);
-    }
-
-    // Always return 200 to prevent email enumeration
-    res.status(200).json({
-      success: true,
-      message: 'If an account exists with that email, a verification code has been sent.'
-    });
-  } catch (error: any) {
-    console.error('[Forgot Password Error]', error.message);
-    res.status(500).json({ success: false, message: 'Failed to process request.' });
-  }
-});
-
-// PUT /api/auth/password
-// Body: { resetToken, newPassword }
-// Updates the user's password after OTP verification (resetToken from otp verify)
-router.put('/password', async (req, res: Response): Promise<void> => {
-  try {
-    const { resetToken, newPassword } = req.body;
-
-    if (!resetToken || !newPassword) {
-      res.status(400).json({ success: false, message: 'Reset token and new password are required.' });
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
-      return;
-    }
-
-    let payload: { email: string; purpose: string };
-    try {
-      payload = jwt.verify(resetToken, getJwtSecret()) as { email: string; purpose: string };
-    } catch {
-      res.status(401).json({ success: false, message: 'Invalid or expired reset token. Please request a new one.' });
-      return;
-    }
-
-    if (payload.purpose !== 'password_reset') {
-      res.status(401).json({ success: false, message: 'Invalid reset token.' });
-      return;
-    }
-
-    const user = userStore.findByEmail(payload.email);
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found.' });
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) {
+      res.status(401).json({ success: false, message: 'Invalid email or password.' });
       return;
     }
 
@@ -246,62 +106,175 @@ router.put('/password', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    const bcrypt = await import('bcryptjs');
-    const newHash = bcrypt.hashSync(newPassword, 10);
-    await userStore.updatePassword(payload.email, newHash);
+    // Check if user already has a Supabase Auth identity linked
+    const existing = await query<{ authuserid: string | null }>(
+      'SELECT authuserid FROM iam.users WHERE userid = $1',
+      [toUserPk(user.id)]
+    );
+    if (existing.rows[0]?.authuserid) {
+      res.status(409).json({ success: false, message: 'This account already has a linked Supabase identity. Try signing in directly.' });
+      return;
+    }
 
-    res.status(200).json({ success: true, message: 'Password updated successfully. Please sign in with your new password.' });
+    const supabase = getSupabaseServiceClient();
+    const created = await supabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: { username: user.username, full_name: user.name }
+    });
+
+    if (created.error) {
+      console.error('[Migrate Legacy] Supabase createUser failed:', created.error.message);
+      res.status(502).json({ success: false, message: 'Authentication service is temporarily unavailable. Please try again.' });
+      return;
+    }
+
+    const authUserId = created.data.user.id;
+
+    await query(
+      'UPDATE iam.users SET authuserid = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2',
+      [authUserId, toUserPk(user.id)]
+    );
+
+    recordActivitySafe({
+      actorId: user.id,
+      actorName: user.name,
+      actorEmail: user.email,
+      actorRole: user.role,
+      action: 'Migrated to Supabase Auth',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: user.id,
+      entityName: user.name,
+      description: `${user.name} migrated from legacy credentials to Supabase Auth.`,
+    });
+
+    res.status(200).json({ success: true, message: 'Credentials migrated to Supabase Auth. Please sign in again.' });
   } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to update password.' });
+    console.error('[Migrate Legacy] Error:', error?.message || error);
+    res.status(500).json({ success: false, message: 'Migration failed. Please contact an administrator.' });
   }
 });
 
-// GET /api/auth/me
-router.get('/me', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  if (!req.user) {
-    res.status(401).json({ success: false, message: 'Not authenticated.' });
-    return;
-  }
-
-  const user = userStore.findById(req.user.id);
-  if (!user) {
-    res.status(404).json({ success: false, message: 'User profile not found.' });
-    return;
-  }
-
+// GET /api/auth/role-status
+router.get('/role-status', async (_req, res: Response): Promise<void> => {
+  await userStore.syncUsersToDb();
   res.status(200).json({
     success: true,
-    user: userStore.sanitizeUser(user)
+    hasAdmin: userStore.hasRole('Admin'),
+    hasHR: userStore.hasRole('HR')
   });
 });
 
-// GET /api/auth/users
-router.get('/users', (_req, res: Response): void => {
-  const users = userStore.getAllUsers().map((u) => userStore.sanitizeUser(u));
-  res.status(200).json({ success: true, users });
+// GET /api/auth/me
+router.get('/me', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    // Supabase/Postgres is authoritative. A newly provisioned account may not exist in this
+    // process's in-memory roster yet, so resolve the authenticated profile directly from the DB.
+    const user = await userStore.refreshUserFromDb(req.user.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User profile not found.' });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      user
+    });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to restore authenticated session.' });
+  }
 });
 
-// GET /api/auth/check-email?email=...
-router.get('/check-email', (req, res: Response): void => {
-  const email = req.query.email as string;
-  if (!email) {
-    res.status(400).json({ success: false, message: 'Email query parameter required.' });
+// GET /api/auth/users
+// Every authenticated role needs this roster -- not just Admin: Team Leads/HR/Team Members all
+// need it to resolve task assignees, @mentions, and notification recipients (e.g. HR-role
+// lookup for attendance/break events) client-side. sanitizeUser() already strips the password
+// hash, so exposing the rest to any logged-in teammate matches how the rest of this internal
+// tool already treats team-roster data (see TeamMembersView, open to every role).
+router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: 'Authentication required.' });
     return;
   }
-  const user = userStore.findByEmail(email.trim().toLowerCase());
-  res.status(200).json({ success: true, exists: !!user });
+
+  try {
+    // Always reload the authoritative Supabase roster. Account provisioning writes directly to
+    // iam.users and must be visible immediately on every process/serverless instance.
+    await userStore.syncUsersToDb();
+    const users = await Promise.all((await userStore.getAllUsers()).map(async (u) => {
+      const safe = userStore.sanitizeUser(u);
+      const effective = await getEffectiveRoles(u.id);
+      return {
+        ...safe,
+        activePermissions: {
+          teamLead: effective.isActiveTeamLead,
+          hr: effective.isActiveHR
+        }
+      };
+    }));
+    res.status(200).json({ success: true, users });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to load users.' });
+  }
+});
+
+// POST /api/auth/audit-login
+// The browser signs in directly against Supabase (signInWithPassword), so the Express /login
+// route never runs for successful logins. The frontend reports a successful sign-in here once
+// per login so Login events reach the audit log with the caller's authoritative role. The
+// audit write is awaited so serverless deployments cannot drop the event when the response
+// returns before the async insert completes.
+router.post('/audit-login', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (req.user) {
+      const user = req.user ? userStore.findById(req.user.id) : undefined;
+      await recordActivity({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+        actorRole: req.user.role, action: 'Login', module: 'Authentication', entityType: 'User',
+        entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed in.`,
+        result: 'Successful', source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+    }
+  } catch (error) {
+    console.warn('[auth] Login audit write failed.', error);
+  }
+  res.status(200).json({ success: true, message: 'Login activity recorded.' });
 });
 
 // POST /api/auth/logout
-router.post('/logout', authenticateJWT, (_req, res: Response): void => {
+router.post('/logout', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (req.user) {
+      const user = req.user ? userStore.findById(req.user.id) : undefined;
+      await recordActivity({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+        actorRole: req.user.role, action: 'Logout', module: 'Authentication', entityType: 'User',
+        entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed out.`,
+        source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+    }
+  } catch (error) {
+    console.warn('[auth] Logout audit write failed.', error);
+  }
   res.status(200).json({ success: true, message: 'Logout successful.' });
 });
 
 // PUT /api/auth/profile/display-name
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct display name editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
     const { name } = req.body;
@@ -327,51 +300,113 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
       message: 'Display name updated successfully.',
       user: updatedUser
     });
-  } catch (error: any) {
-    return void res.status(500).json({ success: false, message: error.message || 'Failed to update display name.' });
+  } catch {
+    return void res.status(500).json({ success: false, message: 'Failed to update display name.' });
   }
 });
 
-// PUT /api/auth/profile/avatar
-router.put('/profile/avatar', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+// PUT /api/auth/profile/username
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/username', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       return void res.status(401).json({ success: false, message: 'Not authenticated.' });
     }
 
-    const { avatar } = req.body;
-
-    if (!avatar || typeof avatar !== 'string') {
-      return void res.status(400).json({ success: false, message: 'Avatar data URL is required.' });
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct username editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
     }
 
-    if (!avatar.startsWith('data:image/')) {
-      return void res.status(400).json({ success: false, message: 'Avatar must be a valid image data URL.' });
+    const { username } = req.body;
+
+    if (!username || typeof username !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Username is required.' });
     }
 
-    const maxSize = 2 * 1024 * 1024;
-    const base64Size = Math.ceil((avatar.length * 3) / 4);
-    if (base64Size > maxSize) {
-      return void res.status(400).json({ success: false, message: 'Avatar image must be smaller than 2 MB.' });
+    const normalizedUsername = username.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (normalizedUsername.length < 3) {
+      return void res.status(400).json({ success: false, message: 'Username must be at least 3 characters long.' });
     }
 
-    const updatedUser = await userStore.updateAvatar(req.user.id, avatar);
+    if (normalizedUsername.length > 80) {
+      return void res.status(400).json({ success: false, message: 'Username must not exceed 80 characters.' });
+    }
+
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(normalizedUsername)) {
+      return void res.status(400).json({ success: false, message: 'Username can only contain letters, numbers, dots, hyphens, and underscores.' });
+    }
+
+    const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
 
     return void res.status(200).json({
       success: true,
-      message: 'Profile picture updated successfully.',
+      message: 'Username updated successfully.',
       user: updatedUser
     });
   } catch (error: any) {
-      return void res.status(500).json({ success: false, message: error.message || 'Failed to update profile picture.' });
+    const message = error?.message || 'Failed to update username.';
+    return void res.status(message.includes('already in use') ? 409 : 500).json({ success: false, message });
+  }
+});
+
+// PUT /api/auth/profile/email
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
+router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      return void res.status(401).json({ success: false, message: 'Not authenticated.' });
+    }
+
+    if (req.user.role !== 'Admin') {
+      return void res.status(403).json({
+        success: false,
+        message: 'Direct email editing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
+    }
+
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return void res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const normalizedEmail = email.replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return void res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
+
+    return void res.status(200).json({
+      success: true,
+      message: 'Email updated successfully.',
+      user: updatedUser
+    });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update email.';
+    return void res.status(message.includes('already exists') ? 409 : 500).json({ success: false, message });
   }
 });
 
 // PUT /api/auth/profile/password
+// Admin-only direct edit. HR/Lead/Member must submit an account change request.
 router.put('/profile/password', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+
+    if (req.user.role !== 'Admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Direct password changing is restricted to Administrators. Please submit an account change request from your profile.'
+      });
       return;
     }
 
@@ -393,7 +428,7 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
     }
 
     const user = userStore.findById(req.user.id);
-    if (!user) {
+    if (!user || !user.passwordHash) {
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
@@ -408,8 +443,191 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
     await userStore.updatePassword(user.email, newHash);
 
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
+  } catch {
+    res.status(500).json({ success: false, message: 'Failed to change password.' });
+  }
+});
+
+// POST /api/auth/users
+router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const { name, username, email, password, role, department, title } = req.body;
+    if (!name || !username || !email || !role || !department || !title) {
+      res.status(400).json({ success: false, message: 'Name, username, email, role, department, and title are required.' });
+      return;
+    }
+    if (req.user.role === 'HR' && role === 'Admin') {
+      res.status(403).json({ success: false, message: 'HR cannot create Administrator accounts.' });
+      return;
+    }
+    if (role === 'Team_Lead') {
+      res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
+      return;
+    }
+
+    const resolvedPassword = typeof password === 'string' && password.trim().length >= 6
+      ? password
+      : DEFAULT_TEMPORARY_ACCOUNT_PASSWORD;
+
+    const newUser = await userStore.createUser({
+      name: String(name).trim(),
+      username: String(username).trim().toLowerCase(),
+      email: String(email).trim().toLowerCase(),
+      password: resolvedPassword,
+      role,
+      department: String(department).trim(),
+      title: String(title).trim(),
+    });
+
+    res.status(201).json({ success: true, message: 'Account created successfully.', user: userStore.sanitizeUser(newUser) });
   } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to change password.' });
+    res.status(400).json({ success: false, message: error?.message || 'Failed to create account.' });
+  }
+});
+
+// PUT /api/auth/users/:id
+router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR' || req.body?.role === 'Admin' || req.body?.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only edit member accounts.' });
+      return;
+    }
+    if ((req.body?.role === 'Team_Lead' && targetUser.role !== 'Team_Lead') || (targetUser.role === 'Team_Lead' && req.body?.role && req.body.role !== 'Team_Lead')) {
+      res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
+      return;
+    }
+
+    const nextPassword = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+    const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword.trim() : '';
+    if (nextPassword || confirmPassword) {
+      const targetIsMember = targetUser.role === 'Team_Member' || targetUser.role === 'Team_Lead';
+      const adminCanManagePassword = req.user.role === 'Admin' && (targetIsMember || targetUser.role === 'HR');
+      const hrCanManagePassword = req.user.role === 'HR' && targetIsMember;
+      if (!adminCanManagePassword && !hrCanManagePassword) {
+        res.status(403).json({ success: false, message: 'Managed password changes are limited to Member and Team Lead accounts, or HR accounts when updated by an Administrator.' });
+        return;
+      }
+      if (nextPassword.length < 6) {
+        res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+        return;
+      }
+      if (nextPassword !== confirmPassword) {
+        res.status(400).json({ success: false, message: 'Password confirmation does not match.' });
+        return;
+      }
+    }
+
+    const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
+
+    if (nextPassword) {
+      const newHash = bcrypt.hashSync(nextPassword, 10);
+      await userStore.updatePassword(updatedUser.email, newHash);
+    }
+
+    let message = 'Account updated successfully.';
+    try {
+      await sendAccountUpdateEmail({
+        toEmail: updatedUser.email,
+        recipientName: updatedUser.name,
+        role: updatedUser.role === 'Team_Member' ? 'Team Member' : updatedUser.role.replace('_', ' '),
+        changedBy: req.user.email,
+        password: nextPassword || undefined,
+      });
+    } catch {
+      message = 'Account updated, but the notification email could not be sent.';
+    }
+
+    res.status(200).json({ success: true, message, user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to update account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/deactivate
+router.patch('/users/:id/deactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only deactivate member accounts.' });
+      return;
+    }
+
+    const updatedUser = await userStore.deactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to deactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// PATCH /api/auth/users/:id/reactivate
+router.patch('/users/:id/reactivate', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR can only reactivate member accounts.' });
+      return;
+    }
+
+    const updatedUser = await userStore.reactivateManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account reactivated successfully.', user: updatedUser });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to reactivate account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
+  }
+});
+
+// DELETE /api/auth/users/:id
+router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canManageAccounts(req.user.role)) {
+      res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    await userStore.deleteManagedUser(req.params.id);
+    res.status(200).json({ success: true, message: 'Account deleted successfully.' });
+  } catch (error: any) {
+    const message = error?.message || 'Failed to delete account.';
+    const status = message === 'User not found.' ? 404 : 400;
+    res.status(status).json({ success: false, message });
   }
 });
 
