@@ -14,7 +14,7 @@ import {
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
 
 const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', type: '', authorId: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
-const COMMENT_MAX_LENGTH = 50;
+const COMMENT_MAX_LENGTH = 250;
 const inputClass = 'project-chat-input w-full rounded-[10px] px-3 py-2 text-sm outline-none transition';
 const formatTime = (date: string) => new Date(date).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 const initials = (name = '?') => name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase();
@@ -130,7 +130,7 @@ export const ProjectChatsView: React.FC = () => {
     }
     return Array.from(options.values());
   }, [filters.projectId, tasks, threads]);
-  const availableProjects = projects.filter((project) => project.status !== 'Completed');
+  const availableProjects = projects.filter((project) => project.status === 'Active');
 
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -273,7 +273,7 @@ export const ProjectChatsView: React.FC = () => {
           {selected && (
             <form onSubmit={submitReply} className="project-chat-composer project-chat-divider relative z-10 m-3 mt-0 shrink-0 rounded-xl border p-3">
               <div className="project-chat-secondary mb-2 flex items-center justify-between text-xs">
-                <span>{replyTo ? 'Replying to a comment' : 'Continue the conversation'}</span>
+                <span>{replyTo ? `Replying to ${selected.comments.find((comment) => comment.id === replyTo)?.body.slice(0, 70) || 'a comment'}` : 'Continue the conversation'}</span>
                 {replyTo && <button type="button" onClick={() => setReplyTo(undefined)} className="project-chat-link font-semibold">Cancel reply</button>}
               </div>
               <div className="relative">
@@ -474,6 +474,7 @@ const DiscussionPanel: React.FC<any> = ({
           const showMenu = canEdit || canDelete;
           const isEditing = editingCommentId === comment.id;
           const grouped = previous?.authorId === comment.authorId && previous?.parentCommentId === comment.parentCommentId;
+          const parent = comment.parentCommentId ? thread.comments.find((candidate) => candidate.id === comment.parentCommentId) : undefined;
 
           return (
             <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
@@ -537,10 +538,11 @@ const DiscussionPanel: React.FC<any> = ({
                     </div>
                   ) : (
                     <>
+                      {parent && <p className="project-chat-secondary mt-2 truncate border-l-2 border-cyan-400/45 pl-2 text-xs">Replying to {users.find((user) => user.id === parent.authorId)?.name || 'message'}: {parent.body}</p>}
                       <p className="project-chat-body mt-2 max-w-3xl break-words whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
                       {comment.attachments.map((file) => renderAttachment(file))}
                       <div className="mt-2 flex gap-3">
-                        {!comment.parentCommentId && <button type="button" onClick={() => onReply(comment.id)} className="project-chat-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold"><ReplyIcon size={13} />Reply</button>}
+                        <button type="button" onClick={() => onReply(comment.id)} className="project-chat-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold"><ReplyIcon size={13} />Reply</button>
                       </div>
                     </>
                   )}

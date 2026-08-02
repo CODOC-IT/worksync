@@ -70,8 +70,8 @@ const assertAttachmentsHaveContent = (attachments: ChatAttachmentInput[]): void 
 };
 
 const assertProjectDiscussionOpen = (statusCode: string): void => {
-  if (statusCode === 'Completed') {
-    throw new DiscussionAuthorizationError('This project has been completed and its discussions are now closed.');
+  if (statusCode !== 'Active') {
+    throw new DiscussionAuthorizationError('Discussions can only be started or continued in active projects.');
   }
 };
 
@@ -283,9 +283,6 @@ export const addComment = async (
     parentRow = await repo.findCommentById(toCommentPk(input.parentCommentId));
     if (!parentRow || parentRow.threadid !== row.threadid) {
       throw new DiscussionValidationError('Replies must reference a comment in this discussion.', 'parentCommentId');
-    }
-    if (parentRow.parentcommentid) {
-      throw new DiscussionValidationError('Only one reply level is supported.', 'parentCommentId');
     }
   }
 

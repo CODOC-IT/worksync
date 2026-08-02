@@ -9,7 +9,7 @@ export interface ValidationResult {
   message?: string;
 }
 
-export const MAX_COMMENT_LENGTH = 50;
+export const MAX_COMMENT_LENGTH = 250;
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 export const ALLOWED_ATTACHMENT_TYPES = new Set([
   'application/pdf',

@@ -1,5 +1,5 @@
 import { fromCommentPk, fromProjectPk, fromTaskPk, fromThreadPk, fromUserPk } from '../utils/idMapping.js';
-import { readAttachmentFromDisk } from './fileStorage.js';
+import { getAttachmentUrl } from './fileStorage.js';
 import {
   ChatAttachmentDTO,
   CommentFileRow,
@@ -22,8 +22,7 @@ import {
 const buildAttachmentDTO = async (row: CommentFileRow): Promise<ChatAttachmentDTO> => {
   let url: string | undefined;
   try {
-    const buffer = await readAttachmentFromDisk(row.storageobjectkey);
-    url = `data:${row.mimetype};base64,${buffer.toString('base64')}`;
+    url = await getAttachmentUrl(row.storageobjectkey, row.mimetype);
   } catch (error) {
     console.warn(`[discussion.mapper] Could not read stored attachment "${row.storageobjectkey}" from disk.`, error);
   }
