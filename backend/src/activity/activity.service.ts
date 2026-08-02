@@ -49,7 +49,28 @@ type StoredEvent = {
 
 const memStore: StoredEvent[] = [];
 
-const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): ActivityDTO => {
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Replaces bare frontend ids (e.g. "usr-46") inside a stored description with the resolved
+// display names. Older events were written with id fallbacks when the in-memory user store
+// had not warmed up yet; the Activity Log corrects those at read time.
+const withResolvedNames = (
+  description: string,
+  names: Array<{ id: string; name: string } | null | undefined>
+): string => {
+  let out = description;
+  for (const entry of names) {
+    if (!entry || !entry.name || entry.name === entry.id) continue;
+    out = out.replace(new RegExp(`\\b${escapeRegExp(entry.id)}\\b`, 'g'), entry.name);
+  }
+  return out;
+};
+
+const toDto = (
+  row: repo.ActivityRow,
+  changes: ActivityDTO['changes'],
+  nameMap: Map<string, string> = new Map()
+): ActivityDTO => {
   const knownUser = row.actoruserid ? userStore.findById(fromUserPk(row.actoruserid)) : undefined;
   const actorId = row.actoruserid ? fromUserPk(row.actoruserid) : null;
   // The audit snapshot is useful for historical records, but a current IAM display name is
@@ -57,6 +78,20 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
   // its in-memory cache yet. Only actorless events should be labelled System.
   const actorName = row.actordisplayname || row.actornamesnapshot || knownUser?.name || (actorId ? actorId : 'System');
   const actorEmail = row.actoremail || row.actoremailsnapshot || knownUser?.email || '';
+  const affectedName = row.affectedusernamesnapshot
+    || (row.affecteduseridtext ? nameMap.get(row.affecteduseridtext) : undefined)
+    || row.affecteduseridtext
+    || 'Unknown user';
+  const entityName = row.entitynamesnapshot
+    || (row.entitytypecode === 'User' && row.entityidtext ? nameMap.get(row.entityidtext) : undefined)
+    || row.entityidtext;
+  const description = withResolvedNames(
+    row.description || `${row.actioncode} ${row.entitytypecode}`,
+    [
+      actorId ? { id: actorId, name: actorName } : null,
+      row.affecteduseridtext ? { id: row.affecteduseridtext, name: affectedName } : null,
+    ]
+  );
   return {
     id: String(row.auditeventid), correlationId: row.correlationid,
     actor: {
@@ -66,11 +101,11 @@ const toDto = (row: repo.ActivityRow, changes: ActivityDTO['changes']): Activity
       role: row.actorrolesnapshot || knownUser?.role || (actorId ? 'Unknown' : 'System')
     },
     affectedUser: row.affecteduseridtext || row.affectedusernamesnapshot ? {
-      id: row.affecteduseridtext, name: row.affectedusernamesnapshot || row.affecteduseridtext || 'Unknown user'
+      id: row.affecteduseridtext, name: affectedName
     } : undefined,
     action: row.actioncode, module: row.modulecode, entityType: row.entitytypecode,
-    entityId: row.entityidtext, entityName: row.entitynamesnapshot || row.entityidtext,
-    description: row.description || `${row.actioncode} ${row.entitytypecode}`,
+    entityId: row.entityidtext, entityName,
+    description,
     project: row.projectid ? { id: fromProjectPk(row.projectid), name: row.projectnamesnapshot || fromProjectPk(row.projectid) } : undefined,
     task: row.taskid ? { id: fromTaskPk(row.taskid), name: row.tasknamesnapshot || fromTaskPk(row.taskid) } : undefined,
     timestamp: new Date(row.occurredatutc).toISOString(), result: row.resultcode,
@@ -153,10 +188,16 @@ export const listActivities = async (filters: ActivityFilters, viewerId: string,
     throw new Error('Activity Log requires a database. Database is not configured.');
   }
   const { rows, total } = await repo.findActivities(filters, effectiveRoles, viewerId);
+  const nameMap = await repo.findUserDisplayNames(
+    rows.flatMap((row) => [
+      row.affecteduseridtext,
+      row.entitytypecode === 'User' ? row.entityidtext : undefined,
+    ]).filter((id): id is string => Boolean(id))
+  );
   const changes = await repo.findChanges(rows.map((row) => String(row.auditeventid)));
   return {
     items: rows.map((row) => {
-      const dto = toDto(row, changes.get(String(row.auditeventid)) || []);
+      const dto = toDto(row, changes.get(String(row.auditeventid)) || [], nameMap);
       return dto;
     }),
     page: filters.page, pageSize: filters.pageSize, total,
@@ -172,7 +213,11 @@ export const getActivity = async (id: string, viewerId: string, _viewerRole: str
   const row = await repo.findVisibleActivityById(id, viewerId, effectiveRoles);
   if (!row) return null;
   const changes = await repo.findChanges([String(row.auditeventid)]);
-  return toDto(row, changes.get(String(row.auditeventid)) || []);
+  const nameMap = await repo.findUserDisplayNames([
+    row.affecteduseridtext,
+    row.entitytypecode === 'User' ? row.entityidtext : undefined,
+  ].filter((id): id is string => Boolean(id)));
+  return toDto(row, changes.get(String(row.auditeventid)) || [], nameMap);
 };
 
 const EXPORT_LIMIT = 5_000;
