@@ -29,8 +29,10 @@ const dateBounds = (filters: ActivityFilters): { from?: string; to?: string } =>
 
 export const toActivityQuery = (filters: ActivityFilters, page: number, pageSize: number): URLSearchParams => {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sort: filters.sort });
+  const bounds = dateBounds(filters);
   const values: Record<string, string | boolean | undefined> = {
-    ...dateBounds(filters),
+    from: filters.from ?? bounds.from,
+    to: filters.to ?? bounds.to,
     userId: filters.userId,
     userRole: filters.userRole,
     projectId: filters.projectId,

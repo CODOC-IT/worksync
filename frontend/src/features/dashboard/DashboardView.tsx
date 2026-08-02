@@ -24,7 +24,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { fetchActivities } from '../activity/activityApi';
-import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
+import { ActivityItem, ActivityFilters, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
 import {
   ALL_CALENDAR_KINDS,
   buildCalendarEntries,
@@ -66,6 +66,26 @@ const PROJECT_STATUS_DOT: Record<string, string> = {
   Draft: 'bg-slate-500',
   Completed: 'bg-cyan-400',
   Archived: 'bg-slate-600',
+};
+
+// The dashboard's Admin/HR boxes aggregate every source of pending decisions into one
+// flat, compact list — the same four sources the Approvals Inbox tab counts and renders,
+// so the badge counts and the item lists stay in sync with the full page.
+interface PendingApprovalItem {
+  id: string;
+  key: string;
+  typeLabel: string;
+  title: string;
+  detail: string;
+}
+
+const PROJECT_REQUEST_LABELS: Record<string, string> = {
+  PROJECT_CREATE: 'Project Creation',
+  PROJECT_EDIT: 'Project Edit',
+  PROJECT_ARCHIVE: 'Project Archive',
+  PROJECT_RESTORE: 'Project Restore',
+  PROJECT_DELETE: 'Project Delete',
+  PROJECT_PERMANENT_DELETE: 'Permanent Delete',
 };
 
 interface MiniCalendarProps {
@@ -131,17 +151,6 @@ const MiniCalendar: React.FC<MiniCalendarProps> = ({ entries }) => {
   );
 };
 
-// Formats a Date as a local calendar date string (YYYY-MM-DD). The activity API's
-// `dateBounds()` Custom preset parses customFrom/customTo as LOCAL dates, so we must
-// supply local date strings here — using UTC date strings (toISOString) shifts the
-// range by the timezone offset and silently drops recent activity on non-UTC systems.
-const toLocalDateString = (date: Date): string => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const {
     currentRole,
@@ -150,6 +159,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     tasks,
     systemApprovals,
     hrRequests,
+    accountChangeRequests,
+    projectApprovalRequests,
     users,
     calendarEvents,
     attendanceRecords,
@@ -169,11 +180,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       setActivityLoading(true);
       try {
         const now = new Date();
+        // Rolling windows are applied server-side via precise ISO bounds so every preset
+        // returns events strictly inside its own window: 'Today' = the current local day,
+        // 'Last Day'/'Last 3 Days' = the last 24h/72h. Filtering a capped client feed (the
+        // previous 50-item fetch) would otherwise show the same entries for every option
+        // whenever more than 50 events fit inside the smallest window.
         let fromDate: Date;
-        const toDate = now;
-
         if (activityFilter === 'Today') {
-          fromDate = new Date(now);
+          fromDate = new Date();
           fromDate.setHours(0, 0, 0, 0);
         } else if (activityFilter === 'Last Day') {
           fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -181,7 +195,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
         }
 
-        const filters = { ...DEFAULT_ACTIVITY_FILTERS, datePreset: 'Custom' as const, customFrom: toLocalDateString(fromDate), customTo: toLocalDateString(toDate) };
+        const filters: ActivityFilters = {
+          ...DEFAULT_ACTIVITY_FILTERS,
+          from: fromDate.toISOString(),
+          to: now.toISOString(),
+        };
+
         const result = await fetchActivities(filters, 1, 50);
         if (!cancelled && Array.isArray(result.items)) {
           const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
@@ -192,7 +211,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
             targetId: item.entityId,
             targetTitle: item.entityName || item.description,
-            timestamp: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
             diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
           }));
           if (!cancelled) setFilteredActivityLogs(mapped);
@@ -254,8 +273,102 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     [myProjects, currentUser.id]
   );
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
-  const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
-  const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
+  // Admin approval box: every pending decision awaiting Admin, across all sources — persisted
+  // project management requests, derived system approvals (project proposals / controlled edits),
+  // Admin-stage attendance/leave requests and Admin-assigned account changes. Mirrors the
+  // Approvals Inbox's pending count (pendingSystemCount + pendingHRCount +
+  // pendingProjectApprovalCount + pendingAccountChangeCount) so the badge matches that tab.
+  const pendingApprovals = useMemo<PendingApprovalItem[]>(() => {
+    if (currentRole !== 'Admin') return [];
+    const items: PendingApprovalItem[] = [];
+
+    for (const request of projectApprovalRequests) {
+      if (request.status !== 'Pending') continue;
+      items.push({
+        id: request.id,
+        key: `prj-${request.id}`,
+        typeLabel: PROJECT_REQUEST_LABELS[request.requestType] || request.requestType.replace('_', ' '),
+        title: request.projectTitle,
+        detail: `Requested by ${request.requestedByName}`,
+      });
+    }
+
+    for (const approval of systemApprovals) {
+      if (approval.status !== 'Pending') continue;
+      if (approval.type === 'Task_Creation') continue;
+      if (approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate) continue;
+      items.push({
+        id: approval.id,
+        key: `sys-${approval.id}`,
+        typeLabel:
+          approval.type === 'Project_Creation' ? 'Project Creation'
+            : approval.type === 'Project_Deletion' ? 'Project Deletion'
+              : 'Controlled Edit',
+        title: approval.targetTitle,
+        detail: approval.details,
+      });
+    }
+
+    for (const request of hrRequests) {
+      if (request.status !== 'Pending' || request.approvalStage !== 'Admin') continue;
+      if (request.userId === currentUser.id) continue;
+      items.push({
+        id: request.id,
+        key: `hr-${request.id}`,
+        typeLabel: request.type.replace('_', ' '),
+        title: users.find((u) => u.id === request.userId)?.name || request.userName || 'Team Member',
+        detail: request.reason,
+      });
+    }
+
+    for (const request of accountChangeRequests) {
+      if (request.status !== 'Pending' || request.assignedApproverRole !== 'Admin') continue;
+      if (request.userId === currentUser.id) continue;
+      items.push({
+        id: request.id,
+        key: `acct-${request.id}`,
+        typeLabel: 'Account Change',
+        title: users.find((u) => u.id === request.userId)?.name || request.userName || 'Team Member',
+        detail: request.reason,
+      });
+    }
+
+    return items;
+  }, [currentRole, currentUser.id, projectApprovalRequests, systemApprovals, hrRequests, accountChangeRequests, users]);
+
+  // HR queue box: every pending decision awaiting HR — HR-stage attendance/leave requests and
+  // HR-assigned account changes, excluding the HR user's own requests. Matches the Approvals
+  // Inbox's HR pending count (pendingHRCount + pendingAccountChangeCount).
+  const pendingHrRequests = useMemo<PendingApprovalItem[]>(() => {
+    if (currentRole !== 'HR') return [];
+    const items: PendingApprovalItem[] = [];
+
+    for (const request of hrRequests) {
+      if (request.status !== 'Pending' || request.approvalStage !== 'HR') continue;
+      if (request.userId === currentUser.id) continue;
+      items.push({
+        id: request.id,
+        key: `hr-${request.id}`,
+        typeLabel: request.type.replace('_', ' '),
+        title: users.find((u) => u.id === request.userId)?.name || request.userName || 'Team Member',
+        detail: request.reason,
+      });
+    }
+
+    for (const request of accountChangeRequests) {
+      if (request.status !== 'Pending' || request.assignedApproverRole !== 'HR') continue;
+      if (request.userId === currentUser.id) continue;
+      items.push({
+        id: request.id,
+        key: `acct-${request.id}`,
+        typeLabel: 'Account Change',
+        title: users.find((u) => u.id === request.userId)?.name || request.userName || 'Team Member',
+        detail: request.reason,
+      });
+    }
+
+    return items;
+  }, [currentRole, currentUser.id, hrRequests, accountChangeRequests, users]);
 
   // ── Mini Calendar filter state (mirrors the Calendar module's CalendarFilterBar) ──
   const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
@@ -472,10 +585,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </div>
               ) : (
                 <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-0">
-                  {pendingApprovals.map((app) => (
-                    <div key={app.id} onClick={() => onNavigate('approvals', app.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">{app.type.replace('_', ' ')}</span><span className="text-[10px] font-bold text-white truncate">{app.targetTitle}</span></div>
-                      <p className="text-[10px] text-slate-300 line-clamp-1">{app.details}</p>
+                  {pendingApprovals.map((item) => (
+                    <div key={item.key} onClick={() => onNavigate('approvals', item.id)} className="p-2.5 rounded-xl bg-slate-900/50 border border-amber-500/20 hover:border-amber-500/40 cursor-pointer transition-all">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-mono font-bold">{item.typeLabel}</span><span className="text-[10px] font-bold text-white truncate">{item.title}</span></div>
+                      <p className="text-[10px] text-slate-300 line-clamp-1">{item.detail}</p>
                     </div>
                   ))}
                 </div>
@@ -486,7 +599,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <div className="glass-panel p-3 border border-emerald-500/30 h-104 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><FileCheck2 size={14} className="text-emerald-400" /><h3 className="font-bold text-xs text-white">HR Queue</h3><span className="text-[10px] text-emerald-400 font-mono">({pendingHrRequests.length})</span></div>
-                <button onClick={() => onNavigate('attendance')} className="text-[10px] text-emerald-400 hover:underline font-mono flex items-center gap-1">Manage <ChevronRight size={10} /></button>
+                <button onClick={() => onNavigate('approvals')} className="text-[10px] text-emerald-400 hover:underline font-mono flex items-center gap-1">Manage <ChevronRight size={10} /></button>
               </div>
               {pendingHrRequests.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-center">
@@ -495,10 +608,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </div>
               ) : (
                 <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-0">
-                  {pendingHrRequests.map((req) => (
-                    <div key={req.id} onClick={() => onNavigate('attendance')} className="p-2.5 rounded-xl bg-slate-900/50 border border-emerald-500/20 hover:border-emerald-500/40 cursor-pointer transition-all">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap"><StatusBadge status={req.type.replace('_', ' ')} size="sm" /><span className="text-[10px] font-bold text-slate-200">{users.find((u) => u.id === req.userId)?.name || 'Team Member'}</span><span className="text-[9px] text-slate-500 font-mono">{req.submittedAt}</span></div>
-                      <p className="text-[10px] text-slate-300 line-clamp-1">"{req.reason}"</p>
+                  {pendingHrRequests.map((item) => (
+                    <div key={item.key} onClick={() => onNavigate('approvals')} className="p-2.5 rounded-xl bg-slate-900/50 border border-emerald-500/20 hover:border-emerald-500/40 cursor-pointer transition-all">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap"><StatusBadge status="Pending" size="sm" /><span className="px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[9px] font-mono font-bold">{item.typeLabel}</span><span className="text-[10px] font-bold text-slate-200 truncate">{item.title}</span></div>
+                      <p className="text-[10px] text-slate-300 line-clamp-1">"{item.detail}"</p>
                     </div>
                   ))}
                 </div>
