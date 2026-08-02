@@ -312,7 +312,7 @@ export const ReportsView: React.FC = () => {
       ).map((p) => p.id);
       return {
         projects: validProjects.filter((p) => hrProjectIds.includes(p.id)),
-        tasks: validTasks.filter((t) => t.projectId && hrProjectIds.includes(t.projectId)),
+        tasks: validTasks,
         attendance: validAttendance,
         hrRequests: validHrRequests
       };
@@ -715,19 +715,16 @@ export const ReportsView: React.FC = () => {
   const deadlineScopedTasks = useMemo(() => {
     const { validProjects, validTasks } = filteredData;
     const userId = currentUser.id;
-    if (currentRole === 'Admin') return validTasks;
-    if (currentRole === 'HR') {
-      const hrProjectIds = validProjects.filter(
-        (p) => p.memberIds?.includes(userId) || p.teamLeadId === userId
-      ).map((p) => p.id);
-      return validTasks.filter((t) => t.projectId && hrProjectIds.includes(t.projectId));
-    }
+    if (currentRole === 'Admin' || currentRole === 'HR') return validTasks;
+    // Lead behavior takes precedence: a lead sees ALL tasks in the projects they lead; projects
+    // they merely belong to contribute nothing. A plain member sees only their own assigned tasks.
     const ledIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
-    const memberOnlyIds = validProjects.filter(
-      (p) => p.memberIds?.includes(userId) && p.teamLeadId !== userId
-    ).map((p) => p.id);
-    return validTasks.filter((t) =>
-      t.projectId && (ledIds.includes(t.projectId) || (memberOnlyIds.includes(t.projectId) && isTaskAssignee(t, userId)))
+    if (ledIds.length > 0) {
+      return validTasks.filter((t) => t.projectId && ledIds.includes(t.projectId));
+    }
+    const memberIds = validProjects.filter((p) => p.memberIds?.includes(userId)).map((p) => p.id);
+    return validTasks.filter(
+      (t) => t.projectId && memberIds.includes(t.projectId) && isTaskAssignee(t, userId)
     );
   }, [filteredData, currentRole, currentUser.id]);
 
@@ -1394,9 +1391,12 @@ ${bodyHtml}
     if (t.subtasks && t.subtasks.length > 0) {
       bodyHtml += section(`Subtasks (${t.subtasks.length})`);
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
-      bodyHtml += `<thead><tr>${th('Title')}${th('Status')}${th('Priority')}</tr></thead><tbody>`;
+      bodyHtml += `<thead><tr>${th('Title')}${th('Assignee(s)')}${th('Due Date')}${th('Status')}${th('Priority')}</tr></thead><tbody>`;
       t.subtasks.forEach((st: any) => {
-        bodyHtml += `<tr>${td(st.title || '\u2014', '#0f172a')}${td(st.status || '\u2014')}${td(st.priority || '\u2014')}</tr>`;
+        bodyHtml += `<tr>${td(st.title || '\u2014', '#0f172a')}${td(formatPdfAssigneeNames(st))}${td(st.dueDate ? st.dueDate.slice(0, 10) : '\u2014')}${td(st.status || '\u2014')}${td(st.priority || '\u2014')}</tr>`;
+        if (st.description) {
+          bodyHtml += `<tr><td colspan="5" style="padding:2px 10px 8px;color:#64748b;font-size:10px;line-height:1.5;">${st.description.replace(/\n/g, '<br/>')}</td></tr>`;
+        }
       });
       bodyHtml += `</tbody></table>`;
     }
