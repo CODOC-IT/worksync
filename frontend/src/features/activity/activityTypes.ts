@@ -36,6 +36,8 @@ export interface ActivityFilters {
   datePreset: 'Today' | 'Yesterday' | 'Last 7 Days' | 'Last 30 Days' | 'Custom';
   customFrom: string;
   customTo: string;
+  from?: string;
+  to?: string;
   userId: string;
   userRole: string;
   projectId: string;
