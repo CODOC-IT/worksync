@@ -106,18 +106,27 @@ const visibilitySql = (
   // ── Led Project Activity tab (non-Admin/non-HR viewers) ────────────────────
   // The tab must show ONLY activity inside the viewer's led projects, performed by
   // current members of those projects (Admin actors stay excluded everywhere).
-  // Led projects are the projectmembers rows carrying memberrolecode='TeamLead'
-  // (how project leads are recorded in this app) plus any iam-scoped temporary
-  // Team Lead assignments. Without this flag the lead tab would widen into the
-  // viewer's other member/task projects — every member's logs from unrelated
-  // projects. Both subqueries are non-correlated (outer-table independent) so the
-  // clause composes with the same param slots used elsewhere.
+  // Led projects mirror project.mapper.ts's resolveTeamLeadUserId exactly: the
+  // projectmembers row carrying memberrolecode='TeamLead', else the project's Owner
+  // when no current TeamLead row exists (self-led/owner-led projects). Plus any
+  // iam-scoped temporary Team Lead assignments. Without the owner fallback, an
+  // owner-led project's feed stays empty even though the frontend lists it as led.
+  // All subqueries are non-correlated so the clause composes with the same param
+  // slots used elsewhere.
   if (ledActivityOnly && effectiveRoles.permanentRole !== 'Admin' && !effectiveRoles.isActiveHR) {
     const ledPredicates: string[] = [
       `pmv.projectid IN (
         SELECT pmlead.projectid FROM work.projectmembers pmlead
         WHERE pmlead.userid = $${pi} AND pmlead.leftatutc IS NULL
           AND pmlead.memberrolecode = 'TeamLead'
+      )`,
+      `pmv.projectid IN (
+        SELECT proj.projectid FROM work.projects proj
+        WHERE proj.owneruserid = $${pi}
+          AND proj.projectid NOT IN (
+            SELECT pmn.projectid FROM work.projectmembers pmn
+            WHERE pmn.leftatutc IS NULL AND pmn.memberrolecode = 'TeamLead'
+          )
       )`,
     ];
     if (effectiveRoles.leadProjectPks.length > 0) {
