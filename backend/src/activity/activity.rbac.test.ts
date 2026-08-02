@@ -402,13 +402,14 @@ test('HR: can view auth/security events and deleted comments', async () => {
   assert.ok(descriptions.includes('User deleted a comment on Discussion'), 'HR should see deleted comments');
 });
 
-test('Action Filter: Priority Changed matches both actioncode and Priority field changes', async () => {
+test('Action Filter: Priority Changed matches real priority changes, not creation-time values', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
     VALUES 
     (99, 1, 1, 'Priority Changed', 'Task', 'tsk-p1', '00000000-0000-0000-0000-000000000099', 'Tasks', 'Direct priority change action', 'Admin'),
-    (98, 1, 1, 'Updated', 'Task', 'tsk-p2', '00000000-0000-0000-0000-000000000098', 'Tasks', 'Updated task priority via field', 'Admin')`);
+    (98, 1, 1, 'Updated', 'Task', 'tsk-p2', '00000000-0000-0000-0000-000000000098', 'Tasks', 'Updated task priority via field', 'Admin'),
+    (97, 1, 1, 'Created', 'Task', 'tsk-p3', '00000000-0000-0000-0000-000000000097', 'Tasks', 'Task created with initial priority', 'Admin')`);
   memDb.public.none(`INSERT INTO audit.auditeventchanges (auditeventid, fieldname, oldvalue, newvalue)
-    VALUES (98, 'Priority', 'Low', 'High')`);
+    VALUES (98, 'Priority', 'Low', 'High'), (97, 'Priority', '', 'Medium')`);
 
   const { findActivities } = await import('./activity.repository.js');
   const { getEffectiveRoles } = await import('./activity.rbac.js');
@@ -417,6 +418,7 @@ test('Action Filter: Priority Changed matches both actioncode and Priority field
   const descriptions = result.rows.map((r: any) => r.description);
   assert.ok(descriptions.includes('Direct priority change action'), 'Should match explicit Priority Changed actioncode');
   assert.ok(descriptions.includes('Updated task priority via field'), 'Should match Priority field changes');
+  assert.ok(!descriptions.includes('Task created with initial priority'), 'Creation-time priority values must not match');
 });
 
 test('Action Filter: Uploaded Attachment matches attachment-carrying events', async () => {
