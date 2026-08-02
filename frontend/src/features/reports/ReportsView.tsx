@@ -202,6 +202,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
+  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'all'>('today');
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -370,6 +371,41 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       hrRequests: [],
     };
   }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  // ── Attendance tab date filter (default Today, overrides global From→To for Attendance only) ──
+  const attendanceWindow = useMemo(() => {
+    const today = todayStr();
+    switch (attendanceRange) {
+      case 'today':
+        return { from: today, to: today };
+      case 'lastWeek':
+        return { from: addDays(today, -6), to: today };
+      case 'last30':
+        return { from: addDays(today, -29), to: today };
+      case 'all':
+      default:
+        return { from: undefined as string | undefined, to: undefined as string | undefined };
+    }
+  }, [attendanceRange]);
+
+  const attendanceTabRecords = useMemo(() => {
+    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    const { from, to } = attendanceWindow;
+    if (from === undefined) return raw;
+    return raw.filter((a: any) => isInDateRange(a.date, from, to));
+  }, [roleFiltered.attendance, attendanceWindow]);
+
+  const attendanceTabStats = useMemo(() => {
+    const att = attendanceTabRecords;
+    const present = att.filter((a: any) => a.status === 'Present').length;
+    const late = att.filter((a: any) => a.status === 'Late').length;
+    const absent = att.filter((a: any) => a.status === 'Absent').length;
+    const onLeave = att.filter((a: any) => a.status === 'On Leave').length;
+    const halfDay = att.filter((a: any) => a.status === 'Half Day').length;
+    const totalHours = att.reduce((s: number, a: any) => s + (a.totalHours || 0), 0);
+    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
+    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length };
+  }, [attendanceTabRecords]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
   useEffect(() => {
@@ -3578,13 +3614,13 @@ ${bodyHtml}
   const renderAttendanceTab = () => (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-        {renderKPICard('Present', attendanceStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Late', attendanceStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
-        {renderKPICard('Absent', attendanceStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
-        {renderKPICard('On Leave', attendanceStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Half Day', attendanceStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Avg Hours', `${attendanceStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
+        {renderKPICard('Present', attendanceTabStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Late', attendanceTabStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
+        {renderKPICard('Absent', attendanceTabStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
+        {renderKPICard('On Leave', attendanceTabStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
+        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Total Records', attendanceTabStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
       <div className="flex justify-end">
@@ -3595,6 +3631,21 @@ ${bodyHtml}
           <FileText size={11} />
           Export Filtered PDF
         </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-slate-400">Attendance date range:</span>
+        <select
+          value={attendanceRange}
+          onChange={(e) => setAttendanceRange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'all')}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+          title="Overrides the global Report date range for the Attendance tab only"
+        >
+          <option value="today">Today</option>
+          <option value="lastWeek">Last Week</option>
+          <option value="last30">Last 30 Days</option>
+          <option value="all">All</option>
+        </select>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
@@ -3633,7 +3684,7 @@ ${bodyHtml}
           <option value="">All Users</option>
           {(() => {
             const seenIds = new Set<string>();
-            return (roleFiltered.attendance || []).filter((a: any) => {
+            return (attendanceTabRecords || []).filter((a: any) => {
               if (seenIds.has(a.userId)) return false;
               seenIds.add(a.userId);
               return true;
@@ -3673,7 +3724,7 @@ ${bodyHtml}
           </thead>
           <tbody>
               {(() => {
-                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                const raw: any[] = (attendanceTabRecords || []) as any[];
                 let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
                 if (attendanceSearchQuery) {
                   filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
@@ -3696,25 +3747,6 @@ ${bodyHtml}
           </tbody>
         </table>
       </div>
-
-      {roleFiltered.hrRequests.length > 0 && (
-        <GlassCard glowColor="amber" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-          <div className="glass-panel p-4 rounded-lg">
-            {renderSectionHeader(<ListTodo size={16} className="text-amber-400" />, 'Pending HR Requests', `${roleFiltered.hrRequests.length} pending`)}
-            <div className="mt-3 space-y-2">
-              {roleFiltered.hrRequests.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={r.type.replace('_', ' ')} size="sm" />
-                    <span className="text-slate-300">{r.reason.slice(0, 60)}{r.reason.length > 60 ? '...' : ''}</span>
-                  </div>
-                  <span className="font-mono text-[10px] text-slate-400">{r.submittedAt || r.date}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </GlassCard>
-      )}
     </div>
   );
 
