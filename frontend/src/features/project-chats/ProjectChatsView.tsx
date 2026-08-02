@@ -5,6 +5,7 @@ import { ProjectMemberSummary } from '../projects/projectRepository';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads } from './projectChatRepository';
 import {
   filterDiscussions,
+  findOutOfScopeMention,
   getMentionTrigger,
   getProjectMentionCandidates,
   insertMention,
@@ -610,6 +611,11 @@ const NewDiscussionDialog: React.FC<any> = ({
     }
     if (body.length > COMMENT_MAX_LENGTH) {
       setError(`Messages cannot exceed ${COMMENT_MAX_LENGTH} characters.`);
+      return;
+    }
+    const outOfScopeMention = findOutOfScopeMention(body, users, projectUsers);
+    if (outOfScopeMention) {
+      setError(`@${outOfScopeMention.name} is not a member of this project. You can only mention project members, HR, or Admin.`);
       return;
     }
     setBusy(true);

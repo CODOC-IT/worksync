@@ -39,6 +39,30 @@ export const parseMentionIds = (body: string, users: MentionCandidate[]): string
   return Array.from(mentionIds);
 };
 
+// A name outside the active discussion's mention directory must not silently look like a
+// successful mention. The API repeats this authorization check using project membership.
+export const findOutOfScopeMention = (
+  body: string,
+  allUsers: MentionCandidate[],
+  allowedUsers: MentionCandidate[]
+): MentionCandidate | undefined => {
+  const allowedIds = new Set(allowedUsers.map((user) => user.id));
+  const candidates = allUsers
+    .filter((user) => user.status !== 'inactive' && user.name.trim())
+    .sort((a, b) => b.name.length - a.name.length);
+  const lowerBody = body.toLocaleLowerCase();
+  for (let index = lowerBody.indexOf('@'); index >= 0; index = lowerBody.indexOf('@', index + 1)) {
+    if (index > 0 && /[\w@]/.test(lowerBody[index - 1])) continue;
+    const afterAt = lowerBody.slice(index + 1);
+    const matched = candidates.find((user) => {
+      const name = user.name.trim().toLocaleLowerCase();
+      return afterAt.startsWith(name) && isMentionBoundary(afterAt[name.length]);
+    });
+    if (matched && !allowedIds.has(matched.id)) return matched;
+  }
+  return undefined;
+};
+
 export const getProjectMentionCandidates = <T extends ProjectMentionCandidate>(
   users: T[],
   projectMemberIds: Iterable<string>
