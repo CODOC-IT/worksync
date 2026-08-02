@@ -293,6 +293,12 @@ export const ReportsView: React.FC = () => {
       .map((p: any) => p.id);
   }, [projects, currentUser.id]);
 
+  // Overview visibility is per-project (see roleFilteredLocal): a plain member sees only their own
+  // assigned tasks; a lead sees all tasks in led projects; Admin/HR see the full project scope.
+  // A member is anyone who is neither Admin nor HR nor a project lead — including a user holding a
+  // global Team_Lead role who leads no project.
+  const isPlainMember = currentRole !== 'Admin' && currentRole !== 'HR' && leadProjectIdsAll.length === 0;
+
   const roleFilteredLocal = useMemo(() => {
     const { validProjects, validTasks, validAttendance, validHrRequests } = filteredData;
     const userId = currentUser.id;
@@ -383,7 +389,56 @@ export const ReportsView: React.FC = () => {
   }, [selectedTaskId, apiAvailable, roleFiltered.tasks]);
 
   // ── Derived metrics from API when available, else from local ──────────
+  const buildStatusDist = (tasks: any[]): { name: string; value: number }[] => {
+    const order = ['Todo', 'In Progress', 'Review', 'Blocked', 'Done'];
+    const counts = new Map<string, number>();
+    tasks.forEach((t: any) => {
+      const key = t.status || 'Unknown';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => {
+        const ia = order.indexOf(a.name);
+        const ib = order.indexOf(b.name);
+        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+      });
+  };
+
+  const buildPriorityDist = (tasks: any[]): { name: string; value: number }[] => {
+    const order = ['Urgent', 'High', 'Medium', 'Low'];
+    const counts = new Map<string, number>();
+    tasks.forEach((t: any) => {
+      const key = t.priority || 'Medium';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => {
+        const ia = order.indexOf(a.name);
+        const ib = order.indexOf(b.name);
+        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+      });
+  };
+
   const kpiStats = useMemo(() => {
+    // Plain members see only their OWN assigned tasks (full M:N assignee set) — the server's
+    // project-wide overview would leak teammates' tasks into their KPIs.
+    if (isPlainMember) {
+      const tasks = roleFiltered.tasks as any[];
+      const total = tasks.length;
+      const completed = tasks.filter((t: any) => t.status === 'Done').length;
+      const active = total - completed;
+      const overdue = tasks.filter((t: any) => t.status !== 'Done' && t.dueDate < todayStr()).length;
+      return {
+        totalProjects: (roleFiltered.projects as any[]).length,
+        activeTasks: active,
+        completedTasks: completed,
+        overdueTasks: overdue,
+        completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+        activeMembers: 0,
+      };
+    }
     if (apiAvailable) {
       const o = reportData.overview || {};
       return {
@@ -396,7 +451,7 @@ export const ReportsView: React.FC = () => {
       };
     }
     return { totalProjects: 0, activeTasks: 0, completedTasks: 0, overdueTasks: 0, completionRate: 0, activeMembers: 0 };
-  }, [apiAvailable, reportData]);
+  }, [isPlainMember, apiAvailable, reportData, roleFiltered.tasks, roleFiltered.projects]);
 
   const projectHealthData = useMemo(() => {
     if (apiAvailable) {
@@ -409,18 +464,25 @@ export const ReportsView: React.FC = () => {
   }, [apiAvailable, reportData]);
 
   const taskStatusDist = useMemo(() => {
+    // Plain members: derive from their own assigned tasks so teammates' tasks stay out of the chart.
+    if (isPlainMember) {
+      return buildStatusDist(roleFiltered.tasks as any[]);
+    }
     if (apiAvailable) {
       return (reportData.tasks || {}).statusDistribution || [];
     }
     return [];
-  }, [apiAvailable, reportData]);
+  }, [isPlainMember, apiAvailable, reportData, roleFiltered.tasks]);
 
   const taskPriorityDist = useMemo(() => {
+    if (isPlainMember) {
+      return buildPriorityDist(roleFiltered.tasks as any[]);
+    }
     if (apiAvailable) {
       return (reportData.tasks || {}).priorityDistribution || [];
     }
     return [];
-  }, [apiAvailable, reportData]);
+  }, [isPlainMember, apiAvailable, reportData, roleFiltered.tasks]);
 
   const taskCompletionTrend = useMemo(() => {
     if (apiAvailable) {
@@ -460,35 +522,11 @@ export const ReportsView: React.FC = () => {
   // different population (all tasks in the visible projects), so they'd leak teammates' tasks
   // into a member's Tasks tab; aggregating client-side keeps list + cards consistent.
   const taskStatusDistData = useMemo(() => {
-    const order = ['Todo', 'In Progress', 'Review', 'Blocked', 'Done'];
-    const counts = new Map<string, number>();
-    (roleFiltered.tasks as any[]).forEach((t: any) => {
-      const key = t.status || 'Unknown';
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
-    return [...counts.entries()]
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => {
-        const ia = order.indexOf(a.name);
-        const ib = order.indexOf(b.name);
-        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
-      });
+    return buildStatusDist(roleFiltered.tasks as any[]);
   }, [roleFiltered.tasks]);
 
   const taskPriorityDistData = useMemo(() => {
-    const order = ['Urgent', 'High', 'Medium', 'Low'];
-    const counts = new Map<string, number>();
-    (roleFiltered.tasks as any[]).forEach((t: any) => {
-      const key = t.priority || 'Medium';
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
-    return [...counts.entries()]
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => {
-        const ia = order.indexOf(a.name);
-        const ib = order.indexOf(b.name);
-        return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
-      });
+    return buildPriorityDist(roleFiltered.tasks as any[]);
   }, [roleFiltered.tasks]);
 
   const taskProjectOptions = useMemo(() => {
@@ -671,8 +709,30 @@ export const ReportsView: React.FC = () => {
     setDetailMemberLoading(false);
   }, [selectedMemberId, workloadData]);
 
+  // Deadline task scope mirroring the backend rule: member-only projects contribute only the
+  // user's own assigned tasks; led projects contribute every task (assignee irrelevant). Used for
+  // the offline/fallback path and for building the deadline filter options.
+  const deadlineScopedTasks = useMemo(() => {
+    const { validProjects, validTasks } = filteredData;
+    const userId = currentUser.id;
+    if (currentRole === 'Admin') return validTasks;
+    if (currentRole === 'HR') {
+      const hrProjectIds = validProjects.filter(
+        (p) => p.memberIds?.includes(userId) || p.teamLeadId === userId
+      ).map((p) => p.id);
+      return validTasks.filter((t) => t.projectId && hrProjectIds.includes(t.projectId));
+    }
+    const ledIds = validProjects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+    const memberOnlyIds = validProjects.filter(
+      (p) => p.memberIds?.includes(userId) && p.teamLeadId !== userId
+    ).map((p) => p.id);
+    return validTasks.filter((t) =>
+      t.projectId && (ledIds.includes(t.projectId) || (memberOnlyIds.includes(t.projectId) && isTaskAssignee(t, userId)))
+    );
+  }, [filteredData, currentRole, currentUser.id]);
+
   const deadlineBaseTasks = useMemo(() => {
-    let tasks = roleFiltered.tasks as any[];
+    let tasks = deadlineScopedTasks as any[];
     if (deadlineSearchQuery) {
       const q = deadlineSearchQuery.toLowerCase();
       tasks = tasks.filter((t: any) => t.title?.toLowerCase().includes(q));
@@ -687,7 +747,7 @@ export const ReportsView: React.FC = () => {
       tasks = tasks.filter((t: any) => t.status === deadlineFilterStatus);
     }
     return tasks;
-  }, [roleFiltered.tasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
+  }, [deadlineScopedTasks, deadlineSearchQuery, deadlineFilterProject, deadlineFilterAssignee, deadlineFilterStatus]);
 
   const deadlineData = useMemo(() => {
     const today = todayStr();
@@ -702,9 +762,12 @@ export const ReportsView: React.FC = () => {
           const task = tasksMap.get(d.id);
           return {
             ...d,
-            projectId: task?.projectId || '',
+            projectId: d.projectId || task?.projectId || '',
+            projectName: d.projectName || task?.projectName || '',
             taskNumber: task?.taskNumber || '',
-            assigneeIds: task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : []),
+            assigneeIds: d.assigneeIds && d.assigneeIds.length
+              ? d.assigneeIds
+              : (task?.assigneeIds || (d.assigneeId ? [d.assigneeId] : [])),
           };
         }).filter((t: any) => {
           if (deadlineSearchQuery && t.title && !t.title.toLowerCase().includes(deadlineSearchQuery.toLowerCase())) return false;
@@ -776,12 +839,32 @@ export const ReportsView: React.FC = () => {
   }), [deadlineData]);
 
   const deadlineProjectOptions = useMemo(() => {
-    const projectIds = new Set((deadlineBaseTasks as any[]).map((t: any) => t.projectId).filter(Boolean));
-    return [...projectIds].map((pid) => {
-      const p = roleFiltered.projects.find((p: any) => p.id === pid);
-      return { id: pid, name: p?.title || pid };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [deadlineBaseTasks, roleFiltered.projects]);
+    const apiRows = apiAvailable && reportData?.deadlines
+      ? [
+          ...(reportData.deadlines.dueToday || []),
+          ...(reportData.deadlines.dueTomorrow || []),
+          ...(reportData.deadlines.upcoming || []),
+          ...(reportData.deadlines.overdue || []),
+        ]
+      : [];
+    const nameByPid: Record<string, string> = {};
+    const addRow = (t: any) => {
+      if (!t.projectId) return;
+      if (t.projectName) nameByPid[t.projectId] = t.projectName;
+    };
+    apiRows.forEach(addRow);
+    (deadlineBaseTasks as any[]).forEach(addRow);
+    (roleFiltered.projects as any[]).forEach((p: any) => { if (p.id) nameByPid[p.id] = p.title || p.id; });
+
+    const projectIds = new Set<string>([
+      ...apiRows.map((t: any) => t.projectId).filter(Boolean),
+      ...(deadlineBaseTasks as any[]).map((t: any) => t.projectId).filter(Boolean),
+    ]);
+    return [...projectIds].map((pid) => ({
+      id: pid,
+      name: nameByPid[pid] || pid,
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [apiAvailable, reportData, deadlineBaseTasks, roleFiltered.projects]);
 
   const deadlineAssigneeOptions = useMemo(() => {
     const ids = new Set<string>();
@@ -1077,7 +1160,9 @@ export const ReportsView: React.FC = () => {
         bodyHtml += kpi('Completed Tasks', kpiStats.completedTasks ?? 0);
         bodyHtml += kpi('Overdue Tasks', kpiStats.overdueTasks ?? 0);
         bodyHtml += kpi('Completion Rate', (kpiStats.completionRate ?? 0) + '%');
-        bodyHtml += kpi('Contributors', kpiStats.activeMembers ?? 0);
+        if (currentRole === 'Admin') {
+          bodyHtml += kpi('Contributors', kpiStats.activeMembers ?? 0);
+        }
         bodyHtml += `</div>`;
         bodyHtml += section('Task Status Distribution');
         bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
@@ -1712,7 +1797,9 @@ ${bodyHtml}
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completed', kpiStats.completedTasks, <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}</div>
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Overdue Tasks', kpiStats.overdueTasks, <AlertTriangle size={14} className="text-amber-400" />, 'amber', kpiStats.overdueTasks > 0 ? renderInsightBadge(false, `${kpiStats.overdueTasks} need attention`) : undefined)}</div>
             <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Completion Rate', `${kpiStats.completionRate}%`, <TrendingUp size={14} className="text-purple-400" />, 'magenta')}</div>
-            <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Contributors', kpiStats.activeMembers, <Users size={14} className="text-cyan-400" />, 'cyan')}</div>
+            {currentRole === 'Admin' && (
+              <div className="flex-1 shrink-0 min-w-[155px]">{renderKPICard('Contributors', kpiStats.activeMembers, <Users size={14} className="text-cyan-400" />, 'cyan')}</div>
+            )}
           </div>
 
           <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
@@ -1832,9 +1919,10 @@ ${bodyHtml}
             </div>
           </GlassCard>
 
-          <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-            <div className="glass-panel p-4 rounded-lg">
-              {renderSectionHeader(<Users size={16} className="text-violet-400" />, 'Member Workload')}
+          {!isPlainMember && (
+            <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+              <div className="glass-panel p-4 rounded-lg">
+                {renderSectionHeader(<Users size={16} className="text-violet-400" />, 'Member Workload')}
               <div className="mt-3 overflow-y-auto max-h-72">
                 {workloadData.length === 0 ? (
                   <p className="text-xs text-slate-500 text-center py-8">No workload data available</p>
@@ -1855,7 +1943,8 @@ ${bodyHtml}
                 )}
               </div>
             </div>
-          </GlassCard>
+            </GlassCard>
+          )}
 
         </>
       ) : (
@@ -2526,6 +2615,7 @@ ${bodyHtml}
   const renderDeadlineRow = (t: any) => {
     const taskAssIds = getTaskAssigneeIds(t);
     const project = roleFiltered.projects.find((p: any) => p.id === t.projectId);
+    const projectTitle = project?.title || t.projectName || '';
     return (
       <div
         key={t.id}
@@ -2536,7 +2626,7 @@ ${bodyHtml}
           <div className="flex items-center gap-2">
             <StatusBadge status={t.priority} size="sm" />
             <span className="text-slate-200 truncate group-hover:text-cyan-300 transition-colors">{t.title}</span>
-            <span className="text-[10px] text-slate-500 shrink-0 hidden sm:inline">{project?.title || ''}</span>
+            <span className="text-[10px] text-slate-500 shrink-0 hidden sm:inline">{projectTitle}</span>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -2630,16 +2720,18 @@ ${bodyHtml}
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-              <select
-                value={deadlineFilterAssignee}
-                onChange={(e) => setDeadlineFilterAssignee(e.target.value)}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
-              >
-                <option value="">All Assignees</option>
-                {deadlineAssigneeOptions.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
+              {!isPlainMember && (
+                <select
+                  value={deadlineFilterAssignee}
+                  onChange={(e) => setDeadlineFilterAssignee(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
+                >
+                  <option value="">All Assignees</option>
+                  {deadlineAssigneeOptions.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={deadlineFilterDateRange}
                 onChange={(e) => setDeadlineFilterDateRange(e.target.value)}

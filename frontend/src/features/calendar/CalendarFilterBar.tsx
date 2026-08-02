@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { ALL_CALENDAR_KINDS, CalendarEntryKind, CalendarEntryOrigin, entryToneClasses } from './calendarRules';
+import { ALL_CALENDAR_KINDS, CalendarEntryKind, CalendarEntryOrigin, PersonalFilterKind, entryToneClasses } from './calendarRules';
 
 type OriginFilter = 'all' | CalendarEntryOrigin;
 
@@ -10,13 +10,28 @@ const ORIGIN_OPTIONS: { value: OriginFilter; label: string }[] = [
   { value: 'task', label: 'Tasks' }
 ];
 
+// 'My Led Projects' is inserted into this list only when the caller says the current user
+// actually leads at least one project -- Team Lead is not a role, so this can't be a static list
+// gated by currentRole the way ORIGIN_OPTIONS is.
+const buildPersonalFilterOptions = (showLedProjectsFilter: boolean): PersonalFilterKind[] => [
+  'My Assigned Tasks',
+  'My Assigned Projects',
+  ...(showLedProjectsFilter ? (['My Led Projects'] as const) : []),
+  'My Deadlines'
+];
+
 interface CalendarFilterBarProps {
   originFilter: OriginFilter;
   onOriginFilterChange: (value: OriginFilter) => void;
   activeKinds: Set<CalendarEntryKind>;
   onActiveKindsChange: (kinds: Set<CalendarEntryKind>) => void;
-  myDeadlinesOnly: boolean;
-  onMyDeadlinesOnlyChange: (value: boolean) => void;
+  // Admin/HR never get any personal filter (full-visibility roles, "mine" has no meaning for
+  // them); showLedProjectsFilter is separate because it depends on project.teamLeadId data, not
+  // on currentRole, per this system's "Team Lead is not a role" data model.
+  showPersonalFilters: boolean;
+  showLedProjectsFilter: boolean;
+  activePersonalFilters: Set<PersonalFilterKind>;
+  onTogglePersonalFilter: (filter: PersonalFilterKind) => void;
 }
 
 export const CalendarFilterBar: React.FC<CalendarFilterBarProps> = ({
@@ -24,8 +39,10 @@ export const CalendarFilterBar: React.FC<CalendarFilterBarProps> = ({
   onOriginFilterChange,
   activeKinds,
   onActiveKindsChange,
-  myDeadlinesOnly,
-  onMyDeadlinesOnlyChange
+  showPersonalFilters,
+  showLedProjectsFilter,
+  activePersonalFilters,
+  onTogglePersonalFilter
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -86,19 +103,30 @@ export const CalendarFilterBar: React.FC<CalendarFilterBarProps> = ({
         ))}
       </div>
 
-      {/* My Deadlines toggle -- reuses the same active/inactive treatment as the origin toggle
-          buttons above, no new colors. */}
-      <button
-        type="button"
-        onClick={() => onMyDeadlinesOnlyChange(!myDeadlinesOnly)}
-        className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[10px] sm:text-xs font-semibold border transition ${
-          myDeadlinesOnly
-            ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-            : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border-white/10 bg-slate-900/50'
-        }`}
-      >
-        My Deadlines
-      </button>
+      {/* Personal filters -- independent toggles (any combination may be active at once, same
+          union semantics as the Kind checkboxes below), hidden entirely for Admin/HR. 'My Led
+          Projects' is further gated on showLedProjectsFilter (whether this user leads at least
+          one project) rather than any role, since Team Lead isn't a role in this system. */}
+      {showPersonalFilters && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {buildPersonalFilterOptions(showLedProjectsFilter).map(
+            (filter) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => onTogglePersonalFilter(filter)}
+                className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl text-[10px] sm:text-xs font-semibold border transition ${
+                  activePersonalFilters.has(filter)
+                    ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border-white/10 bg-slate-900/50'
+                }`}
+              >
+                {filter}
+              </button>
+            )
+          )}
+        </div>
+      )}
 
       {/* Kind multi-select dropdown */}
       <div ref={containerRef} className="relative">

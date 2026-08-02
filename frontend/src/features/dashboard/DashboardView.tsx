@@ -28,11 +28,13 @@ import {
   buildCalendarEntries,
   entryToneClasses,
   filterCalendarEntries,
-  isMyDeadlineEntry,
+  matchesPersonalFilters,
+  leadsAnyProject,
   todayDateKey,
   CalendarEntry,
   CalendarEntryKind,
   CalendarEntryOrigin,
+  PersonalFilterKind,
 } from '../calendar/calendarRules';
 import { CalendarFilterBar } from '../calendar/CalendarFilterBar';
 
@@ -236,7 +238,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   // ── Mini Calendar filter state (mirrors the Calendar module's CalendarFilterBar) ──
   const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
   const [activeKinds, setActiveKinds] = useState<Set<CalendarEntryKind>>(new Set(ALL_CALENDAR_KINDS));
-  const [myDeadlinesOnly, setMyDeadlinesOnly] = useState(false);
+  const [activePersonalFilters, setActivePersonalFilters] = useState<Set<PersonalFilterKind>>(new Set());
+  const showPersonalFilters = currentRole !== 'Admin' && currentRole !== 'HR';
+  const showLedProjectsFilter = leadsAnyProject(projects, currentUser.id);
+  const togglePersonalFilter = (filter: PersonalFilterKind) => {
+    setActivePersonalFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(filter)) next.delete(filter);
+      else next.add(filter);
+      return next;
+    });
+  };
 
   const calendarEntries = useMemo(
     () => buildCalendarEntries(projects, tasks, calendarEvents),
@@ -245,10 +257,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   const filteredCalendarEntries = useMemo(() => {
     const filtered = filterCalendarEntries(calendarEntries, originFilter, activeKinds);
-    return myDeadlinesOnly
-      ? filtered.filter((entry) => isMyDeadlineEntry(entry, projects, tasks, currentUser.id))
-      : filtered;
-  }, [calendarEntries, originFilter, activeKinds, myDeadlinesOnly, projects, tasks, currentUser.id]);
+    if (!showPersonalFilters) return filtered;
+    return filtered.filter((entry) =>
+      matchesPersonalFilters(entry, activePersonalFilters, projects, tasks, currentUser.id)
+    );
+  }, [calendarEntries, originFilter, activeKinds, showPersonalFilters, activePersonalFilters, projects, tasks, currentUser.id]);
 
   const todayKey = todayDateKey();
   const upcomingCalendarEntries = useMemo(
@@ -314,8 +327,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   onOriginFilterChange={setOriginFilter}
                   activeKinds={activeKinds}
                   onActiveKindsChange={setActiveKinds}
-                  myDeadlinesOnly={myDeadlinesOnly}
-                  onMyDeadlinesOnlyChange={setMyDeadlinesOnly}
+                  showPersonalFilters={showPersonalFilters}
+                  showLedProjectsFilter={showLedProjectsFilter}
+                  activePersonalFilters={activePersonalFilters}
+                  onTogglePersonalFilter={togglePersonalFilter}
                 />
               </div>
               <MiniCalendar entries={filteredCalendarEntries} />

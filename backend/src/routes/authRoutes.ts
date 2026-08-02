@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { userStore } from '../store/userStore.js';
 import { authenticateJWT, AuthenticatedRequest, getJwtSecret, JWT_EXPIRES_IN } from '../middleware/authMiddleware.js';
 import { loginRateLimiter, resetLoginAttempts } from '../middleware/rateLimiter.js';
-import { recordActivitySafe } from '../activity/activity.service.js';
+import { recordActivity, recordActivitySafe } from '../activity/activity.service.js';
 import { sendAccountUpdateEmail } from '../services/emailService.js';
 import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query } from '../db/pool.js';
@@ -225,13 +225,40 @@ router.get('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Res
   }
 });
 
+// POST /api/auth/audit-login
+// The browser signs in directly against Supabase (signInWithPassword), so the Express /login
+// route never runs for successful logins. The frontend reports a successful sign-in here once
+// per login so Login events reach the audit log with the caller's authoritative role. The
+// audit write is awaited so serverless deployments cannot drop the event when the response
+// returns before the async insert completes.
+router.post('/audit-login', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (req.user) {
+      const user = req.user ? userStore.findById(req.user.id) : undefined;
+      await recordActivity({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+        actorRole: req.user.role, action: 'Login', module: 'Authentication', entityType: 'User',
+        entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed in.`,
+        result: 'Successful', source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+    }
+  } catch (error) {
+    console.warn('[auth] Login audit write failed.', error);
+  }
+  res.status(200).json({ success: true, message: 'Login activity recorded.' });
+});
+
 // POST /api/auth/logout
-router.post('/logout', authenticateJWT, (req: AuthenticatedRequest, res: Response): void => {
-  const user = req.user ? userStore.findById(req.user.id) : undefined;
-  if (req.user) recordActivitySafe({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
-    actorRole: req.user.role, action: 'Logout', module: 'Authentication', entityType: 'User',
-    entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed out.`,
-    source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+router.post('/logout', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (req.user) {
+      const user = req.user ? userStore.findById(req.user.id) : undefined;
+      await recordActivity({ actorId: req.user.id, actorName: user?.name, actorEmail: req.user.email,
+        actorRole: req.user.role, action: 'Logout', module: 'Authentication', entityType: 'User',
+        entityId: req.user.id, entityName: user?.name, description: `${user?.name || req.user.email} signed out.`,
+        source: 'Web', ipAddress: req.ip || req.socket.remoteAddress });
+    }
+  } catch (error) {
+    console.warn('[auth] Logout audit write failed.', error);
+  }
   res.status(200).json({ success: true, message: 'Logout successful.' });
 });
 

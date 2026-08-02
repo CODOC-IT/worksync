@@ -24,15 +24,22 @@ import {
 // ─── Per-role module whitelists ─────────────────────────────────────────────
 // 'Settings' and 'HR' removed from module filter: Settings is internal admin-only
 // and HR is attendance-scoped; neither is a useful filter option for end users.
-const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications'];
+const MEMBER_MODULES = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Reports'];
 const LEAD_MODULES   = [...MEMBER_MODULES];
-const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Authentication', 'Activity Log', 'System'];
+const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attendance', 'Approvals', 'Calendar', 'AI Assistant', 'Profile', 'Notifications', 'Authentication', 'Activity Log', 'Reports', 'System'];
 
-// Action lists. 'Rejected' is an actioncode (not a status field-change), so it lives here.
+// Action lists. Every option below must map to an actioncode the backend actually records in
+// audit.auditevents — an option that never matches a real stored code would always return an
+// empty feed. Breaks and permission grants/revocations are not written to the audit table, so
+// they are deliberately absent here. Attachment uploads/deletions are represented by the
+// metadata/entity matches wired into backend/src/activity/activity.repository.ts.
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
-const LEAD_ACTIONS   = [...MEMBER_ACTIONS, 'Permission Granted', 'Permission Revoked', 'Permission Expired'];
-// Admin sees all actions including HR attendance and auth events
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Break Started', 'Break Ended', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Permission Granted', 'Permission Revoked', 'Permission Expired', 'Login', 'Logout', 'Exported', 'Preference Changed'];
+const LEAD_ACTIONS   = [...MEMBER_ACTIONS];
+// Admin and HR share one option set: every actioncode recorded across all modules.
+// 'Preference Changed', 'Assigned/Reassigned', permission events, and break events are
+// deliberately excluded — preference changes are not recorded, permissions and breaks are
+// tracked outside the audit table, and reassignments surface under the 'Assigned' option.
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Reopened', 'Completed', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Requested Change', 'Requested', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Login', 'Logout', 'Exported', 'Failed Operation', 'Unauthorized Access'];
 
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];
@@ -128,9 +135,9 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
   }, [users, currentRole, currentUser.id, isAdmin, isHR, isTeamLead, ledProjects]);
 
   const accessibleTasks = useMemo(() => {
-    if (isAdmin) return tasks;
+    if (isAdmin || isHR) return tasks;
     return tasks.filter((t) => userProjectIds.includes(t.projectId));
-  }, [tasks, userProjectIds, isAdmin]);
+  }, [tasks, userProjectIds, isAdmin, isHR]);
 
   // ── Fetch authoritative scope from the backend on mount / role change ────
   useEffect(() => {

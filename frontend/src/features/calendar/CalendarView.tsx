@@ -14,7 +14,8 @@ import {
   buildApprovedLeaveEntries,
   groupEntriesByDate,
   filterCalendarEntries,
-  isMyDeadlineEntry,
+  matchesPersonalFilters,
+  leadsAnyProject,
   getMonthGridDates,
   getWeekDates,
   getYearMonths,
@@ -22,7 +23,8 @@ import {
   ALL_CALENDAR_KINDS,
   CalendarEntry,
   CalendarEntryKind,
-  CalendarEntryOrigin
+  CalendarEntryOrigin,
+  PersonalFilterKind
 } from './calendarRules';
 
 type CalendarViewMode = 'month' | 'week' | 'day' | 'year';
@@ -52,8 +54,27 @@ export const CalendarView: React.FC = () => {
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [originFilter, setOriginFilter] = useState<'all' | CalendarEntryOrigin>('all');
   const [activeKinds, setActiveKinds] = useState<Set<CalendarEntryKind>>(new Set(ALL_CALENDAR_KINDS));
-  const [myDeadlinesOnly, setMyDeadlinesOnly] = useState(false);
+  const [activePersonalFilters, setActivePersonalFilters] = useState<Set<PersonalFilterKind>>(new Set());
   const [manageHolidaysOpen, setManageHolidaysOpen] = useState(false);
+
+  // Admin/HR are full-visibility roles -- "mine" has no meaning for them, so the entire personal
+  // filter cluster is hidden rather than just left unselected (matches Manage Holidays' own
+  // currentRole === 'HR' gating pattern just below). Team Lead is not a role in this system (see
+  // project.teamLeadId), so "leads at least one project" is a data check, not a role check.
+  const showPersonalFilters = currentRole !== 'Admin' && currentRole !== 'HR';
+  const showLedProjectsFilter = leadsAnyProject(projects, currentUser.id);
+
+  const togglePersonalFilter = (filter: PersonalFilterKind) => {
+    setActivePersonalFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(filter)) {
+        next.delete(filter);
+      } else {
+        next.add(filter);
+      }
+      return next;
+    });
+  };
 
   // Recomputed every render (not memoized) so "today" stays correct if the app is left open
   // across midnight — mirrors ProjectsView's own inline `todayStr` convention.
@@ -75,8 +96,10 @@ export const CalendarView: React.FC = () => {
       activeKinds
     );
     return groupEntriesByDate(
-      myDeadlinesOnly
-        ? filtered.filter((entry) => isMyDeadlineEntry(entry, projects, tasks, currentUser.id))
+      showPersonalFilters
+        ? filtered.filter((entry) =>
+            matchesPersonalFilters(entry, activePersonalFilters, projects, tasks, currentUser.id)
+          )
         : filtered
     );
   }, [
@@ -88,7 +111,8 @@ export const CalendarView: React.FC = () => {
     anchorYear,
     originFilter,
     activeKinds,
-    myDeadlinesOnly,
+    showPersonalFilters,
+    activePersonalFilters,
     currentUser.id
   ]);
 
@@ -226,8 +250,10 @@ export const CalendarView: React.FC = () => {
           onOriginFilterChange={setOriginFilter}
           activeKinds={activeKinds}
           onActiveKindsChange={setActiveKinds}
-          myDeadlinesOnly={myDeadlinesOnly}
-          onMyDeadlinesOnlyChange={setMyDeadlinesOnly}
+          showPersonalFilters={showPersonalFilters}
+          showLedProjectsFilter={showLedProjectsFilter}
+          activePersonalFilters={activePersonalFilters}
+          onTogglePersonalFilter={togglePersonalFilter}
         />
       </div>
 

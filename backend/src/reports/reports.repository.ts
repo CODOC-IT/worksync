@@ -430,20 +430,83 @@ export const getWorkload = async (projectIds: number[], from: string, to: string
 // Deadlines: tasks grouped by urgency
 // ────────────────────────────────────────────────────────────
 
+export interface DeadlineProjectRow {
+  projectid: number;
+  projectname: string;
+  projectcode: string;
+  islead: boolean;
+}
+
+// Project population for the Upcoming Deadlines tab. Admin / HR see every visible project
+// (unchanged). Everyone else sees the union of the projects they are a member of AND the projects
+// they lead — a user can be Lead of one project while being a Member of others, and each
+// relationship is respected independently (per-project TeamLead membership, with the Owner as
+// fallback — see LEAD_SCOPE_CLAUSE / MEMBER_SCOPE_CLAUSE). Lead-ness is never derived from the
+// global account role. The per-project islead flag then drives the task population in
+// getDeadlineBucketTasks: led projects expose every eligible deadline, member-only projects expose
+// only the user's own task deadlines.
+export const getDeadlineProjectsForRole = async (
+  userPk: number,
+  role: string,
+  from: string,
+  to: string
+): Promise<DeadlineProjectRow[]> => {
+  // Admin / HR see all active projects (existing behavior preserved).
+  if (role === 'Admin' || role === 'HR') {
+    const result = await query<DeadlineProjectRow>(
+      `SELECT p.projectid, p.projectname, p.projectcode,
+              true AS islead
+       FROM work.projects p
+       JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
+       WHERE p.archivedatutc IS NULL
+         AND (ps.statuscode = 'Active'
+              OR p.startdate >= $1::date AND p.startdate <= $2::date
+              OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+      [from, to]
+    );
+    return result.rows;
+  }
+
+  // Member or lead: union of member projects + led projects, flagging lead-ness per project.
+  const result = await query<DeadlineProjectRow>(
+    `SELECT p.projectid, p.projectname, p.projectcode,
+            (${LEAD_SCOPE_CLAUSE}) AS islead
+     FROM work.projects p
+     JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
+     WHERE p.archivedatutc IS NULL
+       AND (${MEMBER_SCOPE_CLAUSE} OR ${LEAD_SCOPE_CLAUSE})
+       AND (ps.statuscode = 'Active'
+            OR p.startdate >= $1::date AND p.startdate <= $2::date
+            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
+    [from, to, userPk]
+  );
+  return result.rows;
+};
+
 export interface TaskDeadlineRow {
   id: string;
   title: string;
   status: string;
   priority: string;
   dueDate: string;
-  assigneeId: string;
+  projectId: string;
+  projectName: string;
+  assigneeIds: string[];
+  assigneeId: string | null;
 }
 
+// Task population for the Upcoming Deadlines tab. For each project in the scope:
+//   - projects the user leads            -> every eligible task (assignee irrelevant);
+//   - projects the user only belongs to  -> only tasks the user is an assignee of,
+//                                           using the complete (multi-assignee) assignee set.
+// For Admin / HR every project is passed with islead = true, so all tasks are eligible — matching
+// the pre-existing behavior exactly.
 export const getDeadlineBucketTasks = async (
-  projectIds: number[],
+  projects: DeadlineProjectRow[],
+  userPk: number,
   bucket: 'today' | 'tomorrow' | 'upcoming' | 'overdue'
 ): Promise<TaskDeadlineRow[]> => {
-  if (projectIds.length === 0) return [];
+  if (projects.length === 0) return [];
 
   let dateFilter: string;
   switch (bucket) {
@@ -461,6 +524,9 @@ export const getDeadlineBucketTasks = async (
       break;
   }
 
+  const ledProjectIds = projects.filter((p) => p.islead).map((p) => p.projectid);
+  const memberOnlyProjectIds = projects.filter((p) => !p.islead).map((p) => p.projectid);
+
   const result = await query<TaskDeadlineRow>(
     `SELECT
        'tsk-' || t.taskid AS id,
@@ -468,21 +534,35 @@ export const getDeadlineBucketTasks = async (
        ts.statuscode AS status,
        pr.prioritycode AS priority,
        t.duedate::text AS "dueDate",
+       'prj-' || t.projectid AS "projectId",
+       p.projectname AS "projectName",
+       COALESCE((SELECT array_agg('usr-' || taa.userid)
+                 FROM work.taskassignees taa
+                 WHERE taa.taskid = t.taskid AND taa.unassignedatutc IS NULL), '{}'::text[]) AS "assigneeIds",
        'usr-' || ta.userid AS "assigneeId"
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      JOIN work.priorities pr ON pr.priorityid = t.priorityid
+     JOIN work.projects p ON p.projectid = t.projectid
      LEFT JOIN LATERAL (
        SELECT userid FROM work.taskassignees
        WHERE taskid = t.taskid AND unassignedatutc IS NULL
        LIMIT 1
      ) ta ON true
-     WHERE t.projectid = ANY($1::int[])
-        AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-        AND NOT ts.iscompletedstate
+     WHERE t.archivedatutc IS NULL AND t.parenttaskid IS NULL
+       AND NOT ts.iscompletedstate
+       AND (
+         t.projectid = ANY($1::int[])
+         OR (
+           t.projectid = ANY($2::int[])
+           AND EXISTS (SELECT 1 FROM work.taskassignees mta
+                       WHERE mta.taskid = t.taskid AND mta.userid = $3
+                         AND mta.unassignedatutc IS NULL)
+         )
+       )
        AND ${dateFilter}
      ORDER BY t.duedate, t.taskid`,
-    [projectIds]
+    [ledProjectIds, memberOnlyProjectIds, userPk]
   );
 
   // Map status/priority codes to display names
