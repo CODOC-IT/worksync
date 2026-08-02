@@ -515,10 +515,11 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
     const nextPassword = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
     const confirmPassword = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword.trim() : '';
     if (nextPassword || confirmPassword) {
-      const adminCanManagePassword = req.user.role === 'Admin' && (targetUser.role === 'Team_Member' || targetUser.role === 'HR');
-      const hrCanManagePassword = req.user.role === 'HR' && targetUser.role === 'Team_Member';
+      const targetIsMember = targetUser.role === 'Team_Member' || targetUser.role === 'Team_Lead';
+      const adminCanManagePassword = req.user.role === 'Admin' && (targetIsMember || targetUser.role === 'HR');
+      const hrCanManagePassword = req.user.role === 'HR' && targetIsMember;
       if (!adminCanManagePassword && !hrCanManagePassword) {
-        res.status(403).json({ success: false, message: 'Managed password changes are limited to Team Member accounts, or HR accounts when updated by an Administrator.' });
+        res.status(403).json({ success: false, message: 'Managed password changes are limited to Member and Team Lead accounts, or HR accounts when updated by an Administrator.' });
         return;
       }
       if (nextPassword.length < 6) {

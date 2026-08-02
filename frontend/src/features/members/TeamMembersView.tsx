@@ -4,6 +4,7 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
 import { Project, Task, User, UserRole } from '../../types';
 import { AccountFieldErrors, AccountFormValues, getPasswordChecks, validateAccountForm } from './accountFormRules';
+import { getMemberDirectoryRole } from './memberRole';
 import {
   Check,
   Briefcase,
@@ -160,10 +161,26 @@ export const TeamMembersView: React.FC = () => {
 
   const canInspectMembers = currentRole === 'Admin' || currentRole === 'HR';
   const canManageAccounts = currentRole === 'Admin' || currentRole === 'HR';
+  const activeProjectLeadIds = useMemo(
+    () => new Set(
+      projects
+        .filter((project) => project.status === 'Active' && project.approvalStatus === 'Approved')
+        .map((project) => project.teamLeadId)
+        .filter(Boolean)
+    ),
+    [projects],
+  );
+  const directoryUsers = useMemo(
+    () => users.map((member) => {
+      const role = getMemberDirectoryRole(member.role, member.id, activeProjectLeadIds);
+      return role === member.role ? member : { ...member, role };
+    }),
+    [activeProjectLeadIds, users],
+  );
 
   const members = useMemo(
     () =>
-      users
+      directoryUsers
         .filter((member) => {
           if (member.status === 'inactive') {
             if (!canManageAccounts) return false;
@@ -194,12 +211,12 @@ export const TeamMembersView: React.FC = () => {
 
           return left.name.localeCompare(right.name);
         }),
-    [accountView, canManageAccounts, roleFilter, searchField, searchQuery, sortBy, tasks, users],
+    [accountView, canManageAccounts, directoryUsers, roleFilter, searchField, searchQuery, sortBy],
   );
 
   const selectedMember = useMemo(
-    () => users.find((member) => member.id === selectedMemberId) ?? null,
-    [selectedMemberId, users],
+    () => directoryUsers.find((member) => member.id === selectedMemberId) ?? null,
+    [directoryUsers, selectedMemberId],
   );
 
   const selectedMemberInsights = useMemo(
@@ -211,9 +228,9 @@ export const TeamMembersView: React.FC = () => {
   const canEditSelectedMember = Boolean(selectedMember) && !hrCannotManageSelectedMember;
   const selectedMemberIsAdmin = selectedMember?.role === 'Admin';
 
-  const activeMembersCount = useMemo(() => users.filter((member) => member.status !== 'inactive').length, [users]);
-  const deactivatedMembersCount = useMemo(() => users.filter((member) => member.status === 'inactive').length, [users]);
-  const roleLockedToProjectLead = manageMode === 'edit' && memberForm.role === 'Team_Lead';
+  const activeMembersCount = useMemo(() => directoryUsers.filter((member) => member.status !== 'inactive').length, [directoryUsers]);
+  const deactivatedMembersCount = useMemo(() => directoryUsers.filter((member) => member.status === 'inactive').length, [directoryUsers]);
+  const roleLockedToProjectLead = manageMode === 'edit' && Boolean(manageTargetId) && activeProjectLeadIds.has(manageTargetId || '');
 
   useEffect(() => {
     if (!canInspectMembers) {
@@ -253,14 +270,14 @@ export const TeamMembersView: React.FC = () => {
     };
   }, [canManageAccounts]);
 
-  const totalMembers = users.filter((member) => member.status !== 'inactive').length;
-  const teamLeadCount = users.filter((member) => member.role === 'Team_Lead' && member.status !== 'inactive').length;
-  const hrCount = users.filter((member) => member.role === 'HR' && member.status !== 'inactive').length;
-  const teamMemberCount = users.filter((member) => member.role === 'Team_Member' && member.status !== 'inactive').length;
+  const totalMembers = directoryUsers.filter((member) => member.status !== 'inactive').length;
+  const teamLeadCount = directoryUsers.filter((member) => member.role === 'Team_Lead' && member.status !== 'inactive').length;
+  const hrCount = directoryUsers.filter((member) => member.role === 'HR' && member.status !== 'inactive').length;
+  const teamMemberCount = directoryUsers.filter((member) => member.role === 'Team_Member' && member.status !== 'inactive').length;
 
   const roleQuickFilters: Array<{ label: string; value: 'all' | UserRole; count: number }> = [
     { label: 'All', value: 'all', count: totalMembers },
-    { label: 'Admins', value: 'Admin', count: users.filter((member) => member.role === 'Admin' && member.status !== 'inactive').length },
+    { label: 'Admins', value: 'Admin', count: directoryUsers.filter((member) => member.role === 'Admin' && member.status !== 'inactive').length },
     { label: 'Team Leads', value: 'Team_Lead', count: teamLeadCount },
     { label: 'HR', value: 'HR', count: hrCount },
     { label: 'Members', value: 'Team_Member', count: teamMemberCount },
@@ -329,7 +346,9 @@ export const TeamMembersView: React.FC = () => {
         name: memberForm.name.trim(),
         username: memberForm.username.trim().toLowerCase(),
         email: memberForm.email.trim().toLowerCase(),
-        role: memberForm.role,
+        role: roleLockedToProjectLead
+          ? users.find((member) => member.id === manageTargetId)?.role || 'Team_Member'
+          : memberForm.role,
         department: departments.find((department) => String(department.id) === memberForm.department)?.name || memberForm.department.trim(),
         title: memberForm.title.trim(),
         ...(isCreate ? { password: memberForm.password } : {}),
@@ -1169,7 +1188,12 @@ export const TeamMembersView: React.FC = () => {
                 <span className="mb-1 block text-xs">Title</span>
                 <input value={memberForm.title} onChange={(event) => setMemberForm((prev) => ({ ...prev, title: event.target.value }))} className={surfaceInputClass} required />
               </label>
-              {manageMode === 'edit' && (memberForm.role === 'Team_Member' || (currentRole === 'Admin' && memberForm.role === 'HR')) && (
+              {manageMode === 'edit' && (
+                memberForm.role === 'Team_Member'
+                || memberForm.role === 'Team_Lead'
+                || roleLockedToProjectLead
+                || (currentRole === 'Admin' && memberForm.role === 'HR')
+              ) && (
                 <>
                   <label className="text-sm text-slate-300 md:col-span-2">
                     <span className="mb-1 block text-xs">New password</span>
