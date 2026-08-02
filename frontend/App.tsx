@@ -36,6 +36,7 @@ const AppContent: React.FC = () => {
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
   const [reportsInitialTab, setReportsInitialTab] = useState<string | undefined>(undefined);
   const [tasksInitialId, setTasksInitialId] = useState<string | undefined>(undefined);
+  const [calendarInitialEntryId, setCalendarInitialEntryId] = useState<string | undefined>(undefined);
 
   const {
     currentRole,
@@ -188,6 +189,9 @@ const AppContent: React.FC = () => {
     if (tab === 'tasks') {
       setTasksInitialId(filterId || undefined);
     }
+    if (tab === 'calendar') {
+      setCalendarInitialEntryId(filterId || undefined);
+    }
     setCurrentTab(tab);
   };
 
@@ -265,7 +269,12 @@ const AppContent: React.FC = () => {
         
 
 
-          {currentTab === "calendar" && <CalendarView />}
+          {currentTab === "calendar" && (
+            <CalendarView
+              initialEntryId={calendarInitialEntryId}
+              onInitialEntryConsumed={() => setCalendarInitialEntryId(undefined)}
+            />
+          )}
 
 
 

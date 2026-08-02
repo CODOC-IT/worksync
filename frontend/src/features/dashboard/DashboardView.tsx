@@ -481,12 +481,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               {upcomingCalendarEntries.length > 0 ? (
                 <div className="mt-3 space-y-1.5 max-h-[100px] overflow-y-auto pr-1">
                   <span className="text-[9px] font-mono text-slate-500 uppercase">Upcoming</span>
-                  {upcomingCalendarEntries.slice(0, 5).map((d, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[10px] p-1 rounded hover:bg-white/5">
+                  {upcomingCalendarEntries.slice(0, 5).map((d) => (
+                    <button
+                      key={d.id}
+                      onClick={() => onNavigate('calendar', d.id)}
+                      title={`Open "${d.title}" in Calendar`}
+                      className="flex items-center gap-2 text-[10px] p-1 rounded hover:bg-cyan-500/10 hover:ring-1 hover:ring-cyan-500/30 transition-all w-full text-left group"
+                    >
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${entryToneClasses(d.kind).dotClass}`} />
-                      <span className="text-slate-400 font-mono w-20 shrink-0">{d.date}</span>
-                      <span className="text-slate-300 truncate">{d.title}</span>
-                    </div>
+                      <span className="text-slate-400 font-mono w-20 shrink-0 group-hover:text-cyan-300 transition-colors">{d.date}</span>
+                      <span className="text-slate-300 truncate flex-1 group-hover:text-white transition-colors">{d.title}</span>
+                    </button>
                   ))}
                 </div>
               ) : (
