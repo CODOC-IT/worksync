@@ -437,6 +437,24 @@ export interface DeadlineProjectRow {
   islead: boolean;
 }
 
+// `$1`-based equivalents of LEAD_SCOPE_CLAUSE / MEMBER_SCOPE_CLAUSE (those reference $3 for the
+// caller's from/to parameters). The Upcoming Deadlines project scope intentionally does NOT honor
+// the global Reports From → To range: deadlines must reflect actual upcoming task dates regardless
+// of the range the user picked for the rest of Reports, so this query has no date placeholders and
+// the shared clauses' $3 index does not apply here.
+const DEADLINE_LEAD_SCOPE_CLAUSE = `(EXISTS (SELECT 1 FROM work.projectmembers pm
+                                            WHERE pm.projectid = p.projectid AND pm.userid = $1
+                                              AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL)
+                                    OR (p.owneruserid = $1
+                                        AND NOT EXISTS (SELECT 1 FROM work.projectmembers pm
+                                                        WHERE pm.projectid = p.projectid
+                                                          AND pm.memberrolecode = 'TeamLead'
+                                                          AND pm.leftatutc IS NULL)))`;
+
+const DEADLINE_MEMBER_SCOPE_CLAUSE = `EXISTS (SELECT 1 FROM work.projectmembers pm
+                                             WHERE pm.projectid = p.projectid AND pm.userid = $1
+                                               AND pm.leftatutc IS NULL)`;
+
 // Project population for the Upcoming Deadlines tab. Admin / HR see every visible project
 // (unchanged). Everyone else sees the union of the projects they are a member of AND the projects
 // they lead — a user can be Lead of one project while being a Member of others, and each
@@ -445,24 +463,22 @@ export interface DeadlineProjectRow {
 // global account role. The per-project islead flag then drives the task population in
 // getDeadlineBucketTasks: led projects expose every eligible deadline, member-only projects expose
 // only the user's own task deadlines.
+//
+// The global Reports From → To range is deliberately NOT applied here: an upcoming deadline should
+// appear based on its actual due date, not on whether its project's start/end dates fall inside the
+// user's selected report window.
 export const getDeadlineProjectsForRole = async (
   userPk: number,
-  role: string,
-  from: string,
-  to: string
+  role: string
 ): Promise<DeadlineProjectRow[]> => {
-  // Admin / HR see all active projects (existing behavior preserved).
+  // Admin / HR see all non-archived projects (existing behavior preserved).
   if (role === 'Admin' || role === 'HR') {
     const result = await query<DeadlineProjectRow>(
       `SELECT p.projectid, p.projectname, p.projectcode,
               true AS islead
        FROM work.projects p
        JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
-       WHERE p.archivedatutc IS NULL
-         AND (ps.statuscode = 'Active'
-              OR p.startdate >= $1::date AND p.startdate <= $2::date
-              OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
-      [from, to]
+       WHERE p.archivedatutc IS NULL`
     );
     return result.rows;
   }
@@ -470,15 +486,12 @@ export const getDeadlineProjectsForRole = async (
   // Member or lead: union of member projects + led projects, flagging lead-ness per project.
   const result = await query<DeadlineProjectRow>(
     `SELECT p.projectid, p.projectname, p.projectcode,
-            (${LEAD_SCOPE_CLAUSE}) AS islead
+            (${DEADLINE_LEAD_SCOPE_CLAUSE}) AS islead
      FROM work.projects p
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
      WHERE p.archivedatutc IS NULL
-       AND (${MEMBER_SCOPE_CLAUSE} OR ${LEAD_SCOPE_CLAUSE})
-       AND (ps.statuscode = 'Active'
-            OR p.startdate >= $1::date AND p.startdate <= $2::date
-            OR p.enddate >= $1::date AND p.enddate <= $2::date)`,
-    [from, to, userPk]
+       AND (${DEADLINE_MEMBER_SCOPE_CLAUSE} OR ${DEADLINE_LEAD_SCOPE_CLAUSE})`,
+    [userPk]
   );
   return result.rows;
 };

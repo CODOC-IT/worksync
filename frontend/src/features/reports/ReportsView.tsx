@@ -3147,14 +3147,38 @@ ${bodyHtml}
             <div className="p-4">
               {renderSectionHeader(<ListTodo size={16} className="text-cyan-400" />, `Subtasks (${t.subtasks.length})`)}
               <div className="mt-3 space-y-1.5">
-                {t.subtasks.map((st: any) => (
-                  <div key={st.id} className="flex items-center gap-2 p-2 rounded-lg bg-slate-800/30 border border-slate-700/20">
-                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.status === 'Done' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-                    <span className="text-xs text-slate-200 flex-1 truncate">{st.title}</span>
-                    <StatusBadge status={st.status} size="sm" />
-                    <StatusBadge status={st.priority} size="sm" />
-                  </div>
-                ))}
+                {t.subtasks.map((st: any) => {
+                  const stAssigneeIds = getTaskAssigneeIds(st);
+                  return (
+                    <div key={st.id} className="p-2 rounded-lg bg-slate-800/30 border border-slate-700/20 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.status === 'Done' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                        <span className="text-xs text-slate-200 flex-1 min-w-0 truncate">{st.title}</span>
+                        <StatusBadge status={st.status} size="sm" />
+                        <StatusBadge status={st.priority} size="sm" />
+                      </div>
+                      {st.description && (
+                        <div className="pl-3.5">
+                          <p className="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">{st.description}</p>
+                        </div>
+                      )}
+                      <div className="pl-3.5 flex flex-wrap gap-x-4 gap-y-1">
+                        <div>
+                          <span className="text-[10px] text-slate-500 mr-1.5">Assignee{stAssigneeIds.length > 1 ? 's' : ''}</span>
+                          <span className="text-xs text-slate-300">
+                            {stAssigneeIds.length > 0
+                              ? stAssigneeIds.map((aid: string) => users.find((u: any) => u.id === aid)?.name || aid).join(', ')
+                              : '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 mr-1.5">Due Date</span>
+                          <span className="text-xs text-slate-300">{st.dueDate ? st.dueDate.slice(0, 10) : '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </GlassCard>
@@ -3560,7 +3584,7 @@ ${bodyHtml}
             if (s === '') {
               return (
                 <button key={s} onClick={() => setAttendanceStatusFilter('')}
-                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-all ${isActive
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${isActive
                     ? 'bg-slate-600/60 text-slate-200 border border-white/10'
                     : 'bg-slate-800/50 text-slate-400 border border-slate-700/60 hover:text-slate-200'}`}>
                   All
@@ -3574,7 +3598,7 @@ ${bodyHtml}
               : 'bg-violet-500/20 text-violet-400 border-violet-500/30';
             return (
               <button key={s} onClick={() => setAttendanceStatusFilter(s === attendanceStatusFilter ? '' : s)}
-                className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${isActive ? colorClass : 'bg-slate-800/50 text-slate-400 border-slate-700/60 hover:text-slate-200'}`}>
                 {s}
               </button>
             );

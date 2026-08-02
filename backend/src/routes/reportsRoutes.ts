@@ -142,7 +142,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     // member it's "projects I'm a member of" and for a lead it's "projects I lead" plus any
     // additional projects I only belong to — each project flagged with the user's lead status so
     // the task population can differ per project (led -> all tasks; member-only -> own tasks).
-    const deadlineProjects = await repo.getDeadlineProjectsForRole(userPk, role, from, to);
+    const deadlineProjects = await repo.getDeadlineProjectsForRole(userPk, role);
     const [dueToday, dueTomorrow, upcoming, overdue] = await Promise.all([
       repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'today'),
       repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'tomorrow'),
