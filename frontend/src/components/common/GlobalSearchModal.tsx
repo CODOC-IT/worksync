@@ -56,7 +56,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search projects, tasks, code numbers, chat messages..."
+            placeholder="Search projects, tasks..."
             className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none font-medium"
           />
           {query && (
