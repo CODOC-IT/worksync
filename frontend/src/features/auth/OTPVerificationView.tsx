@@ -131,6 +131,7 @@ export const OTPVerificationView: React.FC<OTPVerificationViewProps> = ({
 
   return (
     <div
+      data-login-page
       className="min-h-screen w-screen flex items-center justify-center bg-[var(--bg-canvas)] text-slate-100 relative overflow-hidden"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(9,10,15,0.92), rgba(9,10,15,0.97)), url('/assets/images/auth-bg.png')`,
