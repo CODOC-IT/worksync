@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { GlassCard } from '../../components/common/GlassCard';
+import { getTaskAssigneeIds } from '../tasks/taskRules';
 import { getOwnAccountChangeRequests, getSafeRequestedChangeLabel } from './accountChangeRequestHistory';
 import {
   Mail, Briefcase, Shield, Save, AlertCircle,
@@ -97,7 +98,7 @@ const ROLE_TABS: Record<string, TabDef[]> = {
   ],
 };
 
-export const ProfileView: React.FC = () => {
+export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const {
     currentUser,
     tasks,
@@ -148,6 +149,7 @@ export const ProfileView: React.FC = () => {
   const [profileActivity, setProfileActivity] = useState<any[]>([]);
   const [profileActivityLoading, setProfileActivityLoading] = useState(false);
   const [profileActivityError, setProfileActivityError] = useState<string | null>(null);
+  const [profileActivityTotal, setProfileActivityTotal] = useState(0);
 
   useEffect(() => {
     setNameInput(currentUser.name);
@@ -215,7 +217,7 @@ export const ProfileView: React.FC = () => {
         to: new Date(`${to}T23:59:59.999`).toISOString(),
         myActivityOnly: 'true',
         page: '1',
-        pageSize: '200',
+        pageSize: '30',
         sort: 'newest',
       });
       const res = await fetch(`/api/activity?${params.toString()}`, {
@@ -225,6 +227,7 @@ export const ProfileView: React.FC = () => {
       if (!res.ok || !data.success) {
         throw new Error(data.message || 'Failed to load activity logs.');
       }
+      setProfileActivityTotal(Number(data.total) || 0);
       setProfileActivity((data.items || []).map((item: any) => ({
         id: `act-${item.id}`,
         userId: item.actor?.id || '',
@@ -239,6 +242,7 @@ export const ProfileView: React.FC = () => {
     } catch (err: any) {
       setProfileActivityError(err.message);
       setProfileActivity([]);
+      setProfileActivityTotal(0);
     } finally {
       setProfileActivityLoading(false);
     }
@@ -256,11 +260,11 @@ export const ProfileView: React.FC = () => {
     }
   }, [dateRange.from, dateRange.to, activeTab]);
 
-  const myTasks = tasks.filter((t) => t.assigneeId === currentUser.id);
+  const myTasks = tasks.filter((t) => getTaskAssigneeIds(t).includes(currentUser.id));
   const myProjects = projects.filter(
     (p) => p.memberIds.includes(currentUser.id) || p.teamLeadId === currentUser.id
   );
-  const myAttendance = profileAttendance;
+  const myAttendance = profileAttendance.filter((r) => r.userId === currentUser.id);
   const myActivity = profileActivity;
   const myNotifications = notifications.filter((n) => n.userId === currentUser.id);
   const projectsLed = projects.filter((p) => p.teamLeadId === currentUser.id);
@@ -270,31 +274,18 @@ export const ProfileView: React.FC = () => {
     return p ? p.title : 'Unknown Project';
   };
 
-  const myUpcomingDeadlines = [
-    ...myTasks
-      .filter((t) => t.status !== 'Done' && t.dueDate)
-      .map((t) => ({
-        id: `task-${t.id}`,
-        title: t.title,
-        date: t.dueDate,
-        type: 'task' as const,
-        projectName: getProjectName(t.projectId),
-        projectId: t.projectId,
-        taskId: t.id,
-      })),
-    ...myProjects.flatMap((p) =>
-      (p.milestones || [])
-        .filter((m) => !m.completed && m.dueDate)
-        .map((m) => ({
-          id: `ms-${m.id}`,
-          title: m.title,
-          date: m.dueDate,
-          type: 'milestone' as const,
-          projectName: p.title,
-          projectId: p.id,
-        }))
-    ),
-  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const myUpcomingDeadlines = myTasks
+    .filter((t) => t.status !== 'Done' && t.dueDate)
+    .map((t) => ({
+      id: `task-${t.id}`,
+      title: t.title,
+      date: t.dueDate,
+      type: 'task' as const,
+      projectName: getProjectName(t.projectId),
+      projectId: t.projectId,
+      taskId: t.id,
+    }))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   const dateFilteredTasks = hasDateError
     ? myTasks
@@ -923,13 +914,13 @@ export const ProfileView: React.FC = () => {
     <div>
       <SectionHeader icon={Calendar} label="Upcoming Deadlines" count={dateFilteredDeadlines.length} />
       {dateFilteredDeadlines.length === 0 ? (
-        <EmptyState icon={Calendar} title="No upcoming deadlines" message="Deadlines from your tasks and projects will appear here." />
+        <EmptyState icon={Calendar} title="No upcoming deadlines" message="Deadlines from your assigned tasks will appear here." />
       ) : (
         <div className="max-h-[400px] overflow-y-auto space-y-2">
           {dateFilteredDeadlines.map((dl) => {
             const dayLabel = daysUntil(dl.date);
             const isOverdue = dayLabel.includes('overdue');
-            const task = dl.type === 'task' ? tasks.find((t) => t.id === dl.taskId) : undefined;
+            const task = tasks.find((t) => t.id === dl.taskId);
             return (
               <div
                 key={dl.id}
@@ -944,7 +935,7 @@ export const ProfileView: React.FC = () => {
                         ? 'bg-rose-500/15 text-rose-400'
                         : 'bg-fuchsia-500/15 text-fuchsia-400'
                     }`}>
-                      {dl.type === 'task' ? 'Task' : 'Milestone'}
+                      Task
                     </span>
                     <span className="text-[11px] font-mono text-cyan-400 truncate">{dl.projectName}</span>
                   </div>
@@ -985,29 +976,39 @@ export const ProfileView: React.FC = () => {
       ) : dateFilteredActivity.length === 0 ? (
         <EmptyState icon={ActivityIcon} title="No activity yet" message="Your recent activity will appear here." />
       ) : (
-        <div className="max-h-[400px] overflow-y-auto space-y-1">
-          {dateFilteredActivity.map((log) => (
-            <div
-              key={log.id}
-              className="flex items-start gap-3 p-3 rounded-lg hover:bg-white/[0.02] transition-colors"
+        <>
+          <div className="max-h-[400px] overflow-y-auto space-y-1">
+            {dateFilteredActivity.slice(0, 30).map((log) => (
+              <div
+                key={log.id}
+                className="flex items-start gap-3 p-3 rounded-lg hover:bg-white/[0.02] transition-colors"
+              >
+                <div className="p-1.5 rounded-full bg-slate-800/60 shrink-0 mt-0.5">
+                  <ActivityIcon size={12} className="text-cyan-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-slate-300">
+                    <span className="font-semibold text-white">{log.userName}</span>
+                    {' '}{log.action}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {log.targetTitle}
+                    {log.diff && ` — ${log.diff.field}: ${log.diff.oldVal} → ${log.diff.newVal}`}
+                  </p>
+                </div>
+                <span className="text-[11px] text-slate-500 shrink-0 font-mono">{log.timestamp}</span>
+              </div>
+            ))}
+          </div>
+          {(profileActivityTotal > 30 || dateFilteredActivity.length > 30) && onNavigate && (
+            <button
+              onClick={() => onNavigate('activity')}
+              className="mt-3 w-full py-2 rounded-lg bg-white/[0.04] border border-white/10 text-xs font-semibold text-cyan-300 hover:bg-white/[0.08] transition-colors"
             >
-              <div className="p-1.5 rounded-full bg-slate-800/60 shrink-0 mt-0.5">
-                <ActivityIcon size={12} className="text-cyan-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-slate-300">
-                  <span className="font-semibold text-white">{log.userName}</span>
-                  {' '}{log.action}
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  {log.targetTitle}
-                  {log.diff && ` — ${log.diff.field}: ${log.diff.oldVal} → ${log.diff.newVal}`}
-                </p>
-              </div>
-              <span className="text-[11px] text-slate-500 shrink-0 font-mono">{log.timestamp}</span>
-            </div>
-          ))}
-        </div>
+              View All Activity
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -1019,24 +1020,34 @@ export const ProfileView: React.FC = () => {
       {dateFilteredNotifications.length === 0 ? (
         <EmptyState icon={Bell} title="No notifications" message="Your notifications will appear here." />
       ) : (
-        <div className="max-h-[400px] overflow-y-auto space-y-1">
-          {dateFilteredNotifications.map((n) => (
-            <div
-              key={n.id}
-              className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
-                !n.read ? 'bg-cyan-500/5 border-l-2 border-cyan-500/40' : 'hover:bg-white/[0.02] border-l-2 border-transparent'
-              }`}
-            >
-              <div className="min-w-0 flex-1">
-                <p className={`text-xs ${!n.read ? 'text-white font-semibold' : 'text-slate-300'}`}>
-                  {n.title}
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">{n.message}</p>
+        <>
+          <div className="max-h-[400px] overflow-y-auto space-y-1">
+            {dateFilteredNotifications.slice(0, 30).map((n) => (
+              <div
+                key={n.id}
+                className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
+                  !n.read ? 'bg-cyan-500/5 border-l-2 border-cyan-500/40' : 'hover:bg-white/[0.02] border-l-2 border-transparent'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className={`text-xs ${!n.read ? 'text-white font-semibold' : 'text-slate-300'}`}>
+                    {n.title}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{n.message}</p>
+                </div>
+                <span className="text-[11px] text-slate-500 shrink-0 font-mono">{n.timestamp}</span>
               </div>
-              <span className="text-[11px] text-slate-500 shrink-0 font-mono">{n.timestamp}</span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          {dateFilteredNotifications.length > 30 && onNavigate && (
+            <button
+              onClick={() => onNavigate('notifications')}
+              className="mt-3 w-full py-2 rounded-lg bg-white/[0.04] border border-white/10 text-xs font-semibold text-cyan-300 hover:bg-white/[0.08] transition-colors"
+            >
+              View All Notifications
+            </button>
+          )}
+        </>
       )}
     </div>
   );
