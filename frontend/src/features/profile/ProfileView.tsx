@@ -3,6 +3,8 @@ import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { GlassCard } from '../../components/common/GlassCard';
 import { getTaskAssigneeIds } from '../tasks/taskRules';
+import { fetchActivities } from '../activity/activityApi';
+import { DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
 import { getOwnAccountChangeRequests, getSafeRequestedChangeLabel } from './accountChangeRequestHistory';
 import {
   Mail, Briefcase, Shield, Save, AlertCircle,
@@ -39,6 +41,25 @@ function getInitials(name: string): string {
 
 function todayStr(): string {
   return new Date().toISOString().split('T')[0];
+}
+
+// Local-calendar date helpers (no UTC drift) for the "last 7 days" attendance window.
+function localTodayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDaysStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+// Mirrors NotificationsView: linkRoute may reference a pre-rename tab id (e.g. 'chat').
+const NOTIFICATION_ROUTE_ALIASES: Record<string, string> = { chat: 'project-chats' };
+function notificationTarget(linkRoute?: string): string {
+  if (!linkRoute || linkRoute === 'notifications') return 'notifications';
+  return NOTIFICATION_ROUTE_ALIASES[linkRoute] || linkRoute;
 }
 
 function validateDateRange(from: string, to: string): string | null {
@@ -98,7 +119,7 @@ const ROLE_TABS: Record<string, TabDef[]> = {
   ],
 };
 
-export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
+export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: string) => void }> = ({ onNavigate }) => {
   const {
     currentUser,
     tasks,
@@ -212,23 +233,16 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
     setProfileActivityLoading(true);
     setProfileActivityError(null);
     try {
-      const params = new URLSearchParams({
-        from: new Date(`${from}T00:00:00`).toISOString(),
-        to: new Date(`${to}T23:59:59.999`).toISOString(),
-        myActivityOnly: 'true',
-        page: '1',
-        pageSize: '30',
+      const { items, total } = await fetchActivities({
+        ...DEFAULT_ACTIVITY_FILTERS,
+        datePreset: 'Custom',
+        customFrom: from,
+        customTo: to,
+        myActivityOnly: true,
         sort: 'newest',
-      });
-      const res = await fetch(`/api/activity?${params.toString()}`, {
-        headers: getAuthHeaders(),
-      });
-      const data = await safeParseJSON(res);
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to load activity logs.');
-      }
-      setProfileActivityTotal(Number(data.total) || 0);
-      setProfileActivity((data.items || []).map((item: any) => ({
+      }, 1, 30);
+      setProfileActivityTotal(Number(total) || 0);
+      setProfileActivity((items || []).map((item: any) => ({
         id: `act-${item.id}`,
         userId: item.actor?.id || '',
         userName: item.actor?.name || 'System',
@@ -249,7 +263,12 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
   };
 
   useEffect(() => {
-    if (activeTab === 'my-attendance' || activeTab === 'overview') {
+    if (activeTab === 'my-attendance') {
+      // My Attendance shows ONLY the last 7 days, independent of the page-wide date filter.
+      const to = localTodayStr();
+      const from = addDaysStr(to, -6);
+      fetchProfileAttendance(from, to);
+    } else if (activeTab === 'overview') {
       fetchProfileAttendance(dateRange.from, dateRange.to);
     }
   }, [dateRange.from, dateRange.to, activeTab]);
@@ -265,6 +284,14 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
     (p) => p.memberIds.includes(currentUser.id) || p.teamLeadId === currentUser.id
   );
   const myAttendance = profileAttendance.filter((r) => r.userId === currentUser.id);
+  // My Attendance tab is limited to the most recent 7 days (local calendar dates).
+  const last7Attendance = myAttendance
+    .filter((r) => {
+      const to = localTodayStr();
+      const from = addDaysStr(to, -6);
+      return r.date >= from && r.date <= to;
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
   const myActivity = profileActivity;
   const myNotifications = notifications.filter((n) => n.userId === currentUser.id);
   const projectsLed = projects.filter((p) => p.teamLeadId === currentUser.id);
@@ -614,7 +641,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
         <div className="max-h-[450px] overflow-y-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {dateFilteredTasks.map((t) => (
-              <GlassCard key={t.id} glowColor="violet">
+              <GlassCard key={t.id} glowColor="violet" onClick={() => onNavigate?.('tasks')}>
                 <div className="flex items-start justify-between gap-2 mb-2.5">
                   <span className="font-mono text-[11px] text-purple-400 font-bold shrink-0">{t.taskNumber}</span>
                   <StatusBadge status={t.status} size="sm" />
@@ -651,7 +678,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
         <div className="max-h-[450px] overflow-y-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {dateFilteredProjects.map((p) => (
-              <GlassCard key={p.id} glowColor="cyan">
+              <GlassCard key={p.id} glowColor="cyan" onClick={() => onNavigate?.('projects')}>
                 <div className="flex items-start justify-between gap-2 mb-2.5">
                   <span className="font-mono text-[11px] text-cyan-400 font-bold shrink-0">{p.code}</span>
                   <StatusBadge status={p.status} size="sm" />
@@ -864,7 +891,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
   /* ───────── My Attendance Tab ───────── */
   const renderMyAttendance = () => (
     <div>
-      <SectionHeader icon={Clock} label="My Attendance" count={dateFilteredAttendance.length} />
+      <SectionHeader icon={Clock} label="My Attendance" count={last7Attendance.length} />
       {profileAttendanceLoading ? (
         <div className="flex items-center justify-center py-10">
           <Loader2 size={22} className="text-cyan-400 animate-spin" />
@@ -874,8 +901,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
           <AlertCircle size={14} />
           <span>{profileAttendanceError}</span>
         </div>
-      ) : dateFilteredAttendance.length === 0 ? (
-        <EmptyState icon={Clock} title="No attendance records" message="Your attendance records will appear here." />
+      ) : last7Attendance.length === 0 ? (
+        <EmptyState icon={Clock} title="No attendance records" message="Your attendance from the last 7 days will appear here." />
       ) : (
         <div className="max-h-[400px] overflow-y-auto">
           <table className="w-full text-xs font-mono">
@@ -890,7 +917,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
               </tr>
             </thead>
             <tbody>
-              {dateFilteredAttendance.map((r) => (
+              {last7Attendance.map((r) => (
                 <tr key={r.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                   <td className="py-2.5 px-3 text-white">{r.date}</td>
                   <td className="py-2.5 px-3 text-slate-300">{r.checkIn}</td>
@@ -916,7 +943,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
       {dateFilteredDeadlines.length === 0 ? (
         <EmptyState icon={Calendar} title="No upcoming deadlines" message="Deadlines from your assigned tasks will appear here." />
       ) : (
-        <div className="max-h-[400px] overflow-y-auto space-y-2">
+        <>
+          <div className="max-h-[400px] overflow-y-auto space-y-2">
           {dateFilteredDeadlines.map((dl) => {
             const dayLabel = daysUntil(dl.date);
             const isOverdue = dayLabel.includes('overdue');
@@ -924,7 +952,11 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
             return (
               <div
                 key={dl.id}
-                className={`p-4 rounded-xl bg-slate-800/40 border flex items-start justify-between gap-4 ${
+                role="button"
+                tabIndex={0}
+                onClick={() => onNavigate?.('reports', 'deadlines')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate?.('reports', 'deadlines'); } }}
+                className={`p-4 rounded-xl bg-slate-800/40 border flex items-start justify-between gap-4 cursor-pointer transition-colors hover:bg-slate-800/60 ${
                   isOverdue ? 'border-rose-500/25' : 'border-white/5'
                 }`}
               >
@@ -955,7 +987,16 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
               </div>
             );
           })}
-        </div>
+          </div>
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('reports', 'deadlines')}
+              className="mt-3 w-full py-2 rounded-lg bg-white/[0.04] border border-white/10 text-xs font-semibold text-cyan-300 hover:bg-white/[0.08] transition-colors"
+            >
+              View All Deadlines
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -981,7 +1022,11 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
             {dateFilteredActivity.slice(0, 30).map((log) => (
               <div
                 key={log.id}
-                className="flex items-start gap-3 p-3 rounded-lg hover:bg-white/[0.02] transition-colors"
+                role="button"
+                tabIndex={0}
+                onClick={() => onNavigate?.('activity')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate?.('activity'); } }}
+                className="flex items-start gap-3 p-3 rounded-lg hover:bg-white/[0.02] cursor-pointer transition-colors"
               >
                 <div className="p-1.5 rounded-full bg-slate-800/60 shrink-0 mt-0.5">
                   <ActivityIcon size={12} className="text-cyan-400" />
@@ -1025,7 +1070,16 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
             {dateFilteredNotifications.slice(0, 30).map((n) => (
               <div
                 key={n.id}
-                className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
+                role="button"
+                tabIndex={0}
+                onClick={() => onNavigate?.(notificationTarget(n.linkRoute))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onNavigate?.(notificationTarget(n.linkRoute));
+                  }
+                }}
+                className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
                   !n.read ? 'bg-cyan-500/5 border-l-2 border-cyan-500/40' : 'hover:bg-white/[0.02] border-l-2 border-transparent'
                 }`}
               >
