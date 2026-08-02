@@ -24,7 +24,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { fetchActivities } from '../activity/activityApi';
-import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
+import { ActivityItem, ActivityFilters, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
 import {
   ALL_CALENDAR_KINDS,
   buildCalendarEntries,
@@ -179,25 +179,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     const loadFilteredActivities = async () => {
       setActivityLoading(true);
       try {
-        const now = Date.now();
-        // Rolling windows, applied client-side to the fetched feed so the Activity Log module
-        // itself stays untouched: 'Today' = the current local day, 'Last Day'/'Last 3 Days' =
-        // the last 24h/72h. Distinct windows keep every preset visibly different instead of
-        // every option rounding to the same day boundaries.
-        const fromMs =
-          activityFilter === 'Today'
-            ? new Date(new Date().setHours(0, 0, 0, 0)).getTime()
-            : activityFilter === 'Last Day'
-              ? now - 24 * 60 * 60 * 1000
-              : now - 3 * 24 * 60 * 60 * 1000;
+        const now = new Date();
+        // Rolling windows are applied server-side via precise ISO bounds so every preset
+        // returns events strictly inside its own window: 'Today' = the current local day,
+        // 'Last Day'/'Last 3 Days' = the last 24h/72h. Filtering a capped client feed (the
+        // previous 50-item fetch) would otherwise show the same entries for every option
+        // whenever more than 50 events fit inside the smallest window.
+        let fromDate: Date;
+        if (activityFilter === 'Today') {
+          fromDate = new Date();
+          fromDate.setHours(0, 0, 0, 0);
+        } else if (activityFilter === 'Last Day') {
+          fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        } else {
+          fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        }
 
-        const result = await fetchActivities(DEFAULT_ACTIVITY_FILTERS, 1, 50);
+        const filters: ActivityFilters = {
+          ...DEFAULT_ACTIVITY_FILTERS,
+          from: fromDate.toISOString(),
+          to: now.toISOString(),
+        };
+
+        const result = await fetchActivities(filters, 1, 50);
         if (!cancelled && Array.isArray(result.items)) {
-          const scoped = (result.items as ActivityItem[]).filter((item) => {
-            const ts = new Date(item.timestamp).getTime();
-            return Number.isFinite(ts) && ts >= fromMs && ts <= now;
-          });
-          const mapped: ActivityLogItem[] = scoped.map((item) => ({
+          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
             id: item.id,
             userId: item.actor.id || '',
             userName: item.actor.name,
