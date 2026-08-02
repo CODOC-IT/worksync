@@ -385,6 +385,37 @@ test('HR: cannot see activity performed by Admins', async () => {
   assert.ok(!descriptions.includes('Admin action hidden from HR'), 'HR must not see events performed by Admins');
 });
 
+test('HR: cannot see NULL-snapshot events performed by a current Administrator', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 1, 'Approved task review', 'Task', 'tsk-null-snap', '00000000-0000-0000-0000-000000000090', 'System', 'Admin review decision without role snapshot', NULL)`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  assert.ok(effectiveRoles.isActiveHR, 'usr-4 should be an active HR representative');
+
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(!descriptions.includes('Admin review decision without role snapshot'), 'HR must not see NULL-snapshot events whose actor is currently an Administrator');
+});
+
+test('HR: can see NULL-snapshot events performed by non-Administrators', async () => {
+  memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
+    VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 5, 'Moved task to Review', 'Task', 'tsk-null-member', '00000000-0000-0000-0000-000000000091', 'System', 'Member review move without role snapshot', NULL)`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Member review move without role snapshot'), 'HR should still see NULL-snapshot events by non-Administrators');
+});
+
 test('HR: can view auth/security events and deleted comments', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);

@@ -36,6 +36,24 @@ export interface ActivityRow {
 
 interface ChangeRow { auditeventid: string; fieldname: string; oldvalue: string | null; newvalue: string | null }
 
+// ── HR visibility exclusion ───────────────────────────────────────────────────────
+// HR sees every organization event except those performed by Administrators. The
+// `actorrolesnapshot` check covers events recorded with the actor's role, but legacy
+// rows can carry a NULL snapshot while the actor is (or was) an Administrator — e.g.
+// task-review approvals recorded without a snapshot. So the exclusion ALSO denies any
+// event whose actor currently holds the active `Administrator` role (same window that
+// `getEffectiveRoles` uses). `actoruserid IS NULL` events (system/failed logins) stay
+// visible to HR, which is why the window check is wrapped in an OR NULL guard.
+const HR_EXCLUDED_ACTOR_CLAUSE = `(COALESCE(a.actorrolesnapshot, '') <> 'Admin'
+  AND (a.actoruserid IS NULL OR a.actoruserid NOT IN (
+    SELECT hrur.userid FROM iam.userroles hrur
+    JOIN iam.roles hrr ON hrr.roleid = hrur.roleid
+    WHERE hrr.rolecode = 'Administrator'
+      AND hrur.revokedatutc IS NULL
+      AND hrur.startsatutc <= now()
+      AND (hrur.endsatutc IS NULL OR hrur.endsatutc > now())
+  )))`;
+
 export const insertActivity = async (input: ActivityRecordInput): Promise<string> =>
   withTransaction(async (runQuery) => {
     const result = await runQuery<{ auditeventid: string }>(
@@ -118,7 +136,7 @@ const visibilitySql = (
   // Administrator. This applies whether the HR role is permanent or temporary.
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
+      clause: HR_EXCLUDED_ACTOR_CLAUSE,
       extraParams: params.slice(1),
     };
   }
@@ -128,7 +146,7 @@ const visibilitySql = (
   // need to enumerate project membership predicates on top.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: `COALESCE(a.actorrolesnapshot, '') <> 'Admin'`,
+      clause: HR_EXCLUDED_ACTOR_CLAUSE,
       extraParams: params.slice(1),
     };
   }
