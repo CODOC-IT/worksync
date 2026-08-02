@@ -1498,7 +1498,6 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
                   <option value="name">Display Name</option>
                   <option value="email">Email</option>
                   <option value="username">Username</option>
-                  <option value="password">Password</option>
                 </select>
               </div>
               {requestField && requestField !== 'password' && (
