@@ -9,7 +9,6 @@ import {
   Sparkles,
   Plus,
   ChevronLeft,
-  AlertCircle,
   CheckCircle2,
   Calendar,
   Activity,
@@ -20,6 +19,9 @@ import {
   ArrowUpRight,
   Inbox,
   Filter,
+  Clock,
+  LogIn,
+  LogOut,
 } from 'lucide-react';
 import { fetchActivities } from '../activity/activityApi';
 import { ActivityItem, DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
@@ -141,7 +143,19 @@ const toLocalDateString = (date: Date): string => {
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { currentRole, currentUser, projects, tasks, systemApprovals, hrRequests, users, calendarEvents } = useApp();
+  const {
+    currentRole,
+    currentUser,
+    projects,
+    tasks,
+    systemApprovals,
+    hrRequests,
+    users,
+    calendarEvents,
+    attendanceRecords,
+    checkIn,
+    checkOut
+  } = useApp();
 
   // ── Activity Log Filter State ──
   type ActivityFilterOption = 'Today' | 'Last Day' | 'Last 3 Days';
@@ -227,10 +241,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   const isMyTask = useCallback((t: Task) => t.assigneeId === currentUser.id || (t.assigneeIds ?? []).includes(currentUser.id), [currentUser.id]);
   const myTasks = useMemo(() => tasks.filter((t) => !t.isArchived && isMyTask(t) && t.status !== 'Done').sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')), [tasks, isMyTask]);
-  // Admin and HR see organization-wide totals in the task card, not just their own assignments.
-  const isOrgWideTaskView = currentRole === 'Admin' || currentRole === 'HR';
+  // Admin and HR see organization-wide totals in the metric cards; Team Lead/Member see their own.
+  const isOrgWideView = currentRole === 'Admin' || currentRole === 'HR';
   const totalTasks = useMemo(() => tasks.filter((t) => !t.isArchived).length, [tasks]);
   const totalInProgressTasks = useMemo(() => tasks.filter((t) => !t.isArchived && t.status === 'In Progress').length, [tasks]);
+  const myProjects = useMemo(
+    () => projects.filter((p) => p.status !== 'Archived' && (p.teamLeadId === currentUser.id || p.memberIds.includes(currentUser.id))),
+    [projects, currentUser.id]
+  );
+  const myLedProjects = useMemo(
+    () => myProjects.filter((p) => p.teamLeadId === currentUser.id),
+    [myProjects, currentUser.id]
+  );
   const pendingProjects = useMemo(() => projects.filter((p) => p.approvalStatus === 'Pending Approval'), [projects]);
   const pendingApprovals = useMemo(() => systemApprovals.filter((sa) => sa.status === 'Pending'), [systemApprovals]);
   const pendingHrRequests = useMemo(() => hrRequests.filter((r) => r.status === 'Pending'), [hrRequests]);
@@ -269,6 +291,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     [filteredCalendarEntries, todayKey]
   );
 
+  const todayAttendance = attendanceRecords.find((r) => r.userId === currentUser.id && r.date === todayKey);
+  const isCheckedIn = Boolean(todayAttendance?.checkIn);
+  const isCheckedOut = Boolean(todayAttendance?.checkOut);
+  const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+
   return (
     <div className="space-y-3">
       {/* ── Banner ── */}
@@ -294,21 +321,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* ── Metric Cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5">
         <GlassCard onClick={() => onNavigate('projects')} glowColor="cyan">
-          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Projects</span><div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><FolderKanban size={14} /></div></div>
-          <div className="text-2xl font-bold text-white mb-1">{activeProjects.length}</div>
-          <span className="text-[10px] text-slate-400">{pendingProjects.length} pending approval</span>
+          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">{isOrgWideView ? 'All Projects' : 'My Projects'}</span><div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400"><FolderKanban size={14} /></div></div>
+          <div className="text-2xl font-bold text-white mb-1">{isOrgWideView ? activeProjects.length : myProjects.length}</div>
+          <span className="text-[10px] text-slate-400">{isOrgWideView ? `${pendingProjects.length} pending approval` : `${myLedProjects.length} leading`}</span>
         </GlassCard>
         <GlassCard onClick={() => onNavigate('tasks')} glowColor="violet">
-          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">{isOrgWideTaskView ? 'Tasks' : 'My Tasks'}</span><div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><CheckSquare size={14} /></div></div>
-          <div className="text-2xl font-bold text-white mb-1">{isOrgWideTaskView ? totalTasks : myTasks.length}</div>
-          <span className="text-[10px] text-slate-400">{isOrgWideTaskView ? totalInProgressTasks : myTasks.filter((t) => t.status === 'In Progress').length} in progress</span>
-        </GlassCard>
-        <GlassCard onClick={() => onNavigate('approvals')} glowColor="amber">
-          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">Approvals</span><div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400"><AlertCircle size={14} /></div></div>
-          <div className="text-2xl font-bold text-white mb-1">{pendingApprovals.length + pendingHrRequests.length}</div>
-          <span className="text-[10px] text-slate-400">{pendingApprovals.length} edits + {pendingHrRequests.length} HR</span>
+          <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-mono text-slate-400">{isOrgWideView ? 'All Tasks' : 'My Tasks'}</span><div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400"><CheckSquare size={14} /></div></div>
+          <div className="text-2xl font-bold text-white mb-1">{isOrgWideView ? totalTasks : myTasks.length}</div>
+          <span className="text-[10px] text-slate-400">{isOrgWideView ? totalInProgressTasks : myTasks.filter((t) => t.status === 'In Progress').length} in progress</span>
         </GlassCard>
       </div>
 
@@ -403,9 +425,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Approvals + HR */}
+        {/* Check In / Check Out + Approvals + HR */}
         <div className="flex-1 min-w-[300px] max-w-full space-y-2.5">
-          {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (
+          {(currentRole === 'Team_Lead' || currentRole === 'Team_Member') && (
+            <div className="glass-panel p-3 border border-cyan-500/30 h-104 overflow-y-auto flex flex-col">
+              <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
+                <div className="flex items-center gap-2"><Clock size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Attendance</h3></div>
+                <button onClick={() => onNavigate('attendance')} className="text-[10px] text-cyan-400 hover:underline font-mono flex items-center gap-1">Open <ChevronRight size={10} /></button>
+              </div>
+              <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 py-4 text-center">
+                <div>
+                  <p className="text-[9px] font-mono text-slate-500 uppercase">{todayKey}</p>
+                  <p className="text-xl font-bold text-white font-mono mt-0.5">{nowTime}</p>
+                </div>
+                {!isCheckedIn ? (
+                  <button onClick={checkIn} className="px-5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all">
+                    <LogIn size={13} /> Check In
+                  </button>
+                ) : !isCheckedOut ? (
+                  <>
+                    <p className="text-[10px] text-slate-400">Checked in at <span className="text-emerald-300 font-mono">{todayAttendance?.checkIn}</span></p>
+                    <button onClick={checkOut} className="px-5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all">
+                      <LogOut size={13} /> Check Out
+                    </button>
+                  </>
+                ) : (
+                  <div className="space-y-1 text-[10px] text-slate-400">
+                    <p>Check-in: <span className="text-emerald-300 font-mono">{todayAttendance?.checkIn}</span></p>
+                    <p>Check-out: <span className="text-rose-300 font-mono">{todayAttendance?.checkOut}</span></p>
+                    <p>Total hours: <span className="text-cyan-300 font-mono">{todayAttendance ? todayAttendance.totalHours.toFixed(2) : '0.00'}</span></p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {currentRole === 'Admin' && (
             <div className="glass-panel p-3 border border-amber-500/30 h-104 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-amber-400" /><h3 className="font-bold text-xs text-white">Approvals Inbox</h3><span className="text-[10px] text-amber-400 font-mono">({pendingApprovals.length})</span></div>
@@ -429,7 +483,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           )}
           {currentRole === 'HR' && (
-            <div className="glass-panel p-3 border border-emerald-500/30 h-90 overflow-y-auto flex flex-col">
+            <div className="glass-panel p-3 border border-emerald-500/30 h-104 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><FileCheck2 size={14} className="text-emerald-400" /><h3 className="font-bold text-xs text-white">HR Queue</h3><span className="text-[10px] text-emerald-400 font-mono">({pendingHrRequests.length})</span></div>
                 <button onClick={() => onNavigate('attendance')} className="text-[10px] text-emerald-400 hover:underline font-mono flex items-center gap-1">Manage <ChevronRight size={10} /></button>
@@ -449,16 +503,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   ))}
                 </div>
               )}
-            </div>
-          )}
-          {currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'HR' && (
-            <div className="glass-panel p-3 border border-white/10 h-104 overflow-y-auto flex flex-col">
-              <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-                <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-slate-500" /><h3 className="font-bold text-xs text-slate-400">Approvals</h3></div>
-              </div>
-              <div className="flex flex-col items-center justify-center py-10 text-center">
-                <p className="text-[11px] text-slate-500">No pending approvals</p>
-              </div>
             </div>
           )}
         </div>
