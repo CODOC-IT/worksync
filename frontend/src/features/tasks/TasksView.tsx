@@ -189,6 +189,22 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
     ),
     [currentRole, currentUser.id, projects]
   );
+  // The project filter must mirror the task API scope. Team Members can browse work
+  // for projects they participate in or lead; Admin and HR retain organization-wide
+  // task visibility. Archived projects are intentionally absent from the active list.
+  const taskFilterProjects = useMemo(() => projects.filter((project) => {
+    if (project.status === 'Archived') return false;
+    if (currentRole === 'Admin' || currentRole === 'HR') return true;
+    return project.memberIds.includes(currentUser.id)
+      || project.teamLeadId === currentUser.id
+      || project.createdBy === currentUser.id;
+  }), [currentRole, currentUser.id, projects]);
+
+  useEffect(() => {
+    if (projectFilter && !taskFilterProjects.some((project) => project.id === projectFilter)) {
+      setProjectFilter('');
+    }
+  }, [projectFilter, taskFilterProjects]);
 
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const taskEditApprovals = useMemo(() => systemApprovals.filter((approval) =>
@@ -1126,7 +1142,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
             </label>
 
             <FilterSelect value={projectFilter} onChange={setProjectFilter} label="All projects">
-              {projects.map((project) => (
+              {taskFilterProjects.map((project) => (
                 <option key={project.id} value={project.id}>{getProjectName(project)}</option>
               ))}
             </FilterSelect>
