@@ -112,6 +112,8 @@ export const ReportsView: React.FC = () => {
   });
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'all'>('today');
+
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
   const [reportLoading, setReportLoading] = useState(false);
@@ -219,6 +221,44 @@ export const ReportsView: React.FC = () => {
     }
     return roleFilteredLocal;
   }, [apiAvailable, reportData, roleFilteredLocal, tasks]);
+
+  // ── Attendance-specific date window (overrides global Reports range) ───
+  const attendanceWindow = useMemo(() => {
+    const today = todayStr();
+    switch (attendanceRange) {
+      case 'today':
+        return { from: today, to: today };
+      case 'lastWeek':
+        return { from: new Date(Date.now() - 6 * 86400000).toISOString().split('T')[0], to: today };
+      case 'last30':
+        return { from: new Date(Date.now() - 29 * 86400000).toISOString().split('T')[0], to: today };
+      case 'all':
+      default:
+        return { from: undefined as string | undefined, to: undefined as string | undefined };
+    }
+  }, [attendanceRange]);
+
+  // Role-scoped attendance without the global date restriction (raw source)
+  const roleScopedAttendance = useMemo(() => {
+    const userId = currentUser.id;
+    if (currentRole === 'Admin' || currentRole === 'HR') return attendanceRecords;
+    if (currentRole === 'Team_Lead') {
+      const leadProjectIds = projects.filter((p) => p.teamLeadId === userId).map((p) => p.id);
+      return attendanceRecords.filter((a) => leadProjectIds.some((pid) => {
+        const proj = projects.find((p) => p.id === pid);
+        return proj?.memberIds.includes(a.userId) || proj?.teamLeadId === a.userId;
+      }));
+    }
+    return attendanceRecords.filter((a) => a.userId === userId);
+  }, [attendanceRecords, currentRole, currentUser.id, projects]);
+
+  // Attendance records for the tab, constrained by the attendance filter only
+  const attendanceTabRecords = useMemo(() => {
+    const { from, to } = attendanceWindow;
+    const source: any[] = apiAvailable ? (reportData.attendance?.records || []) : (roleScopedAttendance as any[]);
+    if (from === undefined) return source;
+    return source.filter((a) => isInDateRange(a.date, from, to));
+  }, [apiAvailable, reportData, attendanceWindow, roleScopedAttendance]);
 
   // ── Derived metrics from API when available, else from local ──────────
   const kpiStats = useMemo(() => {
@@ -335,18 +375,7 @@ export const ReportsView: React.FC = () => {
   }, [apiAvailable, reportData, roleFilteredLocal]);
 
   const attendanceStats = useMemo(() => {
-    if (apiAvailable && reportData.attendance) {
-      const a = reportData.attendance;
-      return {
-        present: a.present, late: a.late, absent: a.absent,
-        onLeave: a.onLeave, halfDay: a.halfDay,
-        avgHours: a.avgHours,
-        total: a.total,
-        pendingCorrections: a.pendingCorrections,
-        pendingLeaves: a.pendingLeaves,
-      };
-    }
-    const { attendance: att } = roleFilteredLocal;
+    const att = attendanceTabRecords;
     const present = att.filter((a) => a.status === 'Present').length;
     const late = att.filter((a) => a.status === 'Late').length;
     const absent = att.filter((a) => a.status === 'Absent').length;
@@ -354,10 +383,8 @@ export const ReportsView: React.FC = () => {
     const halfDay = att.filter((a) => a.status === 'Half Day').length;
     const totalHours = att.reduce((sum, a) => sum + (a.totalHours || 0), 0);
     const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    const pendingCorrections = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Correction' && r.status === 'Pending').length;
-    const pendingLeaves = roleFilteredLocal.hrRequests.filter((r) => r.type === 'Leave' && r.status === 'Pending').length;
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections, pendingLeaves };
-  }, [apiAvailable, reportData, roleFilteredLocal]);
+    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length, pendingCorrections: 0, pendingLeaves: 0 };
+  }, [attendanceTabRecords]);
 
   const hrOverviewStats = useMemo(() => {
     if (apiAvailable && reportData.hrOverviewStats) {
@@ -512,7 +539,7 @@ export const ReportsView: React.FC = () => {
       ]);
     } else if (tab === 'attendance') {
       headers = ['User', 'Date', 'Status', 'Check In', 'Check Out', 'Total Hours'];
-      rows = roleFiltered.attendance.map((a: any) => [
+      rows = attendanceTabRecords.map((a: any) => [
         users.find((u) => u.id === a.userId)?.name || a.userId, a.date, a.status, a.checkIn, a.checkOut || '\u2014', String(a.totalHours)
       ]);
     } else if (tab === 'teams') {
@@ -673,7 +700,7 @@ export const ReportsView: React.FC = () => {
       bodyHtml += section('Attendance Records');
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
       bodyHtml += `<thead><tr>${th('User')}${th('Date')}${th('Status')}${th('Check In')}${th('Check Out')}${th('Hours')}</tr></thead><tbody>`;
-      (roleFiltered.attendance || []).forEach((a: any) => {
+      (attendanceTabRecords || []).forEach((a: any) => {
         const userName = users.find((u) => u.id === a.userId)?.name || a.userId;
         bodyHtml += `<tr>${td(userName, '#0f172a')}${td(a.date)}${td(a.status)}${td(a.checkIn)}${td(a.checkOut || '\u2014')}${td(a.totalHours || 0)}</tr>`;
       });
@@ -984,7 +1011,9 @@ ${bodyHtml}
         </>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-3">
+            {renderKPICard('Completed', kpiStats.completedTasks, <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
+            {renderKPICard('Completion Rate', `${kpiStats.completionRate}%`, <TrendingUp size={14} className="text-purple-400" />, 'magenta')}
             {renderKPICard('Present Today', hrOverviewStats.presentToday, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
             {renderKPICard('Absent', hrOverviewStats.absentToday, <UserX size={14} className="text-rose-400" />, 'rose')}
             {renderKPICard('On Leave', hrOverviewStats.onLeaveToday, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
@@ -1384,6 +1413,25 @@ ${bodyHtml}
 
   const renderAttendanceTab = () => (
     <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-white">Attendance Date Range</p>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Overrides the global Report date range for this tab only
+          </p>
+        </div>
+        <select
+          value={attendanceRange}
+          onChange={(e) => setAttendanceRange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'all')}
+          className="px-2.5 py-1.5 rounded-lg text-xs font-mono border border-white/10 bg-slate-900/60 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
+        >
+          <option value="today">Today</option>
+          <option value="lastWeek">Last Week</option>
+          <option value="last30">Last 30 Days</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {renderKPICard('Present', attendanceStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Late', attendanceStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
@@ -1398,7 +1446,7 @@ ${bodyHtml}
         <div className="glass-panel p-4 rounded-lg">
           {renderSectionHeader(<BarChart3 size={16} className="text-cyan-400" />, 'Attendance Distribution')}
           <div className="mt-3" style={{ height: 260 }}>
-            {(roleFiltered.attendance || []).length === 0 ? (
+            {attendanceTabRecords.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-8">No attendance data for this period</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -1439,10 +1487,10 @@ ${bodyHtml}
             </tr>
           </thead>
           <tbody>
-            {(roleFiltered.attendance || []).length === 0 ? (
+            {(attendanceTabRecords || []).length === 0 ? (
               <tr><td colSpan={7} className="text-center text-slate-500 py-6">No records in range</td></tr>
             ) : (
-              (roleFiltered.attendance as any[]).map((a: any) => (
+              (attendanceTabRecords as any[]).map((a: any) => (
                 <tr key={a.id || `${a.userId}-${a.date}`}>
                   <td className="text-white font-medium text-xs">{users.find((u) => u.id === a.userId)?.name || a.userId}</td>
                   <td className="font-mono text-[10px]">{a.date}</td>
@@ -1457,25 +1505,6 @@ ${bodyHtml}
           </tbody>
         </table>
       </div>
-
-      {roleFiltered.hrRequests.length > 0 && (
-        <GlassCard glowColor="amber" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-          <div className="glass-panel p-4 rounded-lg">
-            {renderSectionHeader(<ListTodo size={16} className="text-amber-400" />, 'Pending HR Requests', `${roleFiltered.hrRequests.length} pending`)}
-            <div className="mt-3 space-y-2">
-              {roleFiltered.hrRequests.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={r.type.replace('_', ' ')} size="sm" />
-                    <span className="text-slate-300">{r.reason.slice(0, 60)}{r.reason.length > 60 ? '...' : ''}</span>
-                  </div>
-                  <span className="font-mono text-[10px] text-slate-400">{r.submittedAt || r.date}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </GlassCard>
-      )}
     </div>
   );
 
@@ -1522,7 +1551,7 @@ ${bodyHtml}
                 {activeTab === 'projects' ? roleFiltered.projects.length :
                  activeTab === 'workload' ? workloadData.length :
                  activeTab === 'deadlines' ? deadlineData.dueToday.length + deadlineData.dueTomorrow.length + deadlineData.upcoming.length + deadlineData.overdue.length :
-                 activeTab === 'attendance' ? roleFiltered.attendance.length :
+                 activeTab === 'attendance' ? attendanceTabRecords.length :
                  activeTab === 'teams' ? teamStats.length : (kpiStats.completedTasks + kpiStats.activeTasks)}
               </span>
             </div>

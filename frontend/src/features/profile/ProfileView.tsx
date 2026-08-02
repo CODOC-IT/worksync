@@ -1041,7 +1041,8 @@ export const ProfileView: React.FC = () => {
           </div>
         </div>
 
-        {/* Collapsible Change Password */}
+        {/* Collapsible Change Password — Admin only (hidden for HR, Lead, Member) */}
+        {currentUser.role === 'Admin' && (
         <div>
           <button
             onClick={() => { setPasswordExpanded(!passwordExpanded); setPasswordError(null); setPasswordSuccess(null); }}
@@ -1115,6 +1116,7 @@ export const ProfileView: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
     </div>
