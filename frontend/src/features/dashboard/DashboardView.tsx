@@ -182,9 +182,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         const now = new Date();
         // Rolling windows are applied server-side via precise ISO bounds so every preset
         // returns events strictly inside its own window: 'Today' = the current local day,
-        // 'Last Day'/'Last 3 Days' = the last 24h/72h. Filtering a capped client feed (the
-        // previous 50-item fetch) would otherwise show the same entries for every option
-        // whenever more than 50 events fit inside the smallest window.
+        // 'Last Day'/'Last 3 Days' = the last 24h/72h.
         let fromDate: Date;
         if (activityFilter === 'Today') {
           fromDate = new Date();
@@ -201,21 +199,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           to: now.toISOString(),
         };
 
-        const result = await fetchActivities(filters, 1, 50);
-        if (!cancelled && Array.isArray(result.items)) {
-          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
-            id: item.id,
-            userId: item.actor.id || '',
-            userName: item.actor.name,
-            action: `${item.action} ${item.entityType}`,
-            targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
-            targetId: item.entityId,
-            targetTitle: item.entityName || item.description,
-            timestamp: new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
-          }));
-          if (!cancelled) setFilteredActivityLogs(mapped);
+        // Fetch every page inside the window so the widget shows the full period instead of
+        // only the newest page — a single capped request would otherwise surface the same
+        // handful of events for every filter whenever one day outgrows a page.
+        const PAGE_SIZE = 100;
+        const first = await fetchActivities(filters, 1, PAGE_SIZE);
+        let collected: ActivityItem[] = [...(first.items || [])];
+        const maxPages = Number(first.totalPages) || 1;
+        for (let page = 2; page <= maxPages; page++) {
+          if (cancelled) return;
+          const next = await fetchActivities(filters, page, PAGE_SIZE);
+          collected = [...collected, ...(next.items || [])];
         }
+        if (cancelled) return;
+
+        const mapped: ActivityLogItem[] = collected.map((item) => ({
+          id: item.id,
+          userId: item.actor.id || '',
+          userName: item.actor.name,
+          action: `${item.action} ${item.entityType}`,
+          targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+          targetId: item.entityId,
+          targetTitle: item.entityName || item.description,
+          timestamp: new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+          diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+        }));
+        if (!cancelled) setFilteredActivityLogs(mapped);
       } catch (err) {
         if (!cancelled) {
           console.warn('Failed to load filtered activities.', err);
