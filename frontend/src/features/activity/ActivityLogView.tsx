@@ -39,7 +39,12 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 // events), 'Deleted Attachment' (no ProjectFile deletions are ever recorded), 'Preference
 // Changed' (preference changes are not written to the audit table).
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Uploaded Attachment', 'Checked In', 'Checked Out'];
-const LEAD_ACTIONS   = [...MEMBER_ACTIONS];
+// Led Project Activity tab options are project-scoped only. Attendance check-ins/outs never
+// carry a projectid (verified org-wide: 0 events with a projectid), so 'Checked In'/'Checked
+// Out' can never match inside a led project. Real priority-change events are near-nonexistent
+// (3 org-wide; 0 inside any led scope). Keeping the list to options with actual matches keeps
+// the tab simple and connected.
+const LEAD_ACTIONS   = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Approved', 'Rejected', 'Commented', 'Uploaded Attachment'];
 // Admin and HR share one option set: every actioncode recorded across all modules.
 // 'Preference Changed', 'Assigned/Reassigned', permission events, and break events are
 // deliberately excluded — preference changes are not recorded, permissions and breaks are
@@ -206,9 +211,11 @@ export const ActivityLogView: React.FC<Props> = ({ onNavigate }) => {
 
     // Led Project Activity tab: the backend narrows the feed to the viewer's led
     // projects and only events by those projects' current members — never the wider
-    // member/task-project scope (which would surface every member's logs).
+    // member/task-project scope (which would surface every member's logs). The
+    // "My activity only" toggle stays live here: ON = own events inside led
+    // projects, OFF = all led-project members' events.
     if (activeTab === 'lead') {
-      return { ...f, myActivityOnly: false, hrActivityOnly: false, ledActivityOnly: true };
+      return { ...f, hrActivityOnly: false, ledActivityOnly: true };
     }
     // Admin or HR: org-wide by default (backend enforces the Admin-actor exclusion for HR).
     // The user's own "My activity only" toggle is respected — toggling it restricts the feed

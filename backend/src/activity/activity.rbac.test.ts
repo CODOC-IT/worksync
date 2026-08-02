@@ -413,6 +413,28 @@ test('Led Project tab (temporary Team Lead grant): feed restricted to led projec
   assert.ok(!descriptions.includes('Stranger event in led project'), 'Led tab must not include events by non-members');
 });
 
+test('Led Project tab: "My activity only" toggle narrows the feed to the lead\'s own events inside led projects', async () => {
+  // usr-4 leads Project B via the projectmembers TeamLead row; usr-5 is a member of Project B.
+  memDb.public.none(`INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+    VALUES (2, 4, 'TeamLead', 2)`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
+    (1, 4, 'Updated', 'Task', 'tsk-own', 2, '00000000-0000-0000-0000-000000000095', 'Tasks', 'Own led event', 'Team_Member'),
+    (1, 5, 'Updated', 'Task', 'tsk-peer', 2, '00000000-0000-0000-0000-000000000096', 'Tasks', 'Peer led event', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+
+  const off = await findActivities({ page: 1, pageSize: 50, ledActivityOnly: true, myActivityOnly: false }, effectiveRoles, 'usr-4');
+  const offDescs = off.rows.map((r: any) => r.description);
+  assert.ok(offDescs.includes('Own led event') && offDescs.includes('Peer led event'), 'Toggle OFF should show every led-project member\'s events');
+
+  const on = await findActivities({ page: 1, pageSize: 50, ledActivityOnly: true, myActivityOnly: true }, effectiveRoles, 'usr-4');
+  const onDescs = on.rows.map((r: any) => r.description);
+  assert.ok(onDescs.includes('Own led event'), 'Toggle ON should keep the lead\'s own events');
+  assert.ok(!onDescs.includes('Peer led event'), 'Toggle ON must hide other led-project members');
+});
+
 test('Team Lead: loses visibility after temporary role expires', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc, endsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '2 hours', CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
