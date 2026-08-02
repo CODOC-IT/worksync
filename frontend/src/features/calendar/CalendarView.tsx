@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { MonthGrid } from './MonthGrid';
@@ -16,6 +16,7 @@ import {
   filterCalendarEntries,
   matchesPersonalFilters,
   leadsAnyProject,
+  entryOrigin,
   getMonthGridDates,
   getWeekDates,
   getYearMonths,
@@ -28,6 +29,11 @@ import {
 } from './calendarRules';
 
 type CalendarViewMode = 'month' | 'week' | 'day' | 'year';
+
+interface CalendarViewProps {
+  initialEntryId?: string;
+  onInitialEntryConsumed?: () => void;
+}
 
 const VIEW_MODES: CalendarViewMode[] = ['month', 'week', 'day', 'year'];
 
@@ -45,7 +51,7 @@ const shiftAnchorDate = (date: Date, mode: CalendarViewMode, direction: 1 | -1):
   return next;
 };
 
-export const CalendarView: React.FC = () => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ initialEntryId, onInitialEntryConsumed }) => {
   const { projects, tasks, users, calendarEvents, approvedLeave, holidays, currentRole, currentUser } = useApp();
 
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
@@ -122,6 +128,50 @@ export const CalendarView: React.FC = () => {
   );
   const weekDates = useMemo(() => getWeekDates(anchorDate), [anchorDate]);
   const yearMonths = useMemo(() => getYearMonths(anchorDate.getFullYear()), [anchorDate]);
+
+  // Unfiltered source list, used only to resolve a deep-linked entry by id so the focused item
+  // can be found even when the current filter state would otherwise hide it.
+  const allEntries = useMemo(
+    () => [
+      ...buildCalendarEntries(projects, tasks, calendarEvents),
+      ...buildHolidayEntries([anchorYear - 1, anchorYear, anchorYear + 1], holidays),
+      ...buildApprovedLeaveEntries(approvedLeave)
+    ],
+    [projects, tasks, calendarEvents, approvedLeave, holidays, anchorYear]
+  );
+
+  // Deep-link support: a caller (e.g. Dashboard's upcoming deadlines/milestones) can ask the
+  // Calendar tab to jump to a specific entry. Honor it once, then let the user navigate freely.
+  useEffect(() => {
+    if (!initialEntryId) return;
+    const entry = allEntries.find((e) => e.id === initialEntryId);
+    if (entry) {
+      const [year, month] = entry.date.split('-').map(Number);
+      setAnchorDate(new Date(year, (month || 1) - 1, 1));
+      setViewMode('month');
+      setActiveDayKey(entry.date);
+      setExpandedEntryId(entry.id);
+
+      // Make sure the focused entry is actually visible under the current filters: add its kind,
+      // relax an origin filter that would exclude it, and drop personal filters that reject it.
+      setActiveKinds((prev) => {
+        const next = new Set(prev);
+        next.add(entry.kind);
+        return next;
+      });
+      if (originFilter !== 'all' && entryOrigin(entry) !== originFilter) {
+        setOriginFilter('all');
+      }
+      if (
+        showPersonalFilters &&
+        !matchesPersonalFilters(entry, activePersonalFilters, projects, tasks, currentUser.id)
+      ) {
+        setActivePersonalFilters(new Set());
+      }
+    }
+    onInitialEntryConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEntryId]);
 
   const periodLabel = useMemo(() => {
     if (viewMode === 'month') {
