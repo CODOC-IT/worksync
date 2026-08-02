@@ -494,6 +494,14 @@ export const ProjectsView: React.FC = () => {
   };
 
   const editingProject = editingProjectId ? projects.find((p) => p.id === editingProjectId) || null : null;
+  // Mirrors the backend gate in project.service.ts's updateProject: Completed requires at least
+  // one task and every task Done. Only checked for the transition INTO Completed -- a project
+  // already Completed keeps showing/selecting that status normally even if a task was added or
+  // reopened afterward, matching how the backend only gates the transition, not a no-op resave.
+  const editingProjectTasks = editingProjectId ? tasks.filter((t) => t.projectId === editingProjectId) : [];
+  const editingProjectCanComplete =
+    editingProject?.status === 'Completed' ||
+    (editingProjectTasks.length > 0 && editingProjectTasks.every((t) => t.status === 'Done'));
   const restoreTarget = projects.find((p) => p.id === restoreTargetId) || null;
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
@@ -792,8 +800,17 @@ export const ProjectsView: React.FC = () => {
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   >
                     <option value="Active">Active</option>
-                    <option value="Completed">Completed</option>
+                    <option value="Completed" disabled={!editingProjectCanComplete}>
+                      Completed
+                    </option>
                   </select>
+                  {!editingProjectCanComplete && (
+                    <p className="text-slate-500 mt-1">
+                      {editingProjectTasks.length === 0
+                        ? 'Add at least one task before this project can be marked Completed.'
+                        : 'Every task must be completed before this project can be marked Completed.'}
+                    </p>
+                  )}
                 </div>
               )}
 

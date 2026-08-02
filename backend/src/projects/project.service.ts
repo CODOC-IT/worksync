@@ -5,6 +5,7 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { getProjectTaskCompletion } from '../tasks/task.repository.js';
 import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
@@ -388,6 +389,21 @@ export const updateProject = async (
   if (input.status) {
     if (input.status !== row.statuscode && input.status !== 'Pending Approval' && actorRole !== 'Admin') {
       throw new ProjectAuthorizationError('Only Admins can change a project\'s status.');
+    }
+    // Gate the transition INTO Completed only (not a no-op resubmission of an already-Completed
+    // project) -- every status-change path funnels through here (a direct Admin update, and a
+    // Team Lead's PROJECT_EDIT request once approved -- see projectApproval.service.ts), so this
+    // is the single choke point a direct API call can't bypass. Scoping to the transition, rather
+    // than every save, means editing an unrelated field on an already-Completed project never
+    // fails just because a task was added or reopened afterward.
+    if (input.status === 'Completed' && input.status !== row.statuscode) {
+      const { total, completed } = await getProjectTaskCompletion(row.projectid);
+      if (total === 0) {
+        throw new ProjectValidationError('A project with no tasks cannot be marked as Completed.');
+      }
+      if (completed < total) {
+        throw new ProjectValidationError('All tasks must be completed before this project can be marked as Completed.');
+      }
     }
     updates.statusId = await repo.getProjectStatusId(API_TO_DB_PROJECT_STATUS[input.status as ApiProjectStatus]);
   }
