@@ -214,7 +214,11 @@ const buildWhere = (
   if (filters.taskId) add('a.taskid = ?', toTaskPkOrNull(filters.taskId));
   if (filters.module) add('a.modulecode = ?', filters.module);
   if (filters.action === 'Priority Changed') {
-    clauses.push("(a.actioncode = 'Priority Changed' OR a.auditeventid IN (SELECT pc.auditeventid FROM audit.auditeventchanges pc WHERE lower(pc.fieldname) = 'priority'))");
+    // Task creation records the initial priority as a 'Created' event carrying a priority field
+    // row — that is an initial value, not a change, so it must not match this filter. Only
+    // explicit 'Priority Changed' codes and 'Updated' events that actually modified the
+    // priority field count as real priority changes.
+    clauses.push("(a.actioncode = 'Priority Changed' OR (a.actioncode = 'Updated' AND a.auditeventid IN (SELECT pc.auditeventid FROM audit.auditeventchanges pc WHERE lower(pc.fieldname) = 'priority')))");
   } else if (filters.action === 'Status Changed') {
     clauses.push("(a.actioncode = 'Status Changed' OR a.auditeventid IN (SELECT sc.auditeventid FROM audit.auditeventchanges sc WHERE lower(sc.fieldname) = 'status'))");
   } else if (filters.action === 'Attendance Corrected') {

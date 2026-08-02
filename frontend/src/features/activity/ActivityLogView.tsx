@@ -36,7 +36,10 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Assigned/Reassigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Preference Changed'];
 const LEAD_ACTIONS   = [...MEMBER_ACTIONS];
 // Admin and HR share one option set: every actioncode recorded across all modules.
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Assigned/Reassigned', 'Reopened', 'Completed', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Requested Change', 'Requested', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Login', 'Logout', 'Exported', 'Preference Changed', 'Failed Operation', 'Unauthorized Access'];
+// 'Preference Changed', 'Assigned/Reassigned', permission events, and break events are
+// deliberately excluded — preference changes are not recorded, permissions and breaks are
+// tracked outside the audit table, and reassignments surface under the 'Assigned' option.
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Reopened', 'Completed', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Requested Change', 'Requested', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Login', 'Logout', 'Exported', 'Failed Operation', 'Unauthorized Access'];
 
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];
