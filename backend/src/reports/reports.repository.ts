@@ -401,6 +401,12 @@ export interface WorkloadRow {
 // assignee tasks count for each of their assignees, matching the Tasks tab). The per-project
 // granularity lets a lead's Workload tab filter data down to a single project they lead; each
 // assignee's cross-project total is simply the sum of their rows.
+//
+// Date-range semantics: active/review (non-completed) tasks always count regardless of due date —
+// they represent the member's current workload. Completed tasks count when their completion time
+// falls inside the report's From → To window (PKT), NOT their due date, so a task completed in the
+// period never disappears just because its due date is outside the range. All "today" boundaries
+// use Asia/Karachi so the backend agrees with the frontend's local calendar.
 export const getWorkload = async (projectIds: number[], from: string, to: string): Promise<WorkloadRow[]> => {
   if (projectIds.length === 0) return [];
 
@@ -411,14 +417,16 @@ export const getWorkload = async (projectIds: number[], from: string, to: string
        COALESCE(SUM(CASE WHEN ts.statuscode NOT IN ('Done', 'Review') AND NOT ts.iscompletedstate THEN 1 ELSE 0 END), 0)::int AS active,
        COALESCE(SUM(CASE WHEN ts.iscompletedstate THEN 1 ELSE 0 END), 0)::int AS completed,
        COALESCE(SUM(CASE WHEN ts.statuscode = 'Review' THEN 1 ELSE 0 END), 0)::int AS review,
-       COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS overdue
+       COALESCE(SUM(CASE WHEN NOT ts.iscompletedstate AND t.duedate < (now() AT TIME ZONE 'Asia/Karachi')::date THEN 1 ELSE 0 END), 0)::int AS overdue
      FROM work.taskassignees ta
      JOIN work.tasks t ON t.taskid = ta.taskid AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE ta.unassignedatutc IS NULL
        AND t.projectid = ANY($1::int[])
-       AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-            OR NOT ts.iscompletedstate)
+       AND (NOT ts.iscompletedstate
+            OR (ts.iscompletedstate
+                AND (t.completedatutc AT TIME ZONE 'Asia/Karachi')::date >= $2::date
+                AND (t.completedatutc AT TIME ZONE 'Asia/Karachi')::date <= $3::date))
      GROUP BY ta.userid, t.projectid
       ORDER BY active DESC`,
      [projectIds, from, to]
@@ -455,14 +463,14 @@ const DEADLINE_MEMBER_SCOPE_CLAUSE = `EXISTS (SELECT 1 FROM work.projectmembers 
                                              WHERE pm.projectid = p.projectid AND pm.userid = $1
                                                AND pm.leftatutc IS NULL)`;
 
-// Project population for the Upcoming Deadlines tab. Admin / HR see every visible project
-// (unchanged). Everyone else sees the union of the projects they are a member of AND the projects
-// they lead — a user can be Lead of one project while being a Member of others, and each
-// relationship is respected independently (per-project TeamLead membership, with the Owner as
-// fallback — see LEAD_SCOPE_CLAUSE / MEMBER_SCOPE_CLAUSE). Lead-ness is never derived from the
-// global account role. The per-project islead flag then drives the task population in
-// getDeadlineBucketTasks: led projects expose every eligible deadline, member-only projects expose
-// only the user's own task deadlines.
+// Project population for the Upcoming Deadlines tab. Admin / HR see every non-archived project.
+// For everyone else, lead behavior takes precedence: a user who leads ≥1 project sees ONLY the
+// projects they lead; projects they merely belong to contribute nothing. A user who leads no
+// project is a plain member and sees only the projects they belong to. Lead-ness is per-project
+// (ProjectMembers 'TeamLead' membership, with the Owner as fallback — see
+// DEADLINE_LEAD_SCOPE_CLAUSE) and never derives from the global account role. The per-project
+// islead flag then drives the task population in getDeadlineBucketTasks: led projects expose every
+// eligible deadline, member-only projects expose only the user's own assigned deadlines.
 //
 // The global Reports From → To range is deliberately NOT applied here: an upcoming deadline should
 // appear based on its actual due date, not on whether its project's start/end dates fall inside the
@@ -483,14 +491,25 @@ export const getDeadlineProjectsForRole = async (
     return result.rows;
   }
 
-  // Member or lead: union of member projects + led projects, flagging lead-ness per project.
+  // Lead scope takes precedence: leading any project hides every member-only project.
+  if (await isUserProjectLead(userPk, false)) {
+    const result = await query<DeadlineProjectRow>(
+      `SELECT p.projectid, p.projectname, p.projectcode, true AS islead
+       FROM work.projects p
+       JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
+       WHERE p.archivedatutc IS NULL AND ${DEADLINE_LEAD_SCOPE_CLAUSE}`,
+      [userPk]
+    );
+    return result.rows;
+  }
+
+  // Plain member: member projects only. Their own assigned deadlines are applied in
+  // getDeadlineBucketTasks via the member-only branch.
   const result = await query<DeadlineProjectRow>(
-    `SELECT p.projectid, p.projectname, p.projectcode,
-            (${DEADLINE_LEAD_SCOPE_CLAUSE}) AS islead
+    `SELECT p.projectid, p.projectname, p.projectcode, false AS islead
      FROM work.projects p
      JOIN work.projectstatuses ps ON ps.projectstatusid = p.projectstatusid
-     WHERE p.archivedatutc IS NULL
-       AND (${DEADLINE_MEMBER_SCOPE_CLAUSE} OR ${DEADLINE_LEAD_SCOPE_CLAUSE})`,
+     WHERE p.archivedatutc IS NULL AND ${DEADLINE_MEMBER_SCOPE_CLAUSE}`,
     [userPk]
   );
   return result.rows;
@@ -521,19 +540,24 @@ export const getDeadlineBucketTasks = async (
 ): Promise<TaskDeadlineRow[]> => {
   if (projects.length === 0) return [];
 
+  // PKT "today": the app runs in Pakistan local time, and Postgres CURRENT_DATE is UTC-based and
+  // would shift the Today/Tomorrow/future buckets by a day during the PKT early morning. Compute
+  // the calendar date in Asia/Karachi so the backend and the frontend's local "today" agree.
+  const todaySql = `(now() AT TIME ZONE 'Asia/Karachi')::date`;
+
   let dateFilter: string;
   switch (bucket) {
     case 'today':
-      dateFilter = `t.duedate = CURRENT_DATE`;
+      dateFilter = `t.duedate = ${todaySql}`;
       break;
     case 'tomorrow':
-      dateFilter = `t.duedate = CURRENT_DATE + 1`;
+      dateFilter = `t.duedate = ${todaySql} + 1`;
       break;
     case 'upcoming':
-      dateFilter = `t.duedate > CURRENT_DATE + 1 AND t.duedate <= CURRENT_DATE + 7`;
+      dateFilter = `t.duedate > ${todaySql} + 1`;
       break;
     case 'overdue':
-      dateFilter = `t.duedate < CURRENT_DATE`;
+      dateFilter = `t.duedate < ${todaySql}`;
       break;
   }
 
