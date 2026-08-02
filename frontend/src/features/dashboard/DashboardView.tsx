@@ -435,22 +435,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               </div>
               <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 py-4 text-center">
                 <div>
-                  <p className="text-[9px] font-mono text-slate-500 uppercase">{todayKey}</p>
-                  <p className="text-xl font-bold text-white font-mono mt-0.5">{nowTime}</p>
+                  <p className="text-sm font-mono text-slate-500 uppercase">{todayKey}</p>
+                  <p className="text-3xl font-bold text-white font-mono mt-0.5">{nowTime}</p>
                 </div>
                 {!isCheckedIn ? (
-                  <button onClick={checkIn} className="px-5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all">
-                    <LogIn size={13} /> Check In
+                  <button onClick={checkIn} className="px-6 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-base font-semibold flex items-center gap-1.5 transition-all">
+                    <LogIn size={18} /> Check In
                   </button>
                 ) : !isCheckedOut ? (
                   <>
-                    <p className="text-[10px] text-slate-400">Checked in at <span className="text-emerald-300 font-mono">{todayAttendance?.checkIn}</span></p>
-                    <button onClick={checkOut} className="px-5 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all">
-                      <LogOut size={13} /> Check Out
+                    <p className="text-base text-slate-400">Checked in at <span className="text-emerald-300 font-mono">{todayAttendance?.checkIn}</span></p>
+                    <button onClick={checkOut} className="px-6 py-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-base font-semibold flex items-center gap-1.5 transition-all">
+                      <LogOut size={18} /> Check Out
                     </button>
                   </>
                 ) : (
-                  <div className="space-y-1 text-[10px] text-slate-400">
+                  <div className="space-y-1.5 text-base text-slate-400">
                     <p>Check-in: <span className="text-emerald-300 font-mono">{todayAttendance?.checkIn}</span></p>
                     <p>Check-out: <span className="text-rose-300 font-mono">{todayAttendance?.checkOut}</span></p>
                     <p>Total hours: <span className="text-cyan-300 font-mono">{todayAttendance ? todayAttendance.totalHours.toFixed(2) : '0.00'}</span></p>
