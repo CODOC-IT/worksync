@@ -40,6 +40,7 @@ import {
   UserX,
   Coffee,
   Hourglass,
+  Sun,
   ListTodo,
   ArrowUpRight,
   ArrowDownRight,
@@ -938,12 +939,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
         absentToday: h.absentToday ?? 0,
         onLeaveToday: h.onLeaveToday ?? 0,
         lateToday: h.lateToday ?? 0,
+        halfDayToday: h.halfDayToday ?? 0,
         avgHours: h.avgHours ?? '0',
         pendingLeaveReqs: h.pendingLeaveReqs ?? 0,
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────
@@ -2011,11 +2013,12 @@ ${bodyHtml}
               <span>Attendance data unavailable — API request failed.</span>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {renderKPICard('Present Today', hrOverviewStats.presentToday, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
             {renderKPICard('Absent', hrOverviewStats.absentToday, <UserX size={14} className="text-rose-400" />, 'rose')}
             {renderKPICard('On Leave', hrOverviewStats.onLeaveToday, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
             {renderKPICard('Late', hrOverviewStats.lateToday, <Clock size={14} className="text-amber-400" />, 'amber')}
+            {renderKPICard('Half Day', hrOverviewStats.halfDayToday, <Sun size={14} className="text-blue-400" />, 'slate')}
             {renderKPICard('Avg Hours', `${hrOverviewStats.avgHours}h`, <Hourglass size={14} className="text-violet-400" />, 'violet')}
             {renderKPICard('Pending Leaves', hrOverviewStats.pendingLeaveReqs, <FileSpreadsheet size={14} className="text-purple-400" />, 'magenta')}
             {renderKPICard('Pending Corrections', hrOverviewStats.pendingCorrections, <ListTodo size={14} className="text-amber-400" />, 'amber')}
@@ -2030,16 +2033,17 @@ ${bodyHtml}
                     { name: 'Present', value: hrOverviewStats.presentToday },
                     { name: 'Absent', value: hrOverviewStats.absentToday },
                     { name: 'On Leave', value: hrOverviewStats.onLeaveToday },
-                    { name: 'Late', value: hrOverviewStats.lateToday }
+                    { name: 'Late', value: hrOverviewStats.lateToday },
+                    { name: 'Half Day', value: hrOverviewStats.halfDayToday }
                   ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                     <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
                     <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {[0, 1, 2, 3].map((i) => (
-                        <Cell key={i} fill={[chartColors.emerald, chartColors.rose, chartColors.cyan, chartColors.amber][i]} />
-                      ))}
+                      {[0, 1, 2, 3, 4].map((i) => (
+                          <Cell key={i} fill={[chartColors.emerald, chartColors.rose, chartColors.cyan, chartColors.amber, chartColors.blue][i]} />
+                        ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>

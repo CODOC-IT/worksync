@@ -211,6 +211,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
         absentToday: todayAtt.absentToday,
         onLeaveToday: todayAtt.onLeaveToday,
         lateToday: todayAtt.lateToday,
+        halfDayToday: todayAtt.halfDayToday,
         avgHours: avgHoursToday,
         pendingLeaveReqs: pending.pendingLeaves,
         pendingCorrections: pending.pendingCorrections,
