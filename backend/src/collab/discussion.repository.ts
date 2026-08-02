@@ -161,7 +161,7 @@ const upsertStoredFile = async (
   if (!parsed) {
     throw new Error(`Attachment "${attachment.name}" has no readable content to store.`);
   }
-  const written = await writeAttachmentToDisk(parsed.buffer);
+  const written = await writeAttachmentToDisk(parsed.buffer, parsed.mimeType);
   const extension = attachment.name.includes('.') ? attachment.name.split('.').pop()! : null;
 
   // ScanStatus stays 'Pending' — this app has no virus-scanning pipeline, and claiming 'Clean'
