@@ -36,15 +36,15 @@ export interface ActivityRow {
 
 interface ChangeRow { auditeventid: string; fieldname: string; oldvalue: string | null; newvalue: string | null }
 
-// ── HR visibility exclusion ───────────────────────────────────────────────────────
-// HR sees every organization event except those performed by Administrators. The
-// `actorrolesnapshot` check covers events recorded with the actor's role, but legacy
+// ── Administrator-actor exclusion ─────────────────────────────────────────────────
+// HR, Team Members and Team Leads must never see events performed by Administrators.
+// The `actorrolesnapshot` check covers events recorded with the actor's role, but legacy
 // rows can carry a NULL snapshot while the actor is (or was) an Administrator — e.g.
 // task-review approvals recorded without a snapshot. So the exclusion ALSO denies any
 // event whose actor currently holds the active `Administrator` role (same window that
 // `getEffectiveRoles` uses). `actoruserid IS NULL` events (system/failed logins) stay
-// visible to HR, which is why the window check is wrapped in an OR NULL guard.
-const HR_EXCLUDED_ACTOR_CLAUSE = `(COALESCE(a.actorrolesnapshot, '') <> 'Admin'
+// visible, which is why the window check is wrapped in an OR NULL guard.
+const ADMIN_ACTOR_EXCLUSION = `(COALESCE(a.actorrolesnapshot, '') <> 'Admin'
   AND (a.actoruserid IS NULL OR a.actoruserid NOT IN (
     SELECT hrur.userid FROM iam.userroles hrur
     JOIN iam.roles hrr ON hrr.roleid = hrur.roleid
@@ -120,10 +120,13 @@ const visibilitySql = (
     WHERE vta.userid = $${pi} AND vta.unassignedatutc IS NULL
   )`;
 
-  // Combine base project/task access with module restriction for plain Team Members
+  // Combine base project/task access with module restriction for plain Team Members.
+  // Every non-Admin viewer additionally gets the Administrator-actor exclusion so an
+  // event performed by an Admin can never surface to a Member or Lead — regardless of
+  // filters, tabs, detail lookup or exports.
   const buildMemberClause = (): string => {
     const parts = [...ownParts, projectMemberPart, taskAssigneePart];
-    const scopeClause = `(${parts.join(' OR ')})`;
+    const scopeClause = `((${parts.join(' OR ')}) AND ${ADMIN_ACTOR_EXCLUSION})`;
     // Restrict to non-sensitive modules for pure Team Members
     if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
       return `${scopeClause} AND a.modulecode NOT IN ('Permissions', 'Authentication', 'Settings', 'System')`;
@@ -136,7 +139,7 @@ const visibilitySql = (
   // Administrator. This applies whether the HR role is permanent or temporary.
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: HR_EXCLUDED_ACTOR_CLAUSE,
+      clause: ADMIN_ACTOR_EXCLUSION,
       extraParams: params.slice(1),
     };
   }
@@ -146,7 +149,7 @@ const visibilitySql = (
   // need to enumerate project membership predicates on top.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: HR_EXCLUDED_ACTOR_CLAUSE,
+      clause: ADMIN_ACTOR_EXCLUSION,
       extraParams: params.slice(1),
     };
   }
@@ -176,10 +179,11 @@ const visibilitySql = (
   }
 
   // HR+TeamLead combined: handled above via the isHRandTeamLead branch.
-  // Only pure Team Lead (with no HR) reaches this point.
+  // Only pure Team Lead (with no HR) reaches this point. Admin-performed events are
+  // excluded here too (see buildMemberClause).
 
   return {
-    clause: `(${scopeParts.join(' OR ')})`,
+    clause: `((${scopeParts.join(' OR ')}) AND ${ADMIN_ACTOR_EXCLUSION})`,
     extraParams: params.slice(1),
   };
 };

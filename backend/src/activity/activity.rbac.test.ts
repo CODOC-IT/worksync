@@ -274,6 +274,44 @@ test('Team Member: cannot view unrelated non-restricted modules', async () => {
   assert.ok(!descriptions.includes('Task update visible'), 'Team Member must not see unrelated task activity');
 });
 
+test('Team Member: cannot see Admin-performed events even inside their project scope', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (1, 1, 'Updated', 'Task', 'tsk-adm-proj', 1, '00000000-0000-0000-0000-000000000024', 'Tasks', 'Admin update in member project', 'Admin')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(!descriptions.includes('Admin update in member project'), 'Team Member must never see Admin-performed events, even in a shared project');
+});
+
+test('Team Member: sees other members but not Admin events in shared project scope', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES
+    (1, 5, 'Updated', 'Task', 'tsk-peer-proj', 1, '00000000-0000-0000-0000-000000000025', 'Tasks', 'Peer update in member project', 'Team_Member'),
+    (1, 1, 'Created', 'Task', 'tsk-adm-proj2', 1, '00000000-0000-0000-0000-000000000026', 'Tasks', 'Admin creation in member project', 'Admin')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Peer update in member project'), 'Team Member should see peer activity in a shared project');
+  assert.ok(!descriptions.includes('Admin creation in member project'), 'Team Member must never see Admin-performed events in a shared project');
+});
+
+test('Team Member: cannot retrieve an Admin-performed event by direct ID even inside their project scope', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot)
+    VALUES (998, 1, 1, 'Updated', 'Task', 'tsk-adm-detail', 1, '00000000-0000-0000-0000-000000000027', 'Tasks', 'Admin update in member project', 'Admin')`);
+
+  const { findVisibleActivityById } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const row = await findVisibleActivityById('998', 'usr-4', effectiveRoles);
+  assert.equal(row, null, 'Team Member must not retrieve an Admin-performed event by direct ID');
+});
+
 test('Team Member: cannot retrieve restricted record by direct ID', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
     VALUES (999, 1, 1, 'Permission Granted', 'Permission', 'perm-99', '00000000-0000-0000-0000-000000000030', 'Permissions', 'Admin permission grant', 'Admin')`);

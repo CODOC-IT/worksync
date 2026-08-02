@@ -730,19 +730,24 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           />
         )}
 
-        {/* 8. Quick toggles */}
+        {/* 8. Quick toggles. "My activity only" only makes sense for Admin/HR: a Team
+            Member's "My Work Activity" feed is always their own events (the backend member
+            scope is personal + shared-project events, and admin-performed events are never
+            shown to members), so the toggle must not be able to widen a member's view. */}
         <div className="border-t border-white/5 pt-2 space-y-2">
-          <Toggle
-            checked={filters.myActivityOnly}
-            onChange={(v) => update('myActivityOnly', v)}
-            label="My activity only"
-          />
           {isAdmin && (
-            <Toggle
-              checked={filters.importantOnly}
-              onChange={(v) => update('importantOnly', v)}
-              label="Important activity only"
-            />
+            <>
+              <Toggle
+                checked={filters.myActivityOnly}
+                onChange={(v) => update('myActivityOnly', v)}
+                label="My activity only"
+              />
+              <Toggle
+                checked={filters.importantOnly}
+                onChange={(v) => update('importantOnly', v)}
+                label="Important activity only"
+              />
+            </>
           )}
         </div>
 
