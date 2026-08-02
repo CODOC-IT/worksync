@@ -267,7 +267,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       <div className="flex flex-wrap gap-3">
         {/* Calendar */}
         <div className="flex-1 min-w-[300px] max-w-full">
-          <div className="glass-panel h-full p-3 border border-cyan-500/20 overflow-y-auto">
+          <div className="glass-panel h-104 p-3 border border-cyan-500/20 overflow-y-auto">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><Calendar size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Calendar</h3></div>
                 <button onClick={() => onNavigate('calendar')} className="text-[10px] text-cyan-400 hover:underline font-mono">Open</button>
@@ -294,7 +294,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
         {/* Activity Log */}
         <div className="flex-1 min-w-[300px] max-w-full">
-          <div className="glass-panel p-3 border border-purple-500/20 h-90 overflow-y-auto flex flex-col">
+          <div className="glass-panel p-3 border border-purple-500/20 h-104 overflow-y-auto flex flex-col">
             <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10 shrink-0">
               <div className="flex items-center gap-2"><Activity size={14} className="text-cyan-400" /><h3 className="font-bold text-xs text-white">Activity Log</h3></div>
               <div className="flex items-center gap-2">
@@ -345,7 +345,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         {/* Approvals + HR */}
         <div className="flex-1 min-w-[300px] max-w-full space-y-2.5">
           {(currentRole === 'Admin' || currentRole === 'Team_Lead') && (
-            <div className="glass-panel p-3 border border-amber-500/30 h-90 overflow-y-auto flex flex-col">
+            <div className="glass-panel p-3 border border-amber-500/30 h-104 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-amber-400" /><h3 className="font-bold text-xs text-white">Approvals Inbox</h3><span className="text-[10px] text-amber-400 font-mono">({pendingApprovals.length})</span></div>
                 <button onClick={() => onNavigate('approvals')} className="text-[10px] text-amber-400 hover:underline font-mono flex items-center gap-1">All <ChevronRight size={10} /></button>
@@ -391,7 +391,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           )}
           {currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'HR' && (
-            <div className="glass-panel p-3 border border-white/10 h-90 overflow-y-auto flex flex-col">
+            <div className="glass-panel p-3 border border-white/10 h-104 overflow-y-auto flex flex-col">
               <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2"><ShieldCheck size={14} className="text-slate-500" /><h3 className="font-bold text-xs text-slate-400">Approvals</h3></div>
               </div>
