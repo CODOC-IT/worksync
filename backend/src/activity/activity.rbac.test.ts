@@ -435,6 +435,38 @@ test('Led Project tab: "My activity only" toggle narrows the feed to the lead\'s
   assert.ok(!onDescs.includes('Peer led event'), 'Toggle ON must hide other led-project members');
 });
 
+test('Led Project tab: selecting a led project returns that project\'s member and task events only', async () => {
+  // usr-4 leads Project B via the projectmembers TeamLead row; usr-3 and usr-5 are
+  // members of Project B. Selecting Project B (projectId filter) must return both
+  // project-level and task-level events by every current member of that project -
+  // never events from other projects (task events carry their project's id, so a
+  // selected project covers task activity too).
+  memDb.public.none(`INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid) VALUES
+    (2, 4, 'TeamLead', 2),
+    (2, 3, 'Member', 2),
+    (2, 5, 'Member', 2)`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, taskid, correlationid, modulecode, description, actorrolesnapshot) VALUES
+    (1, 5, 'Updated', 'Task', 'tsk-member', 2, 10, '00000000-0000-0000-0000-000000000120', 'Tasks', 'Project B member task event', 'Team_Member'),
+    (1, 3, 'Created', 'Project', 'prj-b', 2, NULL, '00000000-0000-0000-0000-000000000121', 'Projects', 'Project B member project event', 'Team_Member'),
+    (1, 4, 'Updated', 'Task', 'tsk-own', 2, 11, '00000000-0000-0000-0000-000000000122', 'Tasks', 'Project B own task event', 'Team_Member'),
+    (1, 5, 'Updated', 'Task', 'tsk-other', 1, 12, '00000000-0000-0000-0000-000000000123', 'Tasks', 'Other project task event', 'Team_Member')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+
+  const result = await findActivities(
+    { page: 1, pageSize: 50, ledActivityOnly: true, myActivityOnly: false, projectId: 'prj-2' },
+    effectiveRoles,
+    'usr-4'
+  );
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Project B member task event'), 'Task-level event by another member of the selected led project must appear');
+  assert.ok(descriptions.includes('Project B member project event'), 'Project-level event by another member of the selected led project must appear');
+  assert.ok(descriptions.includes('Project B own task event'), 'Lead\'s own task event in the selected led project must appear');
+  assert.ok(!descriptions.includes('Other project task event'), 'Events from other projects must not appear when a led project is selected');
+});
+
 test('Led Project tab: owner-led projects without a TeamLead row are part of the lead scope', async () => {
   // usr-2 owns Projects A and C; no current TeamLead membership row exists for either
   // (C is freshly inserted so earlier tests cannot have created one) — resolveTeamLeadUserId
