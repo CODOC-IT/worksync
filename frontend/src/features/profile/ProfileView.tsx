@@ -5,6 +5,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { getTaskAssigneeIds } from '../tasks/taskRules';
 import { fetchActivities } from '../activity/activityApi';
 import { DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
+import { TaskStatus, ProjectStatus } from '../../types';
 import { getOwnAccountChangeRequests, getSafeRequestedChangeLabel } from './accountChangeRequestHistory';
 import {
   Mail, Briefcase, Shield, Save, AlertCircle,
@@ -43,16 +44,10 @@ function todayStr(): string {
   return new Date().toISOString().split('T')[0];
 }
 
-// Local-calendar date helpers (no UTC drift) for the "last 7 days" attendance window.
-function localTodayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function addDaysStr(dateStr: string, days: number): string {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(y, m - 1, d + days);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
 }
 
 // Mirrors NotificationsView: linkRoute may reference a pre-rename tab id (e.g. 'chat').
@@ -171,6 +166,9 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   const [profileActivityLoading, setProfileActivityLoading] = useState(false);
   const [profileActivityError, setProfileActivityError] = useState<string | null>(null);
   const [profileActivityTotal, setProfileActivityTotal] = useState(0);
+  const [taskStatusFilter, setTaskStatusFilter] = useState<string>('');
+  const [projectStatusFilter, setProjectStatusFilter] = useState<string>('');
+  const [deadlineFilter, setDeadlineFilter] = useState<string>('all');
 
   useEffect(() => {
     setNameInput(currentUser.name);
@@ -250,7 +248,9 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
         targetType: item.entityType,
         targetId: item.entityId,
         targetTitle: item.entityName || item.description,
-        timestamp: new Date(item.timestamp).toLocaleString(),
+        // Keep the raw ISO timestamp for reliable date-range filtering; render the localized label.
+        timestamp: item.timestamp,
+        timestampLabel: new Date(item.timestamp).toLocaleString(),
         ...(item.changes?.[0] ? { diff: { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } } : {}),
       })));
     } catch (err: any) {
@@ -263,12 +263,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   };
 
   useEffect(() => {
-    if (activeTab === 'my-attendance') {
-      // My Attendance shows ONLY the last 7 days, independent of the page-wide date filter.
-      const to = localTodayStr();
-      const from = addDaysStr(to, -6);
-      fetchProfileAttendance(from, to);
-    } else if (activeTab === 'overview') {
+    if (activeTab === 'my-attendance' || activeTab === 'overview') {
+      // My Attendance follows the same calendar date-range filter as the rest of My Profile.
       fetchProfileAttendance(dateRange.from, dateRange.to);
     }
   }, [dateRange.from, dateRange.to, activeTab]);
@@ -284,14 +280,6 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
     (p) => p.memberIds.includes(currentUser.id) || p.teamLeadId === currentUser.id
   );
   const myAttendance = profileAttendance.filter((r) => r.userId === currentUser.id);
-  // My Attendance tab is limited to the most recent 7 days (local calendar dates).
-  const last7Attendance = myAttendance
-    .filter((r) => {
-      const to = localTodayStr();
-      const from = addDaysStr(to, -6);
-      return r.date >= from && r.date <= to;
-    })
-    .sort((a, b) => b.date.localeCompare(a.date));
   const myActivity = profileActivity;
   const myNotifications = notifications.filter((n) => n.userId === currentUser.id);
   const projectsLed = projects.filter((p) => p.teamLeadId === currentUser.id);
@@ -302,7 +290,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   };
 
   const myUpcomingDeadlines = myTasks
-    .filter((t) => t.status !== 'Done' && t.dueDate)
+    .filter((t) => t.status !== 'Done' && t.dueDate && t.dueDate >= todayStr())
     .map((t) => ({
       id: `task-${t.id}`,
       title: t.title,
@@ -313,6 +301,25 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
       taskId: t.id,
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Dedicated deadline filter that bypasses the global date range (for Upcoming Deadlines tab)
+  const filteredUpcomingDeadlines = myUpcomingDeadlines.filter((d) => {
+    if (deadlineFilter === 'all') return true;
+    const today = todayStr();
+    const tomorrow = addDays(today, 1);
+    const endDate = deadlineFilter === 'today' ? today
+      : deadlineFilter === 'tomorrow' ? tomorrow
+      : deadlineFilter === 'next7' ? addDays(today, 7)
+      : deadlineFilter === 'next30' ? addDays(today, 30)
+      : null;
+    if (!endDate) return true;
+    return d.date >= today && d.date <= endDate;
+  });
+
+  // Global date range filtered deadlines (for Overview tab)
+  const dateFilteredDeadlines = hasDateError
+    ? myUpcomingDeadlines
+    : myUpcomingDeadlines.filter((d) => isInDateRange(d.date, dateRange.from, dateRange.to));
 
   const dateFilteredTasks = hasDateError
     ? myTasks
@@ -328,15 +335,11 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
 
   const dateFilteredActivity = hasDateError
     ? myActivity
-    : myActivity.filter((l) => isInDateRange(l.timestamp, dateRange.from, dateRange.to));
+    : myActivity.filter((l) => isInDateRange(l.timestamp, dateRange.from, dateRange.to) || isInDateRange(l.timestampLabel, dateRange.from, dateRange.to));
 
   const dateFilteredNotifications = hasDateError
     ? myNotifications
     : myNotifications.filter((n) => isInDateRange(n.createdAt || '', dateRange.from, dateRange.to));
-
-  const dateFilteredDeadlines = hasDateError
-    ? myUpcomingDeadlines
-    : myUpcomingDeadlines.filter((d) => isInDateRange(d.date, dateRange.from, dateRange.to));
 
   const daysUntil = (dateStr: string): string => {
     const now = new Date();
@@ -607,6 +610,59 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
     </div>
   );
 
+  /* ───────── Compact Status Filter ───────── */
+  const StatusFilter = ({
+    value,
+    onChange,
+    options,
+    allLabel,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    options: string[];
+    allLabel: string;
+  }) => (
+    <div className="mb-4 flex items-center gap-2">
+      <span className="text-[11px] font-mono text-slate-500 shrink-0">Status</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500/40"
+      >
+        <option value="">{allLabel}</option>
+        {options.map((status) => (
+          <option key={status} value={status}>{status}</option>
+        ))}
+      </select>
+    </div>
+  );
+
+  /* ───────── Compact Deadline Filter ───────── */
+  const DeadlineFilter = ({
+    value,
+    onChange,
+    allLabel,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    allLabel: string;
+  }) => (
+    <div className="mb-4 flex items-center gap-2">
+      <span className="text-[11px] font-mono text-slate-500 shrink-0">Deadline</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500/40"
+      >
+        <option value="all">{allLabel}</option>
+        <option value="today">Due Today</option>
+        <option value="tomorrow">Due Tomorrow</option>
+        <option value="next7">Next 7 Days</option>
+        <option value="next30">Next 30 Days</option>
+      </select>
+    </div>
+  );
+
   /* ───────── Tab Navigation ───────── */
   const renderTabNav = () => (
     <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1">
@@ -632,15 +688,19 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   );
 
   /* ───────── My Tasks Tab ───────── */
-  const renderMyTasks = () => (
+  const TASK_STATUSES: TaskStatus[] = ['Todo', 'In Progress', 'Review', 'Done', 'Blocked'];
+  const renderMyTasks = () => {
+    const filtered = taskStatusFilter ? dateFilteredTasks.filter((t) => t.status === taskStatusFilter) : dateFilteredTasks;
+    return (
     <div>
-      <SectionHeader icon={CheckSquare} label="My Tasks" count={dateFilteredTasks.length} />
-      {dateFilteredTasks.length === 0 ? (
+      <SectionHeader icon={CheckSquare} label="My Tasks" count={filtered.length} />
+      <StatusFilter value={taskStatusFilter} onChange={setTaskStatusFilter} options={TASK_STATUSES} allLabel="All statuses" />
+      {filtered.length === 0 ? (
         <EmptyState icon={Inbox} title="No assigned tasks yet" message="Tasks assigned to you will appear here." />
       ) : (
         <div className="max-h-[450px] overflow-y-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {dateFilteredTasks.map((t) => (
+            {filtered.map((t) => (
               <GlassCard key={t.id} glowColor="violet" onClick={() => onNavigate?.('tasks')}>
                 <div className="flex items-start justify-between gap-2 mb-2.5">
                   <span className="font-mono text-[11px] text-purple-400 font-bold shrink-0">{t.taskNumber}</span>
@@ -666,18 +726,23 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   /* ───────── My Projects Tab ───────── */
-  const renderMyProjects = () => (
+  const PROJECT_STATUSES: ProjectStatus[] = ['Draft', 'Active', 'On Hold', 'Archived', 'Pending Approval', 'Completed'];
+  const renderMyProjects = () => {
+    const filtered = projectStatusFilter ? dateFilteredProjects.filter((p) => p.status === projectStatusFilter) : dateFilteredProjects;
+    return (
     <div>
-      <SectionHeader icon={FolderKanban} label="My Projects" count={dateFilteredProjects.length} />
-      {dateFilteredProjects.length === 0 ? (
+      <SectionHeader icon={FolderKanban} label="My Projects" count={filtered.length} />
+      <StatusFilter value={projectStatusFilter} onChange={setProjectStatusFilter} options={PROJECT_STATUSES} allLabel="All statuses" />
+      {filtered.length === 0 ? (
         <EmptyState icon={FolderKanban} title="No projects yet" message="Projects you belong to will appear here." />
       ) : (
         <div className="max-h-[450px] overflow-y-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {dateFilteredProjects.map((p) => (
+            {filtered.map((p) => (
               <GlassCard key={p.id} glowColor="cyan" onClick={() => onNavigate?.('projects')}>
                 <div className="flex items-start justify-between gap-2 mb-2.5">
                   <span className="font-mono text-[11px] text-cyan-400 font-bold shrink-0">{p.code}</span>
@@ -699,7 +764,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   /* ───────── Overview Tab ───────── */
   const renderOverview = () => {
@@ -780,7 +846,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 {recentActivity.map((log) => (
                   <div key={log.id} className="flex items-start gap-3 text-xs">
-                    <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestamp}</span>
+                    <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestampLabel || log.timestamp}</span>
                     <span className="text-slate-300">{log.action}</span>
                     <span className="text-cyan-400 truncate">{log.targetTitle}</span>
                   </div>
@@ -828,7 +894,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 {recentActivity.map((log) => (
                   <div key={log.id} className="flex items-start gap-3 text-xs">
-                    <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestamp}</span>
+                    <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestampLabel || log.timestamp}</span>
                     <span className="text-slate-300">{log.action}</span>
                     <span className="text-cyan-400 truncate">{log.targetTitle}</span>
                   </div>
@@ -876,7 +942,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
             <div className="space-y-2 max-h-[300px] overflow-y-auto">
               {recentActivity.map((log) => (
                 <div key={log.id} className="flex items-start gap-3 text-xs">
-                  <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestamp}</span>
+                  <span className="text-slate-500 font-mono shrink-0 w-16">{log.timestampLabel || log.timestamp}</span>
                   <span className="text-slate-300">{log.action}</span>
                   <span className="text-cyan-400 truncate">{log.targetTitle}</span>
                 </div>
@@ -891,7 +957,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   /* ───────── My Attendance Tab ───────── */
   const renderMyAttendance = () => (
     <div>
-      <SectionHeader icon={Clock} label="My Attendance" count={last7Attendance.length} />
+      <SectionHeader icon={Clock} label="My Attendance" count={dateFilteredAttendance.length} />
       {profileAttendanceLoading ? (
         <div className="flex items-center justify-center py-10">
           <Loader2 size={22} className="text-cyan-400 animate-spin" />
@@ -901,8 +967,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
           <AlertCircle size={14} />
           <span>{profileAttendanceError}</span>
         </div>
-      ) : last7Attendance.length === 0 ? (
-        <EmptyState icon={Clock} title="No attendance records" message="Your attendance from the last 7 days will appear here." />
+      ) : dateFilteredAttendance.length === 0 ? (
+        <EmptyState icon={Clock} title="No attendance records" message="Your attendance records in the selected date range will appear here." />
       ) : (
         <div className="max-h-[400px] overflow-y-auto">
           <table className="w-full text-xs font-mono">
@@ -917,7 +983,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
               </tr>
             </thead>
             <tbody>
-              {last7Attendance.map((r) => (
+              {dateFilteredAttendance.map((r) => (
                 <tr key={r.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                   <td className="py-2.5 px-3 text-white">{r.date}</td>
                   <td className="py-2.5 px-3 text-slate-300">{r.checkIn}</td>
@@ -939,13 +1005,14 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
   /* ───────── Upcoming Deadlines Tab ───────── */
   const renderUpcomingDeadlines = () => (
     <div>
-      <SectionHeader icon={Calendar} label="Upcoming Deadlines" count={dateFilteredDeadlines.length} />
-      {dateFilteredDeadlines.length === 0 ? (
+      <SectionHeader icon={Calendar} label="Upcoming Deadlines" count={filteredUpcomingDeadlines.length} />
+      <DeadlineFilter value={deadlineFilter} onChange={setDeadlineFilter} allLabel="All Deadlines" />
+      {filteredUpcomingDeadlines.length === 0 ? (
         <EmptyState icon={Calendar} title="No upcoming deadlines" message="Deadlines from your assigned tasks will appear here." />
       ) : (
         <>
           <div className="max-h-[400px] overflow-y-auto space-y-2">
-          {dateFilteredDeadlines.map((dl) => {
+          {filteredUpcomingDeadlines.map((dl) => {
             const dayLabel = daysUntil(dl.date);
             const isOverdue = dayLabel.includes('overdue');
             const task = tasks.find((t) => t.id === dl.taskId);
@@ -954,8 +1021,8 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
                 key={dl.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => onNavigate?.('reports', 'deadlines')}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate?.('reports', 'deadlines'); } }}
+                onClick={() => onNavigate?.('tasks', dl.taskId)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate?.('tasks', dl.taskId); } }}
                 className={`p-4 rounded-xl bg-slate-800/40 border flex items-start justify-between gap-4 cursor-pointer transition-colors hover:bg-slate-800/60 ${
                   isOverdue ? 'border-rose-500/25' : 'border-white/5'
                 }`}
@@ -1041,7 +1108,7 @@ export const ProfileView: React.FC<{ onNavigate?: (tab: string, filterId?: strin
                     {log.diff && ` — ${log.diff.field}: ${log.diff.oldVal} → ${log.diff.newVal}`}
                   </p>
                 </div>
-                <span className="text-[11px] text-slate-500 shrink-0 font-mono">{log.timestamp}</span>
+                <span className="text-[11px] text-slate-500 shrink-0 font-mono">{log.timestampLabel || log.timestamp}</span>
               </div>
             ))}
           </div>
