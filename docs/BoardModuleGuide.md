@@ -157,6 +157,10 @@ fifth value, `Blocked`, owned entirely by the Task Creation module (`blockerReas
 `work.TaskBlockers` table). Blocked tasks are **not shown on the board** in this iteration —
 see §11 Limitations.
 
+Columns have no fixed height and no internal scrollbar: each one extends with its cards and
+every column matches the tallest, so the relative workload per lane is readable at a glance.
+See §11b for the layout and its rationale.
+
 ## 9. Task Lifecycle / Status Change Workflow
 
 Every status change, from any source (drag-and-drop or the card's status dropdown), goes
@@ -261,9 +265,70 @@ A card shows at most 2 assignee names inline; beyond that, a `+N` chip appears. 
 clicking the chip reveals every assigned member's full name. The popover is rendered via
 `createPortal` into `document.body` with `position: fixed` coordinates computed from the
 trigger's `getBoundingClientRect()` — a plain `position: absolute` tooltip would get clipped by
-the board column's `overflow-y-auto` scroll container (and, separately, by the containing-block
-change `.glass-panel`'s `backdrop-filter` introduces for `position: fixed` descendants), so the
-portal is required for correctness, not just convenience.
+the board's horizontal scroll track below `lg` (see §11b) and, separately, by the
+containing-block change `.glass-panel`'s `backdrop-filter` introduces for `position: fixed`
+descendants, so the portal is required for correctness, not just convenience.
+
+## 11b. Board Layout — extendable columns
+
+### Rationale
+
+Columns used to be pinned to `h-[70vh]` (`lg:h-full`) with their own `overflow-y-auto`. That
+made every column look identical no matter how much work it held: a Todo column with 30 cards
+and one with 4 were the same rectangle, and the only way to tell them apart was to open a
+scrollbar. Board-level workload — which lane is overloaded, which is nearly empty — is the one
+thing a Kanban board exists to show at a glance, so the columns now **grow with their content**
+and the page does the scrolling, matching Jira, Azure DevOps, GitHub Projects, ClickUp and
+Trello.
+
+### How it's built
+
+Everything below lives in `KanbanView.tsx`; no CSS file, no other module and no business logic
+changed.
+
+| Element | Classes | Why |
+| --- | --- | --- |
+| Root `<section data-kanban>` | `flex min-h-full flex-col` | `min-h-full`, not `h-full`, so the board may grow taller than the viewport while a short board still fills the screen. |
+| Board track `<div data-kanban-board>` | `flex grow shrink-0 … overflow-x-auto overflow-y-hidden lg:grid lg:grid-cols-4 lg:overflow-visible` | Grid of 4 on desktop; horizontally scrolling track below `lg`. |
+| Column | `flex min-h-[14rem] w-[82vw] shrink-0 snap-start flex-col sm:w-72 lg:w-auto` | Fixed-width, snap-aligned card while the track scrolls; auto width once it's a grid cell. |
+| Column card list | `flex flex-1 flex-col gap-3` | No scroll container and no height cap — this is what makes the column extend. |
+
+**Equal heights** fall out of default alignment: the columns are flex items (below `lg`) or grid
+items (at `lg`), and `align-items`/`align-self` default to `stretch`, so every column is exactly
+as tall as the tallest one. An empty column stretches too — its dashed "No tasks in …"
+placeholder carries `flex-1` so it fills the height its siblings set rather than collapsing.
+
+**Page scrolling** is unchanged infrastructure: `<main>` in `App.tsx` already owns
+`overflow-y-auto`, so a board taller than the viewport scrolls there. Nothing in the board
+scrolls vertically any more.
+
+### Two layout traps worth not re-introducing
+
+- **`grow shrink-0`, not `flex-1`, on the board track.** `flex-1` implies `flex-basis: 0` and
+  therefore depends on the item's *automatic minimum size* to avoid collapsing — and that
+  minimum is `0`, not the content height, for a scroll container. The track is one below `lg`
+  (it sets `overflow-x`), so `flex-1` would silently cap the board at the viewport and clip the
+  overflow. `grow` keeps `flex-basis: auto`, so the track is never shorter than its content and
+  only grows to fill a short viewport.
+- **`overflow-y-hidden` alongside `overflow-x-auto`.** Setting only `overflow-x: auto` makes CSS
+  compute `overflow-y` to `auto` as well, which would put a nested vertical scrollbar back on the
+  board — the exact thing this change removes. It clips nothing, because the track can never be
+  shorter than its content.
+
+### Responsive behaviour
+
+| Breakpoint | Layout |
+| --- | --- |
+| `lg` and up (laptop/desktop) | All 4 columns in one row, `grid-cols-4`, no horizontal scroll. |
+| `sm`–`lg` (tablet) | Horizontal scroll track, columns fixed at `18rem`. |
+| below `sm` (mobile) | Horizontal scroll track, columns at `82vw` so the next lane peeks — the Trello/Jira mobile pattern. |
+
+All three keep full-height columns, and none introduces nested vertical scrolling.
+
+Drag-and-drop, drop targets, the drag-over highlight, the status modal, approvals, reopen,
+permissions and the light/dark theme rules keyed off `[data-kanban]` / `[data-kanban-column]`
+are untouched. Drop zones get *more* accurate, since a column's droppable area is now its full
+stretched height rather than a 70vh window.
 
 ## 12. Current Limitations
 
