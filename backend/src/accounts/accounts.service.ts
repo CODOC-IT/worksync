@@ -13,6 +13,7 @@ import {
 import {
   AccountBaseRole,
   CreateAccountInput,
+  CreateDepartmentInput,
   DepartmentOption,
   InvitationStatus,
   ProvisionedAccount,
@@ -113,6 +114,62 @@ const assertDepartmentPermitted = async (
         : 'Select an active department.'
     );
   }
+};
+
+const toDepartmentCode = (name: string): string => {
+  const cleaned = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return (cleaned || 'DEPARTMENT').slice(0, 24);
+};
+
+const assertDepartmentNameUnique = async (
+  name: string,
+  dependencies: AccountServiceDependencies
+): Promise<void> => {
+  const existing = await dependencies.query<{ departmentid: number }>(
+    `SELECT departmentid FROM org.departments
+      WHERE organizationid = 1 AND lower(departmentname) = lower($1)
+      LIMIT 1`,
+    [name]
+  );
+  if (existing.rows[0]) throw new AccountConflictError('A department with this name already exists.');
+};
+
+export const createDepartment = async (
+  actor: ProvisioningActor,
+  input: CreateDepartmentInput,
+  dependencies: AccountServiceDependencies = defaultDependencies
+): Promise<DepartmentOption> => {
+  if (actor.role !== 'Admin') {
+    throw new AccountAuthorizationError('Only Administrators can create departments.');
+  }
+
+  const normalizedName = input.name.trim();
+  await assertDepartmentNameUnique(normalizedName, dependencies);
+
+  const baseCode = toDepartmentCode(normalizedName);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const code = attempt === 0 ? baseCode : `${baseCode.slice(0, 20)}_${attempt}`;
+    try {
+      const inserted = await dependencies.query<{ departmentid: number }>(
+        `INSERT INTO org.departments (organizationid, departmentcode, departmentname, isactive)
+         VALUES (1, $1, $2, TRUE)
+         RETURNING departmentid`,
+        [code, normalizedName]
+      );
+      const departmentId = inserted.rows[0]?.departmentid;
+      if (!departmentId) throw new Error('Department insert returned no id.');
+      return { id: departmentId, name: normalizedName };
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('duplicate') || error?.code === '23505') continue;
+      throw error;
+    }
+  }
+
+  // All generated codes collided, but the name is still unique. Re-check the name and surface a
+  // clear conflict instead of failing with an ambiguous DB error.
+  await assertDepartmentNameUnique(normalizedName, dependencies);
+  throw new AccountConflictError('Could not assign a unique department code. Try a different name.');
 };
 
 const assertUniqueAccount = async (

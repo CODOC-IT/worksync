@@ -1,4 +1,4 @@
-import { AccountBaseRole, CreateAccountInput } from './accounts.types.js';
+import { AccountBaseRole, CreateAccountInput, CreateDepartmentInput } from './accounts.types.js';
 import { AccountValidationError } from './accounts.errors.js';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -58,4 +58,13 @@ export const parseCreateAccount = (value: unknown): CreateAccountInput => {
   }
 
   return { fullName, username, email, password, baseRole, departmentId, designation, teamLeadAssignment };
+};
+
+export const parseCreateDepartment = (value: unknown): CreateDepartmentInput => {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const name = typeof input.name === 'string' ? input.name.replace(/<[^>]*>/g, '').trim() : '';
+  if (name.length < 2 || name.length > 120) {
+    throw new AccountValidationError('Department name must be between 2 and 120 characters.');
+  }
+  return { name };
 };

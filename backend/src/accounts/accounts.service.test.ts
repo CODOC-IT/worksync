@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { QueryResult, QueryResultRow } from 'pg';
-import { createAccount, AccountServiceDependencies } from './accounts.service.js';
+import { createAccount, createDepartment, AccountServiceDependencies } from './accounts.service.js';
 import { AccountConflictError, AccountAuthorizationError } from './accounts.errors.js';
 import { CreateAccountInput, ProvisioningActor } from './accounts.types.js';
 
@@ -142,5 +142,58 @@ test('Auth failure creates no profile and HR cannot create privileged roles', as
   await assert.rejects(
     () => createAccount(hrActor, { ...input, baseRole: 'Admin' }, harness().dependencies),
     AccountAuthorizationError
+  );
+});
+
+test('Administrator can create a department with a generated code', async () => {
+  let inserted = false;
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('lower(departmentname) = lower($1)')) {
+      return result([] as T[]);
+    }
+    if (sql.includes('INSERT INTO org.departments')) {
+      inserted = true;
+      return result([{ departmentid: 12 }] as unknown as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const dependencies = { query } as unknown as AccountServiceDependencies;
+
+  const department = await createDepartment(actor, { name: 'Quality Assurance' }, dependencies);
+
+  assert.equal(inserted, true);
+  assert.equal(department.id, 12);
+  assert.equal(department.name, 'Quality Assurance');
+});
+
+test('only Administrators can create departments', async () => {
+  const query = async <T extends QueryResultRow>(): Promise<QueryResult<T>> =>
+    result([] as T[]);
+  const dependencies = { query } as unknown as AccountServiceDependencies;
+
+  const hrActor = { ...actor, role: 'HR' as const };
+  const memberActor = { ...actor, role: 'Team_Member' as const };
+  await assert.rejects(
+    () => createDepartment(hrActor, { name: 'Finance' }, dependencies),
+    AccountAuthorizationError
+  );
+  await assert.rejects(
+    () => createDepartment(memberActor, { name: 'Finance' }, dependencies),
+    AccountAuthorizationError
+  );
+});
+
+test('duplicate department name is rejected', async () => {
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('lower(departmentname) = lower($1)')) {
+      return result([{ departmentid: 3 }] as unknown as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const dependencies = { query } as unknown as AccountServiceDependencies;
+
+  await assert.rejects(
+    () => createDepartment(actor, { name: 'Engineering' }, dependencies),
+    AccountConflictError
   );
 });

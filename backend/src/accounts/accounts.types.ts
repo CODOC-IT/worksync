@@ -35,3 +35,7 @@ export interface DepartmentOption {
   id: number;
   name: string;
 }
+
+export interface CreateDepartmentInput {
+  name: string;
+}

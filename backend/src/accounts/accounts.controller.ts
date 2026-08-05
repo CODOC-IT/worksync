@@ -2,9 +2,9 @@ import { Response } from 'express';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { accountErrorStatus, AccountAuthorizationError } from './accounts.errors.js';
-import { createAccount, listPermittedDepartments } from './accounts.service.js';
+import { createAccount, createDepartment, listPermittedDepartments } from './accounts.service.js';
 import { ProvisioningActor } from './accounts.types.js';
-import { parseCreateAccount } from './accounts.validation.js';
+import { parseCreateAccount, parseCreateDepartment } from './accounts.validation.js';
 
 const actorFromRequest = (req: AuthenticatedRequest): ProvisioningActor => {
   if (!req.user) throw new AccountAuthorizationError('Authentication required.');
@@ -28,6 +28,32 @@ export const getDepartments = async (req: AuthenticatedRequest, res: Response): 
     res.status(200).json({ success: true, data: { departments } });
   } catch (error) {
     sendError(res, error, 'Could not load departments.');
+  }
+};
+
+export const postDepartment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  let actor: ProvisioningActor | undefined;
+  try {
+    actor = actorFromRequest(req);
+    const input = parseCreateDepartment(req.body);
+    const department = await createDepartment(actor, input);
+    recordActivitySafe({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      action: 'Created',
+      module: 'Organization',
+      entityType: 'Department',
+      entityId: String(department.id),
+      entityName: department.name,
+      description: `${actor.email} created department ${department.name}.`,
+      result: 'Successful',
+      source: 'API',
+      important: true
+    });
+    res.status(201).json({ success: true, message: 'Department created.', data: { department } });
+  } catch (error) {
+    sendError(res, error, 'Could not create department.');
   }
 };
 export const postAccount = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
