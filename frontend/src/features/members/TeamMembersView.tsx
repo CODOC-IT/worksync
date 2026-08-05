@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
@@ -156,6 +156,7 @@ export const TeamMembersView: React.FC = () => {
   const [confirmAction, setConfirmAction] = useState<{ type: 'deactivate' | 'reactivate'; memberId: string; memberName: string } | null>(null);
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [createAccountOpen, setCreateAccountOpen] = useState(false);
+  const [createDepartmentOpen, setCreateDepartmentOpen] = useState(false);
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [departmentsBusy, setDepartmentsBusy] = useState(false);
 
@@ -244,31 +245,24 @@ export const TeamMembersView: React.FC = () => {
     }
   }, [accountView, canManageAccounts]);
 
-  useEffect(() => {
-    if (!canManageAccounts) return;
-    let active = true;
+  const loadDepartments = useCallback(async (): Promise<void> => {
     setDepartmentsBusy(true);
     const token = localStorage.getItem('worksync_auth_token');
-    fetch('/api/accounts/departments', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then(async (response) => {
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.success) throw new Error(data.message || 'Could not load departments.');
-        return data.data?.departments as DepartmentOption[];
-      })
-      .then((items) => {
-        if (!active) return;
-        setDepartments(Array.isArray(items) ? items : []);
-      })
-      .catch((reason) => {
-        if (active) setNotice({ type: 'error', message: reason instanceof Error ? reason.message : 'Could not load departments.' });
-      })
-      .finally(() => {
-        if (active) setDepartmentsBusy(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [canManageAccounts]);
+    try {
+      const response = await fetch('/api/accounts/departments', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Could not load departments.');
+      setDepartments(Array.isArray(data.data?.departments) ? data.data.departments as DepartmentOption[] : []);
+    } catch (reason) {
+      setNotice({ type: 'error', message: reason instanceof Error ? reason.message : 'Could not load departments.' });
+    } finally {
+      setDepartmentsBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (canManageAccounts) void loadDepartments();
+  }, [canManageAccounts, loadDepartments]);
 
   const totalMembers = directoryUsers.filter((member) => member.status !== 'inactive').length;
   const teamLeadCount = directoryUsers.filter((member) => member.role === 'Team_Lead' && member.status !== 'inactive').length;
@@ -645,101 +639,202 @@ export const TeamMembersView: React.FC = () => {
               })}
             </div>
 
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
-                <select
-                  value={searchField}
-                  onChange={(event) => setSearchField(event.target.value as SearchField)}
-                  className={`${surfaceInputClass} md:w-44`}
-                >
-                  <option value="name">Name</option>
-                  <option value="email">Email</option>
-                  <option value="department">Department</option>
-                  <option value="title">Title</option>
-                </select>
+            {currentRole === 'Admin' ? (
+              <div className="flex flex-nowrap items-center gap-2">
+              <select
+                value={searchField}
+                onChange={(event) => setSearchField(event.target.value as SearchField)}
+                className="w-32 shrink-0 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+              >
+                <option value="name">Name</option>
+                <option value="email">Email</option>
+                <option value="department">Department</option>
+                <option value="title">Title</option>
+              </select>
 
-                <label className="relative flex-1 min-w-[16rem]">
-                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder={`Search by ${searchField}`}
-                    className={`${surfaceInputClass} pl-10`}
-                  />
-                </label>
+              <label className="relative min-w-0 max-w-56 flex-1">
+                <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={`Search by ${searchField}`}
+                  className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-10 pr-3 text-sm text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none"
+                />
+              </label>
 
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-                {canManageAccounts && (
-                  <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setAccountView('active')}
-                      className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
-                        accountView === 'active' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Active Accounts
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAccountView('deactivated')}
-                      className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
-                        accountView === 'deactivated' ? 'bg-rose-500/15 text-rose-300' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Deactivated
-                    </button>
-                  </div>
-                )}
-
-                {canManageAccounts && (
+              {canManageAccounts && (
+                <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
                   <button
                     type="button"
-                    onClick={() => setCreateAccountOpen(true)}
-                    className="glass-button-neon inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold"
-                  >
-                    <Plus size={17} />
-                    Create account
-                  </button>
-                )}
-
-                <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('grid')}
-                    className={`rounded-lg px-2.5 py-2 text-xs transition ${
-                      viewMode === 'grid' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                    onClick={() => setAccountView('active')}
+                    className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                      accountView === 'active' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
                     }`}
-                    aria-label="Grid view"
                   >
-                    <LayoutGrid size={15} />
+                    Active Accounts
                   </button>
                   <button
                     type="button"
-                    onClick={() => setViewMode('list')}
-                    className={`rounded-lg px-2.5 py-2 text-xs transition ${
-                      viewMode === 'list' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                    onClick={() => setAccountView('deactivated')}
+                    className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                      accountView === 'deactivated' ? 'bg-rose-500/15 text-rose-300' : 'text-slate-400 hover:text-white'
                     }`}
-                    aria-label="List view"
                   >
-                    <List size={15} />
+                    Deactivated
                   </button>
                 </div>
+              )}
 
-                <select
-                  value={sortBy}
-                  onChange={(event) => setSortBy(event.target.value as SortOption)}
-                  className={surfaceInputClass}
+              {canManageAccounts && (
+                <button
+                  type="button"
+                  onClick={() => setCreateAccountOpen(true)}
+                  className="glass-button-neon inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold"
                 >
-                  <option value="name">Sort: Name</option>
-                  <option value="role">Sort: Role</option>
-                  <option value="recent">Sort: Recently Added</option>
-                </select>
+                  <Plus size={17} />
+                  Create account
+                </button>
+              )}
 
+              {currentRole === 'Admin' && (
+                <button
+                  type="button"
+                  onClick={() => setCreateDepartmentOpen(true)}
+                  className="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-cyan-400/60 hover:bg-cyan-500/25 hover:text-cyan-100 hover:shadow-[0_0_18px_rgba(34,211,238,0.35)] active:translate-y-0 active:shadow-none"
+                >
+                  <Building2 size={16} />
+                  New department
+                </button>
+              )}
+
+              <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grid')}
+                  className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                    viewMode === 'grid' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                  }`}
+                  aria-label="Grid view"
+                >
+                  <LayoutGrid size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('list')}
+                  className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                    viewMode === 'list' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                  }`}
+                  aria-label="List view"
+                >
+                  <List size={15} />
+                </button>
               </div>
+
+              <select
+                value={sortBy}
+                onChange={(event) => setSortBy(event.target.value as SortOption)}
+                className="w-40 shrink-0 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+              >
+                <option value="name">Sort: Name</option>
+                <option value="role">Sort: Role</option>
+                <option value="recent">Sort: Newest</option>
+              </select>
             </div>
+            ) : (
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+                  <select
+                    value={searchField}
+                    onChange={(event) => setSearchField(event.target.value as SearchField)}
+                    className={`${surfaceInputClass} md:w-44`}
+                  >
+                    <option value="name">Name</option>
+                    <option value="email">Email</option>
+                    <option value="department">Department</option>
+                    <option value="title">Title</option>
+                  </select>
+
+                  <label className="relative min-w-[16rem] flex-1">
+                    <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder={`Search by ${searchField}`}
+                      className={`${surfaceInputClass} pl-10`}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  {canManageAccounts && (
+                    <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setAccountView('active')}
+                        className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                          accountView === 'active' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Active Accounts
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAccountView('deactivated')}
+                        className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition ${
+                          accountView === 'deactivated' ? 'bg-rose-500/15 text-rose-300' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Deactivated
+                      </button>
+                    </div>
+                  )}
+
+                  {canManageAccounts && (
+                    <button
+                      type="button"
+                      onClick={() => setCreateAccountOpen(true)}
+                      className="glass-button-neon inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-bold"
+                    >
+                      <Plus size={17} />
+                      Create account
+                    </button>
+                  )}
+
+                  <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('grid')}
+                      className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                        viewMode === 'grid' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                      }`}
+                      aria-label="Grid view"
+                    >
+                      <LayoutGrid size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('list')}
+                      className={`rounded-lg px-2.5 py-2 text-xs transition ${
+                        viewMode === 'list' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-400 hover:text-white'
+                      }`}
+                      aria-label="List view"
+                    >
+                      <List size={15} />
+                    </button>
+                  </div>
+
+                  <select
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value as SortOption)}
+                    className="w-40 shrink-0 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                  >
+                    <option value="name">Sort: Name</option>
+                    <option value="role">Sort: Role</option>
+                    <option value="recent">Sort: Newest</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
@@ -1307,6 +1402,13 @@ export const TeamMembersView: React.FC = () => {
           onClose={() => setCreateAccountOpen(false)}
         />
       )}
+
+      {currentRole === 'Admin' && createDepartmentOpen && (
+        <CreateDepartmentDialog
+          onCreated={() => void loadDepartments()}
+          onClose={() => setCreateDepartmentOpen(false)}
+        />
+      )}
     </>
   );
 };
@@ -1517,6 +1619,100 @@ const CreateAccountDialog: React.FC<{ isAdmin: boolean; onClose: () => void }> =
       </footer>
     </form>
   </div>;
+};
+
+const CreateDepartmentDialog: React.FC<{ onCreated: () => void; onClose: () => void }> = ({ onCreated, onClose }) => {
+  const { showToast } = useApp();
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const trimmed = name.trim();
+    if (trimmed.length < 2 || trimmed.length > 120) {
+      setError('Enter a department name (2-120 characters).');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('worksync_auth_token');
+      const response = await fetch('/api/accounts/departments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ name: trimmed })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Could not create department.');
+      onCreated();
+      showToast('success', 'Department Created', `Department "${trimmed}" was created.`);
+      onClose();
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Could not create department.';
+      setError(message);
+      showToast('error', 'Department Not Created', message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <form onSubmit={submit} className="glass-panel-glow w-full max-w-md overflow-hidden border border-cyan-500/40 shadow-2xl">
+        <header className="relative overflow-hidden border-b border-white/10 bg-slate-950/55 px-5 py-5">
+          <div className="pointer-events-none absolute -right-10 -top-16 h-36 w-36 rounded-full bg-cyan-500/10 blur-3xl" />
+          <div className="relative flex items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3.5">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 shadow-[0_0_24px_rgba(0,242,254,0.12)]">
+                <Building2 size={20} />
+              </span>
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-cyan-300">Members / Organization</p>
+                <h2 className="mt-1 text-xl font-bold text-white">Create a department</h2>
+                <p className="mt-1 text-xs leading-5 text-slate-400">Add a new department so members can be assigned to it.</p>
+              </div>
+            </div>
+            <button type="button" disabled={busy} onClick={onClose} className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50" aria-label="Close create department dialog"><X size={18} /></button>
+          </div>
+        </header>
+
+        <div className="p-5 sm:p-6">
+          <label className="block text-xs font-semibold text-slate-300">
+            Department name <span className="ml-1 text-cyan-400">*</span>
+            <input
+              autoFocus
+              maxLength={120}
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                setError('');
+              }}
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder="e.g. Quality Assurance"
+              autoComplete="off"
+            />
+          </label>
+          <p className="mt-2 text-[11px] text-slate-500">Members in this department will appear in the directory with this label.</p>
+          {error && <p role="alert" className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-xs text-rose-200">{error}</p>}
+        </div>
+
+        <footer className="flex items-center justify-end gap-3 border-t border-white/10 bg-slate-950/35 px-5 py-4">
+          <button type="button" disabled={busy} onClick={onClose} className={modalSecondaryButtonClass}>Cancel</button>
+          <button disabled={busy} className="glass-button-neon inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Building2 size={16} />}
+            {busy ? 'Creating department...' : 'Create department'}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
 };
 
 const accountInput = 'mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50';
