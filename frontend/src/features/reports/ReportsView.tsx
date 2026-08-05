@@ -203,7 +203,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
-  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'all'>('today');
+  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'custom' | 'all'>('lastWeek');
+  const [attendanceCustomFrom, setAttendanceCustomFrom] = useState<string>('');
+  const [attendanceCustomTo, setAttendanceCustomTo] = useState<string>('');
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -374,6 +377,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   }, [apiAvailable, reportData, roleFilteredLocal]);
 
   // ── Attendance tab date filter (default Today, overrides global From→To for Attendance only) ──
+  const attendanceCustomValid = useMemo(() => {
+    return !!attendanceCustomFrom && !!attendanceCustomTo
+      && attendanceCustomFrom <= attendanceCustomTo
+      && attendanceCustomTo <= todayStr();
+  }, [attendanceCustomFrom, attendanceCustomTo]);
+
   const attendanceWindow = useMemo(() => {
     const today = todayStr();
     switch (attendanceRange) {
@@ -383,11 +392,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
         return { from: addDays(today, -6), to: today };
       case 'last30':
         return { from: addDays(today, -29), to: today };
+      case 'custom':
+        return attendanceCustomValid
+          ? { from: attendanceCustomFrom, to: attendanceCustomTo }
+          : { from: undefined as string | undefined, to: undefined as string | undefined };
       case 'all':
       default:
         return { from: undefined as string | undefined, to: undefined as string | undefined };
     }
-  }, [attendanceRange]);
+  }, [attendanceRange, attendanceCustomValid, attendanceCustomFrom, attendanceCustomTo]);
 
   const attendanceTabRecords = useMemo(() => {
     const raw: any[] = (roleFiltered.attendance || []) as any[];
@@ -1038,6 +1051,28 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
 
   const hasError = validationError !== null;
 
+  const handleAttendanceRangeChange = (value: 'today' | 'lastWeek' | 'last30' | 'custom' | 'all') => {
+    setAttendanceError(null);
+    setAttendanceRange(value);
+  };
+
+  const handleAttendanceCustomDate = (field: 'from' | 'to', value: string) => {
+    const next = {
+      from: field === 'from' ? value : attendanceCustomFrom,
+      to: field === 'to' ? value : attendanceCustomTo,
+    };
+    if (field === 'from') setAttendanceCustomFrom(value);
+    else setAttendanceCustomTo(value);
+    const today = todayStr();
+    if (next.to && next.to > today) {
+      setAttendanceError('To Date cannot be later than today.');
+    } else if (next.from && next.to && next.to < next.from) {
+      setAttendanceError('To Date cannot be earlier than From Date.');
+    } else {
+      setAttendanceError(null);
+    }
+  };
+
   const handlePdfExport = () => {
     const tab = activeTab;
     const now = new Date().toLocaleString();
@@ -1354,9 +1389,10 @@ ${bodyHtml}
 
   const handleAttendancePdfExport = () => {
     const now = new Date().toLocaleString();
-    const from = dateRange.from;
-    const to = dateRange.to;
-    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    const attWindow = attendanceWindow;
+    const from = attWindow.from || 'All time';
+    const to = attWindow.to || 'All time';
+    const raw: any[] = (attendanceTabRecords || []) as any[];
     let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
     if (attendanceSearchQuery) {
       filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
@@ -3641,16 +3677,46 @@ ${bodyHtml}
         <span className="text-xs text-slate-400">Attendance date range:</span>
         <select
           value={attendanceRange}
-          onChange={(e) => setAttendanceRange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'all')}
+          onChange={(e) => handleAttendanceRangeChange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'custom' | 'all')}
           className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
           title="Overrides the global Report date range for the Attendance tab only"
         >
           <option value="today">Today</option>
           <option value="lastWeek">Last Week</option>
           <option value="last30">Last 30 Days</option>
+          <option value="custom">Custom</option>
           <option value="all">All</option>
         </select>
       </div>
+
+      {attendanceRange === 'custom' && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-slate-400">Custom range:</span>
+          <label className="text-[10px] font-mono text-slate-400 uppercase">From</label>
+          <input
+            type="date"
+            value={attendanceCustomFrom}
+            max={todayStr()}
+            onChange={(e) => handleAttendanceCustomDate('from', e.target.value)}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-mono border bg-slate-900/60 border-white/10 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
+          />
+          <label className="text-[10px] font-mono text-slate-400 uppercase">To</label>
+          <input
+            type="date"
+            value={attendanceCustomTo}
+            max={todayStr()}
+            onChange={(e) => handleAttendanceCustomDate('to', e.target.value)}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-mono border bg-slate-900/60 border-white/10 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
+          />
+        </div>
+      )}
+
+      {attendanceError && (
+        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-xs text-rose-300">
+          <AlertTriangle size={14} />
+          <span>{attendanceError}</span>
+        </div>
+      )}
 
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
