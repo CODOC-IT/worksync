@@ -390,13 +390,6 @@ class UserStore {
       throw new Error('This username is already in use.');
     }
 
-    if (userData.role === 'Admin' && this.hasRole('Admin')) {
-      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
-    }
-    if (userData.role === 'HR' && this.hasRole('HR')) {
-      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
-    }
-
     const passwordHash = bcrypt.hashSync(userData.password, 10);
 
     if (this.dbAvailable) {
@@ -525,18 +518,6 @@ class UserStore {
     );
     if (usernameDuplicate) throw new Error('This username is already in use.');
 
-    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
-    if (user.role === 'Admin' && nextRole !== 'Admin' && user.status === 'active' && activeAdminsCount <= 1) {
-      throw new Error('Cannot change the role of the sole active Admin account.');
-    }
-
-    if (nextRole === 'Admin' && user.role !== 'Admin' && this.hasRole('Admin')) {
-      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
-    }
-    if (nextRole === 'HR' && user.role !== 'HR' && this.hasRole('HR')) {
-      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
-    }
-
     if (this.dbAvailable) {
       try {
         const uid = toUserPk(userId);
@@ -606,11 +587,6 @@ class UserStore {
     if (!user) throw new Error('User not found.');
     if (user.status === 'inactive') return this.sanitizeUser(user);
 
-    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
-    if (user.role === 'Admin' && activeAdminsCount <= 1) {
-      throw new Error('Cannot deactivate the sole active Admin account.');
-    }
-
     if (this.dbAvailable) {
       try {
         await query(
@@ -637,23 +613,6 @@ class UserStore {
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
     if (user.status === 'active') return this.sanitizeUser(user);
-
-    if (user.role === 'Admin') {
-      const otherActiveAdmin = Array.from(this.fallbackUsers.values()).some(
-        (entry) => entry.id !== userId && entry.role === 'Admin' && entry.status === 'active'
-      );
-      if (otherActiveAdmin) {
-        throw new Error('An active Administrator account already exists. Only one Admin is permitted.');
-      }
-    }
-    if (user.role === 'HR') {
-      const otherActiveHr = Array.from(this.fallbackUsers.values()).some(
-        (entry) => entry.id !== userId && entry.role === 'HR' && entry.status === 'active'
-      );
-      if (otherActiveHr) {
-        throw new Error('An active HR account already exists. Only one HR is permitted.');
-      }
-    }
 
     if (this.dbAvailable) {
       try {
