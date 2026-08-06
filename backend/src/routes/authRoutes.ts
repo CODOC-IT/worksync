@@ -541,12 +541,22 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
 
     let message = 'Account updated successfully.';
     try {
+      const displayRole = (role: string): string => role === 'Team_Member' ? 'Team Member' : role.replace('_', ' ');
       await sendAccountUpdateEmail({
         toEmail: updatedUser.email,
         recipientName: updatedUser.name,
-        role: updatedUser.role === 'Team_Member' ? 'Team Member' : updatedUser.role.replace('_', ' '),
+        role: displayRole(updatedUser.role),
+        department: updatedUser.department,
+        title: updatedUser.title,
         changedBy: req.user.email,
         password: nextPassword || undefined,
+        previous: {
+          name: targetUser.name,
+          email: targetUser.email,
+          role: displayRole(targetUser.role),
+          department: targetUser.department,
+          title: targetUser.title
+        },
       });
     } catch {
       message = 'Account updated, but the notification email could not be sent.';

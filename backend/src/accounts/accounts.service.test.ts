@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { QueryResult, QueryResultRow } from 'pg';
-import { createAccount, createDepartment, AccountServiceDependencies } from './accounts.service.js';
+import { createAccount, createDepartment, deleteDepartment, AccountServiceDependencies } from './accounts.service.js';
 import { AccountConflictError, AccountAuthorizationError } from './accounts.errors.js';
 import { CreateAccountInput, ProvisioningActor } from './accounts.types.js';
 
@@ -194,6 +194,113 @@ test('duplicate department name is rejected', async () => {
 
   await assert.rejects(
     () => createDepartment(actor, { name: 'Engineering' }, dependencies),
+    AccountConflictError
+  );
+});
+
+test('Administrator can delete an empty department', async () => {
+  let deleted = false;
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('FROM org.departments') && sql.includes('departmentid = $1') && sql.includes('LIMIT 1')) {
+      return result([{ departmentid: 12, departmentname: 'Marketing' }] as unknown as T[]);
+    }
+    if (sql.includes('COUNT(*)::text')) {
+      return result([{ count: '0' }] as unknown as T[]);
+    }
+    if (sql.includes('DELETE FROM org.departments')) {
+      deleted = true;
+      return result([] as T[]);
+    }
+    if (sql.includes('UPDATE iam.users')) {
+      return result([] as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const withTransaction = async <T>(work: (runQuery: typeof query) => Promise<T>): Promise<T> => work(query as typeof query);
+  const dependencies = { query, withTransaction } as unknown as AccountServiceDependencies;
+
+  const department = await deleteDepartment(actor, 12, dependencies);
+
+  assert.equal(deleted, true);
+  assert.equal(department.id, 12);
+  assert.equal(department.name, 'Marketing');
+});
+
+test('department with active members cannot be deleted', async () => {
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('FROM org.departments') && sql.includes('departmentid = $1') && sql.includes('LIMIT 1')) {
+      return result([{ departmentid: 7, departmentname: 'Engineering' }] as unknown as T[]);
+    }
+    if (sql.includes('COUNT(*)::text')) {
+      return result([{ count: '4' }] as unknown as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const withTransaction = async <T>(work: (runQuery: typeof query) => Promise<T>): Promise<T> => work(query as typeof query);
+  const dependencies = { query, withTransaction } as unknown as AccountServiceDependencies;
+
+  await assert.rejects(
+    () => deleteDepartment(actor, 7, dependencies),
+    AccountConflictError
+  );
+});
+
+test('deleting a department unassigns its deactivated members', async () => {
+  const statements: string[] = [];
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('FROM org.departments') && sql.includes('departmentid = $1') && sql.includes('LIMIT 1')) {
+      return result([{ departmentid: 9, departmentname: 'Support' }] as unknown as T[]);
+    }
+    if (sql.includes('COUNT(*)::text')) {
+      return result([{ count: '0' }] as unknown as T[]);
+    }
+    if (sql.includes('UPDATE iam.users')) {
+      statements.push('update');
+      return result([] as T[]);
+    }
+    if (sql.includes('DELETE FROM org.departments')) {
+      statements.push('delete');
+      return result([] as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const withTransaction = async <T>(work: (runQuery: typeof query) => Promise<T>): Promise<T> => work(query as typeof query);
+  const dependencies = { query, withTransaction } as unknown as AccountServiceDependencies;
+
+  const department = await deleteDepartment(actor, 9, dependencies);
+
+  assert.deepEqual(statements, ['update', 'delete']);
+  assert.equal(department.name, 'Support');
+});
+
+test('only Administrators can delete departments', async () => {
+  const query = async <T extends QueryResultRow>(): Promise<QueryResult<T>> =>
+    result([] as T[]);
+  const dependencies = { query } as unknown as AccountServiceDependencies;
+
+  const hrActor = { ...actor, role: 'HR' as const };
+  const memberActor = { ...actor, role: 'Team_Member' as const };
+  await assert.rejects(
+    () => deleteDepartment(hrActor, 1, dependencies),
+    AccountAuthorizationError
+  );
+  await assert.rejects(
+    () => deleteDepartment(memberActor, 1, dependencies),
+    AccountAuthorizationError
+  );
+});
+
+test('deleting a missing department reports a conflict', async () => {
+  const query = async <T extends QueryResultRow>(sql: string): Promise<QueryResult<T>> => {
+    if (sql.includes('FROM org.departments') && sql.includes('departmentid = $1') && sql.includes('LIMIT 1')) {
+      return result([] as T[]);
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const dependencies = { query } as unknown as AccountServiceDependencies;
+
+  await assert.rejects(
+    () => deleteDepartment(actor, 999, dependencies),
     AccountConflictError
   );
 });

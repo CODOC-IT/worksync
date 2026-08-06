@@ -40,8 +40,17 @@ export interface AccountUpdateEmailInput {
   toEmail: string;
   recipientName: string;
   role: string;
+  department: string;
+  title: string;
   changedBy: string;
   password?: string;
+  previous?: {
+    name?: string;
+    email?: string;
+    role?: string;
+    department?: string;
+    title?: string;
+  };
 }
 
 export const buildCredentialEmailContent = (
@@ -105,19 +114,55 @@ export const sendAccountUpdateEmail = async (input: AccountUpdateEmailInput): Pr
     name: escapeHtml(input.recipientName),
     email: escapeHtml(input.toEmail),
     role: escapeHtml(input.role),
+    department: escapeHtml(input.department),
+    title: escapeHtml(input.title),
     changedBy: escapeHtml(input.changedBy),
     password: input.password ? escapeHtml(input.password) : '',
     loginUrl: escapeHtml(loginUrl)
   };
 
+  const previous = input.previous || {};
+  const changes = [
+    ...(previous.name !== undefined && previous.name !== input.recipientName ? [['Name', previous.name || '', input.recipientName]] : []),
+    ...(previous.email !== undefined && previous.email !== input.toEmail ? [['Email', previous.email || '', input.toEmail]] : []),
+    ...(previous.role !== undefined && previous.role !== input.role ? [['Role', previous.role || '', input.role]] : []),
+    ...(previous.department !== undefined && previous.department !== input.department ? [['Department', previous.department || '', input.department]] : []),
+    ...(previous.title !== undefined && previous.title !== input.title ? [['Designation', previous.title || '', input.title]] : []),
+  ];
+  const passwordChanged = Boolean(input.password);
+  const onlyPasswordChanged = passwordChanged && changes.length === 0;
+
+  const changeRows = changes.map(([label, from, to]) =>
+    `<tr><td style="padding:8px 6px;border-top:1px solid #e5e7eb"><strong>${escapeHtml(String(label))}</strong></td><td style="padding:8px 6px;border-top:1px solid #e5e7eb;color:#6b7280;text-decoration:line-through">${escapeHtml(String(from))}</td><td style="padding:8px 6px;border-top:1px solid #e5e7eb;color:#059669;font-weight:600">${escapeHtml(String(to))}</td></tr>`
+  ).join('');
+
+  const summaryText = onlyPasswordChanged
+    ? 'Your password reset request has been approved. Your password was changed.'
+    : changes.length > 0
+      ? `Your account request has been approved. The following details were changed by ${input.changedBy}:`
+      : `Your account details were reviewed by ${input.changedBy}.`;
+  const summaryHtml = onlyPasswordChanged
+    ? `<p>Your password reset request has been approved. Your password was changed.</p>`
+    : changes.length > 0
+      ? `<p>Your account request has been approved. The following details were changed by ${safe.changedBy}:</p>`
+      : `<p>Your account details were reviewed by ${safe.changedBy}.</p>`;
+
   const textLines = [
     `Hello ${input.recipientName},`,
     '',
-    `Your ${organization} account request has been fulfilled and your account details were updated by ${input.changedBy}.`,
-    `Email: ${input.toEmail}`,
-    `Role: ${input.role}`,
-    input.password ? `Password: ${input.password}` : '',
-    loginUrl ? `Sign in: ${loginUrl}` : '',
+    summaryText,
+    ...(changes.length > 0
+      ? changes.map(([label, from, to]) => `  ${label}: ${from} \u2192 ${to}`)
+      : []),
+    passwordChanged ? `  Password: ${input.password}` : '',
+    '',
+    'Your current account details:',
+    `  Name: ${input.recipientName}`,
+    `  Email: ${input.toEmail}`,
+    `  Role: ${input.role}`,
+    `  Department: ${input.department}`,
+    `  Designation: ${input.title}`,
+    loginUrl ? `  Sign in: ${loginUrl}` : '',
     '',
     'If you did not expect this change, contact your administrator immediately.'
   ].filter(Boolean);
@@ -125,16 +170,28 @@ export const sendAccountUpdateEmail = async (input: AccountUpdateEmailInput): Pr
   await transporter.sendMail({
     from: `"${organization.replace(/[\r\n"]/g, '')}" <${smtpUser}>`,
     to: input.toEmail,
-    subject: `Your ${organization} account details were updated`,
+    subject: passwordChanged && !onlyPasswordChanged
+      ? `Your ${organization} account was updated`
+      : passwordChanged
+        ? `Your ${organization} password reset request is approved`
+        : `Your ${organization} account details were updated`,
     text: textLines.join('\n'),
     html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
-      <h1 style="font-size:22px">Your ${safe.organization} account was updated</h1>
+      <h1 style="font-size:22px">${passwordChanged && !onlyPasswordChanged ? 'Your account was updated' : passwordChanged ? 'Your password reset request is approved' : 'Your account details were updated'}</h1>
       <p>Hello ${safe.name},</p>
-      <p>Your account request has been fulfilled and your account details were updated by ${safe.changedBy}.</p>
+      ${summaryHtml}
+      ${changes.length > 0 ? `<table style="border-collapse:collapse;width:100%">
+        <tr style="color:#374151;text-align:left"><th style="padding:8px 6px;border-bottom:2px solid #e5e7eb">Field</th><th style="padding:8px 6px;border-bottom:2px solid #e5e7eb">Previous</th><th style="padding:8px 6px;border-bottom:2px solid #e5e7eb">New</th></tr>
+        ${changeRows}
+      </table>` : ''}
+      <p style="margin-top:16px">Your current account details:</p>
       <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:6px"><strong>Name</strong></td><td style="padding:6px">${safe.name}</td></tr>
         <tr><td style="padding:6px"><strong>Email</strong></td><td style="padding:6px">${safe.email}</td></tr>
         <tr><td style="padding:6px"><strong>Role</strong></td><td style="padding:6px">${safe.role}</td></tr>
-        ${input.password ? `<tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>` : ''}
+        <tr><td style="padding:6px"><strong>Department</strong></td><td style="padding:6px">${safe.department}</td></tr>
+        <tr><td style="padding:6px"><strong>Designation</strong></td><td style="padding:6px">${safe.title}</td></tr>
+        ${passwordChanged ? `<tr><td style="padding:6px"><strong>Password</strong></td><td style="padding:6px">${safe.password}</td></tr>` : ''}
       </table>
       ${loginUrl ? `<p><a href="${safe.loginUrl}">Sign in to ${safe.organization}</a></p>` : ''}
       <p>If you did not expect this change, contact your administrator immediately.</p>
