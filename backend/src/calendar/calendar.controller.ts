@@ -37,27 +37,53 @@ export const listApprovedLeave = async (req: AuthenticatedRequest, res: Response
   }
 };
 
-// GET /api/calendar/holidays -- any authenticated user; visibility is unfiltered.
+// GET /api/calendar/holidays -- every authenticated user; visibility is now audience-scoped
+// (Admin/HR see every holiday, everyone else only sees holidays their audience includes them in --
+// see calendar.service.ts's listHolidays).
 export const listHolidays = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const data = await service.listHolidays();
+    const data = await service.listHolidays(user.id, user.role);
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load holidays.');
   }
 };
 
+// GET /api/calendar/departments -- HR only, enforced in calendar.service.ts via effectiveRoles.ts.
+// Every active department org-wide, not scoped by HR's own permitted-department hierarchy (see
+// listDepartmentsForHolidayAudience's comment) -- feeds Manage Holidays' audience picker only.
+export const listDepartments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.listDepartmentsForHolidayAudience(user.id);
+    res.json({ success: true, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to load departments.');
+  }
+};
+
+type HolidayAudienceBody = { audienceType?: string; departmentIds?: number[]; userIds?: string[] };
+
+const toAudienceInput = (body: HolidayAudienceBody): service.HolidayAudienceInput => ({
+  audienceType: body.audienceType || 'Everyone',
+  departmentIds: body.departmentIds || [],
+  userIds: body.userIds || []
+});
+
 // POST /api/calendar/holidays -- HR only, enforced in calendar.service.ts via effectiveRoles.ts.
 export const createHoliday = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const { name, date, isRecurringAnnual } = (req.body || {}) as {
+    const { name, date, isRecurringAnnual, ...audienceBody } = (req.body || {}) as {
       name?: string; date?: string; isRecurringAnnual?: boolean;
-    };
-    const data = await service.createHoliday(name || '', date || '', Boolean(isRecurringAnnual), user.id);
+    } & HolidayAudienceBody;
+    const data = await service.createHoliday(
+      name || '', date || '', Boolean(isRecurringAnnual), toAudienceInput(audienceBody), user.id
+    );
     res.status(201).json({ success: true, message: 'Holiday created successfully.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to create holiday.');
@@ -69,10 +95,19 @@ export const updateHoliday = async (req: AuthenticatedRequest, res: Response): P
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const { name, date, isRecurringAnnual } = (req.body || {}) as {
+    const { name, date, isRecurringAnnual, audienceType, departmentIds, userIds } = (req.body || {}) as {
       name?: string; date?: string; isRecurringAnnual?: boolean;
-    };
-    const data = await service.updateHoliday(req.params.id, { name, date, isRecurringAnnual }, user.id);
+    } & HolidayAudienceBody;
+    const data = await service.updateHoliday(
+      req.params.id,
+      {
+        name,
+        date,
+        isRecurringAnnual,
+        audience: audienceType !== undefined ? toAudienceInput({ audienceType, departmentIds, userIds }) : undefined
+      },
+      user.id
+    );
     res.json({ success: true, message: 'Holiday updated successfully.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to update holiday.');

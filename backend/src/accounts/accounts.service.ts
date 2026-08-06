@@ -201,20 +201,34 @@ export const deleteDepartment = async (
     throw new AccountConflictError('This department still has active members assigned. Reassign them before deleting.');
   }
 
-  await dependencies.withTransaction(async (runQuery) => {
-    await runQuery(
-      `UPDATE iam.users
-          SET departmentid = NULL, updatedatutc = CURRENT_TIMESTAMP
-        WHERE organizationid = 1 AND departmentid = $1`,
-      [departmentId]
-    );
+  try {
+    await dependencies.withTransaction(async (runQuery) => {
+      await runQuery(
+        `UPDATE iam.users
+            SET departmentid = NULL, updatedatutc = CURRENT_TIMESTAMP
+          WHERE organizationid = 1 AND departmentid = $1`,
+        [departmentId]
+      );
 
-    await runQuery(
-      `DELETE FROM org.departments
-        WHERE organizationid = 1 AND departmentid = $1`,
-      [departmentId]
-    );
-  });
+      await runQuery(
+        `DELETE FROM org.departments
+          WHERE organizationid = 1 AND departmentid = $1`,
+        [departmentId]
+      );
+    });
+  } catch (error) {
+    // hr.HolidayAudienceDepartments (database/28_holiday_audience.sql) FKs this department with
+    // no ON DELETE clause (RESTRICT) -- deliberately, so a department still targeted by a
+    // holiday's audience can't silently vanish from it. Surface that as the same clean
+    // AccountConflictError shape as the active-members check above, instead of letting the raw
+    // Postgres foreign-key-violation (23503) propagate as an unhandled 500.
+    if ((error as { code?: string } | null)?.code === '23503') {
+      throw new AccountConflictError(
+        'This department is still referenced by one or more holidays. Remove it from their audience before deleting.'
+      );
+    }
+    throw error;
+  }
 
   return { id: department.departmentid, name: department.departmentname };
 };
