@@ -90,11 +90,20 @@ export const ProjectChatsView: React.FC = () => {
   const chatUsers = useMemo(() => users.filter((user) => user.status === 'active') as ProjectMemberSummary[], [users]);
   const mentionUsers = useMemo(() => {
     if (!selected) return [];
+    const task = selected.taskId ? tasks.find((item) => item.id === selected.taskId) : undefined;
+    const project = projects.find((item) => item.id === selected.projectId);
+    // A task discussion always takes its narrower audience from the task itself. This
+    // intentionally wins over a cached/server-provided project-wide mention directory.
+    if (task && project) {
+      return getProjectMentionCandidates(
+        chatUsers,
+        [...(task.assigneeIds || [task.assigneeId]), project.teamLeadId]
+      );
+    }
     if (Array.isArray(selected.mentionableUserIds)) {
       const mentionableIds = new Set(selected.mentionableUserIds);
       return chatUsers.filter((user) => mentionableIds.has(user.id));
     }
-    const project = projects.find((item) => item.id === selected.projectId);
     return getProjectMentionCandidates(
       chatUsers,
       project ? [...project.memberIds, project.teamLeadId] : []
