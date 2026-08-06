@@ -588,8 +588,6 @@ const NewDiscussionDialog: React.FC<any> = ({
   const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [projectSearch, setProjectSearch] = useState('');
-  const [taskSearch, setTaskSearch] = useState('');
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
@@ -599,8 +597,6 @@ const NewDiscussionDialog: React.FC<any> = ({
     || selectedProject.memberIds.includes(currentUser.id)
     || selectedProject.teamLeadId === currentUser.id
     || selectedProject.createdBy === currentUser.id;
-  const visibleProjects = projects.filter((project: any) => project.title.toLowerCase().includes(projectSearch.toLowerCase()));
-  const visibleTasks = eligibleTasks.filter((task: any) => task.title.toLowerCase().includes(taskSearch.toLowerCase()));
   const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
     users,
     selectedProject
@@ -672,18 +668,16 @@ const NewDiscussionDialog: React.FC<any> = ({
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-2">
           <label className="project-chat-body text-xs font-semibold">Project *
-            <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} className={`${inputClass} mt-1 mb-1 py-1.5 text-xs`} placeholder="Search projects" />
-            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTaskSearch(''); setTrigger(null); }} className={`${inputClass} mt-1`}>
+            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className={`${inputClass} mt-1`}>
               <option value="">Select project</option>
-              {visibleProjects.map((project: any) => <option key={project.id} value={project.id}>{project.title}{currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? ' — not assigned' : ''}</option>)}
+              {projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}{currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? ' — not assigned' : ''}</option>)}
             </select>
             {!canUseProject && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this project, so you cannot start its discussion.</span>}
           </label>
           <label className="project-chat-body text-xs font-semibold">Task <span className="project-chat-secondary font-normal">(optional)</span>
-            <input value={taskSearch} disabled={!form.projectId} onChange={(event) => setTaskSearch(event.target.value)} className={`${inputClass} mt-1 mb-1 py-1.5 text-xs`} placeholder="Search tasks" />
             <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}>
               <option value="">No specific task</option>
-              {visibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
+              {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
             </select>
             <span className="project-chat-secondary mt-1 block font-normal">Choose a task only if this discussion is about a specific task.</span>
           </label>
