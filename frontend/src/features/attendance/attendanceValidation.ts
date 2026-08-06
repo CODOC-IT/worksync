@@ -1,5 +1,11 @@
 import { WorkBreak } from '../../types';
 
+export const canShowAttendanceCorrection = (
+  checkIn: string | undefined,
+  checkOut: string | undefined,
+  status: string
+): boolean => !(Boolean(checkIn) && !checkOut) && (Boolean(checkOut) || status === 'Absent');
+
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 const minutes = (value?: string): number | null => {
   if (!value || !TIME_PATTERN.test(value)) return null;

@@ -4,6 +4,7 @@ import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import * as repo from '../reports/reports.repository.js';
 import { query } from '../db/pool.js';
 import { attendanceRole, getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { materializeAbsences } from '../attendance/absenceMaterialization.js';
 
 const router = Router();
 
@@ -167,6 +168,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
 
     // Attendance reporting is restricted to active Admin/HR attendance permissions.
     if (effectiveAttendanceRole === 'Admin' || effectiveAttendanceRole === 'HR') {
+      await materializeAbsences(from, to);
       const visibleUsers = await query<{ userid: number }>(
         `SELECT u.userid
            FROM iam.users u

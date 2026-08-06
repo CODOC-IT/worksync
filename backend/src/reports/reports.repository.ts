@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 
 // ────────────────────────────────────────────────────────────
 // Helper: get visible project IDs for a user based on role
@@ -740,6 +741,7 @@ export interface AttendanceRecordRow {
   checkOut: string | null;
   totalHours: number;
   breaksCount: number;
+  timeZone: string;
 }
 
 export const getAttendanceRecords = async (
@@ -763,9 +765,13 @@ export const getAttendanceRecords = async (
        astatus.statuscode AS status,
        COALESCE(ar.actualcheckinatutc::text, '') AS "checkIn",
        ar.actualcheckoutatutc::text AS "checkOut",
+       COALESCE(profile.timezoneid, o.timezoneid, '${DEFAULT_BUSINESS_TIME_ZONE}') AS "timeZone",
        COALESCE(ar.workingminutes, 0) AS "totalHours",
        (SELECT COUNT(*) FROM hr.attendancepunches ap WHERE ap.attendancerecordid = ar.attendancerecordid)::int AS "breaksCount"
      FROM hr.attendancerecords ar
+     JOIN iam.users u ON u.userid = ar.userid
+     JOIN org.organizations o ON o.organizationid = u.organizationid
+     LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
      JOIN hr.attendancestatuses astatus ON astatus.attendancestatusid = ar.attendancestatusid
      WHERE ar.workdate >= $1::date AND ar.workdate <= $2::date
        ${userFilter}

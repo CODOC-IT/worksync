@@ -4,7 +4,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import { todayDateKey, toDateKey } from '../calendar/calendarRules';
-import { isPastDate, validateAttendanceCorrection } from './attendanceValidation';
+import { canShowAttendanceCorrection, isPastDate, validateAttendanceCorrection } from './attendanceValidation';
 import {
   CheckCircle2,
   Clock,
@@ -87,6 +87,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   requestStatus,
   onRequestChange
 }) => {
+  const correctionAvailable = canShowAttendanceCorrection(record.checkIn, record.checkOut, record.status);
   const totalBreakMinutes = getTotalBreakMinutes(record);
   const checkInMinutes = parseTimeInMinutes(record.checkIn);
   const endMinutes = parseTimeInMinutes(record.checkOut);
@@ -128,7 +129,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
 
       <div className="flex items-center gap-2">
         <StatusBadge status={record.status} size="sm" />
-        {canEdit && onEdit && (
+        {correctionAvailable && canEdit && onEdit && (
           <button
             type="button"
             onClick={() => onEdit(record)}
@@ -139,7 +140,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
             {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
           </button>
         )}
-        {canRequestChange && onRequestChange && (
+        {correctionAvailable && canRequestChange && onRequestChange && (
           <button
             type="button"
             onClick={() => onRequestChange(record)}

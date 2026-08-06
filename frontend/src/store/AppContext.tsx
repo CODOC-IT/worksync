@@ -31,6 +31,10 @@ import {
   SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
+import {
+  businessDateKey,
+  formatAttendanceTime
+} from '../features/attendance/attendanceTime';
 
 import {
   TaskMutationData,
@@ -598,8 +602,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: `att-${r.userId}-${r.date}`,
             userId: r.userId,
             date: r.date,
-            checkIn: r.checkIn ? new Date(r.checkIn).toISOString().slice(11, 16) : '',
-            checkOut: r.checkOut ? new Date(r.checkOut).toISOString().slice(11, 16) : undefined,
+            checkIn: r.checkIn ? formatAttendanceTime(r.checkIn, r.timeZone) : '',
+            checkOut: r.checkOut ? formatAttendanceTime(r.checkOut, r.timeZone) : undefined,
             totalHours: r.totalHours || 0,
             status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
             breaks: Array.isArray(r.breaks) ? r.breaks : [],
@@ -2329,8 +2333,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
         return;
       }
-      const todayStr = todayDateKey();
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const isLate = nowTime > settings.workingHours.start;
 
       // Persist check-in to backend
@@ -2381,8 +2385,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const checkOut = async () => {
       if (currentRole === 'Admin') return;
-      const todayStr = todayDateKey();
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const hasOpenAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -2793,8 +2797,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: `att-${record.userId}-${record.date}`,
             userId: record.userId,
             date: record.date,
-            checkIn: record.checkIn ? new Date(record.checkIn).toISOString().slice(11, 16) : '',
-            checkOut: record.checkOut ? new Date(record.checkOut).toISOString().slice(11, 16) : undefined,
+            checkIn: record.checkIn ? formatAttendanceTime(record.checkIn, record.timeZone) : '',
+            checkOut: record.checkOut ? formatAttendanceTime(record.checkOut, record.timeZone) : undefined,
             totalHours: record.totalHours || 0,
             status: (record.status === 'Leave' ? 'On Leave' : record.status || 'Present') as AttendanceRecord['status'],
             breaks: Array.isArray(record.breaks) ? record.breaks : []

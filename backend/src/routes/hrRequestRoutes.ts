@@ -10,6 +10,7 @@ import {
   validateCorrectionValues
 } from '../attendance/correctionValidation.js';
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
+import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -154,11 +155,14 @@ const loadAttendanceSnapshot = async (
   date: string
 ): Promise<{ checkIn: string; checkOut: string }> => {
   const result = await query<{ checkin: string; checkout: string }>(
-    `SELECT COALESCE(to_char(actualcheckinatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkin,
-            COALESCE(to_char(actualcheckoutatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkout
-       FROM hr.attendancerecords
-      WHERE userid = $1 AND workdate = $2::date`,
-    [toUserPk(userId), date]
+    `SELECT COALESCE(to_char(ar.actualcheckinatutc AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $3), 'HH24:MI'), '') AS checkin,
+            COALESCE(to_char(ar.actualcheckoutatutc AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $3), 'HH24:MI'), '') AS checkout
+       FROM hr.attendancerecords ar
+       JOIN iam.users u ON u.userid = ar.userid
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
+      WHERE ar.userid = $1 AND ar.workdate = $2::date`,
+    [toUserPk(userId), date, DEFAULT_BUSINESS_TIME_ZONE]
   );
   return {
     checkIn: result.rows[0]?.checkin || '',
@@ -382,20 +386,30 @@ const applyCorrection = async (
     scheduledstarttime: string | null;
     scheduledendtime: string | null;
     graceminutes: number;
+    timezoneid: string;
   }>(
     `SELECT scheduledstarttime::text, scheduledendtime::text,
-            COALESCE(ws.graceminutes, 0)::int AS graceminutes
+            COALESCE(ws.graceminutes, 0)::int AS graceminutes,
+            COALESCE(profile.timezoneid, o.timezoneid, $3) AS timezoneid
        FROM hr.attendancerecords ar
+       JOIN iam.users u ON u.userid = ar.userid
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
        LEFT JOIN hr.workschedules ws ON ws.workscheduleid = ar.workscheduleid
       WHERE ar.userid = $1 AND ar.workdate = $2::date`,
-    [toUserPk(row.user_id), date]
+    [toUserPk(row.user_id), date, DEFAULT_BUSINESS_TIME_ZONE]
   );
   const schedule = scheduleResult.rows[0];
-  const checkInUtc = new Date(`${date}T${details.requestedCheckIn}:00Z`);
-  const checkOutUtc = new Date(`${date}T${details.requestedCheckOut}:00Z`);
-  const scheduledStartUtc = schedule?.scheduledstarttime
-    ? new Date(`${date}T${schedule.scheduledstarttime}Z`)
-    : null;
+  const instants = await runQuery<{ checkinutc: Date; checkoututc: Date; scheduledstartutc: Date | null }>(
+    `SELECT (($1::date + $2::time) AT TIME ZONE $5) AS checkinutc,
+            (($1::date + $3::time) AT TIME ZONE $5) AS checkoututc,
+            CASE WHEN NULLIF($4, '') IS NULL THEN NULL
+                 ELSE (($1::date + $4::time) AT TIME ZONE $5) END AS scheduledstartutc`,
+    [date, details.requestedCheckIn, details.requestedCheckOut, schedule?.scheduledstarttime || '', schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE]
+  );
+  const checkInUtc = new Date(instants.rows[0].checkinutc);
+  const checkOutUtc = new Date(instants.rows[0].checkoututc);
+  const scheduledStartUtc = instants.rows[0].scheduledstartutc ? new Date(instants.rows[0].scheduledstartutc!) : null;
   const scheduledMinutes = schedule?.scheduledstarttime && schedule?.scheduledendtime
     ? Math.max(
         1,
@@ -415,8 +429,8 @@ const applyCorrection = async (
   });
   const result = await runQuery<{ attendancerecordid: number }>(
     `UPDATE hr.attendancerecords
-        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
-            actualcheckoutatutc = ($2::date + $4::time) AT TIME ZONE 'UTC',
+        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE $8,
+            actualcheckoutatutc = ($2::date + $4::time) AT TIME ZONE $8,
             workingminutes = $5,
             lateminutes = $6,
             attendancestatusid = (
@@ -435,7 +449,8 @@ const applyCorrection = async (
       details.requestedCheckOut,
       outcome.workingMinutes,
       outcome.lateMinutes,
-      outcome.status
+      outcome.status,
+      schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE
     ]
   );
   if (!result.rows[0]) {
