@@ -172,6 +172,53 @@ export const createDepartment = async (
   throw new AccountConflictError('Could not assign a unique department code. Try a different name.');
 };
 
+export const deleteDepartment = async (
+  actor: ProvisioningActor,
+  departmentId: number,
+  dependencies: AccountServiceDependencies = defaultDependencies
+): Promise<DepartmentOption> => {
+  if (actor.role !== 'Admin') {
+    throw new AccountAuthorizationError('Only Administrators can delete departments.');
+  }
+
+  const existing = await dependencies.query<{ departmentid: number; departmentname: string }>(
+    `SELECT departmentid, departmentname
+       FROM org.departments
+      WHERE organizationid = 1 AND departmentid = $1
+      LIMIT 1`,
+    [departmentId]
+  );
+  const department = existing.rows[0];
+  if (!department) throw new AccountConflictError('This department no longer exists.');
+
+  const activeAssigned = await dependencies.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+       FROM iam.users
+      WHERE organizationid = 1 AND departmentid = $1 AND accountstatus = 'Active'`,
+    [departmentId]
+  );
+  if (Number(activeAssigned.rows[0]?.count || 0) > 0) {
+    throw new AccountConflictError('This department still has active members assigned. Reassign them before deleting.');
+  }
+
+  await dependencies.withTransaction(async (runQuery) => {
+    await runQuery(
+      `UPDATE iam.users
+          SET departmentid = NULL, updatedatutc = CURRENT_TIMESTAMP
+        WHERE organizationid = 1 AND departmentid = $1`,
+      [departmentId]
+    );
+
+    await runQuery(
+      `DELETE FROM org.departments
+        WHERE organizationid = 1 AND departmentid = $1`,
+      [departmentId]
+    );
+  });
+
+  return { id: department.departmentid, name: department.departmentname };
+};
+
 const assertUniqueAccount = async (
   input: Pick<CreateAccountInput, 'email' | 'username'>,
   dependencies: AccountServiceDependencies
