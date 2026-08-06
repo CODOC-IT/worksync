@@ -330,7 +330,7 @@ export const ProjectChatsView: React.FC = () => {
           )}
         </main>
       </div>
-      {composerOpen && currentRole !== 'HR' && <NewDiscussionDialog projects={availableProjects} tasks={tasks} users={chatUsers} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
+      {composerOpen && currentRole !== 'HR' && <NewDiscussionDialog projects={availableProjects} tasks={tasks} users={chatUsers} currentUser={currentUser} currentRole={currentRole} onClose={() => setComposerOpen(false)} onCreated={(thread) => { setThreads((items) => [thread, ...items]); setSelectedId(thread.id); setMobileConversationOpen(true); setComposerOpen(false); }} />}
       {deleteConfirmId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) cancelDelete(); }}>
           <div className="project-chat-dialog w-full max-w-md overflow-hidden rounded-2xl">
@@ -574,18 +574,31 @@ const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: Proj
   </div>
 );
 const NewDiscussionDialog: React.FC<any> = ({
-  projects, tasks, users, onClose, onCreated,
+  projects, tasks, users, currentUser, currentRole, onClose, onCreated,
 }) => {
   const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [taskSearch, setTaskSearch] = useState('');
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
   const selectedProject = projects.find((project: any) => project.id === form.projectId);
+  const selectedTask = eligibleTasks.find((task: any) => task.id === form.taskId);
+  const canUseProject = !selectedProject || currentRole === 'Admin'
+    || selectedProject.memberIds.includes(currentUser.id)
+    || selectedProject.teamLeadId === currentUser.id
+    || selectedProject.createdBy === currentUser.id;
+  const visibleProjects = projects.filter((project: any) => project.title.toLowerCase().includes(projectSearch.toLowerCase()));
+  const visibleTasks = eligibleTasks.filter((task: any) => task.title.toLowerCase().includes(taskSearch.toLowerCase()));
   const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
     users,
-    selectedProject ? [...selectedProject.memberIds, selectedProject.teamLeadId] : []
+    selectedProject
+      ? selectedTask
+        ? [...(selectedTask.assigneeIds || [selectedTask.assigneeId]), selectedProject.teamLeadId]
+        : [...selectedProject.memberIds, selectedProject.teamLeadId]
+      : []
   );
   const matchingUsers = trigger?.query
     ? projectUsers.filter((user) => user.status !== 'inactive' && user.name.toLocaleLowerCase().includes(trigger.query.toLocaleLowerCase()))
@@ -613,9 +626,15 @@ const NewDiscussionDialog: React.FC<any> = ({
       setError(`Messages cannot exceed ${COMMENT_MAX_LENGTH} characters.`);
       return;
     }
+    if (!canUseProject) {
+      setError('You can only start a discussion in a project you are assigned to or lead.');
+      return;
+    }
     const outOfScopeMention = findOutOfScopeMention(body, users, projectUsers);
     if (outOfScopeMention) {
-      setError(`@${outOfScopeMention.name} is not a member of this project. You can only mention project members, HR, or Admin.`);
+      setError(selectedTask
+        ? `@${outOfScopeMention.name} is not assigned to this task. You can only mention task assignees, the Team Lead, HR, or Admin.`
+        : `@${outOfScopeMention.name} is not a member of this project. You can only mention project members, HR, or Admin.`);
       return;
     }
     setBusy(true);
@@ -644,15 +663,18 @@ const NewDiscussionDialog: React.FC<any> = ({
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-2">
           <label className="project-chat-body text-xs font-semibold">Project *
-            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className={`${inputClass} mt-1`}>
+            <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} className={`${inputClass} mt-1 mb-1 py-1.5 text-xs`} placeholder="Search projects" />
+            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTaskSearch(''); setTrigger(null); }} className={`${inputClass} mt-1`}>
               <option value="">Select project</option>
-              {projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              {visibleProjects.map((project: any) => <option key={project.id} value={project.id}>{project.title}{currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? ' — not assigned' : ''}</option>)}
             </select>
+            {!canUseProject && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this project, so you cannot start its discussion.</span>}
           </label>
           <label className="project-chat-body text-xs font-semibold">Task <span className="project-chat-secondary font-normal">(optional)</span>
+            <input value={taskSearch} disabled={!form.projectId} onChange={(event) => setTaskSearch(event.target.value)} className={`${inputClass} mt-1 mb-1 py-1.5 text-xs`} placeholder="Search tasks" />
             <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}>
               <option value="">No specific task</option>
-              {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
+              {visibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
             </select>
             <span className="project-chat-secondary mt-1 block font-normal">Choose a task only if this discussion is about a specific task.</span>
           </label>

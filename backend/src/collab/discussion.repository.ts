@@ -103,6 +103,40 @@ export const findMentionableUsersForProjects = async (
   return result.rows;
 };
 
+// Task-scoped discussions are intentionally narrower than project discussions: only current
+// assignees, the project's functional lead, and active HR/Admin accounts may participate.
+export const findMentionableUsersForTask = async (
+  taskId: number,
+  projectId: number
+): Promise<ProjectMentionableUserRow[]> => {
+  const result = await query<ProjectMentionableUserRow>(
+    `SELECT DISTINCT $2::int AS projectid, eligible.userid
+     FROM (
+       SELECT ta.userid
+       FROM work.taskassignees ta
+       JOIN iam.users u ON u.userid = ta.userid
+       WHERE ta.taskid = $1 AND ta.unassignedatutc IS NULL
+         AND u.organizationid = $3 AND u.accountstatus = 'Active' AND u.deactivatedatutc IS NULL
+       UNION
+       SELECT COALESCE(
+         (SELECT pm.userid FROM work.projectmembers pm WHERE pm.projectid = $2 AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL LIMIT 1),
+         p.owneruserid
+       )
+       FROM work.projects p WHERE p.projectid = $2
+       UNION
+       SELECT ur.userid
+       FROM iam.userroles ur
+       JOIN iam.roles r ON r.roleid = ur.roleid
+       JOIN iam.users u ON u.userid = ur.userid
+       WHERE r.rolecode IN ('Administrator', 'HRRepresentative')
+         AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now()) AND ur.revokedatutc IS NULL
+         AND u.organizationid = $3 AND u.accountstatus = 'Active' AND u.deactivatedatutc IS NULL
+     ) eligible`,
+    [taskId, projectId, ORGANIZATION_ID]
+  );
+  return result.rows;
+};
+
 export const findCommentsForThreads = async (threadIds: number[]): Promise<CommentRow[]> => {
   if (threadIds.length === 0) return [];
   const result = await query<CommentRow>(

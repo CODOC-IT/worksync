@@ -75,16 +75,21 @@ const assertProjectDiscussionOpen = (statusCode: string): void => {
   }
 };
 
-const assertValidMentions = async (mentionIds: string[], projectId: number): Promise<number[]> => {
+const assertValidMentions = async (mentionIds: string[], projectId: number, taskId?: number): Promise<number[]> => {
   const mentionPks = Array.from(new Set(mentionIds.map(toUserPk)));
   if (mentionPks.length === 0) return [];
   const mentionableUserIds = new Set(
-    (await repo.findMentionableUsersForProjects([projectId])).map((row) => row.userid)
+    (taskId
+      ? await repo.findMentionableUsersForTask(taskId, projectId)
+      : await repo.findMentionableUsersForProjects([projectId])
+    ).map((row) => row.userid)
   );
   for (const pk of mentionPks) {
     if (!mentionableUserIds.has(pk)) {
       throw new DiscussionValidationError(
-        'You can only mention active project members, HR, or Admin users.',
+        taskId
+          ? 'You can only mention task assignees, this project\'s Team Lead, HR, or Admin users.'
+          : 'You can only mention active project members, HR, or Admin users.',
         'mentionIds'
       );
     }
@@ -120,9 +125,10 @@ const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionTh
       const rowsForThread = commentRows.filter((c) => c.threadid === row.threadid);
       const comments = await Promise.all(rowsForThread.map((c) => buildCommentDTO(c, mentionRows, attachmentRows)));
       const opening = rowsForThread.find((c) => !c.parentcommentid) || rowsForThread[0];
-      const mentionableUserIds = mentionableRows
-        .filter((candidate) => candidate.projectid === row.effectiveprojectid)
-        .map((candidate) => fromUserPk(candidate.userid));
+      const scopedRows = row.taskid
+        ? await repo.findMentionableUsersForTask(row.taskid, row.effectiveprojectid)
+        : mentionableRows.filter((candidate) => candidate.projectid === row.effectiveprojectid);
+      const mentionableUserIds = scopedRows.map((candidate) => fromUserPk(candidate.userid));
       return buildThreadDTO(row, comments, opening?.commentkind || 'General', mentionableUserIds);
     })
   );
@@ -132,7 +138,9 @@ const hydrateThread = async (row: DiscussionThreadRow): Promise<DiscussionThread
 
 const assertThreadAccessible = async (row: DiscussionThreadRow, userId: string, role: string): Promise<void> => {
   const accessible = hasGlobalDiscussionAccess(role)
-    || await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role);
+    || (row.taskid
+      ? (await repo.findMentionableUsersForTask(row.taskid, row.effectiveprojectid)).some((candidate) => fromUserPk(candidate.userid) === userId)
+      : await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role));
   if (!accessible) throw new DiscussionNotFoundError('Discussion not found.');
   const project = await projectRepo.findProjectById(row.effectiveprojectid);
   if (!project) throw new DiscussionNotFoundError('Discussion not found.');
@@ -146,7 +154,12 @@ export const listThreadsForUser = async (userId: string, role: string): Promise<
     const project = await projectRepo.findProjectById(row.effectiveprojectid);
     return project?.statuscode === 'Completed' ? null : row;
   }))).filter((row): row is DiscussionThreadRow => row !== null);
-  return hydrateThreads(openRows);
+  const accessibleRows = hasGlobalDiscussionAccess(role)
+    ? openRows
+    : (await Promise.all(openRows.map(async (row) => {
+        try { await assertThreadAccessible(row, userId, role); return row; } catch { return null; }
+      }))).filter((row): row is DiscussionThreadRow => row !== null);
+  return hydrateThreads(accessibleRows);
 };
 
 export const getThreadForUser = async (threadId: string, userId: string, role: string): Promise<DiscussionThreadDTO> => {
@@ -191,11 +204,15 @@ export const createThread = async (
     }
     taskPk = taskRow.taskid;
     taskTitle = taskRow.title;
+    const taskAudience = await repo.findMentionableUsersForTask(taskPk, projectRow.projectid);
+    if (!hasGlobalDiscussionAccess(actorRole) && !taskAudience.some((candidate) => fromUserPk(candidate.userid) === actorId)) {
+      throw new DiscussionAuthorizationError('Only a task assignee or this project\'s Team Lead can start a task discussion.');
+    }
   }
 
   const title = input.title.trim();
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid);
+  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid, taskPk);
   assertAttachmentsHaveContent(input.attachments);
   const commentKind: CommentKindCode = API_TO_DB_DISCUSSION_TYPE[input.type];
 
@@ -213,7 +230,9 @@ export const createThread = async (
   const row = await repo.findThreadById(threadId);
   const thread = await hydrateThread(row!);
 
-  const members = await projectRepo.findMembersForProject(projectRow.projectid);
+  const members = taskPk
+    ? await repo.findMentionableUsersForTask(taskPk, projectRow.projectid)
+    : await projectRepo.findMembersForProject(projectRow.projectid);
   await ensureUserCacheWarmed();
   const actorName = userStore.findById(actorId)?.name || actorId;
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
@@ -287,7 +306,7 @@ export const addComment = async (
   }
 
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds, row.effectiveprojectid);
+  const mentionPks = await assertValidMentions(input.mentionIds, row.effectiveprojectid, row.taskid || undefined);
   assertAttachmentsHaveContent(input.attachments);
 
   const commentId = await repo.insertComment({
