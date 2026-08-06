@@ -10,6 +10,7 @@ import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
 import { getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { canAuthenticateAccount } from '../auth/accountAccess.js';
 
 const router = Router();
 
@@ -36,7 +37,7 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       return;
     }
 
-    if (user.status !== 'active') {
+    if (!canAuthenticateAccount(user)) {
       recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
         action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
         description: `Blocked login attempt for deactivated account ${user.email}.`, result: 'Blocked',
@@ -101,7 +102,7 @@ router.post('/migrate-legacy-credentials', async (req, res: Response): Promise<v
       return;
     }
 
-    if (user.status !== 'active') {
+    if (!canAuthenticateAccount(user)) {
       res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
       return;
     }

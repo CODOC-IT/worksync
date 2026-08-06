@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { query } from '../db/pool.js';
 import { getSupabaseServiceClient, getSupabaseAnonClient, isSupabaseServiceConfigured } from '../db/supabase.js';
 import { fromUserPk } from '../utils/idMapping.js';
+import { canAuthenticateAccount } from '../auth/accountAccess.js';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -9,7 +10,7 @@ export interface AuthenticatedRequest extends Request {
     email: string;
     role: string;
     authUserId: string;
-    accountStatus: string;
+    accountStatus: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
     departmentId: number | null;
   };
 }
@@ -93,7 +94,7 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
     authUserId: supabaseUserId,
     departmentId: account.departmentid,
     role: account.rolecode === 'Administrator' ? 'Admin' : account.rolecode === 'HRRepresentative' ? 'HR' : account.rolecode === 'TeamLead' ? 'Team_Lead' : 'Team_Member',
-    accountStatus: account.accountstatus
+    accountStatus: account.accountstatus as AuthenticatedRequest['user']['accountStatus']
   };
   return true;
 };
@@ -104,7 +105,9 @@ export const authenticateJWT = async (
   next: NextFunction
 ): Promise<void> => {
   if (!await resolveSession(req, res)) return;
-  if (req.user?.accountStatus !== 'Active') {
+  if (!req.user || !canAuthenticateAccount({
+    accountStatus: req.user.accountStatus
+  })) {
     res.status(403).json({ success: false, message: 'Your WorkSync account is not active.' });
     return;
   }
