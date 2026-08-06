@@ -633,15 +633,33 @@ export interface ApprovedLeaveEntry {
 
 // A Calendar-displayed holiday. hr.Holidays (database/06_hr_tables.sql) is the single source of
 // truth via GET/POST/PUT/DELETE /api/calendar/holidays (backend/src/calendar/) -- HR-only for
-// create/update/delete (enforced server-side via effectiveRoles.ts), visible to every role.
+// create/update/delete (enforced server-side via effectiveRoles.ts). Visibility is audience-scoped
+// (see backend/src/calendar/calendar.service.ts's listHolidays) -- Admin/HR always get every
+// holiday; everyone else only gets holidays whose audience includes them, so `holidays` already
+// arrives pre-filtered and the frontend never needs to re-derive visibility itself.
 // `date` for a recurring holiday is one representative occurrence; the Calendar re-derives
 // month/day from it and repeats across every displayed year (see calendarRules.ts's
 // buildHolidayEntries).
+export type HolidayAudienceType = 'Everyone' | 'Department' | 'Users';
+
 export interface Holiday {
   id: string;
   name: string;
   date: string; // YYYY-MM-DD
   isRecurringAnnual: boolean;
+  audienceType: HolidayAudienceType;
+  departmentIds: number[];
+  userIds: string[];
   createdByUserId: string;
   createdAt: string;
+}
+
+// Shared shape for org.Departments rows returned by GET /api/accounts/departments (see
+// backend/src/accounts/accounts.service.ts's listPermittedDepartments). Not reused from
+// TeamMembersView.tsx's own local, unexported `DepartmentOption` -- that file is unrelated to this
+// feature and stays untouched; this is the shared type new department-aware features (e.g. holiday
+// audience targeting) should import instead of redeclaring it again.
+export interface DepartmentOption {
+  id: number;
+  name: string;
 }

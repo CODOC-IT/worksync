@@ -84,7 +84,8 @@ import {
   fetchHolidays,
   createHolidayApi,
   updateHolidayApi,
-  deleteHolidayApi
+  deleteHolidayApi,
+  HolidayInput
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
@@ -160,8 +161,8 @@ interface AppState {
   calendarEvents: CalendarEvent[];
   approvedLeave: ApprovedLeaveEntry[];
   holidays: Holiday[];
-  createHoliday: (input: { name: string; date: string; isRecurringAnnual: boolean }) => Promise<{ success: boolean; message: string }>;
-  updateHoliday: (id: string, input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>) => Promise<{ success: boolean; message: string }>;
+  createHoliday: (input: HolidayInput) => Promise<{ success: boolean; message: string }>;
+  updateHoliday: (id: string, input: Partial<HolidayInput>) => Promise<{ success: boolean; message: string }>;
   deleteHoliday: (id: string) => Promise<{ success: boolean; message: string }>;
   savedPrompts: SavedPrompt[];
 
@@ -1612,7 +1613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
   // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
   const createHoliday = async (
-    input: { name: string; date: string; isRecurringAnnual: boolean }
+    input: HolidayInput
   ): Promise<{ success: boolean; message: string }> => {
     if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
@@ -1632,7 +1633,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateHoliday = async (
     id: string,
-    input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>
+    input: Partial<HolidayInput>
   ): Promise<{ success: boolean; message: string }> => {
     if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 

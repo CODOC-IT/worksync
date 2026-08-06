@@ -23,6 +23,12 @@ repository and safely adopts an early quoted `"work"."ProjectApprovalRequests"` 
 backfills tasks under already-archived projects, and preserves immutable audit snapshots when a
 project and its tasks are permanently deleted.
 
+`20260806_01_holiday_audience.sql` adds holiday audience targeting (Everyone / Department /
+Users): an `AudienceType` column on `hr.Holidays`, the `hr.HolidayAudienceDepartments` and
+`hr.HolidayAudienceUsers` join tables, and seeds the `holiday_created` notification type. Safe to
+run more than once; existing holidays default to `AudienceType = 'Everyone'`, matching their prior
+unfiltered visibility.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

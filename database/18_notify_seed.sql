@@ -170,6 +170,7 @@ VALUES
     ('security_alert',          'System',    'Critical', TRUE,  TRUE),
     ('audit_alert',             'System',    'High',     FALSE, TRUE),
     ('system_maintenance',      'System',    'Normal',   FALSE, TRUE),
+    ('holiday_created',         'System',    'Normal',   FALSE, TRUE),
     ('attendance',               'Attendance','Normal',  FALSE, TRUE),
     ('task',                     'Task',      'Normal',  FALSE, TRUE),
     ('system',                   'System',    'Low',     FALSE, TRUE),
