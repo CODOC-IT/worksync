@@ -1,5 +1,5 @@
 import * as repo from './task.repository.js';
-import { rowToHistoryDTO, rowToTaskDTO } from './task.mapper.js';
+import { DB_TO_API_PRIORITY, rowToHistoryDTO, rowToTaskDTO, toDateKey } from './task.mapper.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toProjectPkOrNull, toTaskPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -444,14 +444,14 @@ const notifyTaskEdited = (context: {
 
   void (async () => {
     try {
-      const isSubtask = Boolean(row.parenttaskid);
-      const parentRow = row.parenttaskid ? await repo.findTaskById(row.parenttaskid) : null;
-      const parentTitle = parentRow?.title || '';
-      // A subtask's own notifications name both titles, so the recipient knows which checklist
-      // item of which task is being talked about without opening anything.
-      const where = isSubtask && parentTitle
-        ? `subtask "${dto.title}" under task "${parentTitle}"`
-        : `"${dto.title}"`;
+      // Same describer the controlled-edit notifications use, so a member reads one consistent
+      // phrasing — 'subtask "Testing" under task "Notification Module"' — whether their subtask
+      // was reassigned, re-prioritized, or had an edit request decided. It also owns the
+      // fallback for an unreadable parent, which the previous inline version got wrong: it
+      // emitted `task` and `subtask` metadata with the same value.
+      const target = await resolveTaskEditTarget(row, dto.title);
+      const isSubtask = target.isSubtask;
+      const where = target.label;
       const teamLeadId = await resolveProjectTeamLead(row.projectid);
 
       const previous = new Set(previousAssigneeIds);
@@ -463,8 +463,7 @@ const notifyTaskEdited = (context: {
       const assignmentType = isSubtask ? 'subtask_assignment_changed' : 'task_reassigned';
       const sharedMetadata = {
         project: projectName,
-        task: isSubtask && parentTitle ? parentTitle : dto.title,
-        ...(isSubtask ? { subtask: dto.title } : {}),
+        ...target.metadata,
         priority: dto.priority,
         dueDate: dto.dueDate,
         updatedBy: actorName
@@ -621,12 +620,24 @@ export const updateTask = async (
   const dto = await buildDTO(updatedRow!);
   const actorName = actorDisplayName(actorId);
 
+  // Both sides of every comparison must be in the same representation before being called a
+  // "change". Two traps here, and the notification fan-out below makes both user-visible rather
+  // than merely cosmetic in an audit row:
+  //   - Dates come back from node-postgres as Date objects, not 'YYYY-MM-DD' strings (TaskRow
+  //     declares them `string`, which hides it from the compiler). Comparing the inbound string
+  //     directly against the row is true for EVERY value, so an unchanged date — which the edit
+  //     form resubmits on every save — reported as changed and notified everyone.
+  //   - work.Priorities stores 'Critical' for the tier the product calls 'Urgent', so an
+  //     un-translated previous value read "from Critical to High" for a level no user has ever
+  //     seen named that.
+  const previousStartDate = toDateKey(row.startdate);
+  const previousDueDate = toDateKey(row.duedate);
   const taskChanges = [
     input.title !== undefined && input.title.trim() !== row.title ? { field: 'Title', previousValue: row.title, newValue: dto.title } : null,
     input.description !== undefined && input.description.trim() !== row.description ? { field: 'Description', previousValue: row.description, newValue: dto.description } : null,
-    input.priority !== undefined && DB_TO_API_PRIORITY_CODE[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: row.prioritycode, newValue: input.priority } : null,
-    input.startDate !== undefined && input.startDate !== row.startdate ? { field: 'Start date', previousValue: row.startdate, newValue: dto.startDate } : null,
-    input.dueDate !== undefined && input.dueDate !== row.duedate ? { field: 'Due date', previousValue: row.duedate, newValue: dto.dueDate } : null,
+    input.priority !== undefined && DB_TO_API_PRIORITY_CODE[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: DB_TO_API_PRIORITY[row.prioritycode] || row.prioritycode, newValue: input.priority } : null,
+    input.startDate !== undefined && input.startDate !== previousStartDate ? { field: 'Start date', previousValue: previousStartDate, newValue: dto.startDate } : null,
+    input.dueDate !== undefined && input.dueDate !== previousDueDate ? { field: 'Due date', previousValue: previousDueDate, newValue: dto.dueDate } : null,
     input.assigneeIds !== undefined ? { field: 'Assignee', previousValue: previousAssigneeIds.join(', '), newValue: dto.assigneeIds.join(', ') } : null
   ].filter((change): change is { field: string; previousValue: string; newValue: string } => Boolean(change));
   const hasPriorityChange = taskChanges.some((c) => c.field === 'Priority');
