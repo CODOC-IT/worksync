@@ -504,9 +504,16 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
-    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR' || req.body?.role === 'Admin' || req.body?.role === 'HR')) {
-      res.status(403).json({ success: false, message: 'HR can only edit member accounts.' });
-      return;
+    if (req.user.role === 'HR') {
+      const editingSelf = req.params.id === req.user.id;
+      if (!editingSelf && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+        res.status(403).json({ success: false, message: 'HR can only edit their own profile or member accounts.' });
+        return;
+      }
+      if (req.body?.role && req.body.role !== targetUser.role) {
+        res.status(403).json({ success: false, message: 'HR cannot change roles.' });
+        return;
+      }
     }
     if ((req.body?.role === 'Team_Lead' && targetUser.role !== 'Team_Lead') || (targetUser.role === 'Team_Lead' && req.body?.role && req.body.role !== 'Team_Lead')) {
       res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
@@ -629,6 +636,16 @@ router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, r
   try {
     if (!req.user || !canManageAccounts(req.user.role)) {
       res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR cannot delete Administrator or HR accounts.' });
       return;
     }
 
