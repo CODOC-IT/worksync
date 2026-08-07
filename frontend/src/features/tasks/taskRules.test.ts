@@ -168,7 +168,7 @@ test('rejects an assignee outside the project membership', () => {
   assert.ok(errors.assigneeIds);
 });
 
-test('shows only active non-HR, non-Admin selected-project members as task assignees', () => {
+test('shows only active non-admin, non-HR, non-lead project members as task assignees', () => {
   const inactiveMember = { ...users[1], id: 'inactive-member', status: 'inactive' as const };
   const hrMember: User = {
     ...users[1],
@@ -186,7 +186,7 @@ test('shows only active non-HR, non-Admin selected-project members as task assig
     [...users, hrMember, inactiveMember]
   );
 
-  assert.deepEqual(options.map((user) => user.id), ['lead', 'member']);
+  assert.deepEqual(options.map((user) => user.id), ['member']);
 });
 
 test('rejects HR and Admin users as task assignees even when they are project members', () => {
@@ -258,6 +258,11 @@ test('enforces edit and delete permission checks', () => {
   assert.equal(canEditTask('Team_Member', 'member', project, { ...task, subtaskCount: 2 }), false);
   assert.equal(canEditTask('Team_Lead', 'lead', project, { ...task, subtaskCount: 2 }), true);
   assert.equal(canEditTask('Team_Member', 'member', project, {
+    ...task,
+    parentTaskId: 'tsk-parent',
+    subtaskCount: 0
+  }), true);
+  assert.equal(canEditTask('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }, {
     ...task,
     parentTaskId: 'tsk-parent',
     subtaskCount: 0

@@ -56,6 +56,10 @@ export interface Project {
   createdBy: string; // User ID
   teamLeadId: string;
   memberIds: string[];
+  // Members kept in the project (still in memberIds) because they had active task/subtask
+  // assignments when an Admin tried to remove them -- see ProjectsView.tsx's pending-removal
+  // confirmation dialog and backend/src/projects/project.service.ts's removeMember.
+  pendingRemovalMemberIds?: string[];
   startDate: string;
   targetDate: string;
   priority?: TaskPriority;
@@ -479,6 +483,8 @@ export type NotificationType =
   | 'project_deleted'
   | 'project_member_added'
   | 'project_member_removed'
+  | 'project_member_pending_removal'
+  | 'project_member_auto_removed'
   | 'approval'
   | 'user_registered'
   | 'user_role_changed'

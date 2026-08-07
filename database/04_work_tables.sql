@@ -80,10 +80,20 @@ CREATE TABLE work.ProjectMembers
     LeftAtUtc            timestamptz(0) NULL,
     RemovedByUserId      INT NULL,
     RemovalReason        varchar(500) NULL,
+    -- Set when an Admin tries to remove this member while they still have active task/subtask
+    -- assignments in the project: the member is kept (LeftAtUtc stays NULL) rather than removed,
+    -- and these three columns record who flagged it and why, so the system can notify the
+    -- flagging Admin and clear the flag once the member's work is later reassigned/completed.
+    PendingRemovalAtUtc      timestamptz(0) NULL,
+    PendingRemovalByUserId   INT NULL,
+    PendingRemovalReason     varchar(500) NULL,
     CONSTRAINT CK_ProjectMembers_Role CHECK (MemberRoleCode IN ('Owner','TeamLead','Member','Reviewer','Observer')),
     CONSTRAINT CK_ProjectMembers_Left CHECK
             ((LeftAtUtc IS NULL AND RemovedByUserId IS NULL) OR
-             (LeftAtUtc IS NOT NULL AND RemovedByUserId IS NOT NULL AND LeftAtUtc >= JoinedAtUtc))
+             (LeftAtUtc IS NOT NULL AND RemovedByUserId IS NOT NULL AND LeftAtUtc >= JoinedAtUtc)),
+    CONSTRAINT CK_ProjectMembers_PendingRemoval CHECK
+            ((PendingRemovalAtUtc IS NULL AND PendingRemovalByUserId IS NULL) OR
+             (PendingRemovalAtUtc IS NOT NULL AND PendingRemovalByUserId IS NOT NULL))
 );
 
 CREATE TABLE work.ProjectReviewerDesignations

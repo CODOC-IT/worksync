@@ -111,12 +111,14 @@ export const validateUpdateTaskBody = (body: unknown): ValidationResult => {
   }
   if (
     input.assigneeIds !== undefined
-    && (!Array.isArray(input.assigneeIds) || input.assigneeIds.some((id) => !FRONTEND_USER_ID_PATTERN.test(id)))
+    && (
+      !Array.isArray(input.assigneeIds)
+      || input.assigneeIds.length === 0
+      || input.assigneeIds.some((id) => !FRONTEND_USER_ID_PATTERN.test(id))
+      || new Set(input.assigneeIds).size !== input.assigneeIds.length
+    )
   ) {
-    return { valid: false, message: 'assigneeIds must be an array of "usr-<n>" ids.' };
-  }
-  if (input.assigneeIds !== undefined) {
-    return { valid: false, message: 'Task assignments cannot be changed from the assignee edit form.' };
+    return { valid: false, message: 'assigneeIds must contain at least one unique "usr-<n>" id.' };
   }
   return { valid: true };
 };

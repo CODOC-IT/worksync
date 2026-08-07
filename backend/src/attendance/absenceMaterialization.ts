@@ -52,8 +52,8 @@ export const materializeAbsences = async (from: string, to: string): Promise<voi
              $2::date
            )
          ),
-         interval '1 day'
-       ) AS day(workdate) ON TRUE
+          interval '1 day'
+        ) AS day(workdate)
        LEFT JOIN LATERAL (
          SELECT ws.workscheduleid
            FROM hr.workschedules ws

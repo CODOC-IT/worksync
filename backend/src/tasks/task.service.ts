@@ -5,7 +5,8 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
+import { ActivityChange } from '../activity/activity.types.js';
+import { isProjectAccessible, isProjectLead, recheckPendingRemovalForMember } from '../projects/project.service.js';
 import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
   API_TO_DB_TASK_STATUS,
@@ -102,8 +103,8 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
   const assignees = await repo.findAssigneesForTask(row.taskid);
   const isAssignee = assignees.some((assignee) => fromUserPk(assignee.userid) === userId);
 
-  // Subtask editing remains intentionally assignee-only, regardless of project role.
   if (row.parenttaskid) {
+    if (await isProjectLead(projectFrontendId(row), userId, role)) return;
     const denialReason = getTaskEditDenialReason({
       actorId: userId,
       assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
@@ -674,6 +675,18 @@ const taskEditSnapshot = (row: TaskRow): TaskEditApprovalInput => ({
   dueDate: row.duedate
 });
 
+// Field-level diff between the stored task snapshot and the proposed edit, recorded on both the
+// request event (what the member wants changed) and the decision event (what was actually
+// applied or rejected). Mirrors the changes[] shape updateTask writes for direct edits so the
+// Activity Log renders one consistent edit trail regardless of which path changed the task.
+const taskEditDiff = (previous: TaskEditApprovalInput, proposed: TaskEditApprovalInput): ActivityChange[] => [
+  previous.title !== proposed.title ? { field: 'Title', previousValue: previous.title, newValue: proposed.title } : null,
+  previous.description !== proposed.description ? { field: 'Description', previousValue: previous.description, newValue: proposed.description } : null,
+  previous.priority !== proposed.priority ? { field: 'Priority', previousValue: previous.priority, newValue: proposed.priority } : null,
+  previous.startDate !== proposed.startDate ? { field: 'Start date', previousValue: previous.startDate, newValue: proposed.startDate } : null,
+  previous.dueDate !== proposed.dueDate ? { field: 'Due date', previousValue: previous.dueDate, newValue: proposed.dueDate } : null,
+].filter((change): change is ActivityChange => Boolean(change));
+
 const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
   if (!input.title?.trim()) throw new TaskValidationError('Task title cannot be empty.');
   if (!input.description?.trim()) throw new TaskValidationError('Task description cannot be empty.');
@@ -767,15 +780,33 @@ export const createTaskEditApproval = async (
     throw error;
   }
   const createdAt = new Date().toISOString();
+  const changes = diffTaskEdit(previous, proposed);
+  const requesterName = actorDisplayName(actorId);
+  const reviewerName = actorDisplayName(reviewerId);
+  const target = await resolveTaskEditTarget(row, row.title);
+
+  // The request must land in the Activity Log before the response is sent: it is the member's
+  // only audit trace for their proposed edit (the task itself is not touched until approval).
+  // affectedUser is the reviewing Team Lead, so the request surfaces in the Lead's activity as
+  // well as the member's own, and the changes[] diff previews exactly what was proposed.
+  recordActivitySafe({
+    actorId, actorName: requesterName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: reviewerId, affectedUserName: reviewerName,
+    action: 'Task Edit Requested', module: 'Tasks', entityType: 'Task',
+    entityId: taskId, entityName: row.title,
+    projectId: fromProjectPk(row.projectid), projectName: project.projectname,
+    taskId, taskName: row.title,
+    description: `${requesterName} requested an edit to task “${row.title}” — pending ${reviewerName}'s approval.`,
+    linkRoute: 'approvals', important: true,
+    changes: taskEditDiff(previous, proposed),
+    metadata: { approvalId: `task-edit-${requestPk}`, requestedBy: actorId, reviewerId }
+  });
 
   // The project's current Team Lead is the only recipient: they are the sole person authorized to
   // decide this request (decideTaskEditApproval re-checks isProjectLead), so nobody else has an
   // action to take and nobody else is told. Published server-side, in the same request that wrote
   // work.TaskChangeRequests, so it is persisted, appears in notification history, and survives a
   // refresh — the frontend no longer dispatches anything for this event.
-  const changes = diffTaskEdit(previous, proposed);
-  const requesterName = actorDisplayName(actorId);
-  const target = await resolveTaskEditTarget(row, row.title);
   publishSafely(
     {
       type: 'task_edit_approval_requested',
@@ -804,7 +835,6 @@ export const createTaskEditApproval = async (
     [reviewerId],
     actorId
   );
-
   return {
     id: `task-edit-${requestPk}`,
     type: 'Controlled_Edit',
@@ -961,31 +991,33 @@ export const decideTaskEditApproval = async (
     actorId
   );
 
+  // The decision is the audit event for the applied (or refused) edit: the change is executed
+  // inside the repository transaction above (never through service.updateTask, which writes its
+  // own activity), so this is the only place it can be recorded. affectedUserId is the
+  // requesting member, which is what makes the decision surface in the member's own Activity Log
+  // (affecteduseridtext matches the viewer's frontend id in activity.repository.ts) rather than
+  // only the reviewer's. Uses the same subtask-aware `target` the notification above does, so a
+  // subtask decision reads "subtask 'Testing' under task 'Notification Module'" here too, instead
+  // of the ambiguous bare title a second identically-named subtask would otherwise share.
+  const requesterName = actorDisplayName(approval.requestedBy);
   recordActivitySafe({
-    actorId,
-    actorName: approverName,
-    actorEmail: userStore.findById(actorId)?.email,
-    actorRole,
-    action: decision === 'Approved' ? 'Approved' : 'Rejected',
-    module: 'Approvals',
-    entityType: 'Approval',
-    entityId: approval.id,
-    entityName: approval.targetTitle,
-    projectId: approval.projectId,
-    projectName: projectRow?.projectname,
-    taskId: approval.targetId,
-    taskName: approval.targetTitle,
+    actorId, actorName: approverName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: approval.requestedBy, affectedUserName: requesterName,
+    action: decision === 'Approved' ? 'Task Edit Approved' : 'Task Edit Rejected',
+    module: 'Tasks', entityType: 'Task',
+    entityId: approval.targetId, entityName: approval.targetTitle,
+    projectId: approval.projectId, projectName: projectRow?.projectname,
+    taskId: approval.targetId, taskName: approval.targetTitle,
     description: decision === 'Approved'
-      ? `${approverName} approved the ${target.noun} edit request for ${target.label}.`
-      : `${approverName} rejected the ${target.noun} edit request for ${target.label}.`,
-    reason: trimmedReason,
-    linkRoute: 'tasks',
-    important: true,
+      ? `${approverName} approved ${requesterName}'s edit request for ${target.label}.`
+      : `${approverName} rejected ${requesterName}'s edit request for ${target.label}.`,
+    reason: trimmedReason, linkRoute: 'approvals', important: true,
     changes: changes.map((change) => ({
       field: change.label,
       previousValue: change.previousValue,
       newValue: change.newValue
-    }))
+    })),
+    metadata: { approvalId, requestedBy: approval.requestedBy, decidedBy: actorId }
   });
 
   if (decision === 'Rejected') return null;
@@ -1079,6 +1111,12 @@ export const changeTaskStatus = async (
   const dto = await buildDTO(updatedRow!);
   const actorName = actorDisplayName(actorId);
   const projectRow = await projectRepo.findProjectById(row.projectid);
+
+  // This is how a subtask reaches Done (a top-level task's only path to Done is the Approve
+  // action in decideReview below, which has its own identical call) -- Issue #6's completion hook.
+  if (toMeta.isCompletedState) {
+    recheckPendingRemovalSafe(dto.projectId, dto.assigneeIds, actorId);
+  }
 
   // notifyTaskRecipients now always includes the project's Team Lead alongside the assignees,
   // so the Review-specific manual add that used to live here is redundant.
@@ -1418,6 +1456,20 @@ const announceProjectCompletionSafe = (projectPk: number, actorId: string, actor
   });
 };
 
+// Issue #6: whenever a task or subtask reaches Done, any of its (former) assignees who are
+// currently Pending Removal in this project might now be clear to actually remove -- same
+// "never break the status change that triggered it" rule as announceProjectCompletionSafe above.
+// Fired for every assignee unconditionally; project.service.ts's recheckPendingRemovalForMember
+// itself no-ops for anyone not flagged, so this is cheap for the (overwhelmingly common) case of
+// no one being Pending Removal at all.
+const recheckPendingRemovalSafe = (projectId: string, assigneeIds: string[], actorId: string): void => {
+  for (const memberUserId of assigneeIds) {
+    recheckPendingRemovalForMember(projectId, memberUserId, actorId).catch((error) => {
+      console.error('[task.service] Failed to recheck pending removal.', error);
+    });
+  }
+};
+
 const decideReview = async (
   taskId: string,
   decision: 'Approve' | 'Reject',
@@ -1572,6 +1624,8 @@ const decideReview = async (
   // can become fully complete.
   if (decision === 'Approve') {
     announceProjectCompletionSafe(row.projectid, actorId, actorRole);
+    // Issue #6's completion hook -- same reasoning as changeTaskStatus's identical call above.
+    recheckPendingRemovalSafe(dto.projectId, dto.assigneeIds, actorId);
   }
 
   return dto;

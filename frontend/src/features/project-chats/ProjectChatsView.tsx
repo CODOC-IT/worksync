@@ -598,6 +598,13 @@ const NewDiscussionDialog: React.FC<any> = ({
     || selectedProject.memberIds.includes(currentUser.id)
     || selectedProject.teamLeadId === currentUser.id
     || selectedProject.createdBy === currentUser.id;
+  const selectedTaskAssigneeIds = selectedTask
+    ? (selectedTask.assigneeIds || [selectedTask.assigneeId])
+    : [];
+  const canUseTask = !selectedTask
+    || currentRole === 'Admin'
+    || selectedProject?.teamLeadId === currentUser.id
+    || selectedTaskAssigneeIds.includes(currentUser.id);
   const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
     users,
     selectedProject
@@ -638,6 +645,10 @@ const NewDiscussionDialog: React.FC<any> = ({
     }
     if (!canUseProject) {
       setError('You can only start a discussion in a project you are assigned to or lead.');
+      return;
+    }
+    if (!canUseTask) {
+      setError('You can only start a task discussion for a task assigned to you.');
       return;
     }
     const outOfScopeMention = findOutOfScopeMention(body, users, projectUsers);
@@ -700,13 +711,28 @@ const NewDiscussionDialog: React.FC<any> = ({
                 disabled={!form.projectId}
                 placeholder="No specific task"
                 emptyMessage="No tasks found"
-                options={[{ value: '', label: 'No specific task' }, ...eligibleTasks.map((task: any) => ({ value: task.id, label: task.title }))]}
+                options={[
+                  { value: '', label: 'No specific task' },
+                  ...eligibleTasks.map((task: any) => {
+                    const taskAssigneeIds = task.assigneeIds || [task.assigneeId];
+                    const canSelectTask = currentRole === 'Admin'
+                      || selectedProject?.teamLeadId === currentUser.id
+                      || taskAssigneeIds.includes(currentUser.id);
+                    return {
+                      value: task.id,
+                      label: task.title,
+                      sublabel: canSelectTask ? undefined : 'Not assigned to you',
+                      disabled: !canSelectTask
+                    };
+                  })
+                ]}
               />
             </div>
             <select aria-hidden tabIndex={-1} value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className="sr-only">
               <option value="">No specific task</option>
               {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
             </select>
+            {form.taskId && !canUseTask && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this task, so you cannot start its discussion.</span>}
             <span className="project-chat-secondary mt-1 block font-normal">Choose a task only if this discussion is about a specific task.</span>
           </label>
           <label className="project-chat-body text-xs font-semibold">Subject *

@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS work.ProjectApprovalRequests
              (RequestStatus <> 'Pending' AND ReviewedByUserId IS NOT NULL AND DecidedAtUtc IS NOT NULL))
 );
 
+-- Widen the RequestType check for databases where this table was created before 'PROJECT_EDIT'
+-- was added to the workflow -- CREATE TABLE IF NOT EXISTS above is a no-op on an already-existing
+-- table, so it never retroactively fixes a stale constraint on its own. Drop-and-recreate
+-- (idempotent, matching this file's own FK-patching pattern below) keeps this migration safe to
+-- rerun against any existing WorkSync database, regardless of when its approval-requests table
+-- was first created.
+ALTER TABLE work.ProjectApprovalRequests
+    DROP CONSTRAINT IF EXISTS CK_ProjectApprovalRequests_Type;
+ALTER TABLE work.ProjectApprovalRequests
+    ADD CONSTRAINT CK_ProjectApprovalRequests_Type CHECK
+        (RequestType IN ('PROJECT_EDIT','PROJECT_ARCHIVE','PROJECT_DELETE','PROJECT_RESTORE','PROJECT_PERMANENT_DELETE'));
+
 DO $$
 BEGIN
     IF NOT EXISTS (

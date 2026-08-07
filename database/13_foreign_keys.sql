@@ -85,6 +85,9 @@ ALTER TABLE work.ProjectMembers
 ALTER TABLE work.ProjectMembers
     ADD CONSTRAINT FK_ProjectMembers_RemovedBy FOREIGN KEY (RemovedByUserId) REFERENCES iam.Users(UserId);
 
+ALTER TABLE work.ProjectMembers
+    ADD CONSTRAINT FK_ProjectMembers_PendingRemovalBy FOREIGN KEY (PendingRemovalByUserId) REFERENCES iam.Users(UserId);
+
 ALTER TABLE iam.TeamLeadProjectScopes
     ADD CONSTRAINT FK_TeamLeadScopes_UserRole FOREIGN KEY (UserRoleId) REFERENCES iam.UserRoles(UserRoleId) ON DELETE CASCADE;
 

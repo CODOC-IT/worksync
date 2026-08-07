@@ -94,6 +94,9 @@ export interface ProjectMemberRow {
   projectid: number;
   userid: number;
   memberrolecode: ProjectMemberRoleCode;
+  pendingremovalatutc: Date | null;
+  pendingremovalbyuserid: number | null;
+  pendingremovalreason: string | null;
 }
 
 export interface MilestoneDTO {
@@ -127,6 +130,10 @@ export interface ProjectDTO {
   createdBy: string;
   teamLeadId: string;
   memberIds: string[];
+  // Members currently kept in the project (LeftAtUtc still NULL) because an Admin's removal
+  // attempt found them with active task/subtask work still assigned -- see project.service.ts's
+  // removeMember. Always a subset of memberIds, never a separate/parallel identity.
+  pendingRemovalMemberIds: string[];
   startDate: string;
   targetDate: string;
   priority: ApiProjectPriority;

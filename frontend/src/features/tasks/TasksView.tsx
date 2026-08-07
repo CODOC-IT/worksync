@@ -230,11 +230,23 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
     [availableAssignees, form.assigneeIds]
   );
   const editableAssignees = useMemo(() => {
-    if (!editingTaskSource?.parentTaskId) return availableAssignees;
-    const parent = tasks.find((task) => task.id === editingTaskSource.parentTaskId);
-    const parentAssigneeIds = new Set(parent ? getTaskAssigneeIds(parent) : []);
-    return availableAssignees.filter((user) => parentAssigneeIds.has(user.id));
-  }, [availableAssignees, editingTaskSource?.parentTaskId, tasks]);
+    const currentAssigneeIds = new Set(
+      editingTaskSource ? getTaskAssigneeIds(editingTaskSource) : []
+    );
+    const eligibleUsers = editingTaskSource?.parentTaskId
+      ? availableAssignees.filter((user) => {
+          const parent = tasks.find((task) => task.id === editingTaskSource.parentTaskId);
+          return Boolean(parent && getTaskAssigneeIds(parent).includes(user.id));
+        })
+      : availableAssignees;
+
+    // Keep any existing assignee visible even if they were removed from the project or parent
+    // task after this task was created. The lead must be able to remove that stale assignment.
+    return Array.from(new Map([
+      ...eligibleUsers,
+      ...users.filter((user) => currentAssigneeIds.has(user.id))
+    ].map((user) => [user.id, user])).values());
+  }, [availableAssignees, editingTaskSource, tasks, users]);
 
   const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
@@ -309,7 +321,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
       priority: getTaskPriorityValue(task.priority),
       startDate: getTaskStartDate(task),
       dueDate: task.dueDate,
-      assigneeIds: getTaskAssigneeIds(task),
+      assigneeIds: Array.from(new Set(getTaskAssigneeIds(task))),
       status: task.status
     });
     setFieldErrors({});
@@ -393,7 +405,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                 ...(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id
                   ? { assigneeIds: form.assigneeIds }
                   : {})
-              })
+              }, existingTask)
           : createTask({
               projectId: form.projectId,
               title: form.title,
@@ -847,7 +859,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
               </Field>
             ) : (
               <Field
-                label={`Assignees * (${form.assigneeIds.length} selected)`}
+                label={`Assignees * (${new Set(form.assigneeIds).size} selected)`}
                 error={fieldErrors.assigneeIds}
                 className="md:col-span-2 xl:col-span-4"
               >
