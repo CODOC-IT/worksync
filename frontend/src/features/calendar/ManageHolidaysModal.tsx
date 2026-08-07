@@ -225,10 +225,11 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
               <input
                 type="date"
                 value={form.date}
-                // Only enforced while adding a new holiday -- editing an existing (possibly
-                // already-past) holiday's name/recurrence must still work without forcing its
-                // date to change, matching updateHoliday's unchanged backend behavior.
-                min={editingId ? undefined : todayDateKey()}
+                // Today and future only, in both add and edit modes. Editing an existing
+                // (possibly already-past) holiday's name/recurrence must still work without
+                // forcing its date to change, so handleSubmit compares against the original
+                // date -- matching updateHoliday's unchanged backend behavior.
+                min={todayDateKey()}
                 onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
               />
