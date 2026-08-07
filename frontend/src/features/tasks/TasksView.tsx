@@ -39,6 +39,7 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   CREATE_TASK_STATUSES,
+  TASK_FILTER_STATUSES,
   TaskFormInput,
   TaskMutationResult,
   TaskModulePriority,
@@ -1165,7 +1166,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
             <ProjectFilter value={projectFilter} onChange={setProjectFilter} projects={taskFilterProjects} />
 
             <FilterSelect value={statusFilter} onChange={setStatusFilter} label="All statuses">
-              {TASK_STATUSES.map((status) => (
+              {TASK_FILTER_STATUSES.map((status) => (
                 <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
               ))}
             </FilterSelect>
