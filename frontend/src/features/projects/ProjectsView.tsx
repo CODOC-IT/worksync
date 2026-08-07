@@ -362,7 +362,14 @@ export const ProjectsView: React.FC = () => {
     if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
       errors.memberIds = 'The selected Team Lead must be included in project members.';
     }
-    if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
+    // Mirrors backend/src/projects/projectWorkflow.rules.ts's resolveCreateParticipants/
+    // resolveUpdatedParticipants -- a Team Lead is an existing member designated as lead, not a
+    // separate entity, so `memberIds.length === 0` alone never catches a lead-only project (the
+    // check above already force-includes the lead). This checks for at least one *other* member.
+    const nonLeadMemberCount = data.memberIds.filter((id) => id !== data.teamLeadId).length;
+    if (nonLeadMemberCount === 0) {
+      errors.memberIds = 'A project must have at least one member besides the Team Lead.';
+    }
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
     } else if (formMode === 'create' && data.startDate < todayStr) {
@@ -879,7 +886,16 @@ export const ProjectsView: React.FC = () => {
                         type="checkbox"
                         checked={form.memberIds.includes(u.id)}
                         onChange={() => toggleMember(u.id)}
-                        disabled={u.id === form.teamLeadId}
+                        // A Team Lead is an existing member designated as lead, not a separate
+                        // manager of other members -- only Admins may add/remove them. Same
+                        // edit-mode + non-Admin-lead condition already used above to lock the
+                        // Team Lead <select>.
+                        disabled={
+                          u.id === form.teamLeadId ||
+                          (formMode === 'edit' &&
+                            currentRole !== 'Admin' &&
+                            (!editingProject || isProjectLead(editingProject)))
+                        }
                         className="accent-cyan-500"
                       />
                       {u.name}

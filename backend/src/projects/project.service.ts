@@ -74,6 +74,17 @@ const assertCanManage = async (projectRow: ProjectRow, userId: string, role: str
   }
 };
 
+// Member management (add/remove) is Admin-only -- deliberately stricter than assertCanManage's
+// "Admin, or this project's own lead" rule, which still applies to everything else a lead
+// manages (milestones, general project edits via the PROJECT_EDIT approval flow). A Team Lead is
+// an existing project member designated as lead, not a separate role with member-management
+// authority, so addMember/removeMember use this instead of assertCanManage.
+const assertCanManageMembers = (role: string) => {
+  if (role !== 'Admin') {
+    throw new ProjectAuthorizationError('Only Admins can add or remove project members.');
+  }
+};
+
 const PROJECT_LEAD_ELIGIBLE_ROLES = new Set(['Team_Lead', 'Team_Member']);
 const PROJECT_MEMBER_ELIGIBLE_ROLES = new Set(['Team_Member']);
 
@@ -647,7 +658,7 @@ export const addMember = async (
 ): Promise<ProjectDTO> => {
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
-  await assertCanManage(row, actorId, actorRole);
+  assertCanManageMembers(actorRole);
 
   await assertEligibleAssignee(
     memberUserId,
@@ -699,7 +710,7 @@ export const removeMember = async (
 ): Promise<ProjectDTO> => {
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
-  await assertCanManage(row, actorId, actorRole);
+  assertCanManageMembers(actorRole);
   const currentMembers = await repo.findMembersForProject(row.projectid);
   if (resolveTeamLeadUserId(row, currentMembers) === memberUserId) {
     throw new ProjectValidationError(
