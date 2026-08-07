@@ -52,6 +52,8 @@ export const validateCreateTaskBody = (body: unknown): ValidationResult => {
   }
   if (input.status && !VALID_STATUSES.has(input.status)) {
     fieldErrors.status = 'Select a valid task status.';
+  } else if (input.status === 'Done') {
+    fieldErrors.status = 'Tasks cannot be created as Done.';
   }
   if (input.subtasks !== undefined) {
     if (!Array.isArray(input.subtasks) || input.subtasks.length > 10) {
@@ -66,6 +68,7 @@ export const validateCreateTaskBody = (body: unknown): ValidationResult => {
         if (!subtask || !VALID_PRIORITIES.has(subtask.priority)) fieldErrors[`${prefix}.priority`] = 'Select a valid priority.';
         if (!subtask || !Array.isArray(subtask.assigneeIds) || subtask.assigneeIds.length === 0 || subtask.assigneeIds.some((id) => typeof id !== 'string' || !FRONTEND_USER_ID_PATTERN.test(id))) fieldErrors[`${prefix}.assigneeIds`] = 'Select at least one assignee.';
         if (subtask?.status && !VALID_STATUSES.has(subtask.status)) fieldErrors[`${prefix}.status`] = 'Select a valid status.';
+        else if (subtask?.status === 'Done') fieldErrors[`${prefix}.status`] = 'Subtasks cannot be created as Done.';
       });
     }
   }
