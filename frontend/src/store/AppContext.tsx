@@ -756,11 +756,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!isActive) return;
         const validApprovals = persistedApprovals.filter((approval) => {
           const project = projects.find((candidate) => candidate.id === approval.projectId);
-          if (!project || project.teamLeadId !== currentUser.id) return false;
-          return tasks.some((task) =>
-            task.id === approval.targetId ||
-            task.subtasks.some((subtask) => subtask.id === approval.targetId)
-          );
+          // The list endpoint deliberately returns parent tasks only. Subtasks are loaded into
+          // a detail cache when expanded, so requiring an approval target to appear in `tasks`
+          // incorrectly hides valid subtask requests. The API already scopes this response to
+          // the assigned reviewer; retain the project-lead check here only to clear access as
+          // soon as the lead assignment changes in the client.
+          return Boolean(project && project.teamLeadId === currentUser.id);
         });
         setSystemApprovals((prev) => {
           const persistedIds = new Set(validApprovals.map((approval) => approval.id));
