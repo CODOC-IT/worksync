@@ -304,7 +304,7 @@ test('updateCommentText: sets EditedAtUtc alongside the new text', async () => {
   assert.ok(comment!.editedatutc, 'EditedAtUtc should be set after an edit');
 });
 
-test('softDeleteComment: sets DeletedAtUtc without violating the non-empty text constraint', async () => {
+test('softDeleteComment: preserves text for authorized review while marking the comment deleted', async () => {
   const repo = await import('./discussion.repository.js');
   const { commentId } = await repo.insertThread({
     projectId: 1, title: 'Deletable thread', commentKind: 'General', creatorUserId: 1,
@@ -314,6 +314,6 @@ test('softDeleteComment: sets DeletedAtUtc without violating the non-empty text 
   await repo.softDeleteComment(commentId);
   const comment = await repo.findCommentById(commentId);
   assert.ok(comment!.deletedatutc, 'DeletedAtUtc should be set');
-  assert.ok(comment!.commenttext.length > 0, 'CommentText must stay non-empty (CK_Comments_Text)');
+  assert.equal(comment!.commenttext, 'Will be deleted.');
 });
 

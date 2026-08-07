@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, AtSign, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
+import { ArrowLeft, AtSign, ChevronDown, Download, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { SearchableSelect } from '../../components/common/SearchableSelect';
 import { ProjectMemberSummary } from '../projects/projectRepository';
@@ -409,17 +409,30 @@ const ThreadPreview: React.FC<any> = ({ thread, active, projectName, taskName, u
 };
 const renderAttachment = (file: ChatAttachment) => {
   const isImage = file.mimeType.startsWith('image/') && file.url;
+  const downloadControl = file.url && (
+    <a
+      href={file.url}
+      download={file.name}
+      aria-label={`Download ${file.name}`}
+      title={`Download ${file.name}`}
+      className="project-chat-attachment-download inline-flex shrink-0 items-center justify-center rounded-md p-1"
+    >
+      <Download size={13} />
+    </a>
+  );
   if (isImage) {
     return (
       <div key={file.id} className="mt-2 mr-2 inline-block">
         <img src={file.url} alt={file.name} className="project-chat-divider max-h-48 max-w-64 rounded-lg border object-cover" />
-        <p className="project-chat-secondary mt-1 text-[10px]">{file.name}</p>
+        <p className="project-chat-secondary mt-1 flex max-w-64 items-center gap-1 text-[10px]">
+          <span className="truncate">{file.name}</span>{downloadControl}
+        </p>
       </div>
     );
   }
   return (
-    <span key={file.id} className="project-chat-meta-pill mt-2 mr-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs">
-      <FileText size={12} />{file.name}
+    <span key={file.id} className="project-chat-meta-pill mt-2 mr-2 inline-flex max-w-64 items-center gap-1 rounded-lg px-2 py-1 text-xs">
+      <FileText size={12} className="shrink-0" /><span className="truncate">{file.name}</span>{downloadControl}
     </span>
   );
 };
@@ -454,6 +467,7 @@ const DiscussionPanel: React.FC<any> = ({
     wasNearBottom.current = true;
   }, [thread.id]);
   const participantCount = new Set(thread.comments.map((comment: DiscussionComment) => comment.authorId)).size;
+  const canReviewDeletedContent = currentRole === 'Admin' || currentRole === 'HR';
 
   return (
     <div className="relative grid h-full min-h-0 grid-rows-[auto_minmax(280px,1fr)] overflow-hidden">
@@ -488,7 +502,7 @@ const DiscussionPanel: React.FC<any> = ({
           const parent = comment.parentCommentId ? thread.comments.find((candidate) => candidate.id === comment.parentCommentId) : undefined;
 
           return (
-            <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
+            <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${comment.deletedAt ? 'is-deleted' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
               <div className="flex gap-3">
                 <MemberInitials user={author} />
                 <div className="min-w-0 flex-1">
@@ -525,7 +539,7 @@ const DiscussionPanel: React.FC<any> = ({
                       </div>
                     )}
                   </div>
-                  {comment.deletedAt ? (
+                  {comment.deletedAt && !canReviewDeletedContent ? (
                     <p className="project-chat-secondary mt-2 italic text-sm">This message was deleted.</p>
                   ) : isEditing ? (
                     <div className="mt-2 space-y-2">
@@ -549,12 +563,13 @@ const DiscussionPanel: React.FC<any> = ({
                     </div>
                   ) : (
                     <>
+                      {comment.deletedAt && <span className="project-chat-deleted-label mt-2 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide">Deleted</span>}
                       {parent && <p className="project-chat-secondary mt-2 truncate border-l-2 border-cyan-400/45 pl-2 text-xs">Replying to {users.find((user) => user.id === parent.authorId)?.name || 'message'}: {parent.body}</p>}
                       <p className="project-chat-body mt-2 max-w-3xl break-words whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
                       {comment.attachments.map((file) => renderAttachment(file))}
-                      <div className="mt-2 flex gap-3">
+                      {!comment.deletedAt && <div className="mt-2 flex gap-3">
                         <button type="button" onClick={() => onReply(comment.id)} className="project-chat-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold"><ReplyIcon size={13} />Reply</button>
-                      </div>
+                      </div>}
                     </>
                   )}
                 </div>

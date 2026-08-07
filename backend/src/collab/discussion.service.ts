@@ -109,7 +109,10 @@ const notify = (
   });
 };
 
-const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionThreadDTO[]> => {
+const hydrateThreads = async (
+  rows: DiscussionThreadRow[],
+  includeDeletedContent: boolean
+): Promise<DiscussionThreadDTO[]> => {
   if (rows.length === 0) return [];
   const threadIds = rows.map((row) => row.threadid);
   const projectIds = Array.from(new Set(rows.map((row) => row.effectiveprojectid)));
@@ -124,7 +127,9 @@ const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionTh
   return Promise.all(
     rows.map(async (row) => {
       const rowsForThread = commentRows.filter((c) => c.threadid === row.threadid);
-      const comments = await Promise.all(rowsForThread.map((c) => buildCommentDTO(c, mentionRows, attachmentRows)));
+      const comments = await Promise.all(
+        rowsForThread.map((c) => buildCommentDTO(c, mentionRows, attachmentRows, includeDeletedContent))
+      );
       const opening = rowsForThread.find((c) => !c.parentcommentid) || rowsForThread[0];
       const scopedRows = row.taskid
         ? await repo.findMentionableUsersForTask(row.taskid, row.effectiveprojectid)
@@ -135,7 +140,12 @@ const hydrateThreads = async (rows: DiscussionThreadRow[]): Promise<DiscussionTh
   );
 };
 
-const hydrateThread = async (row: DiscussionThreadRow): Promise<DiscussionThreadDTO> => (await hydrateThreads([row]))[0];
+const hydrateThread = async (
+  row: DiscussionThreadRow,
+  includeDeletedContent: boolean
+): Promise<DiscussionThreadDTO> => (await hydrateThreads([row], includeDeletedContent))[0];
+
+const canReviewDeletedContent = (role: string): boolean => role === 'Admin' || role === 'HR';
 
 const assertThreadAccessible = async (row: DiscussionThreadRow, userId: string, role: string): Promise<void> => {
   const accessible = hasGlobalDiscussionAccess(role)
@@ -160,14 +170,14 @@ export const listThreadsForUser = async (userId: string, role: string): Promise<
     : (await Promise.all(openRows.map(async (row) => {
         try { await assertThreadAccessible(row, userId, role); return row; } catch { return null; }
       }))).filter((row): row is DiscussionThreadRow => row !== null);
-  return hydrateThreads(accessibleRows);
+  return hydrateThreads(accessibleRows, canReviewDeletedContent(role));
 };
 
 export const getThreadForUser = async (threadId: string, userId: string, role: string): Promise<DiscussionThreadDTO> => {
   const row = await repo.findThreadById(toThreadPk(threadId));
   if (!row) throw new DiscussionNotFoundError('Discussion not found.');
   await assertThreadAccessible(row, userId, role);
-  return hydrateThread(row);
+  return hydrateThread(row, canReviewDeletedContent(role));
 };
 
 export interface CreateThreadServiceInput {
@@ -229,7 +239,7 @@ export const createThread = async (
   });
 
   const row = await repo.findThreadById(threadId);
-  const thread = await hydrateThread(row!);
+  const thread = await hydrateThread(row!, canReviewDeletedContent(actorRole));
 
   const members = taskPk
     ? await repo.findMentionableUsersForTask(taskPk, projectRow.projectid)
@@ -399,7 +409,7 @@ export const editComment = async (commentId: string, body: string, actorId: stri
     repo.findMentionsForComments([commentRow.commentid]),
     repo.findAttachmentsForComments([commentRow.commentid])
   ]);
-  const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows);
+  const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows, canReviewDeletedContent(actorRole));
 
   await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);
@@ -438,7 +448,7 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
     repo.findMentionsForComments([commentRow.commentid]),
     repo.findAttachmentsForComments([commentRow.commentid])
   ]);
-  const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows);
+  const dto = await buildCommentDTO(updatedRow!, mentionRows, attachmentRows, canReviewDeletedContent(actorRole));
 
   await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);

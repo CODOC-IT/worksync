@@ -325,11 +325,13 @@ export const updateCommentText = async (commentId: number, body: string): Promis
 };
 
 // Soft-delete — collab.Comments has DeletedAtUtc for exactly this, matching the same
-// "never a hard DELETE" pattern as Projects/Tasks/Notifications.
+// "never a hard DELETE" pattern as Projects/Tasks/Notifications. Preserve the original text so
+// HR/Admin can review an inappropriate or otherwise deleted message; response mapping redacts it
+// for every other role.
 export const softDeleteComment = async (commentId: number): Promise<void> => {
   await query(
     `UPDATE collab.comments
-     SET deletedatutc = CURRENT_TIMESTAMP, commenttext = '[deleted]', rowversion = rowversion + 1
+     SET deletedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
      WHERE commentid = $1`,
     [commentId]
   );
