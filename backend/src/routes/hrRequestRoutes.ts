@@ -114,6 +114,19 @@ const formatDateTime = (value: string | Date): string =>
   new Date(value).toISOString().replace('T', ' ').substring(0, 16);
 const parseDetails = (details: HRRequestRow['details']): HRRequestDetails =>
   typeof details === 'string' ? JSON.parse(details) : details || {};
+
+// Labels used when composing leave audit entries so the Activity Log distinguishes
+// half-day from full-day leave (and the half-day period) like attendance records do.
+const leaveTypeLabel = (details: HRRequestDetails): string =>
+  details.leaveType === 'Half Day Leave'
+    ? `Half Day Leave (${details.leavePeriod || 'Second Half'})`
+    : 'Full Day Leave';
+
+const leaveMetadata = (details: HRRequestDetails): Record<string, unknown> => ({
+  leaveType: details.leaveType,
+  leavePeriod: details.leavePeriod,
+  leaveDays: details.leaveDays ?? 1,
+});
 const mapRow = (row: HRRequestRow) => ({
   id: row.id,
   userId: row.user_id,
@@ -316,9 +329,10 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         module: 'Attendance',
         entityType: 'Leave',
         entityId: id,
-        entityName: `Leave ${requestDate}`,
-        description: `${actorName} requested leave for ${requestDate}.`,
+        entityName: `${leaveTypeLabel(cleanDetails)} ${requestDate}`,
+        description: `${actorName} requested ${leaveTypeLabel(cleanDetails)} for ${requestDate}.`,
         source: 'Web',
+        metadata: leaveMetadata(cleanDetails),
       });
     }
 
@@ -453,6 +467,7 @@ const decideRequest = async (
       const deciderName = userStore.findById(req.user.id)?.name || req.user.email;
       const requestDateStr = formatDate(updated.request_date);
       if (updated.request_type === 'Leave') {
+        const leaveDetails = parseDetails(updated.details);
         recordActivitySafe({
           actorId: req.user.id,
           actorName: deciderName,
@@ -464,13 +479,14 @@ const decideRequest = async (
           module: 'Attendance',
           entityType: 'Leave',
           entityId: updated.id,
-          entityName: `Leave ${requestDateStr}`,
+          entityName: `${leaveTypeLabel(leaveDetails)} ${requestDateStr}`,
           description: decision === 'Approved'
-            ? `${deciderName} approved leave request for ${requesterName} on ${requestDateStr}.`
-            : `${deciderName} rejected leave request for ${requesterName} on ${requestDateStr}.`,
+            ? `${deciderName} approved leave request (${leaveTypeLabel(leaveDetails)}) for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected leave request (${leaveTypeLabel(leaveDetails)}) for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,
+          metadata: { ...leaveMetadata(leaveDetails), approvalStage: updated.approval_stage },
         });
       } else if (updated.request_type === 'Correction') {
         recordActivitySafe({
