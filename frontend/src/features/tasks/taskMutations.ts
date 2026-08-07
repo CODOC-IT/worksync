@@ -146,10 +146,11 @@ export const prepareTaskUpdate = (
     return { success: false, message: 'You do not have permission to edit this task.' };
   }
 
-  if (data.assigneeId !== undefined || data.assigneeIds !== undefined) {
+  const isProjectLead = project.teamLeadId === context.currentUserId && context.currentRole !== 'HR';
+  if ((data.assigneeId !== undefined || data.assigneeIds !== undefined) && !isProjectLead) {
     return {
       success: false,
-      message: 'Task assignments cannot be changed from the assignee edit form.'
+      message: 'Only this project\'s Team Lead can change task assignments.'
     };
   }
 
