@@ -40,6 +40,22 @@ export const validatePublishEventBody = (body: unknown): ValidationResult => {
   if (event.priority && !['Critical', 'High', 'Normal', 'Low'].includes(event.priority)) {
     return { valid: false, message: 'priority must be one of Critical, High, Normal, Low.' };
   }
+  // Optional expanded-detail payload (see NotificationEvent.detail/metadata). `detail` is free
+  // text; `metadata` is a flat label/value bag rendered verbatim in the expanded view, so nested
+  // objects/arrays are rejected rather than silently stringified into "[object Object]".
+  if (event.detail !== undefined && typeof event.detail !== 'string') {
+    return { valid: false, message: 'detail must be a string.' };
+  }
+  if (event.metadata !== undefined) {
+    if (typeof event.metadata !== 'object' || event.metadata === null || Array.isArray(event.metadata)) {
+      return { valid: false, message: 'metadata must be an object.' };
+    }
+    for (const [key, value] of Object.entries(event.metadata)) {
+      if (!['string', 'number', 'boolean'].includes(typeof value)) {
+        return { valid: false, message: `metadata."${key}" must be a string, number, or boolean.` };
+      }
+    }
+  }
 
   return { valid: true };
 };

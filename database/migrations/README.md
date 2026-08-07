@@ -29,6 +29,13 @@ Users): an `AudienceType` column on `hr.Holidays`, the `hr.HolidayAudienceDepart
 run more than once; existing holidays default to `AudienceType = 'Everyone'`, matching their prior
 unfiltered visibility.
 
+`20260807_01_notification_detail_metadata.sql` adds `DetailText` and `MetadataJson` to
+`notify.Notifications` (the expanded-detail half of the Notification Center's compact-preview /
+expanded-detail split) and seeds the `task_edit_approval_requested`/`_approved`/`_rejected`,
+`subtask_assignment_changed`, and `leave_requested`/`_approved`/`_rejected` notification types.
+Safe to run more than once; existing notifications keep NULL detail/metadata and render exactly
+as before.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
