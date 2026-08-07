@@ -206,12 +206,13 @@ export const loadTaskEditApprovalsViaApi = async (): Promise<SystemApproval[]> =
 
 export const decideTaskEditApprovalViaApi = async (
   approvalId: string,
-  decision: 'Approved' | 'Rejected'
+  decision: 'Approved' | 'Rejected',
+  reason?: string
 ): Promise<Task | null> => {
   const response = await fetch(`/api/tasks/edit-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'PATCH',
     headers: authHeaders(),
-    body: JSON.stringify({ decision })
+    body: JSON.stringify({ decision, reason })
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.success) {

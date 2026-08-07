@@ -234,8 +234,13 @@ export const decideTaskEditApproval = async (req: AuthenticatedRequest, res: Res
     res.status(400).json({ success: false, message: 'Decision must be Approved or Rejected.' });
     return;
   }
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (decision === 'Rejected' && !reason) {
+    res.status(400).json({ success: false, message: 'A rejection reason is required.' });
+    return;
+  }
   try {
-    const data = await service.decideTaskEditApproval(req.params.approvalId, decision, user.id, user.role);
+    const data = await service.decideTaskEditApproval(req.params.approvalId, decision, user.id, user.role, reason || undefined);
     res.json({ success: true, message: `Task update ${decision.toLowerCase()}.`, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to decide task update request.');
