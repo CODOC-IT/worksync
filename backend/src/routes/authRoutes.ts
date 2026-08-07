@@ -11,6 +11,7 @@ import { query } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
 import { getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { canAuthenticateAccount } from '../auth/accountAccess.js';
+import { isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../accounts/accounts.validation.js';
 
 const router = Router();
 
@@ -522,8 +523,8 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
         res.status(403).json({ success: false, message: 'Managed password changes are limited to Member and Team Lead accounts, or HR accounts when updated by an Administrator.' });
         return;
       }
-      if (nextPassword.length < 6) {
-        res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+      if (!isStrongPassword(nextPassword)) {
+        res.status(400).json({ success: false, message: `New password must meet the policy: ${PASSWORD_POLICY_MESSAGE}` });
         return;
       }
       if (nextPassword !== confirmPassword) {
