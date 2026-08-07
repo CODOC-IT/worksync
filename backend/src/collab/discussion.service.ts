@@ -206,7 +206,7 @@ export const createThread = async (
     taskTitle = taskRow.title;
     const taskAudience = await repo.findMentionableUsersForTask(taskPk, projectRow.projectid);
     if (!hasGlobalDiscussionAccess(actorRole) && !taskAudience.some((candidate) => fromUserPk(candidate.userid) === actorId)) {
-      throw new DiscussionAuthorizationError('Only a task assignee or this project\'s Team Lead can start a task discussion.');
+      throw new DiscussionAuthorizationError('Only an active task assignee or this project\'s current Team Lead can start a task discussion.');
     }
   }
 
