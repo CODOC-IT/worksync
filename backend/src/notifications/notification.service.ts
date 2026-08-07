@@ -5,7 +5,7 @@ import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
-import { actorDisplayName } from '../utils/actorDisplay.js';
+import { actorDisplayName, normalizeActorMessage } from '../utils/actorDisplay.js';
 import {
   NotificationCategory,
   NotificationDTO,
@@ -163,6 +163,40 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
   );
   if (recipientIds.length === 0) return [];
   event = { ...event, recipientIds };
+
+  // Centralized actor-name repair: every module in the app publishes through this one function
+  // (see the doc comment above), so sanitizing here — rather than auditing and fixing every
+  // individual call site in task.service.ts/project.service.ts/AppContext.tsx/etc. — guarantees
+  // no notification can ever persist with a raw "usr-<n>" id or the legacy "Someone" placeholder
+  // baked into its text, regardless of what the calling module happened to construct (e.g. a
+  // userStore cache miss at the moment actorDisplayName was called there — see its own comment).
+  // Applied to title/message/detail and every per-recipient override, before anything is written,
+  // so it also protects the in-memory DTOs this function returns (used for the immediate API
+  // response and the live Realtime broadcast), not only what a later GET /notifications re-fetch
+  // would show via notification.mapper.ts's identical read-time repair.
+  const resolvedActorName = actorDisplayName(event.actorId);
+  event = {
+    ...event,
+    title: normalizeActorMessage(event.title, resolvedActorName),
+    message: normalizeActorMessage(event.message, resolvedActorName),
+    detail: event.detail ? normalizeActorMessage(event.detail, resolvedActorName) : event.detail,
+    recipientMessages: event.recipientMessages
+      ? Object.fromEntries(
+          Object.entries(event.recipientMessages).map(([id, text]) => [
+            id,
+            normalizeActorMessage(text, resolvedActorName)
+          ])
+        )
+      : event.recipientMessages,
+    recipientDetails: event.recipientDetails
+      ? Object.fromEntries(
+          Object.entries(event.recipientDetails).map(([id, text]) => [
+            id,
+            normalizeActorMessage(text, resolvedActorName)
+          ])
+        )
+      : event.recipientDetails
+  };
 
   const suppressedUserIds = new Set<number>();
   for (const recipientPk of deliverablePks) {

@@ -672,12 +672,13 @@ export const addMember = async (
     })
     .catch((error) => console.error('[project.service] Failed to publish member-added event.', error));
 
+  const addedMemberName = actorDisplayName(memberUserId);
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    affectedUserId: memberUserId, affectedUserName: userStore.findById(memberUserId)?.name,
+    affectedUserId: memberUserId, affectedUserName: addedMemberName,
     action: 'Assigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
-    entityName: userStore.findById(memberUserId)?.name, projectId: dto.id, projectName: dto.title,
-    description: `${actorName} added ${userStore.findById(memberUserId)?.name || memberUserId} to “${dto.title}”.`,
+    entityName: addedMemberName, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} added ${addedMemberName} to “${dto.title}”.`,
     linkRoute: 'projects', changes: [{ field: 'Project role', previousValue: null, newValue: roleCode || 'Member' }]
   });
 
@@ -721,13 +722,13 @@ export const removeMember = async (
 
     const members = await repo.findMembersForProject(row.projectid);
     const dto = await buildDTO(row, members);
-    const memberName = userStore.findById(memberUserId)?.name;
+    const memberName = actorDisplayName(memberUserId);
 
     notificationService
       .publishEvent({
         type: 'project_member_pending_removal',
         title: 'Member Pending Removal',
-        message: `${actorName} tried to remove ${memberName || memberUserId} from "${dto.title}", but they still ` +
+        message: `${actorName} tried to remove ${memberName} from "${dto.title}", but they still ` +
           `have ${activeAssignments.length} active task/subtask assignment(s). Reassign or complete their work to ` +
           'finish removing them.',
         actorId,
@@ -741,7 +742,7 @@ export const removeMember = async (
       affectedUserId: memberUserId, affectedUserName: memberName,
       action: 'Flagged', module: 'Projects', entityType: 'User', entityId: memberUserId,
       entityName: memberName, projectId: dto.id, projectName: dto.title,
-      description: `${actorName} flagged ${memberName || memberUserId} for removal from “${dto.title}”, pending ` +
+      description: `${actorName} flagged ${memberName} for removal from “${dto.title}”, pending ` +
         `${activeAssignments.length} active task/subtask assignment(s).`,
       reason, linkRoute: 'projects', important: true
     });
@@ -771,12 +772,13 @@ export const removeMember = async (
     })
     .catch((error) => console.error('[project.service] Failed to publish member-removed event.', error));
 
+  const removedMemberName = actorDisplayName(memberUserId);
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    affectedUserId: memberUserId, affectedUserName: userStore.findById(memberUserId)?.name,
+    affectedUserId: memberUserId, affectedUserName: removedMemberName,
     action: 'Reassigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
-    entityName: userStore.findById(memberUserId)?.name, projectId: dto.id, projectName: dto.title,
-    description: `${actorName} removed ${userStore.findById(memberUserId)?.name || memberUserId} from “${dto.title}”.`,
+    entityName: removedMemberName, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} removed ${removedMemberName} from “${dto.title}”.`,
     reason, linkRoute: 'projects', important: true
   });
 
@@ -814,14 +816,14 @@ export const recheckPendingRemovalForMember = async (
   );
   if (!removed) return;
 
-  const memberName = userStore.findById(memberUserId)?.name;
+  const memberName = actorDisplayName(memberUserId);
   const flaggedByUserId = fromUserPk(member.pendingremovalbyuserid);
 
   notificationService
     .publishEvent({
       type: 'project_member_auto_removed',
       title: 'Member Removed',
-      message: `${memberName || memberUserId} was automatically removed from "${row.projectname}" -- their ` +
+      message: `${memberName} was automatically removed from "${row.projectname}" -- their ` +
         'previously active work is now reassigned or completed.',
       recipientMessages: { [memberUserId]: `You were removed from "${row.projectname}".` },
       actorId,
@@ -835,7 +837,7 @@ export const recheckPendingRemovalForMember = async (
     affectedUserId: memberUserId, affectedUserName: memberName,
     action: 'Auto-Removed', module: 'Projects', entityType: 'User', entityId: memberUserId,
     entityName: memberName, projectId, projectName: row.projectname,
-    description: `${memberName || memberUserId} was automatically removed from “${row.projectname}” after their ` +
+    description: `${memberName} was automatically removed from “${row.projectname}” after their ` +
       'previously active work was reassigned or completed.',
     linkRoute: 'projects', important: true
   });

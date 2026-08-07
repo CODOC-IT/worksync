@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import { isDatabaseConfigured } from '../db/pool.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import * as repo from './activity.repository.js';
 import { getEffectiveRoles, EffectiveRoles } from './activity.rbac.js';
 import { ActivityChange, ActivityDTO, ActivityFilters, ActivityRecordInput } from './activity.types.js';
@@ -74,9 +75,15 @@ const toDto = (
   const knownUser = row.actoruserid ? userStore.findById(fromUserPk(row.actoruserid)) : undefined;
   const actorId = row.actoruserid ? fromUserPk(row.actoruserid) : null;
   // The audit snapshot is useful for historical records, but a current IAM display name is
-  // authoritative for live actors. This also fixes cold-starts where userStore has not warmed
-  // its in-memory cache yet. Only actorless events should be labelled System.
-  const actorName = row.actordisplayname || row.actornamesnapshot || knownUser?.name || (actorId ? actorId : 'System');
+  // authoritative for live actors. Only actorless events should be labelled System.
+  //
+  // The final fallback used to be the raw `actorId` itself (e.g. "usr-46") whenever the DB join,
+  // the write-time snapshot, AND the userStore cache all missed for the same actor — the same
+  // class of bug the Notification module had. actorDisplayName(actorId) replaces that single
+  // step with the full Display Name -> Username -> Email -> Role -> "Unknown User" chain (it
+  // does its own userStore lookup — the same one `knownUser` already performed above — and
+  // returns 'System' for a null/absent actorId, matching this line's previous behavior exactly).
+  const actorName = row.actordisplayname || row.actornamesnapshot || actorDisplayName(actorId);
   const actorEmail = row.actoremail || row.actoremailsnapshot || knownUser?.email || '';
   const affectedName = row.affectedusernamesnapshot
     || (row.affecteduseridtext ? nameMap.get(row.affecteduseridtext) : undefined)
