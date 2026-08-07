@@ -11,6 +11,7 @@ export interface UserRecord {
   title: string;
   status: 'active' | 'inactive' | 'away';
   accountStatus?: 'Pending' | 'Active' | 'Locked' | 'Deactivated';
+  authUserId?: string;
   invitationSentAtUtc?: string | null;
   createdAt: string;
 }

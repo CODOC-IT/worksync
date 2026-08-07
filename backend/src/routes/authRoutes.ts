@@ -440,8 +440,7 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
       return;
     }
 
-    const newHash = bcrypt.hashSync(newPassword, 10);
-    await userStore.updatePassword(user.email, newHash);
+    await userStore.updatePassword(user.email, newPassword);
 
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch {
@@ -536,8 +535,7 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
     const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
 
     if (nextPassword) {
-      const newHash = bcrypt.hashSync(nextPassword, 10);
-      await userStore.updatePassword(updatedUser.email, newHash);
+      await userStore.updatePassword(updatedUser.email, nextPassword);
     }
 
     let message = 'Account updated successfully.';
