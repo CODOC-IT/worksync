@@ -202,7 +202,7 @@ interface AppState {
   approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
-  updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
+  updateTask: (taskId: string, data: TaskMutationData, sourceTask?: Task) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
   updateTaskStatus: (
     taskId: string,
@@ -1743,17 +1743,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // dispatches one itself (main's per-field notification differentiation -- reassigned/priority/
   // due-date/checklist -- had no backend equivalent to call through to, so it's not carried
   // forward here; see docs/ProjectBoardNotification_Implementation_Notes.md).
-  const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
+  const updateTask = async (
+    taskId: string,
+    data: TaskMutationData,
+    sourceTask?: Task
+  ): Promise<TaskMutationResult> => {
     const validationResult = prepareTaskUpdate(taskId, data, {
       currentRole,
       currentUserId: currentUser.id,
       projects,
-      tasks,
+      // Expanded subtasks are loaded into a view-local detail cache rather than the list's
+      // top-level task collection. Include that known source so an edit can be validated and
+      // submitted instead of being rejected locally as an unknown task.
+      tasks: sourceTask ? [...tasks, sourceTask] : tasks,
       users
     });
     if (!validationResult.success) return validationResult;
 
-    const existingTask = tasks.find((task) => task.id === taskId) || validationResult.task;
+    const existingTask = tasks.find((task) => task.id === taskId) || sourceTask || validationResult.task;
     const project = existingTask && projects.find((item) => item.id === existingTask.projectId);
     const isMemberOwnedTask = Boolean(
       existingTask

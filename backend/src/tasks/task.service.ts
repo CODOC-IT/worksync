@@ -95,8 +95,8 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
   const assignees = await repo.findAssigneesForTask(row.taskid);
   const isAssignee = assignees.some((assignee) => fromUserPk(assignee.userid) === userId);
 
-  // Subtask editing remains intentionally assignee-only, regardless of project role.
   if (row.parenttaskid) {
+    if (await isProjectLead(projectFrontendId(row), userId, role)) return;
     const denialReason = getTaskEditDenialReason({
       actorId: userId,
       assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
