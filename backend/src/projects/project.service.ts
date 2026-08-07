@@ -5,7 +5,7 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { getProjectTaskCompletion } from '../tasks/task.repository.js';
+import { findActiveTaskAssignmentsForUserInProject, getProjectTaskCompletion } from '../tasks/task.repository.js';
 import { resolveCreateParticipants, resolveUpdatedParticipants } from './projectWorkflow.rules.js';
 import {
   API_TO_DB_PRIORITY,
@@ -226,6 +226,15 @@ export const createProject = async (
   if (!input.description?.trim()) throw new ProjectValidationError('Project description is required.');
   if (!input.startDate || !input.targetDate) throw new ProjectValidationError('Start and target dates are required.');
   if (input.targetDate < input.startDate) throw new ProjectValidationError('Target date cannot be before the start date.');
+  // Mirrors the frontend's create-only creationReason check (ProjectsView.tsx's validate()) --
+  // every non-Admin create becomes a PROJECT_CREATE approval request (see the actorRole check a
+  // few lines below), so this is the only thing stopping a direct API call from submitting one
+  // with no reviewer context at all (project.controller.ts otherwise silently falls back to a
+  // generic placeholder message). Admin creates apply immediately with no approval step, so
+  // they're exempt, same as the frontend.
+  if (actorRole !== 'Admin' && !input.creationReason?.trim()) {
+    throw new ProjectValidationError('Creation notes are required when submitting a project for Admin approval.');
+  }
 
   const participants = resolveCreateParticipants(actorId, actorRole, input.teamLeadId, input.memberIds);
   if (participants.error) throw new ProjectValidationError(participants.error);
@@ -692,9 +701,57 @@ export const removeMember = async (
     );
   }
 
+  const actorName = actorDisplayName(actorId);
+  const memberPk = toUserPk(memberUserId);
+
+  // Issue #6: never actually remove a member who still has active task/subtask work in this
+  // project -- flag them Pending Removal instead, so that work keeps an owner until it's
+  // reassigned or completed (see task.service.ts's completion hooks -> recheckPendingRemovalForMember
+  // below). Checked here, not just in the frontend's own pre-check, so a direct API call can't
+  // bypass it.
+  const activeAssignments = await findActiveTaskAssignmentsForUserInProject(row.projectid, memberPk);
+  if (activeAssignments.length > 0) {
+    const flagged = await repo.flagMemberPendingRemoval(
+      row.projectid,
+      memberPk,
+      toUserPk(actorId),
+      `Has ${activeAssignments.length} active task/subtask assignment(s) remaining.`
+    );
+    if (!flagged) throw new ProjectValidationError('That user is not an active member of this project.');
+
+    const members = await repo.findMembersForProject(row.projectid);
+    const dto = await buildDTO(row, members);
+    const memberName = userStore.findById(memberUserId)?.name;
+
+    notificationService
+      .publishEvent({
+        type: 'project_member_pending_removal',
+        title: 'Member Pending Removal',
+        message: `${actorName} tried to remove ${memberName || memberUserId} from "${dto.title}", but they still ` +
+          `have ${activeAssignments.length} active task/subtask assignment(s). Reassign or complete their work to ` +
+          'finish removing them.',
+        actorId,
+        projectId: dto.id,
+        recipientIds: [resolveTeamLeadUserId(row, members)]
+      })
+      .catch((error) => console.error('[project.service] Failed to publish pending-removal event.', error));
+
+    recordActivitySafe({
+      actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+      affectedUserId: memberUserId, affectedUserName: memberName,
+      action: 'Flagged', module: 'Projects', entityType: 'User', entityId: memberUserId,
+      entityName: memberName, projectId: dto.id, projectName: dto.title,
+      description: `${actorName} flagged ${memberName || memberUserId} for removal from “${dto.title}”, pending ` +
+        `${activeAssignments.length} active task/subtask assignment(s).`,
+      reason, linkRoute: 'projects', important: true
+    });
+
+    return dto;
+  }
+
   const removed = await repo.removeProjectMember(
     row.projectid,
-    toUserPk(memberUserId),
+    memberPk,
     toUserPk(actorId),
     reason?.trim() || 'Removed from project'
   );
@@ -702,7 +759,6 @@ export const removeMember = async (
 
   const members = await repo.findMembersForProject(row.projectid);
   const dto = await buildDTO(row, members);
-  const actorName = actorDisplayName(actorId);
 
   notificationService
     .publishEvent({
@@ -725,6 +781,64 @@ export const removeMember = async (
   });
 
   return dto;
+};
+
+// Re-checks a single Pending-Removal member after one of their tasks/subtasks in this project
+// reaches Done (see task.service.ts's changeTaskStatus/decideReview hooks) -- if they now have
+// zero active assignments left in the project, finishes the removal that removeMember above
+// deferred, notifying both the Admin who originally flagged them and the member themselves. A
+// no-op if the member isn't currently flagged, or still has other active work. Deliberately keyed
+// on a single (project, user) pair, not the whole completed task's assignee list, so a future
+// "task/subtask reassigned" hook can call this exact same function once that feature exists --
+// see task.repository.ts's findActiveTaskAssignmentsForUserInProject for the other half of this.
+export const recheckPendingRemovalForMember = async (
+  projectId: string,
+  memberUserId: string,
+  actorId: string
+): Promise<void> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) return;
+  const members = await repo.findMembersForProject(row.projectid);
+  const memberPk = toUserPk(memberUserId);
+  const member = members.find((m) => m.userid === memberPk);
+  if (!member || member.pendingremovalatutc === null || member.pendingremovalbyuserid === null) return;
+
+  const stillActive = await findActiveTaskAssignmentsForUserInProject(row.projectid, memberPk);
+  if (stillActive.length > 0) return;
+
+  const removed = await repo.removeProjectMember(
+    row.projectid,
+    memberPk,
+    member.pendingremovalbyuserid,
+    'Automatically removed -- all previously active work was reassigned or completed.'
+  );
+  if (!removed) return;
+
+  const memberName = userStore.findById(memberUserId)?.name;
+  const flaggedByUserId = fromUserPk(member.pendingremovalbyuserid);
+
+  notificationService
+    .publishEvent({
+      type: 'project_member_auto_removed',
+      title: 'Member Removed',
+      message: `${memberName || memberUserId} was automatically removed from "${row.projectname}" -- their ` +
+        'previously active work is now reassigned or completed.',
+      recipientMessages: { [memberUserId]: `You were removed from "${row.projectname}".` },
+      actorId,
+      projectId,
+      recipientIds: [flaggedByUserId, memberUserId]
+    })
+    .catch((error) => console.error('[project.service] Failed to publish auto-removed event.', error));
+
+  recordActivitySafe({
+    actorId, actorName: actorDisplayName(actorId),
+    affectedUserId: memberUserId, affectedUserName: memberName,
+    action: 'Auto-Removed', module: 'Projects', entityType: 'User', entityId: memberUserId,
+    entityName: memberName, projectId, projectName: row.projectname,
+    description: `${memberName || memberUserId} was automatically removed from “${row.projectname}” after their ` +
+      'previously active work was reassigned or completed.',
+    linkRoute: 'projects', important: true
+  });
 };
 
 const MILESTONE_TITLE_MAX_LENGTH = 150; // matches work.ProjectMilestones.MilestoneName varchar(150)

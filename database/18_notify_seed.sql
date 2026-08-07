@@ -156,8 +156,10 @@ VALUES
     ('project_archived',       'Project',    'Normal',   FALSE, TRUE),
     ('project_restored',       'Project',    'Normal',   FALSE, TRUE),
     ('project_deleted',        'Project',    'High',     FALSE, TRUE),
-    ('project_member_added',   'Project',    'Normal',   FALSE, TRUE),
-    ('project_member_removed', 'Project',    'Normal',   FALSE, TRUE),
+    ('project_member_added',            'Project', 'Normal', FALSE, TRUE),
+    ('project_member_removed',          'Project', 'Normal', FALSE, TRUE),
+    ('project_member_pending_removal',  'Project', 'Normal', FALSE, TRUE),
+    ('project_member_auto_removed',     'Project', 'Normal', FALSE, TRUE),
     -- Approvals / system / admin
     ('approval',                'Approval',  'High',     FALSE, TRUE),
     ('user_registered',         'System',    'Normal',   FALSE, TRUE),

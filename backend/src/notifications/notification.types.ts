@@ -20,6 +20,7 @@ export type NotificationType =
   | 'comment_added' | 'mention' | 'attachment_uploaded'
   | 'project_created' | 'project_updated' | 'project_archived' | 'project_restored'
   | 'project_deleted' | 'project_member_added' | 'project_member_removed'
+  | 'project_member_pending_removal' | 'project_member_auto_removed'
   | 'approval' | 'user_registered' | 'user_role_changed' | 'user_deactivated'
   | 'workspace_created' | 'workspace_deleted' | 'backup_completed' | 'backup_failed'
   | 'security_alert' | 'audit_alert' | 'system_maintenance' | 'holiday_created' | 'attendance' | 'task' | 'system'
