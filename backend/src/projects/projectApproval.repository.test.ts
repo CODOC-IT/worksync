@@ -70,6 +70,11 @@ test('persists and loads requests through the lowercase-folded project approval 
 });
 
 test('Team Lead project edit request persists and appears in Admin inbox newest first', async () => {
+  const persistedPayload = {
+    version: 1,
+    changes: [{ fieldKey: 'title', fieldLabel: 'Project Name', oldValue: 'Project 42', newValue: 'Latest proposal' }],
+    proposal: { title: 'Latest proposal' }
+  };
   const olderId = await insertApprovalRequest({
     projectId: 42,
     projectTitle: 'Project 42',
@@ -83,7 +88,7 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
     projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
-    requestedChangesJson: JSON.stringify({ title: 'Latest proposal' }),
+    requestedChangesJson: JSON.stringify(persistedPayload),
     reason: 'Latest scope update'
   });
   await pool.query(
@@ -97,7 +102,9 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
 
   const pending = await findPendingApprovalRequests();
   assert.deepEqual(pending.map((item) => item.approvalrequestid), [newerId, olderId]);
-  assert.deepEqual(JSON.parse(pending[0].requestedchangesjson || '{}'), { title: 'Latest proposal' });
+  assert.deepEqual(JSON.parse(pending[0].requestedchangesjson || '{}'), persistedPayload);
+  const reloaded = await findApprovalRequestById(newerId);
+  assert.deepEqual(JSON.parse(reloaded?.requestedchangesjson || '{}'), persistedPayload);
 });
 
 test('rejection persists the required reason for request history and notifications', async () => {
