@@ -90,6 +90,12 @@ import {
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
 import {
+  buildLeaveDecisionCopy,
+  buildLeaveForwardedCopy,
+  buildLeaveForwardedRequesterCopy,
+  buildLeaveRequestedCopy
+} from '../features/attendance/leaveNotifications';
+import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
   approveProjectApprovalRequestApi,
@@ -1819,17 +1825,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : subtask)
         };
       }));
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
-        type: 'approval',
-        title: 'Task Update Requested',
-        message: `${currentUser.name} requested an update to "${existingTask.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId: existingTask.projectId,
-        taskId
-      });
+      // No dispatchNotifications here: POST /api/tasks/:id/edit-approval already published the
+      // `task_edit_approval_requested` event server-side, in the same request that wrote the
+      // change request — with the exact list of fields being changed, which this client-side
+      // call never had. Dispatching again would double-notify the Team Lead.
       pushActivity('Requested task update approval', 'Approval', approval.id, existingTask.title);
       confirmActionSuccess('Task Update Requested', `Your changes to "${existingTask.title}" were sent to the Team Lead for approval.`);
       return { success: true, message: 'Task update requested for Team Lead approval.', task: pendingTask };
@@ -2154,17 +2153,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSystemApprovals((prev) => prev.map((approval) => approval.id === approvalId
             ? { ...approval, status: 'Approved' }
             : approval));
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-            type: 'approval',
-            title: 'Task Update Approved',
-            message: `${currentUser.name} approved your update to "${item.targetTitle}".`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'tasks',
-            projectId: relatedProject.id,
-            taskId: item.targetId
-          });
+          // The requester's `task_edit_approval_approved` notification is published server-side by
+          // decideTaskEditApproval (it carries the approved field list and the approver's
+          // comment), so nothing is dispatched here — see the matching note in updateTask.
           result = { success: true, message: `You approved the update to "${item.targetTitle}".` };
           confirmActionSuccess('Task Update Approved', result.message);
         } catch (error: any) {
@@ -2277,17 +2268,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? item.projectId
           : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-        type: 'approval',
-        title: 'Request Rejected',
-        message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: targetsProject ? 'projects' : 'tasks',
-        taskId: targetsProject || item.type === 'Task_Creation' ? undefined : item.targetId,
-        projectId: targetsProject ? item.targetId : relatedProjectId
-      });
+      // A rejected controlled task edit is notified server-side by decideTaskEditApproval, which
+      // is the only place that has the mandatory rejection reason as it was actually persisted
+      // (work.ChangeRequestReviews.ReviewNote) and can therefore put it in the notification body.
+      // Dispatching the generic "Request Rejected" here too would deliver a second, vaguer copy.
+      if (!(item.type === 'Controlled_Edit' && item.proposedTaskUpdate)) {
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+          type: 'approval',
+          title: 'Request Rejected',
+          message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
+          // The reviewer's reason is mandatory on every rejection path that supplies one, so it
+          // belongs in the expanded body rather than forcing the requester to open the item.
+          detail: reason?.trim()
+            ? `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.\n\nReason: ${reason.trim()}`
+            : undefined,
+          metadata: {
+            request: item.targetTitle,
+            ...(relatedProject ? { project: relatedProject.title } : {}),
+            rejectedBy: currentUser.name,
+            ...(reason?.trim() ? { rejectionReason: reason.trim() } : {})
+          },
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: targetsProject ? 'projects' : 'tasks',
+          taskId: targetsProject || item.type === 'Task_Creation' ? undefined : item.targetId,
+          projectId: targetsProject ? item.targetId : relatedProjectId
+        });
+      }
       const message = `You rejected the request for "${item.targetTitle}" successfully.`;
       confirmActionSuccess('Request Rejected', message);
       return { success: true, message };
@@ -2580,10 +2588,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // HR Requests
-    // 'Correction' has its own dedicated notification type; 'Leave' and 'Break_Exception' reuse
-    // the generic 'approval' type already used elsewhere in this file for every other
-    // pending-decision flow (project creation, controlled edits) — see approveApprovalItem/
-    // rejectApprovalItem above for the same convention.
+    // 'Correction' and 'Leave' each have their own dedicated notification types
+    // ('attendance_correction_*' / 'leave_*'); 'Break_Exception' reuses 'break_approved'/
+    // 'break_rejected' on decision and the generic 'attendance' type on submission.
+    //
+    // Leave copy is built by features/attendance/leaveNotifications.ts rather than inline here,
+    // so submitted / forwarded / approved / rejected all name the leave the same way — a
+    // recipient can always tell a Full Day Leave from a Half Day Leave (and which half) from the
+    // notification alone. Previously every one of these read "...your leave request", which is
+    // the specific gap this replaces.
     const submitHRRequest = async (
       type: HRRequest['type'],
       reason: string,
@@ -2617,15 +2630,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           newReq.approvalStage === 'Admin'
             ? resolveAdminRecipients(users, currentUser.id)
             : resolveHRRecipients();
-        dispatchNotifications({
-          recipientIds: recipients,
-          type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
-          title: type === 'Leave' ? 'Leave Submitted' : 'New Attendance Edit Request',
-          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'attendance'
-        });
+        if (type === 'Leave') {
+          const copy = buildLeaveRequestedCopy({ requesterName: currentUser.name, request: newReq });
+          dispatchNotifications({
+            recipientIds: recipients,
+            type: 'leave_requested',
+            title: copy.title,
+            message: copy.message,
+            detail: copy.detail,
+            metadata: copy.metadata,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            // Reviewers act on a leave request from the Approvals inbox, not the Attendance
+            // screen, so the deep link takes them straight to where the decision is made.
+            linkRoute: 'approvals'
+          });
+        } else {
+          dispatchNotifications({
+            recipientIds: recipients,
+            type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
+            title: 'New Attendance Edit Request',
+            message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+        }
         confirmActionSuccess('Request Submitted', `Your ${type.toLowerCase().replace('_', ' ')} request was submitted successfully.`);
         pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
         return { success: true, message: data.message || 'HR request submitted successfully.' };
@@ -2736,20 +2766,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
 
         if (data.forwarded) {
+          const requesterName = updatedRequest.userName || 'an employee';
+          const adminCopy = buildLeaveForwardedCopy({
+            requesterName,
+            approverName: currentUser.name,
+            request: updatedRequest
+          });
           dispatchNotifications({
             recipientIds: resolveAdminRecipients(users, currentUser.id),
-            type: 'attendance',
-            title: 'Leave Forwarded to Admin',
-            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'} request for ${updatedRequest.date}.`,
+            type: 'leave_requested',
+            title: adminCopy.title,
+            message: adminCopy.message,
+            detail: adminCopy.detail,
+            metadata: adminCopy.metadata,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'approvals'
           });
+          const requesterCopy = buildLeaveForwardedRequesterCopy({
+            approverName: currentUser.name,
+            request: updatedRequest
+          });
           dispatchNotifications({
             recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: 'attendance',
-            title: 'Leave Forwarded to Admin',
-            message: `HR approved your leave request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
+            type: 'leave_requested',
+            title: requesterCopy.title,
+            message: requesterCopy.message,
+            detail: requesterCopy.detail,
+            metadata: requesterCopy.metadata,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'attendance'
@@ -2807,25 +2851,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         }
 
-        const notifType =
-          updatedRequest.type === 'Correction'
-            ? 'attendance_correction_approved'
-            : updatedRequest.type === 'Break_Exception'
-              ? 'break_approved'
-              : 'attendance';
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-          type: notifType,
-          title: updatedRequest.type === 'Leave'
-            ? 'Leave Approved'
-            : updatedRequest.type === 'Correction'
+        if (updatedRequest.type === 'Leave') {
+          const copy = buildLeaveDecisionCopy({
+            decision: 'Approved',
+            approverName: currentUser.name,
+            request: updatedRequest,
+            decisionReason
+          });
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: 'leave_approved',
+            title: copy.title,
+            message: copy.message,
+            detail: copy.detail,
+            metadata: copy.metadata,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+        } else {
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: updatedRequest.type === 'Correction' ? 'attendance_correction_approved' : 'break_approved',
+            title: updatedRequest.type === 'Correction'
               ? 'Attendance Approved'
               : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
-          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'attendance'
-        });
+            message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
+            detail: decisionReason?.trim()
+              ? `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.\n\nComment: ${decisionReason.trim()}`
+              : undefined,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+        }
         confirmActionSuccess('Request Approved', `You approved the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
         pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
         return { success: true, message: data.message || 'HR request approved successfully.' };
@@ -2856,25 +2915,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
 
-        const notifType =
-          updatedRequest.type === 'Correction'
-            ? 'attendance_correction_rejected'
-            : updatedRequest.type === 'Break_Exception'
-              ? 'break_rejected'
-              : 'attendance';
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-          type: notifType,
-          title: updatedRequest.type === 'Leave'
-            ? 'Leave Rejected'
-            : updatedRequest.type === 'Correction'
+        if (updatedRequest.type === 'Leave') {
+          const copy = buildLeaveDecisionCopy({
+            decision: 'Rejected',
+            approverName: currentUser.name,
+            request: updatedRequest,
+            decisionReason
+          });
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: 'leave_rejected',
+            title: copy.title,
+            message: copy.message,
+            detail: copy.detail,
+            metadata: copy.metadata,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+        } else {
+          const requestLabel = updatedRequest.type.toLowerCase().replace('_', ' ');
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: updatedRequest.type === 'Correction' ? 'attendance_correction_rejected' : 'break_rejected',
+            title: updatedRequest.type === 'Correction'
               ? 'Attendance Rejected'
               : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
-          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'attendance'
-        });
+            // The mandatory rejection reason moves out of the preview and into the expanded body:
+            // the list stays scannable, and a long reason is no longer truncated mid-sentence.
+            message: `${currentUser.name} rejected your ${requestLabel} request.`,
+            detail: decisionReason?.trim()
+              ? `${currentUser.name} rejected your ${requestLabel} request.\n\nReason: ${decisionReason.trim()}`
+              : undefined,
+            metadata: {
+              rejectedBy: currentUser.name,
+              date: updatedRequest.date,
+              ...(decisionReason?.trim() ? { rejectionReason: decisionReason.trim() } : {})
+            },
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+        }
         confirmActionSuccess('Request Rejected', `You rejected the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
         pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
         return { success: true, message: data.message || 'HR request rejected successfully.' };

@@ -23,6 +23,23 @@ specific to the board.
 > Rejecting a task with completed subtasks now requires a per-subtask Accept/Reject verdict, not
 > just an overall comment — see the new §11a.
 
+> **Update (`feature/board-notification-enhancements`)**: Three board-scoped fixes, no change to
+> the board's interaction model, permissions or data flow:
+> 1. **Project selector contrast** — the searchable project dropdown (§6a) gave its hovered /
+>    keyboard-highlighted row a cyan fill while leaving the project code at `text-slate-500`,
+>    which fell below a readable contrast ratio. Hover, keyboard-highlight and selected are now
+>    three visually distinct, individually-coloured states (§6a).
+> 2. **Status History scrolling** — the task details dialog's Status History list now owns a
+>    bounded scroll region, so the dialog's height no longer grows with the size of a task's
+>    audit trail (§6b).
+> 3. **Only active projects reach the board** — `getAccessibleProjects` now filters on
+>    `isActiveProject`, hiding `Pending Approval` / `Draft` / `On Hold` / `Completed` projects
+>    from the project selector and the board, not just `Archived` ones (§7).
+>
+> Task edit / assignment / subtask notification work from the same branch is server-side and
+> documented in `docs/Notification_Module_Guide.md`, not here — the board's own event publishing
+> (§14) is unchanged.
+
 ## 1. Purpose
 
 A role-scoped Kanban view of tasks per project: `Todo → In Progress → Review → Done`, with
@@ -125,6 +142,48 @@ arrays' *content* comes from (the real API, not just seed data) and where a stat
   Team Member: only if they're an assignee on the task). This avoids a second, possibly
   divergent permission rule for the same underlying question.
 
+## 6a. Project selector states
+
+`ProjectSelect` in `KanbanView.tsx` is a button-triggered popover with an internal search input
+(type-to-filter, arrow keys, Enter to select, Escape to close). It renders **three** distinct
+row states, each colouring the project title *and* the project code explicitly rather than
+letting either inherit:
+
+| State | Row | Title | Code |
+| --- | --- | --- | --- |
+| Hovered / keyboard-highlighted | `bg-cyan-500/20` + inset cyan ring | `text-white` | `text-cyan-100` |
+| Selected (not hovered) | `bg-white/[0.07]` + inset white ring | `text-cyan-200` | `text-cyan-300/80` |
+| Neither | transparent, `hover:bg-white/[0.07]` | `text-slate-200` | `text-slate-400` |
+
+The **code line is the reason this needs three states rather than two.** It used to be pinned at
+`text-slate-500` regardless of the row's background, so as soon as a row took the cyan hover fill
+the code dropped below a readable contrast ratio — a project's code is exactly the thing someone
+scans a long project list for. Selection stays legible without hover because it carries its own
+fill, its own ring *and* a check mark, so it is never signalled by text colour alone.
+
+Search, keyboard navigation and the selected check mark are otherwise untouched.
+
+## 6b. Status History scrolling (task details dialog)
+
+The dialog (`TaskDetailsModal`) is capped at `max-h-[88vh]` and shows task tiles, description,
+assignees, subtasks, then Status History. History is the only unbounded section — it grows by one
+row on *every* status change the task or its subtasks ever undergo — so it, and only it, owns a
+scroll region:
+
+```
+<ul className="max-h-[40vh] ... overflow-y-auto overscroll-contain scroll-smooth sm:max-h-72">
+```
+
+Before this, the list had no cap: a task with a long audit trail pushed the dialog to its 88vh
+ceiling and the *entire* body scrolled, so scrolling to read older history also scrolled away the
+task title, status tiles and subtasks the reader needed for context. Now the dialog's height is
+independent of how many history entries exist, everything above the timeline stays fixed, and the
+entry count is shown in the section header so the list's length is obvious before scrolling it.
+
+`overscroll-contain` stops a scroll that reaches the end of the timeline from chaining to the
+dialog behind it. The cap is viewport-relative (`40vh`) below `sm` and a fixed `18rem` above, so
+it stays sensible on both short laptop screens and phones.
+
 ## 7. Role-Based Permissions
 
 | Role | Project visibility | Can switch projects | Can drag/change status | Can Approve/Reject Review |
@@ -141,6 +200,23 @@ plain member of Project B, and the board (and the backend) treat them accordingl
 independently. `canDecideReview`/`canReopenTask` in `boardAccess.ts` and `isProjectLead` in
 `backend/src/projects/project.service.ts` are the single source of truth for this on the frontend
 and backend respectively — never `currentUser.role === 'Team_Lead'`.
+
+**Every row of that table is additionally filtered to *active* projects.**
+`getAccessibleProjects` starts from `projects.filter(isActiveProject)` — `taskRules.ts`'s
+existing rule, `status === 'Active' && approvalStatus === 'Approved'` — before applying any
+role scoping, so a project that is `Pending Approval`, `Draft`, `On Hold`, `Completed` or
+`Archived` never reaches the project selector or the board for *anyone*, Admin included.
+
+It previously filtered only `status !== 'Archived'`, which was strictly wider than the rest of
+the app already enforced: `canCreateTaskForProject` refuses to create work in a non-active
+project, and `task.service.ts`'s `createTask` rejects any project whose `StatusCode` isn't
+`Active`. A board lane for a project that cannot legitimately hold movable work is noise —
+most visibly for `Pending Approval`, which is a project that has not been agreed to yet.
+Reusing `isActiveProject` rather than re-deriving the rule is what keeps the board and the Task
+module from drifting apart on the definition of "active".
+
+Consequence worth knowing: a Team Member who belongs only to a pending project now sees the
+board's empty state ("No active projects"), whose copy says as much.
 
 Everyone who can see a project sees **every task in it**, regardless of assignee — per the
 brief, understanding project context matters more than hiding teammates' cards. Only the

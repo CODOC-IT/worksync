@@ -1,5 +1,5 @@
 import * as repo from './task.repository.js';
-import { rowToHistoryDTO, rowToTaskDTO } from './task.mapper.js';
+import { DB_TO_API_PRIORITY, rowToHistoryDTO, rowToTaskDTO, toDateKey } from './task.mapper.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toProjectPkOrNull, toTaskPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -23,6 +23,13 @@ import {
   UpdateTaskInput
 } from './task.types.js';
 import { getTaskEditDenialReason } from './task.authorization.js';
+import {
+  describeTaskEditTarget,
+  diffTaskEdit,
+  formatTaskEditChange,
+  summarizeTaskEditFields,
+  TaskEditTarget
+} from './taskEditCopy.js';
 import { shouldAnnounceProjectCompletion } from './task.projectCompletion.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 
@@ -396,6 +403,163 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   return dto;
 };
 
+// --- Task edit notifications ----------------------------------------------------------------
+// An edit used to raise a single generic `task_updated` ("X updated <task>.") addressed to every
+// assignee plus the Team Lead, no matter what actually changed — which told a recipient nothing
+// and reached people the change did not concern. It is replaced by a diff-driven fan-out:
+//
+//   * someone newly assigned            -> their own "you have been assigned" notification
+//   * someone removed from the task     -> their own "you have been removed" notification
+//   * priority / due date / other fields-> one notification per *kind* of change, addressed only
+//                                          to the people still working on the task (+ the Lead)
+//
+// Newly-added assignees deliberately do NOT also receive the field-change notices: their
+// assignment notification already carries the task's current priority and dates, so sending both
+// would describe a change from a state they never saw.
+
+interface TaskFieldChange {
+  field: string;
+  previousValue: string;
+  newValue: string;
+}
+
+// Which notification type reports which field. Anything not listed here rolls up into the
+// generic `task_updated`, which names the fields it covers rather than staying vague.
+const FIELD_CHANGE_EVENTS: Record<string, { type: 'task_priority_changed' | 'task_due_date_changed'; title: string }> = {
+  Priority: { type: 'task_priority_changed', title: 'Task Priority Changed' },
+  'Due date': { type: 'task_due_date_changed', title: 'Task Due Date Changed' }
+};
+
+const notifyTaskEdited = (context: {
+  row: TaskRow;
+  dto: TaskDTO;
+  actorId: string;
+  actorName: string;
+  projectName?: string;
+  previousAssigneeIds: string[];
+  changedAssignees: boolean;
+  fieldChanges: TaskFieldChange[];
+}): void => {
+  const { row, dto, actorId, actorName, previousAssigneeIds, changedAssignees, fieldChanges } = context;
+  const projectName = context.projectName || 'the project';
+
+  void (async () => {
+    try {
+      // Same describer the controlled-edit notifications use, so a member reads one consistent
+      // phrasing — 'subtask "Testing" under task "Notification Module"' — whether their subtask
+      // was reassigned, re-prioritized, or had an edit request decided. It also owns the
+      // fallback for an unreadable parent, which the previous inline version got wrong: it
+      // emitted `task` and `subtask` metadata with the same value.
+      const target = await resolveTaskEditTarget(row, dto.title);
+      const isSubtask = target.isSubtask;
+      const where = target.label;
+      const teamLeadId = await resolveProjectTeamLead(row.projectid);
+
+      const previous = new Set(previousAssigneeIds);
+      const current = new Set(dto.assigneeIds);
+      const added = changedAssignees ? dto.assigneeIds.filter((id) => !previous.has(id)) : [];
+      const removed = changedAssignees ? previousAssigneeIds.filter((id) => !current.has(id)) : [];
+      const retained = dto.assigneeIds.filter((id) => !added.includes(id));
+
+      const assignmentType = isSubtask ? 'subtask_assignment_changed' : 'task_reassigned';
+      const sharedMetadata = {
+        project: projectName,
+        ...target.metadata,
+        priority: dto.priority,
+        dueDate: dto.dueDate,
+        updatedBy: actorName
+      };
+
+      if (added.length > 0) {
+        publishSafely(
+          {
+            type: assignmentType,
+            title: isSubtask ? 'Subtask Assigned' : 'Task Assigned',
+            message: `You have been assigned to ${where} in ${projectName}.`,
+            detail: [
+              `${actorName} assigned you to ${where} in ${projectName}.`,
+              '',
+              `Priority: ${dto.priority}`,
+              `Due: ${dto.dueDate}`
+            ].join('\n'),
+            metadata: { ...sharedMetadata, change: 'Assigned' },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          added,
+          actorId
+        );
+      }
+
+      if (removed.length > 0) {
+        publishSafely(
+          {
+            type: assignmentType,
+            title: isSubtask ? 'Removed From Subtask' : 'Removed From Task',
+            message: `You have been removed from ${where} in ${projectName}.`,
+            detail: `${actorName} removed you from ${where} in ${projectName}. It no longer appears in your assigned work.`,
+            metadata: { ...sharedMetadata, change: 'Removed' },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          removed,
+          actorId
+        );
+      }
+
+      if (fieldChanges.length === 0) return;
+
+      // One notification per kind of change, so "priority raised to Urgent" is never buried
+      // inside a generic update notice — and so a recipient can mute or filter by the specific
+      // type. Recipients are the people the change actually affects: whoever is still working on
+      // the task, plus the Lead who oversees it.
+      const fieldRecipients = [...retained, teamLeadId];
+      const grouped = new Map<string, { title: string; changes: TaskFieldChange[] }>();
+      for (const change of fieldChanges) {
+        const event = FIELD_CHANGE_EVENTS[change.field];
+        const key = event ? event.type : 'task_updated';
+        const title = event ? event.title : 'Task Updated';
+        const bucket = grouped.get(key) || { title, changes: [] };
+        bucket.changes.push(change);
+        grouped.set(key, bucket);
+      }
+
+      for (const [type, { title, changes }] of grouped) {
+        const fieldList = changes.map((change) => change.field.toLowerCase()).join(', ');
+        const summary =
+          changes.length === 1
+            ? `${actorName} changed the ${fieldList} of ${where} from "${changes[0].previousValue}" to "${changes[0].newValue}".`
+            : `${actorName} updated the ${fieldList} of ${where}.`;
+        publishSafely(
+          {
+            type: type as Parameters<typeof notificationService.publishEvent>[0]['type'],
+            title,
+            message: summary,
+            detail: [
+              `${actorName} updated ${where} in ${projectName}.`,
+              '',
+              'Changes:',
+              ...changes.map((change) => `• ${change.field}: "${change.previousValue}" → "${change.newValue}"`)
+            ].join('\n'),
+            metadata: { ...sharedMetadata, fieldsChanged: changes.map((change) => change.field).join(', ') },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          fieldRecipients,
+          actorId
+        );
+      }
+    } catch (error) {
+      // A notification failure must never surface as a failed edit — the task update itself has
+      // already committed by the time this runs.
+      console.error('[task.service] Failed to publish task edit notifications.', error);
+    }
+  })();
+};
+
 export const updateTask = async (
   taskId: string,
   input: UpdateTaskInput,
@@ -457,26 +621,41 @@ export const updateTask = async (
   const dto = await buildDTO(updatedRow!);
   const actorName = actorDisplayName(actorId);
 
-  notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
-    type: 'task_updated',
-    title: 'Task Updated',
-    message: `${actorName} updated "${dto.title}".`,
-    actorId,
-    projectId: dto.projectId,
-    taskId: dto.id
-  });
-
+  // Both sides of every comparison must be in the same representation before being called a
+  // "change". Two traps here, and the notification fan-out below makes both user-visible rather
+  // than merely cosmetic in an audit row:
+  //   - Dates come back from node-postgres as Date objects, not 'YYYY-MM-DD' strings (TaskRow
+  //     declares them `string`, which hides it from the compiler). Comparing the inbound string
+  //     directly against the row is true for EVERY value, so an unchanged date — which the edit
+  //     form resubmits on every save — reported as changed and notified everyone.
+  //   - work.Priorities stores 'Critical' for the tier the product calls 'Urgent', so an
+  //     un-translated previous value read "from Critical to High" for a level no user has ever
+  //     seen named that.
+  const previousStartDate = toDateKey(row.startdate);
+  const previousDueDate = toDateKey(row.duedate);
   const taskChanges = [
     input.title !== undefined && input.title.trim() !== row.title ? { field: 'Title', previousValue: row.title, newValue: dto.title } : null,
     input.description !== undefined && input.description.trim() !== row.description ? { field: 'Description', previousValue: row.description, newValue: dto.description } : null,
-    input.priority !== undefined && DB_TO_API_PRIORITY_CODE[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: row.prioritycode, newValue: input.priority } : null,
-    input.startDate !== undefined && input.startDate !== row.startdate ? { field: 'Start date', previousValue: row.startdate, newValue: dto.startDate } : null,
-    input.dueDate !== undefined && input.dueDate !== row.duedate ? { field: 'Due date', previousValue: row.duedate, newValue: dto.dueDate } : null,
+    input.priority !== undefined && DB_TO_API_PRIORITY_CODE[input.priority] !== row.prioritycode ? { field: 'Priority', previousValue: DB_TO_API_PRIORITY[row.prioritycode] || row.prioritycode, newValue: input.priority } : null,
+    input.startDate !== undefined && input.startDate !== previousStartDate ? { field: 'Start date', previousValue: previousStartDate, newValue: dto.startDate } : null,
+    input.dueDate !== undefined && input.dueDate !== previousDueDate ? { field: 'Due date', previousValue: previousDueDate, newValue: dto.dueDate } : null,
     input.assigneeIds !== undefined ? { field: 'Assignee', previousValue: previousAssigneeIds.join(', '), newValue: dto.assigneeIds.join(', ') } : null
   ].filter((change): change is { field: string; previousValue: string; newValue: string } => Boolean(change));
   const hasPriorityChange = taskChanges.some((c) => c.field === 'Priority');
   const hasAssigneeChange = taskChanges.some((c) => c.field === 'Assignee');
   const project = await projectRepo.findProjectById(row.projectid);
+
+  notifyTaskEdited({
+    row,
+    dto,
+    actorId,
+    actorName,
+    projectName: project?.projectname,
+    previousAssigneeIds,
+    changedAssignees: input.assigneeIds !== undefined,
+    fieldChanges: taskChanges.filter((change) => change.field !== 'Assignee')
+  });
+
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: hasAssigneeChange ? 'Assigned/Reassigned' : hasPriorityChange ? 'Priority Changed' : 'Updated',
@@ -517,6 +696,17 @@ const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
   if (!input.startDate || !input.dueDate || input.dueDate < input.startDate) {
     throw new TaskValidationError('Due date cannot be before the start date.');
   }
+};
+
+// --- Controlled task edits ------------------------------------------------------------------
+// The diffing and copy-building are pure and live in taskEditCopy.ts (unit-tested there). This
+// is the only part that needs the database: resolving a subtask's parent title so the
+// notification can name it. Costs one indexed primary-key lookup, and only for subtasks — a
+// top-level task never touches the database here.
+const resolveTaskEditTarget = async (row: TaskRow, title: string): Promise<TaskEditTarget> => {
+  if (!row.parenttaskid) return describeTaskEditTarget(title);
+  const parent = await repo.findTaskById(row.parenttaskid);
+  return describeTaskEditTarget(title, parent?.title || '');
 };
 
 export interface TaskEditApprovalDTO {
@@ -590,12 +780,15 @@ export const createTaskEditApproval = async (
     throw error;
   }
   const createdAt = new Date().toISOString();
+  const changes = diffTaskEdit(previous, proposed);
+  const requesterName = actorDisplayName(actorId);
+  const reviewerName = actorDisplayName(reviewerId);
+  const target = await resolveTaskEditTarget(row, row.title);
+
   // The request must land in the Activity Log before the response is sent: it is the member's
   // only audit trace for their proposed edit (the task itself is not touched until approval).
   // affectedUser is the reviewing Team Lead, so the request surfaces in the Lead's activity as
   // well as the member's own, and the changes[] diff previews exactly what was proposed.
-  const requesterName = userStore.findById(actorId)?.name || actorDisplayName(actorId);
-  const reviewerName = userStore.findById(reviewerId)?.name || reviewerId;
   recordActivitySafe({
     actorId, actorName: requesterName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     affectedUserId: reviewerId, affectedUserName: reviewerName,
@@ -608,6 +801,40 @@ export const createTaskEditApproval = async (
     changes: taskEditDiff(previous, proposed),
     metadata: { approvalId: `task-edit-${requestPk}`, requestedBy: actorId, reviewerId }
   });
+
+  // The project's current Team Lead is the only recipient: they are the sole person authorized to
+  // decide this request (decideTaskEditApproval re-checks isProjectLead), so nobody else has an
+  // action to take and nobody else is told. Published server-side, in the same request that wrote
+  // work.TaskChangeRequests, so it is persisted, appears in notification history, and survives a
+  // refresh — the frontend no longer dispatches anything for this event.
+  publishSafely(
+    {
+      type: 'task_edit_approval_requested',
+      title: target.isSubtask ? 'Subtask Edit Request' : 'Task Edit Request',
+      message: `${requesterName} requested an edit to ${target.label} (${summarizeTaskEditFields(changes)}).`,
+      detail: [
+        `${requesterName} submitted an edit request for ${target.label} in ${project.projectname} and is waiting on your decision.`,
+        '',
+        'Requested changes:',
+        ...changes.map((change) => `• ${formatTaskEditChange(change)}`)
+      ].join('\n'),
+      metadata: {
+        project: project.projectname,
+        ...target.metadata,
+        requestedBy: requesterName,
+        fieldsChanged: changes.map((change) => change.label).join(', '),
+        requestedAt: createdAt
+      },
+      actorId,
+      projectId: fromProjectPk(row.projectid),
+      // Stays the edited row's own id, including for a subtask: it is the accurate provenance of
+      // the event and is what groupNotifications keys on, so two subtasks of the same parent
+      // never collapse into one row. The parent is carried in `metadata.task` instead.
+      taskId
+    },
+    [reviewerId],
+    actorId
+  );
   return {
     id: `task-edit-${requestPk}`,
     type: 'Controlled_Edit',
@@ -690,30 +917,109 @@ export const decideTaskEditApproval = async (
     reason
   );
   if (!taskPk) throw new TaskValidationError('This task edit request is no longer pending.');
-  // The decision is the audit event for the applied edit: the change is executed inside the
-  // repository transaction (never through service.updateTask, which writes its own activity), so
-  // this is the only place an approved member edit can be recorded. affectedUser is the
-  // requesting member, which is exactly how approval decisions on their own requests are wired
-  // to surface in the member's Activity Log (affecteduseridtext matches the viewer's frontend
-  // id in backend/src/activity/activity.repository.ts).
-  const reviewerName = actorDisplayName(actorId);
-  const requesterName = userStore.findById(approval.requestedBy)?.name || approval.requestedBy;
-  const project = await projectRepo.findProjectById(row.projectid);
+
+  // Only the Team Member who submitted the request is notified — nobody else asked for anything,
+  // so nobody else hears about the outcome (and in particular the rejection reason, which is
+  // feedback addressed to one person, never broadcast).
+  //
+  // `reason` is the exact value repo.decideTaskEditApproval just persisted to
+  // work.ChangeRequestReviews.ReviewNote in the transaction above, so the notification body and
+  // the stored review history can never disagree; it is also written to
+  // notify.Notifications.DetailText here, which is what keeps it visible in the Notification
+  // Center after a refresh without re-reading the change-request tables.
+  const changes = diffTaskEdit(approval.previousTaskSnapshot, approval.proposedTaskUpdate);
+  const approverName = actorDisplayName(actorId);
+  const projectRow = await projectRepo.findProjectById(row.projectid);
+  const projectName = projectRow?.projectname || 'the project';
+  const decidedAt = new Date().toISOString();
+  const trimmedReason = reason?.trim();
+  // Named from the snapshot taken when the request was submitted, not from `row.title`: an
+  // approved title change would otherwise report the outcome under the *new* name, leaving the
+  // requester unable to match the notification to the request they actually made.
+  const target = await resolveTaskEditTarget(row, approval.targetTitle);
+  const subject = target.isSubtask ? 'Subtask' : 'Task';
+
+  publishSafely(
+    decision === 'Approved'
+      ? {
+          type: 'task_edit_approval_approved',
+          title: `${subject} Edit Request Approved`,
+          message: `${approverName} approved your edit request for ${target.label}.`,
+          detail: [
+            `${approverName} approved your edit request for ${target.label} in ${projectName}. The changes are now live on the ${target.noun}.`,
+            '',
+            'Approved changes:',
+            ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
+            ...(trimmedReason ? ['', `Comment: ${trimmedReason}`] : [])
+          ].join('\n'),
+          metadata: {
+            project: projectName,
+            ...target.metadata,
+            approvedBy: approverName,
+            fieldsChanged: changes.map((change) => change.label).join(', '),
+            decidedAt
+          },
+          actorId,
+          projectId: approval.projectId,
+          taskId: approval.targetId
+        }
+      : {
+          type: 'task_edit_approval_rejected',
+          title: `${subject} Edit Request Rejected`,
+          message: `${approverName} rejected your edit request for ${target.label}.`,
+          detail: [
+            `${approverName} rejected your edit request for ${target.label} in ${projectName}. The ${target.noun} is unchanged.`,
+            '',
+            'Requested changes:',
+            ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
+            '',
+            `Reason: ${trimmedReason || 'No reason was recorded.'}`
+          ].join('\n'),
+          metadata: {
+            project: projectName,
+            ...target.metadata,
+            rejectedBy: approverName,
+            fieldsChanged: changes.map((change) => change.label).join(', '),
+            rejectionReason: trimmedReason || '',
+            decidedAt
+          },
+          actorId,
+          projectId: approval.projectId,
+          taskId: approval.targetId
+        },
+    [approval.requestedBy],
+    actorId
+  );
+
+  // The decision is the audit event for the applied (or refused) edit: the change is executed
+  // inside the repository transaction above (never through service.updateTask, which writes its
+  // own activity), so this is the only place it can be recorded. affectedUserId is the
+  // requesting member, which is what makes the decision surface in the member's own Activity Log
+  // (affecteduseridtext matches the viewer's frontend id in activity.repository.ts) rather than
+  // only the reviewer's. Uses the same subtask-aware `target` the notification above does, so a
+  // subtask decision reads "subtask 'Testing' under task 'Notification Module'" here too, instead
+  // of the ambiguous bare title a second identically-named subtask would otherwise share.
+  const requesterName = actorDisplayName(approval.requestedBy);
   recordActivitySafe({
-    actorId, actorName: reviewerName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    actorId, actorName: approverName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     affectedUserId: approval.requestedBy, affectedUserName: requesterName,
     action: decision === 'Approved' ? 'Task Edit Approved' : 'Task Edit Rejected',
     module: 'Tasks', entityType: 'Task',
     entityId: approval.targetId, entityName: approval.targetTitle,
-    projectId: fromProjectPk(row.projectid), projectName: project?.projectname,
+    projectId: approval.projectId, projectName: projectRow?.projectname,
     taskId: approval.targetId, taskName: approval.targetTitle,
     description: decision === 'Approved'
-      ? `${reviewerName} approved ${requesterName}'s edit request for task “${approval.targetTitle}”.`
-      : `${reviewerName} rejected ${requesterName}'s edit request for task “${approval.targetTitle}”.`,
-    reason: reason || undefined, linkRoute: 'approvals', important: true,
-    changes: taskEditDiff(approval.previousTaskSnapshot, approval.proposedTaskUpdate),
+      ? `${approverName} approved ${requesterName}'s edit request for ${target.label}.`
+      : `${approverName} rejected ${requesterName}'s edit request for ${target.label}.`,
+    reason: trimmedReason, linkRoute: 'approvals', important: true,
+    changes: changes.map((change) => ({
+      field: change.label,
+      previousValue: change.previousValue,
+      newValue: change.newValue
+    })),
     metadata: { approvalId, requestedBy: approval.requestedBy, decidedBy: actorId }
   });
+
   if (decision === 'Rejected') return null;
   const updated = await repo.findTaskById(taskPk);
   return updated ? buildDTO(updated) : null;

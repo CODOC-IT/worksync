@@ -59,8 +59,14 @@ async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T
 export interface PublishNotificationEventInput {
   type: NotificationType;
   title: string;
+  /** Compact preview (1–2 lines) — persisted to notify.Notifications.SafePreviewText. */
   message: string;
+  /** Full expanded body — persisted to notify.Notifications.DetailText. */
+  detail?: string;
+  /** Structured expanded-view context — persisted to notify.Notifications.MetadataJson. */
+  metadata?: NotificationItem['metadata'];
   recipientMessages?: Record<string, string>;
+  recipientDetails?: Record<string, string>;
   recipientIds: string[];
   actorId?: string;
   projectId?: string;
@@ -78,6 +84,20 @@ const API_PRIORITY_TO_DB: Record<NotificationPriority, string> = {
   Low: 'Low'
 };
 
+// The backend validator rejects a metadata value that isn't a string/number/boolean, and callers
+// naturally build these maps with conditional entries that can come out `undefined`. Dropping
+// them here keeps every call site free to write `{ project: p?.title }` without having to guard
+// each key, and matches how an absent key already renders (the row is simply not shown).
+const compactMetadata = (
+  metadata: NotificationItem['metadata']
+): Record<string, string | number | boolean> | undefined => {
+  if (!metadata) return undefined;
+  const entries = Object.entries(metadata).filter(
+    (entry): entry is [string, string | number | boolean] => entry[1] !== undefined
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
 export const publishNotificationEvent = async (
   input: PublishNotificationEventInput
 ): Promise<NotificationItem[]> => {
@@ -85,6 +105,7 @@ export const publishNotificationEvent = async (
     method: 'POST',
     body: JSON.stringify({
       ...input,
+      metadata: compactMetadata(input.metadata),
       priority: input.priority ? API_PRIORITY_TO_DB[input.priority] : undefined
     })
   });

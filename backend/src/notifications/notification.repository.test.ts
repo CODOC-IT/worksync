@@ -15,6 +15,24 @@ import { setPoolForTesting, resetPoolForTesting } from '../db/pool.js';
 // No live Postgres/Docker was available in this environment (see the DB testing approach
 // agreed with the user before this branch started) — this is the closest verification possible
 // without one: real SQL, real constraints, real repository code, just an in-memory engine.
+//
+// KNOWN pg-mem LIMITATION — most of this suite currently fails against pg-mem, and has since
+// `filterDeliverableRecipients` was introduced (it predates the board/notification enhancement
+// branch; the failure is not caused by any production code being wrong). Every publishEvent()
+// call now routes through that function, whose query is:
+//
+//     SELECT userid FROM iam.users WHERE userid = ANY($1::int[]) AND ...
+//
+// pg-mem silently returns ZERO rows for `= ANY($n::int[])` when the compared column carries a
+// unique index — which UserId does, being the PRIMARY KEY. Verified with a minimal repro: the
+// same query returns the right rows against a non-indexed column, and `IN (2,3)` returns them
+// against the PK, so it is an index-path bug in the emulator, not a defect in the SQL. It is the
+// same class of bug already documented on notify.NotificationTypes.TypeCode below.
+//
+// Deliberately NOT worked around by reshaping the production query: `= ANY($1::int[])` is the
+// correct, injection-safe way to pass an id list to Postgres, and rewriting real SQL to suit an
+// emulator's bug would be a worse trade than a temporarily red suite. Running these against a
+// live Postgres (or a pg-mem release that fixes the index path) is what unblocks them.
 
 const SCHEMA_DDL = `
   CREATE SCHEMA org;
@@ -33,7 +51,12 @@ const SCHEMA_DDL = `
     OrganizationId INT NOT NULL REFERENCES org.Organizations(OrganizationId),
     Email VARCHAR(254) NOT NULL,
     DisplayName VARCHAR(170) NOT NULL,
-    AccountStatus VARCHAR(20) NOT NULL DEFAULT 'Active'
+    AccountStatus VARCHAR(20) NOT NULL DEFAULT 'Active',
+    -- Required by filterDeliverableRecipients, which every publishEvent() call goes through to
+    -- drop recipients who could never read the notification (locked service accounts,
+    -- deactivated users). Without this column the whole suite failed at the first publish with
+    -- a "column deactivatedatutc does not exist" execution error.
+    DeactivatedAtUtc TIMESTAMPTZ NULL
   );
 
   CREATE TABLE work.ProjectStatuses (
@@ -115,6 +138,8 @@ const SCHEMA_DDL = `
     LeaveRequestId BIGINT NULL REFERENCES hr.LeaveRequests(LeaveRequestId),
     Title VARCHAR(200) NOT NULL,
     SafePreviewText VARCHAR(500) NULL,
+    DetailText VARCHAR(4000) NULL,
+    MetadataJson JSONB NULL,
     PriorityCode VARCHAR(10) NOT NULL,
     CreatedAtUtc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
