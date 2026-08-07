@@ -160,6 +160,7 @@ VALUES
     ('project_member_removed',          'Project', 'Normal', FALSE, TRUE),
     ('project_member_pending_removal',  'Project', 'Normal', FALSE, TRUE),
     ('project_member_auto_removed',     'Project', 'Normal', FALSE, TRUE),
+    ('project_approval_rejected',       'Project', 'High',   FALSE, TRUE),
     -- Approvals / system / admin
     ('approval',                'Approval',  'High',     FALSE, TRUE),
     ('user_registered',         'System',    'Normal',   FALSE, TRUE),

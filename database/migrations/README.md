@@ -47,6 +47,12 @@ active task/subtask assignments is flagged instead of removed) and seeds the
 `project_member_pending_removal`/`project_member_auto_removed` notification types. Additive and
 safe to run more than once; existing members default to not pending removal.
 
+`20260808_01_project_approval_rejected_notification.sql` seeds the `project_approval_rejected`
+notification type, used when an Admin rejects a Team Lead's project approval request (creation,
+edit, archive, restore, delete, or permanent delete) — the notification carries the Admin's
+`DecisionReason` exactly as persisted on `work.ProjectApprovalRequests`. Data-only, safe to run
+more than once.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

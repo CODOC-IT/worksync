@@ -485,6 +485,7 @@ export type NotificationType =
   | 'project_member_removed'
   | 'project_member_pending_removal'
   | 'project_member_auto_removed'
+  | 'project_approval_rejected'
   | 'approval'
   | 'user_registered'
   | 'user_role_changed'

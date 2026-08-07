@@ -83,6 +83,7 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   project_member_removed: { label: 'Removed from Project', icon: UserMinus, tone: 'warning', priority: 'Medium' },
   project_member_pending_removal: { label: 'Member Pending Removal', icon: AlertTriangle, tone: 'warning', priority: 'Medium' },
   project_member_auto_removed: { label: 'Member Removed', icon: UserMinus, tone: 'info', priority: 'Medium' },
+  project_approval_rejected: { label: 'Project Approval Rejected', icon: XCircle, tone: 'error', priority: 'High' },
   approval: { label: 'Approval Requested', icon: CheckSquare, tone: 'info', priority: 'High' },
   user_registered: { label: 'New User Registered', icon: UserRoundPlus, tone: 'info', priority: 'Medium' },
   user_role_changed: { label: 'Role Changed', icon: UserCog, tone: 'warning', priority: 'High' },

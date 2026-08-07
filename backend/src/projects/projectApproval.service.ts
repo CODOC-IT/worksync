@@ -13,6 +13,7 @@ import {
   projectDecisionEffect,
   validateProjectDecision
 } from './projectWorkflow.rules.js';
+import { buildProjectApprovalRejectionCopy } from './projectApprovalRejectionCopy.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -256,23 +257,53 @@ export const decideApprovalRequest = async (
   const requesterDisplayName = actorName(requesterId);
   const reviewerDisplayName = actorName(actorId);
   const outcomeVerb = decision === 'Approved' ? 'approved' : 'rejected';
-  notifyRequester(requesterId, {
-    type: 'approval',
-    title: `Project Request ${decision}`,
-    message: buildProjectDecisionMessage(
-      reviewerDisplayName,
-      decision,
-      REQUEST_TYPE_LABEL[row.requesttype],
+  const notificationProjectId =
+    row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
+    (row.requesttype === 'PROJECT_CREATE' && decision === 'Rejected')
+      ? undefined
+      : projectIdStr;
+
+  if (decision === 'Rejected') {
+    // The reason comes from `decidedDto`, built via toDTO(decided) above — `decided` is the row
+    // `repo.decideApprovalRequest` just persisted via its own `UPDATE ... RETURNING`, not the raw
+    // request-body `decisionReason` parameter this function was called with. They're equal within
+    // this one request, but sourcing the notification from the persisted row (the exact same row
+    // Notification History and a page refresh will later read) is what guarantees they can never
+    // drift apart. `decidedDto.decisionReason` is only ever the manually-built fallback (line 235,
+    // sourced from the request parameter rather than a DB read) for an approved
+    // PROJECT_PERMANENT_DELETE whose row cascade-deleted itself — a branch only reachable when
+    // `decision === 'Approved'`, never on this Rejected path.
+    const copy = buildProjectApprovalRejectionCopy({
+      reviewerName: reviewerDisplayName,
       projectName,
-      decisionReason
-    ),
-    actorId,
-    projectId:
-      row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
-      (row.requesttype === 'PROJECT_CREATE' && decision === 'Rejected')
-        ? undefined
-        : projectIdStr
-  });
+      requestTypeLabel: REQUEST_TYPE_LABEL[row.requesttype],
+      reason: decidedDto.decisionReason || '',
+      decidedAt: decidedDto.decidedAt ? new Date(decidedDto.decidedAt) : new Date()
+    });
+    notifyRequester(requesterId, {
+      type: 'project_approval_rejected',
+      title: copy.title,
+      message: copy.message,
+      detail: copy.detail,
+      metadata: copy.metadata,
+      actorId,
+      projectId: notificationProjectId
+    });
+  } else {
+    notifyRequester(requesterId, {
+      type: 'approval',
+      title: `Project Request ${decision}`,
+      message: buildProjectDecisionMessage(
+        reviewerDisplayName,
+        decision,
+        REQUEST_TYPE_LABEL[row.requesttype],
+        projectName,
+        decisionReason
+      ),
+      actorId,
+      projectId: notificationProjectId
+    });
+  }
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: decision, module: 'Projects', entityType: 'Project', entityId: projectIdStr,

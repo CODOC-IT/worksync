@@ -23,6 +23,7 @@ export type NotificationType =
   | 'project_created' | 'project_updated' | 'project_archived' | 'project_restored'
   | 'project_deleted' | 'project_member_added' | 'project_member_removed'
   | 'project_member_pending_removal' | 'project_member_auto_removed'
+  | 'project_approval_rejected'
   | 'approval' | 'user_registered' | 'user_role_changed' | 'user_deactivated'
   | 'workspace_created' | 'workspace_deleted' | 'backup_completed' | 'backup_failed'
   | 'security_alert' | 'audit_alert' | 'system_maintenance' | 'holiday_created' | 'attendance' | 'task' | 'system'
