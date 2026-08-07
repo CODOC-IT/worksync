@@ -3,10 +3,13 @@ import {
   UserRole,
   User,
   Project,
+  Milestone,
+  ProjectFile,
   Task,
   TaskStatus,
   AttendanceRecord,
   HRRequest,
+  AccountChangeRequest,
   SystemApproval,
   ChatMessage,
   AIQueryLog,
@@ -17,13 +20,21 @@ import {
   ToastTone,
   ActivityLogItem,
   CalendarEvent,
+  ApprovedLeaveEntry,
+  Holiday,
+  ProjectApprovalRequest,
   SavedPrompt,
 
   BreakType,
   WorkBreak,
   ControlledEditRequest,
+  SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
+import {
+  businessDateKey,
+  formatAttendanceTime
+} from '../features/attendance/attendanceTime';
 
 import {
   TaskMutationData,
@@ -39,9 +50,14 @@ import {
   approveTaskViaApi,
   changeTaskStatusViaApi,
   createTaskViaApi,
+  createTaskEditApprovalViaApi,
+  decideTaskEditApprovalViaApi,
   deleteTaskViaApi,
+  loadTaskDetailFromApi,
+  loadTaskEditApprovalsViaApi,
   loadTasksFromApi,
   rejectTaskViaApi,
+  reopenTaskViaApi,
   updateTaskViaApi
 } from '../features/tasks/taskRepository';
 import {
@@ -50,9 +66,40 @@ import {
   createProjectApi,
   updateProjectApi,
   archiveProjectApi,
+  permanentlyDeleteProjectApi,
+  restoreProjectApi,
   addProjectMemberApi,
-  removeProjectMemberApi
+  removeProjectMemberApi,
+  addMilestoneApi,
+  updateMilestoneApi,
+  deleteMilestoneApi,
+  addProjectFileApi,
+  removeProjectFileApi
 } from '../features/projects/projectRepository';
+import {
+  fetchActivities,
+} from '../features/activity/activityApi';
+import {
+  fetchApprovedLeave,
+  fetchHolidays,
+  createHolidayApi,
+  updateHolidayApi,
+  deleteHolidayApi,
+  HolidayInput
+} from '../features/calendar/calendarRepository';
+import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
+import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
+import { mapAttendanceApiRecords, restoreActiveBreak } from '../features/attendance/attendanceHydration';
+import {
+  fetchPendingProjectApprovals,
+  fetchMyProjectApprovalRequests,
+  approveProjectApprovalRequestApi,
+  rejectProjectApprovalRequestApi
+} from '../features/projects/projectApprovalRepository';
+import {
+  ActivityItem,
+  DEFAULT_ACTIVITY_FILTERS,
+} from '../features/activity/activityTypes';
 import {
   SendNotificationInput,
   markAsRead,
@@ -103,6 +150,7 @@ interface AppState {
   tasks: Task[];
   attendanceRecords: AttendanceRecord[];
   hrRequests: HRRequest[];
+  accountChangeRequests: AccountChangeRequest[];
   systemApprovals: SystemApproval[];
   chatMessages: ChatMessage[];
   aiLogs: AIQueryLog[];
@@ -112,6 +160,11 @@ interface AppState {
   notificationPreferences: NotificationPreferences;
   activityLogs: ActivityLogItem[];
   calendarEvents: CalendarEvent[];
+  approvedLeave: ApprovedLeaveEntry[];
+  holidays: Holiday[];
+  createHoliday: (input: HolidayInput) => Promise<{ success: boolean; message: string }>;
+  updateHoliday: (id: string, input: Partial<HolidayInput>) => Promise<{ success: boolean; message: string }>;
+  deleteHoliday: (id: string) => Promise<{ success: boolean; message: string }>;
   savedPrompts: SavedPrompt[];
 
   activeBreak: {
@@ -120,6 +173,7 @@ interface AppState {
     breakType: BreakType;
     startTime: string; // HH:mm
     elapsedSeconds: number;
+    startedAtUtc: string;
   } | null;
   settings: {
     workingHours: { start: string; end: string };
@@ -128,7 +182,7 @@ interface AppState {
     maxChatPins: number;
   };
   // Actions
-  refreshUsers: () => void;
+  refreshUsers: () => Promise<void>;
   onUserRegistered: (user: User) => void;
   loginUser: (user: User) => void;
   logoutUser: () => void;
@@ -136,10 +190,20 @@ interface AppState {
   createProject: (data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
   approveProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
   rejectProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
-  updateProject: (projectId: string, data: Partial<Project>) => Promise<{ success: boolean; message: string }>;
-  deleteProject: (projectId: string) => Promise<{ success: boolean; message: string }>;
+  updateProject: (projectId: string, data: Partial<Project>, approvalReason?: string) => Promise<{ success: boolean; message: string }>;
+  deleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  permanentlyDeleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  restoreProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  // Fetches this project's full server detail (includes real, persisted milestones -- the list
+  // endpoint backing `projects` deliberately doesn't, to avoid an N+1 query on every project list
+  // load), merges it in, and returns it -- called when the Project Details popup or the Edit form
+  // opens, so both show backend data rather than the list-cached snapshot.
+  refreshProjectDetails: (projectId: string) => Promise<Project | null>;
+  projectApprovalRequests: ProjectApprovalRequest[];
+  approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
-  updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
+  updateTask: (taskId: string, data: TaskMutationData, sourceTask?: Task) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
   updateTaskStatus: (
     taskId: string,
@@ -151,7 +215,27 @@ interface AppState {
       // -- Review -> Done must always go through an explicit reviewer decision).
       note?: string;
       reviewDecision?: 'Approve' | 'Reject';
+      // Only meaningful alongside reviewDecision: 'Reject' -- one Accept/Reject verdict per
+      // completed subtask, required whenever the task being rejected has any (see
+      // task.service.ts's decideReview).
+      subtaskDecisions?: SubtaskReviewDecision[];
     }
+  ) => Promise<{ success: boolean; message: string }>;
+  // Team-Lead-only reopen of a Done task. `reason` is mandatory and is persisted to
+  // work.TaskStatusHistory exactly like a normal status change's note.
+  reopenTask: (
+    taskId: string,
+    newStatus: TaskStatus,
+    reason: string
+  ) => Promise<{ success: boolean; message: string }>;
+  // Ticks/un-ticks a subtask from the board's task detail. `note` is the mandatory description
+  // the board prompts for. Returns once the server has confirmed and the parent task (whose
+  // status/progress may have cascaded) has been re-read.
+  setSubtaskCompletion: (
+    subtaskId: string,
+    parentTaskId: string,
+    completed: boolean,
+    note: string
   ) => Promise<{ success: boolean; message: string }>;
   proposeControlledEdit: (taskId: string, field: 'dueDate' | 'priority' | 'description' | 'assignee' | 'status', newValue: string, reason: string) => void;
   approveApprovalItem: (approvalId: string) => Promise<{ success: boolean; message: string }>;
@@ -162,11 +246,16 @@ interface AppState {
   endBreak: () => void;
   updateAttendanceRecord: (
     recordId: string,
-    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-  ) => { success: boolean; message: string };
+    updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>,
+    reason?: string
+  ) => Promise<{ success: boolean; message: string }>;
   submitHRRequest: (type: HRRequest['type'], reason: string, details: HRRequest['details'], requestDate?: string) => Promise<{ success: boolean; message: string }>;
   approveHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
   rejectHRRequest: (requestId: string, decisionReason?: string) => Promise<{ success: boolean; message: string }>;
+  submitAccountChangeRequest: (requestedField: 'name' | 'email' | 'username' | 'password', requestedValue: string | undefined, reason: string, currentPassword?: string) => Promise<{ success: boolean; message: string }>;
+  approveAccountChangeRequest: (requestId: string) => Promise<{ success: boolean; message: string }>;
+  rejectAccountChangeRequest: (requestId: string, reason: string) => Promise<{ success: boolean; message: string }>;
+  refreshAccountChangeRequests: () => Promise<void>;
   sendChatMessage: (projectId: string, message: string) => void;
   togglePinMessage: (projectId: string, messageId: string) => void;
   addAIQueryLog: (query: string, scope: string, responseSummary: string) => void;
@@ -176,6 +265,7 @@ interface AppState {
   snoozeNotification: (id: string, untilIso: string) => void;
   updateNotificationPreferences: (data: Partial<NotificationPreferences>) => void;
   dismissToast: (id: string) => void;
+  showToast: (tone: ToastTone, title: string, message: string) => void;
   deactivateUser: (userId: string) => { success: boolean; message: string };
   exportBackup: () => void;
   updateCurrentUser: (updates: Partial<User>) => void;
@@ -191,7 +281,7 @@ const AppContext = createContext<AppState | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User>({
-    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', avatar: '', title: '', status: 'inactive', createdAt: ''
+    id: '', name: '', email: '', passwordHash: '', role: 'Team_Member', department: '', title: '', status: 'inactive', createdAt: ''
   });
   const currentRole: UserRole = currentUser.role;
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -199,9 +289,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskReloadVersion, setTaskReloadVersion] = useState(0);
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(loadAttendanceRecords);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [hrRequests, setHrRequests] = useState<HRRequest[]>([]);
+  const [accountChangeRequests, setAccountChangeRequests] = useState<AccountChangeRequest[]>([]);
   const [systemApprovals, setSystemApprovals] = useState<SystemApproval[]>([]);
+  const [projectApprovalRequests, setProjectApprovalRequests] = useState<ProjectApprovalRequest[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [aiLogs, setAiLogs] = useState<AIQueryLog[]>([]);
   const [aiAudits, setAiAudits] = useState<AIUsageAudit[]>([]);
@@ -218,6 +310,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([]);
   const [calendarEvents] = useState<CalendarEvent[]>([]);
+  const [approvedLeave, setApprovedLeave] = useState<ApprovedLeaveEntry[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [savedPrompts] = useState<SavedPrompt[]>([]);
   const recentTaskSubmission = useRef<{ signature: string; submittedAt: number } | null>(null);
 
@@ -227,6 +321,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     breakType: BreakType;
     startTime: string;
     elapsedSeconds: number;
+    startedAtUtc: string;
   } | null>(null);
 
 
@@ -276,6 +371,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser.id]);
 
+  const refreshAccountChangeRequests = async (): Promise<void> => {
+    if (!currentUser.id) return;
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) return;
+
+    const response = await fetch('/api/account-change-requests', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to load account change requests.');
+    }
+    if (Array.isArray(data.requests)) {
+      setAccountChangeRequests(data.requests as AccountChangeRequest[]);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser.id) return;
+    void refreshAccountChangeRequests().catch((error) => {
+      console.error('Failed to load account change requests from API.', error);
+      setAccountChangeRequests([]);
+    });
+  }, [currentUser.id]);
+
   const [settings] = useState({
     workingHours: { start: '09:00', end: '18:00' },
     breakLimitMinutes: 60,
@@ -297,11 +417,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const refreshUsers = () => {
+  const refreshUsers = async (): Promise<void> => {
     const token = localStorage.getItem('worksync_auth_token');
     if (!token) return;
 
-    fetch('/api/auth/users', {
+    await fetch('/api/auth/users', {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(async (res) => {
@@ -312,7 +432,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return data;
       })
       .then((data) => {
-        if (data.success && Array.isArray(data.users) && data.users.length > 0) {
+        if (data.success && Array.isArray(data.users)) {
           setUsers(data.users as User[]);
         }
       })
@@ -354,15 +474,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
   const logoutUser = () => {
+    fetch('/api/auth/logout', { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
   localStorage.removeItem('worksync_auth_token');
   setHrRequests([]);
-  setCurrentUser({
+    setAccountChangeRequests([]);
+    setCurrentUser({
     id: '',
     name: '',
     email: '',
     role: 'Team_Member',
     department: '',
-    avatar: '',
     title: '',
     status: 'inactive'
   });
@@ -419,13 +540,245 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    // Calendar-only, read-only: approved HR leave requests for display alongside
+    // Deadlines/Milestones/Task Due. Never mutates leave data; the HR approval flow that owns it
+    // (backend/src/routes/hrRequestRoutes.ts) is untouched.
+    const hydrateApprovedLeave = async () => {
+      try {
+        const remoteApprovedLeave = await fetchApprovedLeave();
+        if (isActive) setApprovedLeave(remoteApprovedLeave);
+      } catch (error) {
+        console.warn('Approved leave API request failed; Calendar will show no leave entries.', error);
+      }
+    };
+
+    // hr.Holidays is the single source of truth for Calendar's holiday display (see
+    // calendarRules.ts's buildHolidayEntries). Visible to every role; only HR can mutate (see
+    // createHoliday/updateHoliday/deleteHoliday below, enforced server-side via effectiveRoles.ts).
+    const hydrateHolidays = async () => {
+      try {
+        const remoteHolidays = await fetchHolidays();
+        if (isActive) setHolidays(remoteHolidays);
+      } catch (error) {
+        console.warn('Holidays API request failed; Calendar will show no holiday entries.', error);
+      }
+    };
+
+    // Project Management Approval Workflow: Admin sees every Pending request (their inbox);
+    // a project's lead sees their own submitted requests (any status), to check outcomes. Team
+    // Lead is not a separate account role -- a Team_Member becomes a project's lead only by
+    // per-project assignment, so this fetches for Team_Lead and Team_Member alike (HR never
+    // creates these, so skipping the call for HR avoids a wasted round trip) -- this is not
+    // authorization (the backend endpoints themselves already gate that via isProjectLead).
+    const hydrateProjectApprovalRequests = async () => {
+      if (currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'Team_Member') return;
+      try {
+        const remote = currentRole === 'Admin'
+          ? await fetchPendingProjectApprovals()
+          : await fetchMyProjectApprovalRequests();
+        if (isActive) setProjectApprovalRequests(remote);
+      } catch (error) {
+        console.warn('Project approval requests API request failed.', error);
+      }
+    };
+
+    const hydrateAttendance = async () => {
+      try {
+        const token = localStorage.getItem('worksync_auth_token');
+        if (!token || !isActive) return;
+        const futureDate = new Date();
+        futureDate.setDate(futureDate.getDate() + 90);
+        const to = futureDate.toISOString().split('T')[0];
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - 90);
+        const from = fromDate.toISOString().split('T')[0];
+        const response = await fetch(`/api/attendance?from=${from}&to=${to}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !Array.isArray(data.data)) {
+          throw new Error(data.message || 'Failed to load attendance.');
+        }
+        if (isActive) {
+          const mapped = mapAttendanceApiRecords(data.data);
+          setAttendanceRecords(mapped);
+          setActiveBreak(restoreActiveBreak(data.activeBreak, currentUser.id));
+        }
+      } catch (error) {
+        console.warn('Attendance API request failed; falling back to local data.', error);
+        if (isActive) {
+          const local = loadAttendanceRecords();
+          if (local.length > 0) setAttendanceRecords(local);
+        }
+      }
+    };
+
+    const hydrateActivityLogs = async () => {
+      try {
+        const result = await fetchActivities(DEFAULT_ACTIVITY_FILTERS, 1, 50);
+        if (isActive && Array.isArray(result.items)) {
+          const mapped: ActivityLogItem[] = (result.items as ActivityItem[]).map((item) => ({
+            id: item.id,
+            userId: item.actor.id || '',
+            userName: item.actor.name,
+            action: `${item.action} ${item.entityType}`,
+            targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+            targetId: item.entityId,
+            targetTitle: item.entityName || item.description,
+            timestamp: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+          }));
+          setActivityLogs(mapped);
+        }
+      } catch (error) {
+        console.warn('Activity API request failed.', error);
+      }
+    };
+
     void hydrateTasks();
     void hydrateProjects();
+    void hydrateApprovedLeave();
+    void hydrateHolidays();
+    void hydrateProjectApprovalRequests();
+    void hydrateAttendance();
+    void hydrateActivityLogs();
 
     return () => {
       isActive = false;
     };
-  }, [currentUser.id, taskReloadVersion]);
+  }, [currentUser.id, taskReloadVersion, currentRole]);
+
+  // Derive systemApprovals from loaded backend data (projects + tasks)
+  const approvalsHydratedRef = useRef(false);
+  useEffect(() => {
+    if (approvalsHydratedRef.current) return;
+    if (projects.length === 0 && tasks.length === 0) return;
+    approvalsHydratedRef.current = true;
+
+    const derived: SystemApproval[] = [];
+
+    for (const t of tasks) {
+      if (t.pendingEdit && t.pendingEdit.status === 'Pending') {
+        derived.push({
+          id: `sys-approval-edit-${t.pendingEdit.id}`,
+          type: 'Controlled_Edit',
+          targetId: t.id,
+          targetTitle: t.title,
+          requestedBy: t.pendingEdit.requestedBy,
+          requestedRole: 'Team_Member',
+          createdAt: t.pendingEdit.createdAt,
+          details: `Requested ${t.pendingEdit.field} change on "${t.title}"`,
+          status: 'Pending',
+          projectId: t.projectId,
+          proposedDiff: {
+            field: t.pendingEdit.field,
+            oldValue: t.pendingEdit.oldValue,
+            newValue: t.pendingEdit.newValue,
+          },
+        });
+      }
+    }
+
+    if (derived.length > 0) {
+      setSystemApprovals((prev) => {
+        const existingIds = new Set(prev.map((a) => a.id));
+        const newItems = derived.filter((d) => !existingIds.has(d.id));
+        return newItems.length > 0 ? [...prev, ...newItems] : prev;
+      });
+    }
+  }, [projects, tasks]);
+
+  useEffect(() => {
+    // Team Lead is a project assignment, not an account role.  Team Members always
+    // load this endpoint; the API returns only requests for projects they actively lead.
+    // HR must not retain a previous lead's restricted approval data after a role change.
+    if (!currentUser.id || currentRole !== 'Team_Member' || projects.length === 0) {
+      setSystemApprovals((prev) => prev.filter((approval) =>
+        !(approval.type === 'Controlled_Edit' && approval.proposedTaskUpdate)
+      ));
+      return;
+    }
+    let isActive = true;
+
+    void loadTaskEditApprovalsViaApi()
+      .then((persistedApprovals) => {
+        if (!isActive) return;
+        const validApprovals = persistedApprovals.filter((approval) => {
+          const project = projects.find((candidate) => candidate.id === approval.projectId);
+          if (!project || project.teamLeadId !== currentUser.id) return false;
+          return tasks.some((task) =>
+            task.id === approval.targetId ||
+            task.subtasks.some((subtask) => subtask.id === approval.targetId)
+          );
+        });
+        setSystemApprovals((prev) => {
+          const persistedIds = new Set(validApprovals.map((approval) => approval.id));
+          return [
+            ...validApprovals,
+            ...prev.filter((approval) =>
+              !persistedIds.has(approval.id) &&
+              !(approval.type === 'Controlled_Edit' &&
+                approval.proposedTaskUpdate &&
+                approval.status === 'Pending')
+            )
+          ];
+        });
+        setTasks((prev) => prev.map((task) => {
+          const directApproval = validApprovals.find((approval) => approval.targetId === task.id);
+          if (directApproval) {
+            return {
+              ...task,
+              approvalStatus: 'Pending Approval',
+              pendingEdit: {
+                id: directApproval.id,
+                taskId: task.id,
+                requestedBy: directApproval.requestedBy,
+                field: 'description',
+                oldValue: 'Current task details',
+                newValue: 'Proposed task details',
+                reason: 'Task update requested by the assignee.',
+                status: 'Pending',
+                createdAt: directApproval.createdAt
+              }
+            };
+          }
+          return {
+            ...task,
+            approvalStatus: task.hasPendingApproval ? 'Pending Approval' : 'Approved',
+            pendingEdit: undefined,
+            subtasks: task.subtasks.map((subtask) => {
+              const approval = validApprovals.find((candidate) => candidate.targetId === subtask.id);
+              return approval
+                ? {
+                    ...subtask,
+                    approvalStatus: 'Pending Approval',
+                    pendingEdit: {
+                      id: approval.id,
+                      taskId: subtask.id,
+                      requestedBy: approval.requestedBy,
+                      field: 'description',
+                      oldValue: 'Current task details',
+                      newValue: 'Proposed task details',
+                      reason: 'Task update requested by the assignee.',
+                      status: 'Pending',
+                      createdAt: approval.createdAt
+                    }
+                  }
+                : {
+                    ...subtask,
+                    approvalStatus: (subtask as Partial<Task>).hasPendingApproval ? 'Pending Approval' : 'Approved',
+                    pendingEdit: undefined
+                  };
+            })
+          };
+        }));
+      })
+      .catch((error) => console.warn('Failed to load persisted task edit approvals.', error));
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser.id, currentRole, projects, tasks.length]);
 
   // Break Timer Interval Effect
   useEffect(() => {
@@ -457,7 +810,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `act-${Date.now()}`,
       userId: currentUser.id,
       userName: currentUser.name,
-      userAvatar: currentUser.avatar,
       action,
       targetType,
       targetId,
@@ -467,11 +819,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setActivityLogs((prev) => [newAct, ...prev]);
 
-    fetch('/api/activity-log', {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ action, targetType, targetId, targetTitle, diff }),
-    }).catch(() => {});
+    // Backend workflows persist the authoritative audit event; keep this optimistic
+    // compatibility list local to avoid duplicate audit rows.
   };
 
   // --- Notification Module -----------------------------------------------------------
@@ -644,7 +993,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, projects]);
 
-  // Only Team Leads may propose new projects; every new project requires Admin approval.
+  // A project member who creates a project becomes its project-scoped lead after approval.
   const eligibleProjectMemberIds = (ids: string[]): string[] =>
     ids.filter((id) => users.find((u) => u.id === id)?.role === 'Team_Member');
 
@@ -658,53 +1007,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // project.types.ts's ProjectDTO comment), so they are preserved/merged locally on top of
   // whatever the server returns.
   const createProject = async (data: Partial<Project>): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
+    if (currentRole !== 'Team_Member' && currentRole !== 'Team_Lead' && currentRole !== 'Admin') {
       return { success: false, message: 'You do not have permission to create a project.' };
     }
 
     try {
+      // Local-safe date defaults -- new Date().toISOString() reports UTC, which reads a full
+      // calendar day behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any
+      // other positive-offset timezone. See calendarRules.ts's todayDateKey/toDateKey.
+      const defaultTargetDate = new Date();
+      defaultTargetDate.setDate(defaultTargetDate.getDate() + 30);
       const created = await createProjectApi({
         title: data.title || 'Untitled Project',
         description: data.description || '',
         priority: data.priority || 'Medium',
-        startDate: data.startDate || new Date().toISOString().split('T')[0],
-        targetDate: data.targetDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        startDate: data.startDate || todayDateKey(),
+        targetDate: data.targetDate || toDateKey(defaultTargetDate),
         teamLeadId: data.teamLeadId,
         memberIds: eligibleProjectMemberIds(data.memberIds || []),
         creationReason: data.creationReason
       });
 
+      // Milestones have their own dedicated endpoints (no bulk field on POST /api/projects,
+      // matching how membership already works above) -- the project must exist first, so these
+      // are created one at a time against the new project's real id, right after it's created.
+      const createdMilestones: Milestone[] = [];
+      const milestoneErrors: string[] = [];
+      for (const milestone of data.milestones || []) {
+        if (!milestone.title?.trim() || !milestone.dueDate) continue;
+        try {
+          createdMilestones.push(
+            await addMilestoneApi(created.id, { title: milestone.title.trim(), dueDate: milestone.dueDate })
+          );
+        } catch (error: any) {
+          milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+        }
+      }
+
+      // Same pattern as milestones just above -- attachments have their own dedicated endpoint,
+      // the project must exist first. `file.dataUrl` is only present for a file just selected in
+      // the form (see ProjectsView.tsx's handleFileSelect); anything without one has no content to
+      // upload and is skipped defensively.
+      const createdFiles: ProjectFile[] = [];
+      const fileErrors: string[] = [];
+      for (const file of data.files || []) {
+        if (!file.dataUrl) continue;
+        try {
+          createdFiles.push(
+            await addProjectFileApi(created.id, { name: file.name, mimeType: file.mimeType, url: file.dataUrl })
+          );
+        } catch (error: any) {
+          fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+        }
+      }
+
       setProjects((prev) => [
-        { ...created, milestones: data.milestones || [], files: data.files || [], pinnedMessagesCount: 0 },
+        { ...created, milestones: createdMilestones, files: createdFiles, pinnedMessagesCount: 0 },
         ...prev
       ]);
 
-      // Pending Approval projects still need a local SystemApproval record so the Approvals
-      // Inbox can list them -- the backend has no SystemApprovals table of its own (out of this
-      // branch's scope), it only publishes the "approval" notification event to Admins.
-      if (created.status === 'Pending Approval') {
-        const approval: SystemApproval = {
-          id: `app-${Date.now()}`,
-          type: 'Project_Creation',
-          targetId: created.id,
-          targetTitle: created.title,
-          requestedBy: currentUser.id,
-          requestedRole: currentRole,
-          createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-          details: `Team Lead ${currentUser.name} proposed new project "${created.title}". Pending Admin approval.`,
-          status: 'Pending'
-        };
-        setSystemApprovals((prev) => [approval, ...prev]);
-      }
-
       pushActivity('Created project', 'Project', created.id, created.title);
 
-      const message =
+      const baseMessage =
         created.status === 'Pending Approval'
           ? `"${created.title}" was submitted for Admin approval successfully.`
           : `"${created.title}" was created successfully.`;
-      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
-      return { success: true, message };
+      const creationErrors = [...milestoneErrors, ...fileErrors];
+      if (creationErrors.length > 0) {
+        const message = `${baseMessage} Some items could not be saved: ${creationErrors.join(' ')}`;
+        confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', message);
+        return { success: true, message };
+      }
+      confirmActionSuccess(created.status === 'Pending Approval' ? 'Project Submitted' : 'Project Created', baseMessage);
+      return { success: true, message: baseMessage };
     } catch (error: any) {
       console.error('Failed to create project.', error);
       return { success: false, message: error?.message || 'Failed to create the project. Please try again.' };
@@ -718,8 +1093,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      const updated = await updateProjectApi(projectId, { status: 'Active' });
-      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
+      const result = await updateProjectApi(projectId, { status: 'Active' });
+      const updated = result.project!;
+      // `updated` is a fresh server DTO -- milestones/files/pinnedMessagesCount have no backend
+      // representation, so the server always reports them empty. Preserve whatever the Team Lead
+      // set locally when they created this project instead of letting activation wipe it out.
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? { ...p, ...updated, milestones: p.milestones, files: p.files, pinnedMessagesCount: p.pinnedMessagesCount }
+            : p
+        )
+      );
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Approved' } : sa
@@ -753,6 +1138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjects((prev) =>
         prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived', approvalStatus: 'Rejected' } : p))
       );
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Creation' ? { ...sa, status: 'Rejected' } : sa
@@ -769,34 +1155,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // For a Team Lead, this creates a Pending PROJECT_EDIT approval request instead of applying
+  // the change (see backend/src/projects/project.controller.ts's updateProject) -- `approvalReason`
+  // is their comment for the Admin, required in that case. Admin calls are unaffected: they still
+  // apply immediately, exactly as before.
   const updateProject = async (
     projectId: string,
-    data: Partial<Project>
+    data: Partial<Project>,
+    approvalReason?: string
   ): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
     try {
-      const updated = await updateProjectApi(projectId, {
+      const result = await updateProjectApi(projectId, {
         title: data.title,
         description: data.description,
         priority: data.priority,
         startDate: data.startDate,
         targetDate: data.targetDate,
-        status: data.status
+        status: data.status,
+        teamLeadId: data.teamLeadId,
+        memberIds: data.memberIds,
+        creationReason: data.creationReason,
+        reason: approvalReason
       });
-      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...updated } : p)));
-      pushActivity('Updated project', 'Project', projectId, updated.title);
+
+      if (!result.pendingApproval && result.project) {
+        const updated = result.project;
+        // milestones: p.milestones (not data.milestones) -- the milestone diff block below is the
+        // single source of truth for persisting milestone changes and refreshing this array from
+        // the server; this merge must not race it with the form's raw (possibly unpersisted-id)
+        // local list.
+        // files: p.files (not data.files) -- same reasoning as milestones: the file diff block
+        // below is the single source of truth for persisting attachment changes and refreshing
+        // this array from the server.
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === projectId ? { ...p, ...updated, milestones: p.milestones, files: p.files } : p
+          )
+        );
+        pushActivity('Updated project', 'Project', projectId, updated.title);
+      } else {
+        pushActivity('Requested project edit', 'Project', projectId, project.title);
+        confirmActionSuccess('Edit Requested', result.message);
+        return { success: true, message: result.message };
+      }
 
       // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
       // UpdateProjectPayload) -- it goes through the dedicated member endpoints instead, one
-      // call per added/removed user, diffed against the project's current membership.
+      // call per added/removed user, diffed against the project's current membership. Member
+      // changes are never approval-gated (not one of this workflow's five integration points),
+      // so they apply immediately regardless of whether the rest of this edit is pending.
+      const memberErrors: string[] = [];
+      let membershipChanged = false;
       if (data.memberIds) {
-        const beforeIds = new Set(project.memberIds);
+        // Both sides of this diff must go through the same eligibility filter. project.memberIds
+        // (the "before" set) includes the project's Team Lead, whose account role is virtually
+        // never 'Team_Member' -- comparing it unfiltered against the filtered `afterIds` made the
+        // lead look "removed" on every single save (the edit form's member checkboxes never
+        // touch the lead's own membership, see ProjectsView.tsx's assignableMembers), silently
+        // firing a real removeProjectMemberApi call and a false "removed from project"
+        // notification. Filtering both sides identically fixes the root cause instead of
+        // special-casing the lead's id.
+        const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
-        const removed = project.memberIds.filter((id) => !afterIds.includes(id));
-        const memberErrors: string[] = [];
+        const removed = Array.from(beforeIds).filter((id) => !afterIds.includes(id));
 
         for (const userId of added) {
           try {
@@ -812,19 +1237,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberErrors.push(error?.message || `Failed to remove member ${userId}.`);
           }
         }
-
-        if (added.length > 0 || removed.length > 0) {
-          const refreshed = await fetchProjectApi(projectId);
-          setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...refreshed } : p)));
-        }
-
-        if (memberErrors.length > 0) {
-          const message = `Project details saved, but some membership changes failed: ${memberErrors.join(' ')}`;
-          return { success: false, message };
-        }
+        membershipChanged = added.length > 0 || removed.length > 0;
       }
 
-      const message = `Your changes to "${updated.title}" were saved successfully.`;
+      // Milestones now have their own dedicated endpoints (POST/PATCH/DELETE
+      // /api/projects/:id/milestones[/:milestoneId]), same "no bulk field, diff against current
+      // state, one call per change" pattern as membership above -- and same non-approval-gated
+      // treatment (reuses assertCanManage server-side, not the Team Lead approval workflow).
+      // A milestone not yet saved to the server has a client-generated id like "m-<timestamp>-<n>"
+      // (see ProjectsView.tsx's addMilestone); a real, persisted one has a plain numeric id (the
+      // DB's MilestoneId as a string) -- that shape difference is what tells "new" from "existing"
+      // apart, no separate tracking needed.
+      const milestoneErrors: string[] = [];
+      let milestonesChanged = false;
+      if (data.milestones) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextById = new Map(data.milestones.filter((m) => isPersistedId(m.id)).map((m) => [m.id, m]));
+        const removedMilestones = project.milestones.filter((m) => !nextById.has(m.id));
+        const addedMilestones = data.milestones.filter((m) => !isPersistedId(m.id));
+        const changedMilestones = project.milestones.filter((m) => {
+          const next = nextById.get(m.id);
+          return next && (next.title !== m.title || next.dueDate !== m.dueDate);
+        });
+
+        for (const milestone of removedMilestones) {
+          try {
+            await deleteMilestoneApi(projectId, milestone.id);
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to remove milestone "${milestone.title}".`);
+          }
+        }
+        for (const milestone of changedMilestones) {
+          const next = nextById.get(milestone.id)!;
+          try {
+            await updateMilestoneApi(projectId, milestone.id, { title: next.title, dueDate: next.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to update milestone "${milestone.title}".`);
+          }
+        }
+        for (const milestone of addedMilestones) {
+          if (!milestone.title?.trim() || !milestone.dueDate) continue;
+          try {
+            await addMilestoneApi(projectId, { title: milestone.title.trim(), dueDate: milestone.dueDate });
+          } catch (error: any) {
+            milestoneErrors.push(error?.message || `Failed to save milestone "${milestone.title}".`);
+          }
+        }
+        milestonesChanged =
+          removedMilestones.length > 0 || changedMilestones.length > 0 || addedMilestones.length > 0;
+      }
+
+      // Attachments have their own dedicated endpoints too, same pattern as milestones just above
+      // -- only add/remove exist (no "rename"/"replace content" in the current UI, so no "changed"
+      // case to diff). Same numeric-id-vs-client-generated-id discriminator: a file just selected
+      // in the form has an id like "f-<timestamp>-<name>" and carries its content in `dataUrl`
+      // (see ProjectsView.tsx's handleFileSelect); an already-persisted file has a plain numeric id
+      // (the DB's FileId) and no `dataUrl`.
+      const fileErrors: string[] = [];
+      let filesChanged = false;
+      if (data.files) {
+        const isPersistedId = (id: string) => /^\d+$/.test(id);
+        const nextIds = new Set(data.files.filter((f) => isPersistedId(f.id)).map((f) => f.id));
+        const removedFiles = project.files.filter((f) => !nextIds.has(f.id));
+        const addedFiles = data.files.filter((f) => !isPersistedId(f.id) && f.dataUrl);
+
+        for (const file of removedFiles) {
+          try {
+            await removeProjectFileApi(projectId, file.id);
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to remove file "${file.name}".`);
+          }
+        }
+        for (const file of addedFiles) {
+          try {
+            await addProjectFileApi(projectId, { name: file.name, mimeType: file.mimeType, url: file.dataUrl! });
+          } catch (error: any) {
+            fileErrors.push(error?.message || `Failed to upload file "${file.name}".`);
+          }
+        }
+        filesChanged = removedFiles.length > 0 || addedFiles.length > 0;
+      }
+
+      if (membershipChanged || milestonesChanged || filesChanged) {
+        const refreshed = await fetchProjectApi(projectId);
+        // `refreshed` is a fresh server DTO -- pinnedMessagesCount has no backend representation,
+        // so keep the locally-held value; milestones and files are now real, persisted,
+        // server-confirmed data, so take both from `refreshed`.
+        setProjects((prev) =>
+          prev.map((p) => (p.id === projectId ? { ...p, ...refreshed, pinnedMessagesCount: p.pinnedMessagesCount } : p))
+        );
+      }
+
+      if (memberErrors.length > 0 || milestoneErrors.length > 0 || fileErrors.length > 0) {
+        const message = `Project details saved, but some changes failed: ${[...memberErrors, ...milestoneErrors, ...fileErrors].join(' ')}`;
+        return { success: false, message };
+      }
+
+      const message = `Your changes to "${result.project!.title}" were saved successfully.`;
       confirmActionSuccess('Project Updated', message);
       return { success: true, message };
     } catch (error: any) {
@@ -833,60 +1342,121 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteProject = async (projectId: string): Promise<{ success: boolean; message: string }> => {
+  // GET /api/projects/:id returns the full detail DTO (milestones included -- see
+  // project.service.ts's buildDetailDTO), unlike GET /api/projects (the list `projects` is
+  // hydrated from), which omits milestones/files to avoid an N+1 query on every project list load.
+  // ProjectsView.tsx calls this when the Details popup or the Edit form opens (the Edit button on
+  // a card also only ever has the list-cached, milestone/file-less project), so both reflect real
+  // backend data instead of that snapshot. Returns the merged project so a caller that needs it
+  // synchronously (e.g. to seed an edit form) doesn't have to read back a stale closure of
+  // `projects` right after this resolves.
+  const refreshProjectDetails = async (projectId: string): Promise<Project | null> => {
+    try {
+      const detail = await fetchProjectApi(projectId);
+      const existing = projects.find((p) => p.id === projectId);
+      const merged: Project = existing ? { ...existing, ...detail } : detail;
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? merged : p)));
+      return merged;
+    } catch (error) {
+      console.warn('Failed to load project details.', error);
+      return null;
+    }
+  };
+
+  // Soft-deletes an Active project by archiving it (or, for an already-Archived one, is the first
+  // half of the two-step permanent delete -- see ProjectsView's confirmDelete). For a Team Lead
+  // this creates a Pending PROJECT_ARCHIVE approval request instead of archiving immediately (see
+  // backend/src/projects/project.controller.ts's archiveProject); `reason` is their comment for
+  // the Admin. Admin calls archive immediately, exactly as before -- the old local-only
+  // Project_Deletion SystemApproval flow this replaced never persisted anywhere the Admin's own
+  // session could see it, so it's gone rather than kept alongside a real one.
+  const deleteProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return { success: false, message: 'Project not found.' };
 
-    // Team Leads cannot delete immediately: their delete action files a Project Deletion
-    // approval request instead (local-only, same as the Project Creation approval flow); the
-    // actual archive only happens once an Admin approves it via approveProjectDeletion below.
-    // This entire branch never calls the backend (there's no API for "request a deletion"), so
-    // unlike every other Project mutation, the Admin notification here has no server-side
-    // equivalent to rely on -- it must be dispatched from here, or Admins never learn a
-    // deletion request exists at all.
-    if (currentRole !== 'Admin') {
-      const approval: SystemApproval = {
-        id: `app-${Date.now()}`,
-        type: 'Project_Deletion',
-        targetId: projectId,
-        targetTitle: project.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `Team Lead ${currentUser.name} requested deletion of project "${project.title}". Pending Admin approval.`,
-        status: 'Pending'
-      };
-      setSystemApprovals((prev) => [approval, ...prev]);
-      dispatchNotifications({
-        recipientIds: resolveAdminRecipients(users, currentUser.id),
-        type: 'approval',
-        title: 'Project Deletion Requested',
-        message: `${currentUser.name} requested deletion of project "${project.title}".`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId
-      });
-      pushActivity('Requested project deletion', 'Project', projectId, project.title);
-
-      const message = `Your request to delete "${project.title}" was submitted for Admin approval.`;
-      confirmActionSuccess('Deletion Requested', message);
-      return { success: true, message };
-    }
-
     try {
-      await archiveProjectApi(projectId, `Deleted by ${currentUser.name}.`);
-      // Soft delete only -- the backend never cascades this to work.Tasks, so tasks under an
-      // archived project are intentionally left exactly as they are.
+      const result = await archiveProjectApi(projectId, reason?.trim() || `Deleted by ${currentUser.name}.`);
+      if (result.pendingApproval) {
+        pushActivity('Requested project delete', 'Project', projectId, project.title);
+        confirmActionSuccess('Delete Requested', result.message);
+        return { success: true, message: result.message };
+      }
+      // Admin archive actions (including approved Team Lead requests) also mark this project's
+      // non-deleted tasks as project-archived, so remove them from active local state immediately.
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       pushActivity('Deleted project', 'Project', projectId, project.title);
 
-      const message = `"${project.title}" was archived successfully.`;
-      confirmActionSuccess('Project Deleted', message);
-      return { success: true, message };
+      confirmActionSuccess('Project Deleted', result.message);
+      return { success: true, message: result.message };
     } catch (error: any) {
       console.error('Failed to delete project.', error);
       return { success: false, message: error?.message || 'Failed to delete the project. Please try again.' };
+    }
+  };
+
+  // Step two of the two-step delete: only usable on a project that's already Archived (the
+  // permanent-delete confirmation in ProjectsView only ever calls this for such a project). For a
+  // Team Lead this creates a Pending PROJECT_PERMANENT_DELETE approval request instead of
+  // executing (see project.controller.ts). Unlike deleteProject/archiveProjectApi above, a
+  // successful direct execution removes the project from local state entirely -- there's no
+  // longer a row to reflect a status on.
+  const permanentlyDeleteProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      const result = await permanentlyDeleteProjectApi(projectId, reason);
+      if (result.pendingApproval) {
+        pushActivity('Requested permanent project delete', 'Project', projectId, project.title);
+        confirmActionSuccess('Permanent Delete Requested', result.message);
+        return { success: true, message: result.message };
+      }
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
+      pushActivity('Permanently deleted project', 'Project', projectId, project.title);
+
+      confirmActionSuccess('Project Permanently Deleted', result.message);
+      return { success: true, message: result.message };
+    } catch (error: any) {
+      console.error('Failed to permanently delete project.', error);
+      return { success: false, message: error?.message || 'Failed to permanently delete the project. Please try again.' };
+    }
+  };
+
+  // Restores an Archived project back to Active. For a Team Lead this creates a Pending
+  // PROJECT_RESTORE approval request instead of restoring immediately (see project.controller.ts).
+  // PROJECT_RESTORE approval request instead of restoring immediately. An approved restore clears
+  // the project-driven archive marker on its tasks in the same backend transaction, so active
+  // tasks are refreshed after the action completes.
+  const restoreProject = async (projectId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      const result = await restoreProjectApi(projectId, reason);
+      if (result.pendingApproval) {
+        pushActivity('Requested project restore', 'Project', projectId, project.title);
+        confirmActionSuccess('Restore Requested', result.message);
+        return { success: true, message: result.message };
+      }
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Active' } : p)));
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        // The project and task rows are already restored transactionally on the server. A transient
+        // refresh failure should not report the restore itself as failed; the next normal load will
+        // repopulate the active task list.
+        console.warn('Project restored, but active tasks could not be refreshed immediately.', refreshError);
+      }
+      pushActivity('Restored project', 'Project', projectId, project.title);
+
+      confirmActionSuccess('Project Restored', result.message);
+      return { success: true, message: result.message };
+    } catch (error: any) {
+      console.error('Failed to restore project.', error);
+      return { success: false, message: error?.message || 'Failed to restore the project. Please try again.' };
     }
   };
 
@@ -901,6 +1471,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await archiveProjectApi(projectId, `Deletion approved by ${currentUser.name}.`);
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, status: 'Archived' } : p)));
+      setTasks((prev) => prev.filter((task) => task.projectId !== projectId));
       setSystemApprovals((prev) =>
         prev.map((sa) =>
           sa.targetId === projectId && sa.type === 'Project_Deletion' ? { ...sa, status: 'Approved' } : sa
@@ -914,6 +1485,143 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to approve project deletion.', error);
       return { success: false, message: error?.message || 'Failed to approve the deletion. Please try again.' };
+    }
+  };
+
+  // Admin decision on a real, backend-persisted Project Management Approval Workflow request
+  // (PROJECT_EDIT/ARCHIVE/DELETE/RESTORE/PERMANENT_DELETE -- see backend/src/projects/
+  // projectApproval.service.ts). Approving executes the underlying action server-side; since each
+  // request type changes `projects` differently (and permanent delete removes the row entirely),
+  // the simplest correct move is to just reload the full project list from the server rather than
+  // guess the new local shape here.
+  const approveProjectApprovalRequest = async (
+    approvalRequestId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can approve project requests.' };
+
+    try {
+      const decided = await approveProjectApprovalRequestApi(approvalRequestId, reason);
+      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      try {
+        const remoteProjects = await fetchProjectsApi();
+        // remoteProjects is a fresh server list -- milestones/files/pinnedMessagesCount have no
+        // backend representation, so every entry reports them empty regardless of what was set
+        // locally. Look each project up in the previous state (not the fresh `p` itself) to carry
+        // those fields forward instead of wiping them out for every project in the list.
+        setProjects((prev) => {
+          const prevById = new Map(prev.map((p) => [p.id, p]));
+          return remoteProjects.map((p) => {
+            const existing = prevById.get(p.id);
+            return {
+              ...p,
+              milestones: existing?.milestones || [],
+              files: existing?.files || [],
+              pinnedMessagesCount: existing?.pinnedMessagesCount ?? 0
+            };
+          });
+        });
+      } catch (refreshError) {
+        console.warn('Failed to refresh projects after approving a request.', refreshError);
+      }
+      // Approval requests can archive, restore, or permanently delete a project. Refreshing the
+      // active task list keeps every task surface in sync with the transaction that changed it.
+      try {
+        const refreshedTasks = await loadTasksFromApi();
+        if (refreshedTasks !== null) setTasks(refreshedTasks);
+      } catch (refreshError) {
+        console.warn('Failed to refresh tasks after approving a project request.', refreshError);
+      }
+      pushActivity('Approved project request', 'Project', decided.projectId, decided.projectTitle);
+
+      const message = `Request for "${decided.projectTitle}" was approved.`;
+      confirmActionSuccess('Request Approved', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to approve project request.', error);
+      return { success: false, message: error?.message || 'Failed to approve the request. Please try again.' };
+    }
+  };
+
+  // Rejecting just marks the request decided -- the project is never touched.
+  const rejectProjectApprovalRequest = async (
+    approvalRequestId: string,
+    reason?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can reject project requests.' };
+
+    try {
+      const decided = await rejectProjectApprovalRequestApi(approvalRequestId, reason);
+      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      pushActivity('Rejected project request', 'Project', decided.projectId, decided.projectTitle);
+
+      const message = `Request for "${decided.projectTitle}" was rejected.`;
+      confirmActionSuccess('Request Rejected', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to reject project request.', error);
+      return { success: false, message: error?.message || 'Failed to reject the request. Please try again.' };
+    }
+  };
+
+  // Holiday management (Calendar module). The currentRole check here is a UX convenience only --
+  // the real gate is server-side, via effectiveRoles.ts in backend/src/calendar/calendar.service.ts
+  // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
+  // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
+  const createHoliday = async (
+    input: HolidayInput
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const created = await createHolidayApi(input);
+      setHolidays((prev) => [...prev, created]);
+      pushActivity('Added holiday', 'Settings', created.id, created.name);
+
+      const message = `"${created.name}" was added to the holiday calendar.`;
+      confirmActionSuccess('Holiday Added', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to create holiday.', error);
+      return { success: false, message: error?.message || 'Failed to add the holiday. Please try again.' };
+    }
+  };
+
+  const updateHoliday = async (
+    id: string,
+    input: Partial<HolidayInput>
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    try {
+      const updated = await updateHolidayApi(id, input);
+      setHolidays((prev) => prev.map((h) => (h.id === id ? updated : h)));
+      pushActivity('Updated holiday', 'Settings', updated.id, updated.name);
+
+      const message = `"${updated.name}" was updated.`;
+      confirmActionSuccess('Holiday Updated', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to update holiday.', error);
+      return { success: false, message: error?.message || 'Failed to update the holiday. Please try again.' };
+    }
+  };
+
+  const deleteHoliday = async (id: string): Promise<{ success: boolean; message: string }> => {
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+
+    const holiday = holidays.find((h) => h.id === id);
+    try {
+      await deleteHolidayApi(id);
+      setHolidays((prev) => prev.filter((h) => h.id !== id));
+      pushActivity('Deleted holiday', 'Settings', id, holiday?.name || 'Holiday');
+
+      const message = `${holiday ? `"${holiday.name}"` : 'The holiday'} was removed from the calendar.`;
+      confirmActionSuccess('Holiday Deleted', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to delete holiday.', error);
+      return { success: false, message: error?.message || 'Failed to delete the holiday. Please try again.' };
     }
   };
 
@@ -944,7 +1652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Team Members submit task creation requests to the selected project's Team Lead.
     // The task is only created in the backend after that Team Lead approves the request.
-    if (currentRole === 'Team_Member') {
+    if (currentRole === 'Team_Member' && projects.find((item) => item.id === input.projectId)?.teamLeadId !== currentUser.id) {
       const project = projects.find((item) => item.id === input.projectId);
 
       if (!project) {
@@ -971,7 +1679,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           projectId: input.projectId,
           title: input.title,
           description: input.description,
-          priority: input.priority === 'Critical' ? 'Urgent' : input.priority,
+          priority: input.priority || 'Medium',
           startDate: input.startDate,
           dueDate: input.dueDate,
           assigneeIds: input.assigneeIds,
@@ -1028,15 +1736,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // dispatches one itself (main's per-field notification differentiation -- reassigned/priority/
   // due-date/checklist -- had no backend equivalent to call through to, so it's not carried
   // forward here; see docs/ProjectBoardNotification_Implementation_Notes.md).
-  const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
+  const updateTask = async (
+    taskId: string,
+    data: TaskMutationData,
+    sourceTask?: Task
+  ): Promise<TaskMutationResult> => {
     const validationResult = prepareTaskUpdate(taskId, data, {
       currentRole,
       currentUserId: currentUser.id,
       projects,
-      tasks,
+      tasks: sourceTask ? [...tasks, sourceTask] : tasks,
       users
     });
     if (!validationResult.success) return validationResult;
+
+    const existingTask = tasks.find((task) => task.id === taskId) || sourceTask || validationResult.task;
+    const project = existingTask && projects.find((item) => item.id === existingTask.projectId);
+    const isMemberOwnedTask = Boolean(
+      existingTask
+      && (Boolean(existingTask.parentTaskId)
+        || Math.max(existingTask.subtaskCount || 0, existingTask.subtasks?.length || 0) === 0)
+        && currentRole === 'Team_Member'
+        && project?.teamLeadId !== currentUser.id
+    );
+
+    // Team Members may prepare changes to their assigned standalone tasks and subtasks, but
+    // the stored task remains unchanged until the owning Team Lead approves the request.
+    if (isMemberOwnedTask && existingTask && project?.teamLeadId) {
+      const proposedTaskUpdate = {
+        title: data.title?.trim() || existingTask.title,
+        description: data.description?.trim() || existingTask.description,
+        priority: data.priority || existingTask.priority,
+        startDate: data.startDate || validationResult.task?.startDate || existingTask.createdAt.slice(0, 10),
+        dueDate: data.dueDate || existingTask.dueDate
+      };
+      const requestId = `edit-${Date.now()}`;
+      const createdAt = new Date().toISOString().replace('T', ' ').substring(0, 16);
+      const pendingEdit: ControlledEditRequest = {
+        id: requestId,
+        taskId,
+        requestedBy: currentUser.id,
+        field: 'description',
+        oldValue: 'Current task details',
+        newValue: 'Proposed task details',
+        reason: 'Task update requested by the assignee.',
+        status: 'Pending',
+        createdAt
+      };
+      let approval: SystemApproval;
+      try {
+        approval = await createTaskEditApprovalViaApi(taskId, proposedTaskUpdate);
+      } catch (error: any) {
+        return { success: false, message: error?.message || 'Unable to submit the task update request.' };
+      }
+
+      const pendingTask = {
+        ...existingTask,
+        approvalStatus: 'Pending Approval' as const,
+        pendingEdit
+      };
+      setTasks((prev) => prev.map((task) => {
+        if (task.id === taskId) return pendingTask;
+        if (!task.subtasks.some((subtask) => subtask.id === taskId)) return task;
+        return {
+          ...task,
+          subtasks: task.subtasks.map((subtask) => subtask.id === taskId
+            ? { ...subtask, approvalStatus: 'Pending Approval', pendingEdit }
+            : subtask)
+        };
+      }));
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
+        type: 'approval',
+        title: 'Task Update Requested',
+        message: `${currentUser.name} requested an update to "${existingTask.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId: existingTask.projectId,
+        taskId
+      });
+      pushActivity('Requested task update approval', 'Approval', approval.id, existingTask.title);
+      confirmActionSuccess('Task Update Requested', `Your changes to "${existingTask.title}" were sent to the Team Lead for approval.`);
+      return { success: true, message: 'Task update requested for Team Lead approval.', task: pendingTask };
+    }
 
     try {
       const updated = await updateTaskViaApi(taskId, data);
@@ -1089,6 +1872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       extraInfo?: {
         note?: string;
         reviewDecision?: 'Approve' | 'Reject';
+        subtaskDecisions?: SubtaskReviewDecision[];
       }
     ): Promise<{ success: boolean; message: string }> => {
       const task = tasks.find((t) => t.id === taskId);
@@ -1101,7 +1885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           extraInfo?.reviewDecision === 'Approve'
             ? await approveTaskViaApi(taskId, note)
             : extraInfo?.reviewDecision === 'Reject'
-              ? await rejectTaskViaApi(taskId, note)
+              ? await rejectTaskViaApi(taskId, note, extraInfo?.subtaskDecisions)
               : await changeTaskStatusViaApi(taskId, newStatus, note);
 
         setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
@@ -1132,6 +1916,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (error: any) {
         console.error('Failed to update task status.', error);
         return { success: false, message: error?.message || 'Failed to update task status. Please try again.' };
+      }
+    };
+
+    // Reopens a completed task. Kept separate from updateTaskStatus because the backend treats
+    // it as a distinct, more strictly authorized operation (Team Lead only, mandatory reason,
+    // its own endpoint and history entry) — see backend/src/tasks/task.service.ts's reopenTask.
+    // Like every other board mutation, `tasks` is only updated from the server's response.
+    const reopenTask = async (
+      taskId: string,
+      newStatus: TaskStatus,
+      reason: string
+    ): Promise<{ success: boolean; message: string }> => {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) return { success: false, message: 'Task not found.' };
+
+      try {
+        const updated = await reopenTaskViaApi(taskId, newStatus, reason.trim());
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
+
+        pushActivity('Reopened task', 'Task', taskId, task.title, {
+          field: 'status',
+          oldVal: 'Done',
+          newVal: newStatus
+        });
+        confirmActionSuccess('Task Reopened', `"${task.title}" was reopened to ${newStatus}.`);
+
+        return { success: true, message: `"${task.title}" reopened to ${newStatus}.` };
+      } catch (error: any) {
+        console.error('Failed to reopen task.', error);
+        return { success: false, message: error?.message || 'Failed to reopen the task. Please try again.' };
+      }
+    };
+
+    // Ticks / un-ticks a subtask from the Project Board's task detail. A subtask is just a Task
+    // with a parent (Task Module model), so this reuses the *existing* status endpoint rather
+    // than adding a subtask-specific one — the board consumes the Task Module's API, it does not
+    // duplicate its logic. `note` is the mandatory description the board prompts for, persisted
+    // to work.TaskStatusHistory exactly like any other status change's reason.
+    //
+    // The parent is then re-read from the server, never patched locally: completing a subtask
+    // can cascade the parent to In Progress or Review server-side (see task.service.ts's
+    // syncParentFromSubtasks), so only the server knows the resulting status and progress.
+    const setSubtaskCompletion = async (
+      subtaskId: string,
+      parentTaskId: string,
+      completed: boolean,
+      note: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        await changeTaskStatusViaApi(subtaskId, completed ? 'Done' : 'Todo', note);
+
+        const refreshedParent = await loadTaskDetailFromApi(parentTaskId);
+        setTasks((prev) => prev.map((t) => (t.id === parentTaskId ? refreshedParent : t)));
+
+        return {
+          success: true,
+          message: completed ? 'Subtask marked complete.' : 'Subtask reopened.'
+        };
+      } catch (error: any) {
+        console.error('Failed to update subtask.', error);
+        return { success: false, message: error?.message || 'Failed to update the subtask. Please try again.' };
       }
     };
 
@@ -1220,7 +2065,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can approve the task request.'
@@ -1237,7 +2082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           parentTaskId: proposed.parentTaskId,
           title: proposed.title,
           description: proposed.description,
-          priority: proposed.priority === 'Urgent' ? 'Critical' : proposed.priority,
+          priority: proposed.priority,
           startDate: proposed.startDate,
           dueDate: proposed.dueDate,
           assigneeIds: proposed.assigneeIds,
@@ -1274,6 +2119,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: `You approved "${item.targetTitle}" and created the task successfully.`
         };
         confirmActionSuccess('Task Request Approved', result.message);
+      } else if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        const relatedProject = item.projectId && projects.find((project) => project.id === item.projectId);
+        if (!relatedProject || relatedProject.teamLeadId !== currentUser.id) {
+          return { success: false, message: 'Only this task\'s Team Lead can approve the update.' };
+        }
+        try {
+          const updated = await decideTaskEditApprovalViaApi(approvalId, 'Approved');
+          if (!updated) return { success: false, message: 'The approved task was not returned by the server.' };
+          setTasks((prev) => prev.map((task) => {
+            if (task.id === item.targetId) return { ...updated, approvalStatus: 'Approved', pendingEdit: undefined };
+            if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
+            return {
+              ...task,
+              subtasks: task.subtasks.map((subtask) => subtask.id === item.targetId
+                ? { ...updated, approvalStatus: 'Approved', pendingEdit: undefined, completed: updated.status === 'Done' }
+                : subtask)
+            };
+          }));
+          setSystemApprovals((prev) => prev.map((approval) => approval.id === approvalId
+            ? { ...approval, status: 'Approved' }
+            : approval));
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+            type: 'approval',
+            title: 'Task Update Approved',
+            message: `${currentUser.name} approved your update to "${item.targetTitle}".`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: relatedProject.id,
+            taskId: item.targetId
+          });
+          result = { success: true, message: `You approved the update to "${item.targetTitle}".` };
+          confirmActionSuccess('Task Update Approved', result.message);
+        } catch (error: any) {
+          return { success: false, message: error?.message || 'Unable to apply the approved task update.' };
+        }
       } else if (item.type === 'Controlled_Edit' && item.proposedDiff) {
         const { field, newValue } = item.proposedDiff;
         setTasks((prev) =>
@@ -1336,7 +2218,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (item.type === 'Task_Creation') {
         const project = projects.find((candidate) => candidate.id === item.projectId);
 
-        if (currentRole !== 'Team_Lead' || !project || project.teamLeadId !== currentUser.id) {
+        if (!project || project.teamLeadId !== currentUser.id) {
           return {
             success: false,
             message: 'Only this project’s Team Lead can reject the task request.'
@@ -1344,9 +2226,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
+      if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        const project = item.projectId && projects.find((candidate) => candidate.id === item.projectId);
+        if (!project || project.teamLeadId !== currentUser.id) {
+          return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
+        }
+        try {
+          await decideTaskEditApprovalViaApi(approvalId, 'Rejected');
+        } catch (error: any) {
+          return { success: false, message: error?.message || 'Unable to reject the task update.' };
+        }
+      }
+
       setSystemApprovals((prev) =>
         prev.map((sa) => (sa.id === approvalId ? { ...sa, status: 'Rejected' } : sa))
       );
+      if (item.type === 'Controlled_Edit' && item.proposedTaskUpdate) {
+        setTasks((prev) => prev.map((task) => {
+          if (task.id === item.targetId) {
+            return { ...task, approvalStatus: 'Approved', pendingEdit: undefined };
+          }
+          if (!task.subtasks.some((subtask) => subtask.id === item.targetId)) return task;
+          return {
+            ...task,
+            subtasks: task.subtasks.map((subtask) => subtask.id === item.targetId
+              ? { ...subtask, approvalStatus: 'Approved', pendingEdit: undefined }
+              : subtask)
+          };
+        }));
+      }
 
       const targetsProject = item.type === 'Project_Deletion';
       const relatedProjectId = targetsProject
@@ -1381,24 +2289,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const resolveHRRecipients = () =>
       users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
 
-    const checkIn = () => {
-      const todayStr = new Date().toISOString().split('T')[0];
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const checkIn = async () => {
+      if (currentRole === 'Admin') {
+        pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
+        return;
+      }
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const isLate = nowTime > settings.workingHours.start;
 
+      // Persist check-in to backend
+      const checkInUtc = new Date().toISOString();
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Check-in Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      const response = await fetch('/api/attendance/check-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workDate: todayStr, checkInUtc }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        pushToast('error', 'Check-in Failed', data?.message || 'Failed to save check-in.');
+        return;
+      }
       setAttendanceRecords((prev) => {
         const existing = prev.find((a) => a.userId === currentUser.id && a.date === todayStr);
-        if (existing) return prev; // block duplicate checkin
-        const newRec: AttendanceRecord = {
-          id: `att-${Date.now()}`,
+        if (existing) return prev;
+        return [{
+          id: `att-${data.data.attendancerecordid}`,
           userId: currentUser.id,
           date: todayStr,
           checkIn: nowTime,
-          status: 'Present',
+          status: 'In Session',
           totalHours: 0,
           breaks: []
-        };
-        return [newRec, ...prev];
+        }, ...prev];
       });
 
       dispatchNotifications({
@@ -1416,9 +2344,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Checked in for work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const checkOut = () => {
-      const todayStr = new Date().toISOString().split('T')[0];
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const checkOut = async () => {
+      if (currentRole === 'Admin') return;
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const hasOpenAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -1427,22 +2356,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (!hasOpenAttendance) return;
 
-      setAttendanceRecords((prev) =>
-        prev.map((a) => {
-          if (a.userId === currentUser.id && a.date === todayStr && !a.checkOut) {
-            return {
-              ...a,
-              checkOut: nowTime,
-              totalHours: 8.0
-            };
-          }
-          return a;
-        })
-      );
-
       if (activeBreak?.isBreaking && activeBreak.userId === currentUser.id) {
-        endBreak();
+        await endBreak();
       }
+
+      // Persist check-out to backend
+      const checkOutUtc = new Date().toISOString();
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Checkout Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      let persistedStatus: AttendanceRecord['status'] = 'Half Day';
+      let persistedWorkingMinutes = 0;
+      {
+        const response = await fetch('/api/attendance/check-out', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ workDate: todayStr, checkOutUtc }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          pushToast('error', 'Checkout Failed', data?.message || 'Failed to save checkout.');
+          return;
+        }
+        persistedStatus = data.data.status;
+        persistedWorkingMinutes = data.data.workingMinutes;
+      }
+      setAttendanceRecords((prev) =>
+        prev.map((a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOut
+          ? { ...a, checkOut: nowTime, totalHours: persistedWorkingMinutes / 60, status: persistedStatus }
+          : a)
+      );
 
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -1457,10 +2402,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const startBreak = (breakType: BreakType) => {
+    const startBreak = async (breakType: BreakType) => {
+      if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = businessDateKey();
       const openAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -1469,13 +2415,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (!openAttendance) return;
 
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const startedAtUtc = new Date().toISOString();
+      const nowTime = formatAttendanceTime(startedAtUtc);
+      const breakId = `brk-${Date.now()}`;
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      const response = await fetch('/api/attendance/breaks/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workDate: todayStr, id: breakId, type: breakType, startedAtUtc })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        pushToast('error', 'Break Failed', data?.message || 'Failed to start break.');
+        return;
+      }
       setActiveBreak({
         isBreaking: true,
         userId: currentUser.id,
         breakType,
         startTime: nowTime,
-        elapsedSeconds: 0
+        elapsedSeconds: 0,
+        startedAtUtc
       });
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -1489,11 +2453,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity(`Started ${breakType}`, 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const endBreak = () => {
+    const endBreak = async () => {
+      if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = businessDateKey();
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-      const durationMin = Math.max(1, Math.round(activeBreak.elapsedSeconds / 60));
+      const endedAtUtc = new Date().toISOString();
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((new Date(endedAtUtc).getTime() - new Date(activeBreak.startedAtUtc).getTime()) / 1000)
+      );
+      const durationMin = durationSeconds / 60;
       const exceeded = durationMin > settings.breakLimitMinutes;
 
       const newBreak: WorkBreak = {
@@ -1501,21 +2471,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: activeBreak.breakType,
         startTime: activeBreak.startTime,
         endTime: endTimeStr,
-        durationMinutes: durationMin
+        durationMinutes: durationMin,
+        durationSeconds,
+        startedAtUtc: activeBreak.startedAtUtc,
+        endedAtUtc
       };
 
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      {
+        const response = await fetch('/api/attendance/breaks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            workDate: todayStr,
+            id: newBreak.id,
+            type: newBreak.type,
+            startedAtUtc: activeBreak.startedAtUtc,
+            endedAtUtc
+          })
+        }).catch((err) => {
+          console.error('[Attendance] Failed to persist break:', err);
+          return null;
+        });
+        if (!response?.ok) {
+          pushToast('error', 'Break Failed', 'Failed to end and save the active break.');
+          return;
+        }
+      }
       setAttendanceRecords((prev) =>
-        prev.map((a) => {
-          if (a.userId === currentUser.id && a.date === todayStr) {
-            return {
-              ...a,
-              breaks: [...a.breaks, newBreak]
-            };
-          }
-          return a;
-        })
+        prev.map((a) => a.userId === currentUser.id && a.date === todayStr
+          ? { ...a, breaks: [...a.breaks, newBreak] }
+          : a)
       );
-
       setActiveBreak(null);
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -1531,18 +2522,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity(`Ended break (${durationMin} mins)`, 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const updateAttendanceRecord = (
+    const updateAttendanceRecord = async (
       recordId: string,
-      updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>
-    ) => {
+      updates: Pick<AttendanceRecord, 'checkIn' | 'checkOut' | 'breaks'>,
+      reason?: string
+    ): Promise<{ success: boolean; message: string }> => {
       const record = attendanceRecords.find((item) => item.id === recordId);
       if (!record) {
         return { success: false, message: 'Attendance record not found.' };
       }
+      if (!record.checkOut && record.status !== 'Absent') {
+        return { success: false, message: 'Active attendance sessions cannot be edited. Check out first.' };
+      }
 
       const isAdmin = currentRole === 'Admin';
       const isOwnRecord = record.userId === currentUser.id;
-      const canEditRecord = isOwnRecord || isAdmin;
+      const canEditRecord = isOwnRecord && !isAdmin;
       if (!canEditRecord) {
         return {
           success: false,
@@ -1550,47 +2545,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-      if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
-        return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
-      }
-
       const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
-        const duration = Number(workBreak.durationMinutes);
+        const [startHour, startMinute] = workBreak.startTime.split(':').map(Number);
+        const [endHour, endMinute] = (workBreak.endTime || '').split(':').map(Number);
+        const duration = endHour * 60 + endMinute - (startHour * 60 + startMinute);
         return {
           ...workBreak,
           id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
           type: 'Other',
-          startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
-          endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
-          durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+          startTime: workBreak.startTime,
+          endTime: workBreak.endTime,
+          durationMinutes: Number.isFinite(duration) ? duration : 0,
+          durationSeconds: Number.isFinite(duration) ? duration * 60 : 0
         };
       });
+      const validationError = validateAttendanceCorrection(
+        updates.checkIn,
+        updates.checkOut || '',
+        normalizedBreaks
+      );
+      if (validationError) return { success: false, message: validationError };
 
-      if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
-        return { success: false, message: 'Every saved break must have valid start and end times.' };
+      const cleanReason = reason?.trim() || '';
+      if (!cleanReason) {
+        return { success: false, message: 'A reason is required for an attendance edit request.' };
       }
-
-      setAttendanceRecords((prev) =>
-        prev.map((item) =>
-          item.id === recordId
-            ? {
-              ...item,
-              checkIn: updates.checkIn,
-              checkOut: updates.checkOut || undefined,
-              breaks: normalizedBreaks
-            }
-            : item
-        )
+      return submitHRRequest(
+        'Correction',
+        cleanReason,
+        {
+          currentCheckIn: record.checkIn,
+          currentCheckOut: record.checkOut || '',
+          requestedCheckIn: updates.checkIn,
+          requestedCheckOut: updates.checkOut || '',
+          currentBreaks: record.breaks,
+          requestedBreaks: normalizedBreaks,
+          attendanceChangeReason: cleanReason
+        },
+        record.date
       );
-
-      pushActivity(
-        `Updated attendance for ${users.find((user) => user.id === record.userId)?.name || record.userId}`,
-        'Attendance',
-        record.id,
-        currentUser.name
-      );
-      return { success: true, message: 'Attendance record updated.' };
     };
 
     // HR Requests
@@ -1605,13 +2598,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       requestDate?: string
     ): Promise<{ success: boolean; message: string }> => {
       try {
+        if (type === 'Leave' && isPastDate(requestDate || todayDateKey(), todayDateKey())) {
+          return { success: false, message: 'Leave date cannot be in the past.' };
+        }
         const response = await fetch('/api/hr-requests', {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
             userName: currentUser.name,
             type,
-            date: requestDate || new Date().toISOString().split('T')[0],
+            date: requestDate || todayDateKey(),
             reason,
             details
           })
@@ -1624,11 +2620,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newReq = data.request as HRRequest;
         setHrRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
 
+        const recipients =
+          newReq.approvalStage === 'Admin'
+            ? resolveAdminRecipients(users, currentUser.id)
+            : resolveHRRecipients();
+        const leavePeriodLabel = type === 'Leave' && newReq.details.leaveType === 'Half Day Leave'
+          ? ` (${newReq.details.leavePeriod || 'Second Half'})`
+          : '';
         dispatchNotifications({
-          recipientIds: resolveHRRecipients(),
-          type: type === 'Correction' ? 'attendance_correction_submitted' : 'approval',
-          title: `New ${type.replace('_', ' ')} Request`,
-          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
+          recipientIds: recipients,
+          type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
+          title: type === 'Leave' ? 'Leave Submitted' : 'New Attendance Edit Request',
+          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request: "${reason}".`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
@@ -1642,6 +2645,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, message };
       }
     };
+
+    const submitAccountChangeRequest = async (
+      requestedField: 'name' | 'email' | 'username' | 'password',
+      requestedValue: string | undefined,
+      reason: string,
+      currentPassword?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch('/api/account-change-requests', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ requestedField, requestedValue, reason, currentPassword })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || 'Failed to submit account change request.');
+        }
+
+        const newReq = data.request as AccountChangeRequest;
+        setAccountChangeRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
+
+        const hrRecipients = users.filter((u) => u.role === 'HR').map((u) => u.id);
+        const adminRecipients = resolveAdminRecipients(users, currentUser.id);
+        const allRecipientIds = currentRole === 'HR'
+          ? adminRecipients
+          : [...new Set([...hrRecipients, ...adminRecipients])];
+
+        dispatchNotifications({
+          recipientIds: allRecipientIds,
+          type: 'approval',
+          title: 'Account Change Request',
+          message: `${currentUser.name} (${currentRole}) requested an account change: "${reason}".`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'approvals'
+        });
+        confirmActionSuccess('Request Submitted', 'Your account change request was submitted for approval.');
+        pushActivity('Requested account/profile change', 'Approval', newReq.id, currentUser.name);
+        return { success: true, message: data.message || 'Account change request submitted successfully.' };
+      } catch (error: any) {
+        const message = error?.message || 'Failed to submit account change request.';
+        pushToast('error', 'Request Failed', message);
+        return { success: false, message };
+      }
+    };
+
+    const reviewAccountChangeRequest = async (
+      requestId: string,
+      action: 'approve' | 'reject',
+      reason?: string
+    ): Promise<{ success: boolean; message: string }> => {
+      try {
+        const response = await fetch(
+          `/api/account-change-requests/${encodeURIComponent(requestId)}/${action}`,
+          {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(action === 'reject' ? { reason } : {})
+          }
+        );
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.request) {
+          throw new Error(data.message || `Failed to ${action} account change request.`);
+        }
+        await Promise.all([refreshAccountChangeRequests(), refreshUsers()]);
+        return { success: true, message: data.message };
+      } catch (error: any) {
+        return {
+          success: false,
+          message: error?.message || `Failed to ${action} account change request.`
+        };
+      }
+    };
+
+    const approveAccountChangeRequest = (requestId: string) =>
+      reviewAccountChangeRequest(requestId, 'approve');
+
+    const rejectAccountChangeRequest = (requestId: string, reason: string) =>
+      reviewAccountChangeRequest(requestId, 'reject', reason);
 
     const approveHRRequest = async (
       requestId: string,
@@ -1659,21 +2741,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
+
+        if (data.forwarded) {
+          dispatchNotifications({
+            recipientIds: resolveAdminRecipients(users, currentUser.id),
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'approvals'
+          });
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `HR approved your ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'attendance'
+          });
+          const message = data.message || 'Leave request forwarded to Admin.';
+          confirmActionSuccess('Leave Forwarded', message);
+          return { success: true, message };
+        }
+
+        if (updatedRequest.type === 'Correction') {
+          const attendanceResponse = await fetch(
+            `/api/attendance?from=${encodeURIComponent(updatedRequest.date)}&to=${encodeURIComponent(updatedRequest.date)}`,
+            { headers: getAuthHeaders() }
+          );
+          const attendanceData = await attendanceResponse.json();
+          if (!attendanceResponse.ok || !attendanceData.success || !Array.isArray(attendanceData.data)) {
+            throw new Error(attendanceData.message || 'Correction was approved, but attendance could not be refreshed.');
+          }
+          const refreshed: AttendanceRecord[] = attendanceData.data.map((record: any) => ({
+            id: `att-${record.userId}-${record.date}`,
+            userId: record.userId,
+            date: record.date,
+            checkIn: record.checkIn ? formatAttendanceTime(record.checkIn, record.timeZone) : '',
+            checkOut: record.checkOut ? formatAttendanceTime(record.checkOut, record.timeZone) : undefined,
+            totalHours: record.totalHours || 0,
+            status: (record.status === 'Leave' ? 'On Leave' : record.status || 'Present') as AttendanceRecord['status'],
+            breaks: Array.isArray(record.breaks) ? record.breaks : []
+          }));
+          setAttendanceRecords((previous) => [
+            ...previous.filter((record) => record.date !== updatedRequest.date),
+            ...refreshed
+          ]);
+        } else if (updatedRequest.type === 'Leave') {
+          const status = updatedRequest.details.leaveType === 'Half Day Leave' ? 'Half Day' : 'On Leave';
+          setAttendanceRecords((prev) => {
+            const exists = prev.some((record) =>
+              record.userId === updatedRequest.userId && record.date === updatedRequest.date
+            );
+            if (exists) {
+              return prev.map((record) =>
+                record.userId === updatedRequest.userId && record.date === updatedRequest.date
+                  ? { ...record, status }
+                  : record
+              );
+            }
+            return [{
+              id: `att-${updatedRequest.userId}-${updatedRequest.date}`,
+              userId: updatedRequest.userId,
+              date: updatedRequest.date,
+              checkIn: '',
+              totalHours: 0,
+              status,
+              breaks: []
+            }, ...prev];
+          });
+        }
 
         const notifType =
           updatedRequest.type === 'Correction'
             ? 'attendance_correction_approved'
             : updatedRequest.type === 'Break_Exception'
               ? 'break_approved'
-              : 'approval';
+              : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${updatedRequest.type.replace('_', ' ')} Request Approved`,
-          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Approved'
+            : updatedRequest.type === 'Correction'
+              ? 'Attendance Approved'
+              : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
+          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
@@ -1704,6 +2865,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
@@ -1713,12 +2877,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ? 'attendance_correction_rejected'
             : updatedRequest.type === 'Break_Exception'
               ? 'break_rejected'
-              : 'approval';
+              : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
-          title: `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
-          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Rejected'
+            : updatedRequest.type === 'Correction'
+              ? 'Attendance Rejected'
+              : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
+          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
@@ -1914,6 +3082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tasks,
       attendanceRecords,
       hrRequests,
+      accountChangeRequests,
       systemApprovals,
       chatMessages,
       aiLogs
@@ -1959,7 +3128,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Reassigned ${assignedTasks.length} task(s) from ${sourceUser?.name || sourceUserId} to ${targetUser?.name || targetUserId}`,
         targetType: 'Task',
         targetId: sourceUserId,
@@ -1980,7 +3148,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: data.email,
       role: data.role || 'Team_Member',
       department: data.department || 'Engineering',
-      avatar: data.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(data.name)}`,
       title: data.title || 'Team Specialist',
       status: data.status || 'active',
       lastActive: 'Just now',
@@ -1993,7 +3160,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Added new team member ${newUser.name} (${newUser.role})`,
         targetType: 'Settings',
         targetId: newUserId,
@@ -2013,7 +3179,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Updated profile details for member ${data.name || userId}`,
         targetType: 'Settings',
         targetId: userId,
@@ -2046,7 +3211,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `act-${Date.now()}`,
         userId: currentUser.id,
         userName: currentUser.name,
-        userAvatar: currentUser.avatar,
         action: `Deleted team member ${targetUser.name}`,
         targetType: 'Settings',
         targetId: userId,
@@ -2069,6 +3233,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tasks,
         attendanceRecords,
         hrRequests,
+        accountChangeRequests,
         systemApprovals,
         chatMessages,
         aiLogs,
@@ -2078,6 +3243,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notificationPreferences,
         activityLogs,
         calendarEvents,
+        approvedLeave,
+        holidays,
+        createHoliday,
+        updateHoliday,
+        deleteHoliday,
         savedPrompts,
         activeBreak,
         settings,
@@ -2091,10 +3261,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectProject,
         updateProject,
         deleteProject,
+        permanentlyDeleteProject,
+        restoreProject,
+        refreshProjectDetails,
+        projectApprovalRequests,
+        approveProjectApprovalRequest,
+        rejectProjectApprovalRequest,
         createTask,
         updateTask,
         deleteTask,
         updateTaskStatus,
+        reopenTask,
+        setSubtaskCompletion,
         proposeControlledEdit,
         approveApprovalItem,
         rejectApprovalItem,
@@ -2106,6 +3284,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitHRRequest,
         approveHRRequest,
         rejectHRRequest,
+        submitAccountChangeRequest,
+        approveAccountChangeRequest,
+        rejectAccountChangeRequest,
+        refreshAccountChangeRequests,
         sendChatMessage,
         togglePinMessage,
         addAIQueryLog,
@@ -2115,6 +3297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snoozeNotification,
         updateNotificationPreferences,
         dismissToast,
+        showToast: pushToast,
         deactivateUser,
         exportBackup,
         updateCurrentUser,
