@@ -60,7 +60,7 @@ export const listPermittedDepartments = async (
   actor: ProvisioningActor,
   dependencies: AccountServiceDependencies = defaultDependencies
 ): Promise<DepartmentOption[]> => {
-  if (actor.role === 'Admin') {
+  if (actor.role === 'Admin' || actor.role === 'HR') {
     const result = await dependencies.query<{ departmentid: number; departmentname: string }>(
       `SELECT departmentid, departmentname
          FROM org.departments
@@ -69,36 +69,7 @@ export const listPermittedDepartments = async (
     );
     return result.rows.map((row) => ({ id: row.departmentid, name: row.departmentname }));
   }
-  if (actor.role !== 'HR') throw new AccountAuthorizationError('Only Admin and HR users can manage accounts.');
-
-  const result = await dependencies.query<{ departmentid: number; departmentname: string }>(
-    `WITH RECURSIVE roots AS (
-       SELECT $1::int AS departmentid WHERE $1::int IS NOT NULL
-       UNION
-       SELECT hds.departmentid
-         FROM iam.userroles ur
-         JOIN iam.roles r ON r.roleid = ur.roleid AND r.rolecode = 'HRRepresentative'
-         JOIN iam.hrdepartmentscopes hds ON hds.userroleid = ur.userroleid
-        WHERE ur.userid = $2
-          AND ur.revokedatutc IS NULL
-          AND ur.startsatutc <= now()
-          AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-     ), permitted AS (
-       SELECT departmentid FROM roots
-       UNION
-       SELECT child.departmentid
-         FROM org.departments child
-         JOIN permitted parent ON child.parentdepartmentid = parent.departmentid
-        WHERE child.organizationid = 1
-     )
-     SELECT d.departmentid, d.departmentname
-       FROM org.departments d
-       JOIN permitted p ON p.departmentid = d.departmentid
-      WHERE d.organizationid = 1 AND d.isactive = TRUE
-      ORDER BY d.departmentname`,
-    [actor.departmentId, toUserPk(actor.id)]
-  );
-  return result.rows.map((row) => ({ id: row.departmentid, name: row.departmentname }));
+  throw new AccountAuthorizationError('Only Admin and HR users can manage accounts.');
 };
 
 const assertDepartmentPermitted = async (
