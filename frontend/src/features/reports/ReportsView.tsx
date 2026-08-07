@@ -1844,6 +1844,16 @@ ${bodyHtml}
       bodyHtml += `</tbody></table>`;
     }
 
+    if (projectTasks.length > 0) {
+      bodyHtml += section(`Task Dates (${totalTasks})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
+      bodyHtml += `<thead><tr>${th('Task')}${th('Start Date')}${th('Due Date')}${th('Created')}</tr></thead><tbody>`;
+      projectTasks.forEach((t: any) => {
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(formatDate(t.startDate))}${td(formatDate(t.dueDate))}${td(formatDate(t.createdAt))}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
     if (milestones.length > 0) {
       bodyHtml += section(`Milestones (${milestones.length})`);
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
