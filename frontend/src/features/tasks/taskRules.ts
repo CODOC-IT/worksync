@@ -158,9 +158,9 @@ export const canEditTask = (
   task: Task
 ): boolean => {
   if (!isActiveProject(project) || task.isArchived) return false;
-  if (task.parentTaskId) return getTaskAssigneeIds(task).includes(userId);
-
   const isProjectLead = role !== 'HR' && project.teamLeadId === userId;
+  if (task.parentTaskId) return isProjectLead || getTaskAssigneeIds(task).includes(userId);
+
   if (Math.max(task.subtaskCount || 0, task.subtasks?.length || 0) > 0) {
     return isProjectLead;
   }

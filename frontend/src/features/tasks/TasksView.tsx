@@ -405,7 +405,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                 ...(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id
                   ? { assigneeIds: form.assigneeIds }
                   : {})
-              })
+              }, existingTask)
           : createTask({
               projectId: form.projectId,
               title: form.title,
