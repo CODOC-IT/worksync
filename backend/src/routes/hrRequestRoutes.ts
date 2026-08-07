@@ -129,12 +129,25 @@ const formatDateTime = (value: string | Date): string =>
   new Date(value).toISOString().replace('T', ' ').substring(0, 16);
 const parseDetails = (details: HRRequestRow['details']): HRRequestDetails =>
   typeof details === 'string' ? JSON.parse(details) : details || {};
+
 export const validateNotPastDate = (date: string, today: string): string | null =>
   date < today ? 'Leave date cannot be in the past.' : null;
 const effectiveBusinessDate = async (): Promise<string> => {
   const result = await query<{ today: string }>('SELECT CURRENT_DATE::text AS today');
   return result.rows[0].today;
 };
+// Labels used when composing leave audit entries so the Activity Log distinguishes
+// half-day from full-day leave (and the half-day period) like attendance records do.
+const leaveTypeLabel = (details: HRRequestDetails): string =>
+  details.leaveType === 'Half Day Leave'
+    ? `Half Day Leave (${details.leavePeriod || 'Second Half'})`
+    : 'Full Day Leave';
+
+const leaveMetadata = (details: HRRequestDetails): Record<string, unknown> => ({
+  leaveType: details.leaveType,
+  leavePeriod: details.leavePeriod,
+  leaveDays: details.leaveDays ?? 1,
+});
 export const mapHRRequestRow = (row: HRRequestRow) => ({
   id: row.id,
   userId: row.user_id,
@@ -377,9 +390,51 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         module: 'Attendance',
         entityType: 'Leave',
         entityId: id,
-        entityName: `Leave ${requestDate}`,
-        description: `${actorName} requested leave for ${requestDate}.`,
+        entityName: `${leaveTypeLabel(cleanDetails)} ${requestDate}`,
+        description: `${actorName} requested ${leaveTypeLabel(cleanDetails)} for ${requestDate}.`,
         source: 'Web',
+        metadata: leaveMetadata(cleanDetails),
+      });
+    } else if (type === 'Correction') {
+      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Attendance Correction Requested',
+        module: 'Attendance',
+        entityType: 'Attendance',
+        entityId: id,
+        entityName: `Attendance ${requestDate}`,
+        description: `${actorName} requested an attendance correction for ${requestDate}.`,
+        source: 'Web',
+        important: true,
+        linkRoute: 'approvals',
+        metadata: {
+          requestId: id,
+          requestedCheckIn: cleanDetails.requestedCheckIn,
+          requestedCheckOut: cleanDetails.requestedCheckOut,
+          requestedBreakCount: (cleanDetails.requestedBreaks || []).length,
+        },
+      });
+    } else if (type === 'Break_Exception') {
+      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Break Exception Requested',
+        module: 'Attendance',
+        entityType: 'Attendance',
+        entityId: id,
+        entityName: `Attendance ${requestDate}`,
+        description: `${actorName} requested a break exception for ${requestDate}.`,
+        source: 'Web',
+        important: true,
+        linkRoute: 'approvals',
+        metadata: { requestId: id, reason: cleanReason },
       });
     }
 
@@ -630,13 +685,14 @@ const decideRequest = async (
           module: 'Attendance',
           entityType: 'Leave',
           entityId: updated.id,
-          entityName: `Leave ${requestDateStr}`,
+          entityName: `${leaveTypeLabel(leaveDetails)} ${requestDateStr}`,
           description: decision === 'Approved'
             ? `${deciderName} approved ${leaveLabel} leave request for ${requesterName} on ${requestDateStr}.`
             : `${deciderName} rejected ${leaveLabel} leave request for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,
+          metadata: { ...leaveMetadata(leaveDetails), approvalStage: updated.approval_stage },
         });
       } else if (updated.request_type === 'Correction') {
         recordActivitySafe({
@@ -654,6 +710,26 @@ const decideRequest = async (
           description: decision === 'Approved'
             ? `${deciderName} approved attendance correction for ${requesterName} on ${requestDateStr}.`
             : `${deciderName} rejected attendance correction for ${requesterName} on ${requestDateStr}.`,
+          source: 'Web',
+          important: true,
+          reason: decisionReason || undefined,
+        });
+      } else if (updated.request_type === 'Break_Exception') {
+        recordActivitySafe({
+          actorId: req.user.id,
+          actorName: deciderName,
+          actorEmail: req.user.email,
+          actorRole: req.user.role,
+          affectedUserId: updated.user_id,
+          affectedUserName: requesterName,
+          action: decision === 'Approved' ? 'Break Exception Approved' : 'Break Exception Rejected',
+          module: 'Attendance',
+          entityType: 'Attendance',
+          entityId: updated.id,
+          entityName: `Attendance ${requestDateStr}`,
+          description: decision === 'Approved'
+            ? `${deciderName} approved break exception request for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected break exception request for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,

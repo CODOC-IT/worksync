@@ -29,6 +29,24 @@ Users): an `AudienceType` column on `hr.Holidays`, the `hr.HolidayAudienceDepart
 run more than once; existing holidays default to `AudienceType = 'Everyone'`, matching their prior
 unfiltered visibility.
 
+`20260807_01_notification_detail_metadata.sql` adds `DetailText` and `MetadataJson` to
+`notify.Notifications` (the expanded-detail half of the Notification Center's compact-preview /
+expanded-detail split) and seeds the `task_edit_approval_requested`/`_approved`/`_rejected`,
+`subtask_assignment_changed`, and `leave_requested`/`_approved`/`_rejected` notification types.
+Safe to run more than once; existing notifications keep NULL detail/metadata and render exactly
+as before.
+
+`20260807_02_rejected_project_creation_cleanup.sql` preserves project-approval decisions and
+their `DecisionReason` when a rejected project-creation proposal is permanently deleted. It also
+repairs the approval request type constraint in environments created before `PROJECT_CREATE` was
+added to the workflow.
+
+`20260807_01_project_member_pending_removal.sql` adds `PendingRemovalAtUtc`/
+`PendingRemovalByUserId`/`PendingRemovalReason` columns to `work.ProjectMembers` (a member with
+active task/subtask assignments is flagged instead of removed) and seeds the
+`project_member_pending_removal`/`project_member_auto_removed` notification types. Additive and
+safe to run more than once; existing members default to not pending removal.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, AtSign, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
+import { SearchableSelect } from '../../components/common/SearchableSelect';
 import { ProjectMemberSummary } from '../projects/projectRepository';
 import { addDiscussionComment, createDiscussion, deleteDiscussionComment, editDiscussionComment, loadDiscussionThreads } from './projectChatRepository';
 import {
@@ -597,6 +598,13 @@ const NewDiscussionDialog: React.FC<any> = ({
     || selectedProject.memberIds.includes(currentUser.id)
     || selectedProject.teamLeadId === currentUser.id
     || selectedProject.createdBy === currentUser.id;
+  const selectedTaskAssigneeIds = selectedTask
+    ? (selectedTask.assigneeIds || [selectedTask.assigneeId])
+    : [];
+  const canUseTask = !selectedTask
+    || currentRole === 'Admin'
+    || selectedProject?.teamLeadId === currentUser.id
+    || selectedTaskAssigneeIds.includes(currentUser.id);
   const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
     users,
     selectedProject
@@ -623,6 +631,10 @@ const NewDiscussionDialog: React.FC<any> = ({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const body = form.body.trim();
+    if (!form.projectId) {
+      setError('Select a project for this discussion.');
+      return;
+    }
     if (!body) {
       setError('Write an initial message for the discussion.');
       return;
@@ -633,6 +645,10 @@ const NewDiscussionDialog: React.FC<any> = ({
     }
     if (!canUseProject) {
       setError('You can only start a discussion in a project you are assigned to or lead.');
+      return;
+    }
+    if (!canUseTask) {
+      setError('You can only start a task discussion for a task assigned to you.');
       return;
     }
     const outOfScopeMention = findOutOfScopeMention(body, users, projectUsers);
@@ -668,17 +684,55 @@ const NewDiscussionDialog: React.FC<any> = ({
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-2">
           <label className="project-chat-body text-xs font-semibold">Project *
-            <select required value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className={`${inputClass} mt-1`}>
+            <div className="mt-1">
+              <SearchableSelect
+                value={form.projectId}
+                onChange={(projectId) => { setForm({ ...form, projectId, taskId: '' }); setTrigger(null); }}
+                placeholder="Select project"
+                emptyMessage="No projects found"
+                options={projects.map((project: any) => ({
+                  value: project.id,
+                  label: project.title,
+                  sublabel: currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? 'Not assigned' : undefined
+                }))}
+              />
+            </div>
+            <select aria-hidden tabIndex={-1} value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className="sr-only">
               <option value="">Select project</option>
               {projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}{currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? ' — not assigned' : ''}</option>)}
             </select>
             {!canUseProject && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this project, so you cannot start its discussion.</span>}
           </label>
           <label className="project-chat-body text-xs font-semibold">Task <span className="project-chat-secondary font-normal">(optional)</span>
-            <select value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className={`${inputClass} mt-1`}>
+            <div className="mt-1">
+              <SearchableSelect
+                value={form.taskId}
+                onChange={(taskId) => setForm({ ...form, taskId })}
+                disabled={!form.projectId}
+                placeholder="No specific task"
+                emptyMessage="No tasks found"
+                options={[
+                  { value: '', label: 'No specific task' },
+                  ...eligibleTasks.map((task: any) => {
+                    const taskAssigneeIds = task.assigneeIds || [task.assigneeId];
+                    const canSelectTask = currentRole === 'Admin'
+                      || selectedProject?.teamLeadId === currentUser.id
+                      || taskAssigneeIds.includes(currentUser.id);
+                    return {
+                      value: task.id,
+                      label: task.title,
+                      sublabel: canSelectTask ? undefined : 'Not assigned to you',
+                      disabled: !canSelectTask
+                    };
+                  })
+                ]}
+              />
+            </div>
+            <select aria-hidden tabIndex={-1} value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className="sr-only">
               <option value="">No specific task</option>
               {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
             </select>
+            {form.taskId && !canUseTask && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this task, so you cannot start its discussion.</span>}
             <span className="project-chat-secondary mt-1 block font-normal">Choose a task only if this discussion is about a specific task.</span>
           </label>
           <label className="project-chat-body text-xs font-semibold">Subject *

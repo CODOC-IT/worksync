@@ -32,12 +32,12 @@ import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError
 const actorName = (userId: string): string => actorDisplayName(userId);
 
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
-  const project = await projectRepo.findProjectById(row.projectid);
+  const project = row.projectid == null ? null : await projectRepo.findProjectById(row.projectid);
   const requestedByFrontendId = fromUserPk(row.requestedbyuserid);
   return {
     id: row.approvalrequestid,
-    projectId: fromProjectPk(row.projectid),
-    projectTitle: project?.projectname || fromProjectPk(row.projectid),
+    projectId: row.projectid == null ? '' : fromProjectPk(row.projectid),
+    projectTitle: project?.projectname || row.projecttitle,
     requestType: row.requesttype,
     requestedByUserId: requestedByFrontendId,
     requestedByName: actorName(requestedByFrontendId),
@@ -107,6 +107,7 @@ export const createApprovalRequest = async (
 
   const approvalRequestId = await repo.insertApprovalRequest({
     projectId: projectPk,
+    projectTitle: row.projectname,
     requestType,
     requestedByUserId: toUserPk(requesterId),
     requestedChangesJson: requestedChanges ? JSON.stringify(requestedChanges) : null,
@@ -150,8 +151,9 @@ export const listMyApprovalRequests = async (userId: string): Promise<ProjectApp
   return Promise.all(rows.map(toDTO));
 };
 
-// Approves or rejects a request. Rejecting just marks it decided -- the project is never
-// touched. Approving executes the *existing* project.service.ts function, using the Admin's own
+// Approves or rejects a request. Rejecting normally just marks it decided; rejecting a pending
+// project creation permanently removes that proposal. Approving executes the *existing*
+// project.service.ts function, using the Admin's own
 // identity, before marking the request decided -- if that execution throws (e.g. a validation
 // rule that became true between request and decision), the request stays Pending and the error
 // surfaces to the Admin, rather than being silently marked Approved with nothing having happened.
@@ -242,12 +244,11 @@ export const decideApprovalRequest = async (
   }
 
   if (projectDecisionEffect(row.requesttype, decision) === 'remove-rejected-creation') {
-    const archived = await projectRepo.archiveProject(
-      row.projectid,
-      toUserPk(actorId),
-      `Creation rejected: ${decisionReason!.trim()}`
-    );
-    if (!archived || !await projectRepo.permanentlyDeleteProject(row.projectid)) {
+    // Do not archive first: archiving emits project/archive notifications and briefly exposes
+    // the rejected proposal as an archived project. The request row has already persisted the
+    // Admin's decision reason, and its FK is SET NULL on project deletion, so remove the
+    // proposal directly.
+    if (row.projectid == null || !await projectRepo.permanentlyDeleteProject(row.projectid, { allowUnarchived: true })) {
       throw new ProjectValidationError('The rejected project proposal could not be removed.');
     }
   }

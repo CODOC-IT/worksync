@@ -44,6 +44,10 @@ interface ChangeRow { auditeventid: string; fieldname: string; oldvalue: string 
 // event whose actor currently holds the active `Administrator` role (same window that
 // `getEffectiveRoles` uses). `actoruserid IS NULL` events (system/failed logins) stay
 // visible, which is why the window check is wrapped in an OR NULL guard.
+// Note: HR viewers are exempt from this exclusion (they see all organization events,
+// including Administrator-performed ones), and the exclusion is waived for Member/Lead
+// viewers when the event is recorded against the viewer themselves (affected user), so a
+// member can always see an approval decision made on their own request.
 const ADMIN_ACTOR_EXCLUSION = `(COALESCE(a.actorrolesnapshot, '') <> 'Admin'
   AND (a.actoruserid IS NULL OR a.actoruserid NOT IN (
     SELECT hrur.userid FROM iam.userroles hrur
@@ -91,12 +95,18 @@ export const insertActivity = async (input: ActivityRecordInput): Promise<string
 
 const visibilitySql = (
   viewerPk: number,
+  viewerFrontendId: string,
   effectiveRoles: EffectiveRoles,
   paramIndex: number,
   ledActivityOnly = false
 ): { clause: string; extraParams: unknown[] } => {
   const params: unknown[] = [viewerPk];
   const pi = paramIndex;
+  // Approval/decision events record the affected user as their frontend id (e.g.
+  // 'usr-4') in affecteduseridtext, so the viewer's own id must be compared in its
+  // string form — never as the numeric primary key.
+  params.push(viewerFrontendId);
+  const affectedUserPart = `a.affecteduseridtext = $${params.length}`;
 
   // ── Admin: unrestricted within the organization ──────────────────────────────
   if (effectiveRoles.permanentRole === 'Admin') {
@@ -170,10 +180,12 @@ const visibilitySql = (
   // Combine base project/task access with module restriction for plain Team Members.
   // Every non-Admin viewer additionally gets the Administrator-actor exclusion so an
   // event performed by an Admin can never surface to a Member or Lead — regardless of
-  // filters, tabs, detail lookup or exports.
+  // filters, tabs, detail lookup or exports. One exception: events recorded against the
+  // viewer themselves (affected user), so a member always sees an approval decision made
+  // on their own request even when the approver was an Administrator.
   const buildMemberClause = (): string => {
-    const parts = [...ownParts, projectMemberPart, taskAssigneePart];
-    const scopeClause = `((${parts.join(' OR ')}) AND ${ADMIN_ACTOR_EXCLUSION})`;
+    const parts = [...ownParts, projectMemberPart, taskAssigneePart, affectedUserPart];
+    const scopeClause = `(((${parts.join(' OR ')}) AND (${ADMIN_ACTOR_EXCLUSION} OR ${affectedUserPart})))`;
     // Restrict to non-sensitive modules for pure Team Members
     if (!effectiveRoles.isActiveTeamLead && !effectiveRoles.isActiveHR) {
       return `${scopeClause} AND a.modulecode NOT IN ('Permissions', 'Authentication', 'Settings', 'System')`;
@@ -181,23 +193,23 @@ const visibilitySql = (
     return scopeClause;
   };
 
-  // ── HR: near-admin visibility — all organization events except those performed by Admins ──
-  // HR can see everything an Admin sees with one exclusion: events where the actor was an
-  // Administrator. This applies whether the HR role is permanent or temporary.
+  // ── HR: organization-wide visibility — all events, including Administrator-performed ones ──
+  // HR can see everything an Admin sees. Applies whether the HR role is permanent or
+  // temporary (the HR + Team Lead combination below shares this path).
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: ADMIN_ACTOR_EXCLUSION,
-      extraParams: params.slice(1),
+      clause: 'TRUE',
+      extraParams: [],
     };
   }
 
-  // ── HR + Team Lead combined: same near-admin scope ───────────────────────
+  // ── HR + Team Lead combined: same organization-wide scope ─────────────────
   // When both are active the HR scope already covers everything the lead scope would; no
   // need to enumerate project membership predicates on top.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: ADMIN_ACTOR_EXCLUSION,
-      extraParams: params.slice(1),
+      clause: 'TRUE',
+      extraParams: [],
     };
   }
 
@@ -208,7 +220,7 @@ const visibilitySql = (
     return { clause: buildMemberClause(), extraParams: params.slice(1) };
   }
 
-  const scopeParts: string[] = [...ownParts, projectMemberPart, taskAssigneePart];
+  const scopeParts: string[] = [...ownParts, projectMemberPart, taskAssigneePart, affectedUserPart];
 
   // Permanent Team Lead: also include formal lead membership rows
   if (effectiveRoles.permanentRole === 'Team_Lead') {
@@ -227,10 +239,11 @@ const visibilitySql = (
 
   // HR+TeamLead combined: handled above via the isHRandTeamLead branch.
   // Only pure Team Lead (with no HR) reaches this point. Admin-performed events are
-  // excluded here too (see buildMemberClause).
+  // excluded here too (see buildMemberClause), except when the viewer is the affected
+  // user of the event.
 
   return {
-    clause: `((${scopeParts.join(' OR ')}) AND ${ADMIN_ACTOR_EXCLUSION})`,
+    clause: `(((${scopeParts.join(' OR ')}) AND (${ADMIN_ACTOR_EXCLUSION} OR ${affectedUserPart})))`,
     extraParams: params.slice(1),
   };
 };
@@ -243,7 +256,7 @@ const buildWhere = (
   const viewerPk = toUserPkOrNull(viewerId);
   if (viewerPk === null) throw new Error('Invalid authenticated user identifier.');
 
-  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, effectiveRoles, 1, filters.ledActivityOnly);
+  const { clause: visibilityClause, extraParams } = visibilitySql(viewerPk, viewerId, effectiveRoles, 1, filters.ledActivityOnly);
 
   // For Admin and HR the visibility clause needs no $1 viewerPk parameter.
   // For all other roles $1 is the viewerPk used inside the scoped predicates.
@@ -263,16 +276,15 @@ const buildWhere = (
     clauses.push("NOT (a.actioncode = 'Deleted' AND a.entitytypecode = 'Comment')");
   }
 
-  // myActivityOnly uses $1 (viewerPk). For Admin that param slot doesn't exist yet, so we
-  // push viewerPk on demand and reference its position dynamically.
-  let myActivityOnlyParamIdx: number | null = null;
-
+  // myActivityOnly matches events the viewer performed plus approval/decision events
+  // recorded against the viewer (affected user), so a member keeps seeing the HR/Admin
+  // decisions on their own requests even under the default "My activity only" view.
+  // Params are pushed on demand and referenced by their dynamic position.
   const add = (sql: string, value: unknown) => { values.push(value); clauses.push(sql.replace('?', `$${values.length}`)); };
 
   if (filters.myActivityOnly) {
-    values.push(viewerPk);
-    myActivityOnlyParamIdx = values.length;
-    clauses.push(`a.actoruserid = $${myActivityOnlyParamIdx}`);
+    values.push(viewerPk, viewerId);
+    clauses.push(`(a.actoruserid = $${values.length - 1} OR a.affecteduseridtext = $${values.length})`);
   }
 
   if (filters.from) add('a.occurredatutc >= ?::timestamptz', filters.from);

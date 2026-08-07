@@ -1,4 +1,5 @@
 import { Project, TaskStatus, UserRole } from '../../types';
+import { isActiveProject } from '../tasks/taskRules';
 
 // The four columns the Project Board renders. `Blocked` remains a valid Task.status value
 // owned by the Task Creation module but is intentionally not surfaced on the board
@@ -12,12 +13,22 @@ export const BOARD_COLUMNS: TaskStatus[] = ['Todo', 'In Progress', 'Review', 'Do
 // visibility here cannot widen what HR may change. Without this HR fell through to the
 // membership filter below and — never being a project member — saw an empty board.
 // Team Lead: only projects they lead. Team Member: only projects they belong to.
+//
+// Only *active* projects reach the board. This reuses taskRules.ts's `isActiveProject`
+// (`status === 'Active' && approvalStatus === 'Approved'`) rather than re-deriving the rule
+// here, so the board agrees with every other surface that already gates on it — most relevantly
+// `canCreateTaskForProject`, which refuses to create work in a non-active project, and the
+// backend's own `createTask`, which rejects any project whose `StatusCode` is not `Active`.
+// The previous `status !== 'Archived'` filter was strictly wider than that and let projects
+// still awaiting approval (`Pending Approval` / `Draft`), paused (`On Hold`) and closed
+// (`Completed`) ones onto the board and into the project selector, where they could never
+// legitimately hold movable work.
 export const getAccessibleProjects = (
   role: UserRole,
   userId: string,
   projects: Project[]
 ): Project[] => {
-  const activeProjects = projects.filter((project) => project.status !== 'Archived');
+  const activeProjects = projects.filter(isActiveProject);
   if (role === 'Admin' || role === 'HR') return activeProjects;
   if (role === 'Team_Lead') return activeProjects.filter((project) => project.teamLeadId === userId);
   return activeProjects.filter((project) => project.memberIds.includes(userId));

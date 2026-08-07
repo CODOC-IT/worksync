@@ -135,6 +135,38 @@ export const findAssigneesForTasks = async (taskIds: number[]): Promise<TaskAssi
   return result.rows;
 };
 
+export interface ActiveAssignmentRow {
+  taskid: number;
+  parenttaskid: number | null;
+  title: string;
+}
+
+// Whether `userId` has any active (not-yet-Done) task OR subtask assignment left in `projectId` --
+// used by project.service.ts's removeMember (should this member be kept as Pending Removal
+// instead of removed?) and its completion-triggered recheck (are they clear to actually remove
+// now?). Deliberately does NOT filter out subtasks (t.parenttaskid IS NULL), unlike
+// reports.repository.ts's getWorkload/deadline queries -- Issue #6 requires a subtask assigned to
+// someone, with its parent task still incomplete, to count on its own.
+export const findActiveTaskAssignmentsForUserInProject = async (
+  projectId: number,
+  userId: number
+): Promise<ActiveAssignmentRow[]> => {
+  const result = await query<ActiveAssignmentRow>(
+    `SELECT t.taskid, t.parenttaskid, t.title
+     FROM work.taskassignees ta
+     JOIN work.tasks t ON t.taskid = ta.taskid
+     JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+     WHERE ta.unassignedatutc IS NULL
+       AND t.projectid = $1
+       AND ta.userid = $2
+       AND t.archivedatutc IS NULL
+       AND NOT ts.iscompletedstate
+     ORDER BY t.taskid`,
+    [projectId, userId]
+  );
+  return result.rows;
+};
+
 const getNextTaskNumber = async (runQuery: typeof query, projectId: number): Promise<number> => {
   const result = await runQuery<{ next: string }>(
     'SELECT COALESCE(MAX(tasknumber), 0) + 1 AS next FROM work.tasks WHERE projectid = $1',
@@ -283,7 +315,8 @@ export const decideTaskEditApproval = async (
   requestId: number,
   reviewerUserId: number,
   decision: 'Approved' | 'Rejected',
-  proposed: TaskEditApprovalInput
+  proposed: TaskEditApprovalInput,
+  reviewNote?: string
 ): Promise<number | null> => withTransaction(async (runQuery) => {
   const locked = await runQuery<{ taskid: number }>(
     `SELECT taskid FROM work.taskchangerequests
@@ -324,9 +357,9 @@ export const decideTaskEditApproval = async (
   );
   await runQuery(
     `INSERT INTO work.changerequestreviews
-       (changerequestid, revieweruserid, reviewaction, reviewerrolecode)
-     VALUES ($1, $2, $3, 'TeamLead')`,
-    [requestId, reviewerUserId, decision]
+       (changerequestid, revieweruserid, reviewaction, reviewnote, reviewerrolecode)
+     VALUES ($1, $2, $3, $4, 'TeamLead')`,
+    [requestId, reviewerUserId, decision, reviewNote || null]
   );
   return locked.rows[0].taskid;
 });

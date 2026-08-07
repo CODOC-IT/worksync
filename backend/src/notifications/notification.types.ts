@@ -16,10 +16,13 @@ export type NotificationType =
   | 'task_review_approved' | 'task_review_rejected' | 'task_completed' | 'task_deleted'
   | 'task_due_today' | 'task_due_tomorrow' | 'task_overdue' | 'checklist_completed'
   | 'subtask_assigned' | 'subtask_completed' | 'subtask_reopened' | 'subtask_due_today'
-  | 'subtask_overdue' | 'task_reopened'
+  | 'subtask_overdue' | 'task_reopened' | 'subtask_assignment_changed'
+  | 'task_edit_approval_requested' | 'task_edit_approval_approved' | 'task_edit_approval_rejected'
+  | 'leave_requested' | 'leave_approved' | 'leave_rejected'
   | 'comment_added' | 'mention' | 'attachment_uploaded'
   | 'project_created' | 'project_updated' | 'project_archived' | 'project_restored'
   | 'project_deleted' | 'project_member_added' | 'project_member_removed'
+  | 'project_member_pending_removal' | 'project_member_auto_removed'
   | 'approval' | 'user_registered' | 'user_role_changed' | 'user_deactivated'
   | 'workspace_created' | 'workspace_deleted' | 'backup_completed' | 'backup_failed'
   | 'security_alert' | 'audit_alert' | 'system_maintenance' | 'holiday_created' | 'attendance' | 'task' | 'system'
@@ -47,13 +50,28 @@ export type ApiPriority = 'Critical' | 'High' | 'Medium' | 'Low';
 // The "event" every module publishes to the Notification Service. Every recipient/actor/
 // project/task id here is a frontend-style prefixed string (`usr-4`) — the repository layer is
 // the only place that converts to integer primary keys (idMapping.ts).
+export type NotificationMetadata = Record<string, string | number | boolean>;
+
 export interface NotificationEvent {
   type: NotificationType;
   title: string;
+  /** The compact preview line rendered in the notification list. Keep it to one or two lines —
+   *  anything longer belongs in `detail`. Persisted to notify.Notifications.SafePreviewText. */
   message: string;
+  /** The full body, shown only when a recipient expands the notification in the Notification
+   *  Center (rejection reasons, review comments, the exact fields an edit changed). Persisted to
+   *  notify.Notifications.DetailText. Optional: an event with nothing more to say than its
+   *  preview simply omits it and renders no expanded body. */
+  detail?: string;
+  /** Structured context for the expanded view (project name, task title, approver, changed
+   *  fields, leave type/period, ...). Persisted to notify.Notifications.MetadataJson. Rendered
+   *  back verbatim as label/value rows — nothing queries inside it. */
+  metadata?: NotificationMetadata;
   /** Per-recipient message override — see frontend notificationService.ts's identical field
    *  for why (the same event reads differently depending on who's reading it). */
   recipientMessages?: Record<string, string>;
+  /** Per-recipient `detail` override, for the same reason as `recipientMessages`. */
+  recipientDetails?: Record<string, string>;
   recipientIds: string[];
   actorId?: string;
   projectId?: string;
@@ -74,7 +92,12 @@ export interface NotificationDTO {
   actorId?: string;
   actorName?: string;
   title: string;
+  /** Compact preview (1–2 lines) — what the notification list shows by default. */
   message: string;
+  /** Full body — only rendered once the recipient expands the notification. */
+  detail?: string;
+  /** Structured expanded-view context (project name, task title, approver, changed fields, ...). */
+  metadata?: NotificationMetadata;
   type: NotificationType;
   priority: ApiPriority;
   read: boolean;

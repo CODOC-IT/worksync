@@ -3,7 +3,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
 import { Project, Task, User, UserRole } from '../../types';
-import { AccountFieldErrors, AccountFormValues, getPasswordChecks, validateAccountForm } from './accountFormRules';
+import { AccountFieldErrors, AccountFormValues, PASSWORD_POLICY_MESSAGE, getPasswordChecks, isStrongPassword, validateAccountForm } from './accountFormRules';
 import { getMemberDirectoryRole } from './memberRole';
 import {
   Check,
@@ -138,7 +138,7 @@ const EMPTY_MEMBER_FORM: MemberFormState = {
 };
 
 export const TeamMembersView: React.FC = () => {
-  const { users, tasks, projects, currentRole, refreshUsers, showToast } = useApp();
+  const { users, tasks, projects, currentRole, currentUser, refreshUsers, showToast } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<SearchField>('name');
@@ -226,14 +226,15 @@ export const TeamMembersView: React.FC = () => {
     () => (selectedMember ? getMemberInsights(selectedMember, projects, tasks) : null),
     [projects, selectedMember, tasks],
   );
-  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && selectedMember?.role === 'Admin');
-  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR');
+  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR'));
+  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || (selectedMember?.role === 'HR' && selectedMember.id !== currentUser.id));
   const canEditSelectedMember = Boolean(selectedMember) && !hrCannotManageSelectedMember;
   const selectedMemberIsAdmin = selectedMember?.role === 'Admin';
 
   const activeMembersCount = useMemo(() => directoryUsers.filter((member) => member.status !== 'inactive').length, [directoryUsers]);
   const deactivatedMembersCount = useMemo(() => directoryUsers.filter((member) => member.status === 'inactive').length, [directoryUsers]);
   const roleLockedToProjectLead = manageMode === 'edit' && Boolean(manageTargetId) && activeProjectLeadIds.has(manageTargetId || '');
+  const isEditingSelf = manageMode === 'edit' && Boolean(manageTargetId) && manageTargetId === currentUser.id;
 
   useEffect(() => {
     if (!canInspectMembers) {
@@ -302,6 +303,7 @@ export const TeamMembersView: React.FC = () => {
   const openEditModal = (member: User) => {
     setManageMode('edit');
     setManageTargetId(member.id);
+    setNotice(null);
     void loadDepartments();
     const departmentId = departments.find((department) => department.name === member.department)?.id;
     setMemberForm({
@@ -322,6 +324,7 @@ export const TeamMembersView: React.FC = () => {
     if (manageSubmitting) return;
     setManageModalOpen(false);
     setManageTargetId(null);
+    setNotice(null);
     setMemberForm({ ...EMPTY_MEMBER_FORM });
     setShowTemporaryPassword(false);
   };
@@ -333,8 +336,8 @@ export const TeamMembersView: React.FC = () => {
     try {
       const isCreate = manageMode === 'create';
       if (manageMode === 'edit' && (memberForm.password || memberForm.confirmPassword)) {
-        if (memberForm.password.length < 6) {
-          throw new Error('New password must be at least 6 characters long.');
+        if (!isStrongPassword(memberForm.password)) {
+          throw new Error(`New password must meet the policy: ${PASSWORD_POLICY_MESSAGE}`);
         }
         if (memberForm.password !== memberForm.confirmPassword) {
           throw new Error('Password confirmation does not match.');
@@ -1243,6 +1246,12 @@ export const TeamMembersView: React.FC = () => {
               </button>
             </div>
 
+            {notice && notice.type === 'error' && (
+              <div role="alert" className="border-b border-rose-500/30 bg-rose-500/10 px-5 py-3 text-sm text-rose-300">
+                {notice.message}
+              </div>
+            )}
+
             <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
               <label className="text-sm text-slate-300">
                 <span className="mb-1 block text-xs">Full name</span>
@@ -1258,7 +1267,7 @@ export const TeamMembersView: React.FC = () => {
               </label>
                 <label className="text-sm text-slate-300">
                   <span className="mb-1 block text-xs">Role</span>
-                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin') || roleLockedToProjectLead} className={surfaceInputClass}>
+                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && (isEditingSelf || memberForm.role === 'Admin')) || roleLockedToProjectLead} className={surfaceInputClass}>
                     {currentRole === 'Admin' && <option value="Admin">Administrator</option>}
                     {currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin' && <option value="Admin">Administrator</option>}
                     {roleLockedToProjectLead && <option value="Team_Lead">Team Lead</option>}
@@ -1267,9 +1276,11 @@ export const TeamMembersView: React.FC = () => {
                   </select>
                   {(currentRole === 'HR' || roleLockedToProjectLead) && (
                     <p className="mt-2 text-xs text-slate-500">
-                      {roleLockedToProjectLead
-                        ? 'Team Lead assignment is managed from the Projects section.'
-                        : 'HR cannot create or change Administrator roles.'}
+                      {isEditingSelf
+                        ? 'Your role cannot be changed from this screen.'
+                        : roleLockedToProjectLead
+                          ? 'Team Lead assignment is managed from the Projects section.'
+                          : 'HR cannot create or change Administrator roles.'}
                     </p>
                   )}
                 </label>
@@ -1301,7 +1312,7 @@ export const TeamMembersView: React.FC = () => {
                         value={memberForm.password}
                         onChange={(event) => setMemberForm((prev) => ({ ...prev, password: event.target.value }))}
                         className={`${surfaceInputClass} pr-12`}
-                        minLength={6}
+                        minLength={8}
                         placeholder="Leave blank to keep the current password"
                       />
                       <button
@@ -1321,13 +1332,21 @@ export const TeamMembersView: React.FC = () => {
                       value={memberForm.confirmPassword}
                       onChange={(event) => setMemberForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
                       className={surfaceInputClass}
-                      minLength={6}
+                      minLength={8}
                       placeholder="Confirm the new password"
                     />
                     <p className="mt-2 text-xs text-slate-500">
                       When changed, the account owner will receive an email confirming the update and their new credentials.
                     </p>
                   </label>
+                  <div className="md:col-span-2 grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-slate-950/45 p-3 text-[11px] sm:grid-cols-5">
+                    {Object.entries(getPasswordChecks(memberForm.password)).map(([key, passed]) => (
+                      <span key={key} className={`inline-flex items-center gap-1.5 capitalize ${passed ? 'text-emerald-300' : 'text-slate-500'}`}>
+                        <span className={`flex h-4 w-4 items-center justify-center rounded-full border ${passed ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/10'}`}>{passed ? <Check size={10} /> : null}</span>
+                        {key === 'length' ? '8-128 chars' : key}
+                      </span>
+                    ))}
+                  </div>
                 </>
               )}
               {manageMode === 'create' && (

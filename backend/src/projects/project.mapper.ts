@@ -87,6 +87,9 @@ export const rowToProjectDTO = (
         || member.memberrolecode === 'TeamLead'
       )
       .map((member) => fromUserPk(member.userid)),
+    pendingRemovalMemberIds: members
+      .filter((member) => member.pendingremovalatutc !== null)
+      .map((member) => fromUserPk(member.userid)),
     startDate: formatDate(row.startdate),
     targetDate: formatDate(row.enddate),
     priority: DB_TO_API_PRIORITY[row.prioritycode],

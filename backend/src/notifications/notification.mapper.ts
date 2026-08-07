@@ -1,6 +1,13 @@
 import { fromProjectPk, fromTaskPk, fromUserPk } from '../utils/idMapping.js';
 import { normalizeActorMessage } from '../utils/actorDisplay.js';
-import { ApiPriority, DbPriority, NotificationCategory, NotificationDTO, NotificationType } from './notification.types.js';
+import {
+  ApiPriority,
+  DbPriority,
+  NotificationCategory,
+  NotificationDTO,
+  NotificationMetadata,
+  NotificationType
+} from './notification.types.js';
 
 // One row per notification, already joined against NotificationTypes (for TypeCode/
 // CategoryCode) and iam.Users (for the actor's display name) — see
@@ -13,6 +20,10 @@ export interface NotificationRow {
   actordisplayname: string | null;
   title: string;
   safepreviewtext: string | null;
+  detailtext: string | null;
+  // jsonb comes back from node-postgres already parsed; typed loosely because the shape is
+  // per-notification-type by design (see NotificationEvent.metadata).
+  metadatajson: NotificationMetadata | null;
   typecode: string;
   categorycode: string;
   prioritycode: DbPriority;
@@ -30,27 +41,56 @@ const CATEGORY_LINK_ROUTES: Record<NotificationCategory, string> = {
   Task: 'tasks',
   Project: 'projects',
   Approval: 'approvals',
-  System: 'settings',
+  // No 'settings' tab exists in frontend/App.tsx's router, so a generic System event has nowhere
+  // more specific to go than the Notification Center itself. The System types that DO have a
+  // natural home are routed by TYPE_LINK_ROUTES below.
+  System: 'notifications',
   Attendance: 'attendance',
   Break: 'attendance',
   Report: 'reports',
-  Chat: 'chat',
+  // The Project Chat tab's id is 'project-chats'; 'chat' was its id historically and is still
+  // aliased on the frontend for notifications published before the rename.
+  Chat: 'project-chats',
   AI: 'ai-assistant'
 };
 
-export const deriveLinkRoute = (categoryCode: string, typeCode: string): string => {
-  // A handful of task-category types belong on the board rather than the task list.
-  if (
-    typeCode === 'task_status_changed' ||
-    typeCode === 'task_review_requested' ||
-    typeCode === 'task_review_approved' ||
-    typeCode === 'task_review_rejected' ||
-    typeCode === 'task_completed'
-  ) {
-    return 'kanban';
-  }
-  return CATEGORY_LINK_ROUTES[categoryCode as NotificationCategory] || 'notifications';
+// Per-type overrides for events whose category alone points at the wrong tab. Clicking a
+// notification must land on the surface that actually shows it — a review decision belongs on the
+// board, a task-edit request belongs in the Approvals inbox, a holiday belongs on the calendar.
+const TYPE_LINK_ROUTES: Record<string, string> = {
+  // Board (Kanban) — status movement and the Review -> Done gate.
+  task_status_changed: 'kanban',
+  task_review_requested: 'kanban',
+  task_review_approved: 'kanban',
+  task_review_rejected: 'kanban',
+  task_completed: 'kanban',
+  task_reopened: 'kanban',
+  subtask_completed: 'kanban',
+  subtask_reopened: 'kanban',
+  checklist_completed: 'kanban',
+  // Controlled task edits: the request is a pending decision (Approvals inbox); its outcome is
+  // about the task itself (Tasks).
+  task_edit_approval_requested: 'approvals',
+  task_edit_approval_approved: 'tasks',
+  task_edit_approval_rejected: 'tasks',
+  // Assignment changes are read on the task list, where the assignee sees their own work.
+  task_assigned: 'tasks',
+  task_reassigned: 'tasks',
+  subtask_assigned: 'tasks',
+  subtask_assignment_changed: 'tasks',
+  // Leave: the requester tracks their own leave in Attendance; reviewers act on it in Approvals.
+  leave_requested: 'approvals',
+  leave_approved: 'attendance',
+  leave_rejected: 'attendance',
+  // System events with a real owning screen.
+  holiday_created: 'calendar',
+  user_registered: 'members',
+  user_role_changed: 'members',
+  user_deactivated: 'members'
 };
+
+export const deriveLinkRoute = (categoryCode: string, typeCode: string): string =>
+  TYPE_LINK_ROUTES[typeCode] || CATEGORY_LINK_ROUTES[categoryCode as NotificationCategory] || 'notifications';
 
 const DB_TO_API_PRIORITY: Record<DbPriority, ApiPriority> = {
   Critical: 'Critical',
@@ -76,6 +116,8 @@ export const rowToNotificationDTO = (row: NotificationRow): NotificationDTO => (
   actorName: row.actordisplayname || undefined,
   title: row.title,
   message: normalizeActorMessage(row.safepreviewtext || row.title, row.actordisplayname),
+  detail: row.detailtext ? normalizeActorMessage(row.detailtext, row.actordisplayname) : undefined,
+  metadata: row.metadatajson || undefined,
   type: row.typecode as NotificationType,
   priority: DB_TO_API_PRIORITY[row.prioritycode],
   read: row.readatutc !== null,
