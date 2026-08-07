@@ -29,6 +29,12 @@ Users): an `AudienceType` column on `hr.Holidays`, the `hr.HolidayAudienceDepart
 run more than once; existing holidays default to `AudienceType = 'Everyone'`, matching their prior
 unfiltered visibility.
 
+`20260808_01_ai_prompt_library.sql` installs the AI Assistant prompt library: `ai.PromptLibraries`
+and `ai.PromptVersions` give saved prompts (and their version history) durable Postgres storage
+instead of the backend's in-memory `PromptStore`, which lost every saved prompt on backend
+restart / serverless recycle. Safe to run more than once; there is no data to backfill because
+nothing was ever persisted before.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
