@@ -8,6 +8,11 @@ import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { ProjectApprovalRequestDTO, ProjectApprovalRequestRow, ProjectApprovalRequestType } from './projectApproval.types.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
+import {
+  buildProjectDecisionMessage,
+  projectDecisionEffect,
+  validateProjectDecision
+} from './projectWorkflow.rules.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -166,6 +171,8 @@ export const decideApprovalRequest = async (
   if (row.requeststatus !== 'Pending') {
     throw new ProjectValidationError('This request has already been decided.');
   }
+  const decisionError = validateProjectDecision(decision, decisionReason);
+  if (decisionError) throw new ProjectValidationError(decisionError);
 
   const projectIdStr = fromProjectPk(row.projectid);
   const requesterId = fromUserPk(row.requestedbyuserid);
@@ -202,7 +209,48 @@ export const decideApprovalRequest = async (
     }
   }
 
-  const decided = await repo.decideApprovalRequest(approvalRequestId, decision, toUserPk(actorId), decisionReason?.trim() || null);
+  const decided = await repo.decideApprovalRequest(
+    approvalRequestId,
+    decision,
+    toUserPk(actorId),
+    decisionReason?.trim() || null
+  );
+  let decidedDto: ProjectApprovalRequestDTO;
+  if (!decided) {
+    if (decision === 'Approved' && row.requesttype === 'PROJECT_PERMANENT_DELETE') {
+      decidedDto = {
+        id: row.approvalrequestid,
+        projectId: projectIdStr,
+        projectTitle: projectName,
+        requestType: row.requesttype,
+        requestedByUserId: requesterId,
+        requestedByName: actorName(requesterId),
+        requestedChanges: null,
+        reason: row.reason,
+        status: 'Approved',
+        reviewedByUserId: actorId,
+        reviewedByName: actorName(actorId),
+        decisionReason: decisionReason?.trim() || undefined,
+        createdAt: row.createdatutc.toISOString(),
+        decidedAt: new Date().toISOString()
+      };
+    } else {
+      throw new ProjectValidationError('This request has already been decided.');
+    }
+  } else {
+    decidedDto = await toDTO(decided);
+  }
+
+  if (projectDecisionEffect(row.requesttype, decision) === 'remove-rejected-creation') {
+    const archived = await projectRepo.archiveProject(
+      row.projectid,
+      toUserPk(actorId),
+      `Creation rejected: ${decisionReason!.trim()}`
+    );
+    if (!archived || !await projectRepo.permanentlyDeleteProject(row.projectid)) {
+      throw new ProjectValidationError('The rejected project proposal could not be removed.');
+    }
+  }
 
   const requesterDisplayName = actorName(requesterId);
   const reviewerDisplayName = actorName(actorId);
@@ -210,9 +258,19 @@ export const decideApprovalRequest = async (
   notifyRequester(requesterId, {
     type: 'approval',
     title: `Project Request ${decision}`,
-    message: `${reviewerDisplayName} ${outcomeVerb} your request to ${REQUEST_TYPE_LABEL[row.requesttype]} "${projectName}".`,
+    message: buildProjectDecisionMessage(
+      reviewerDisplayName,
+      decision,
+      REQUEST_TYPE_LABEL[row.requesttype],
+      projectName,
+      decisionReason
+    ),
     actorId,
-    projectId: row.requesttype === 'PROJECT_PERMANENT_DELETE' ? undefined : projectIdStr
+    projectId:
+      row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
+      (row.requesttype === 'PROJECT_CREATE' && decision === 'Rejected')
+        ? undefined
+        : projectIdStr
   });
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -226,27 +284,5 @@ export const decideApprovalRequest = async (
   // (FK_ProjectApprovalRequests_Project ON DELETE CASCADE, database/25_project_approvals.sql) --
   // there's nothing left to re-fetch or mark Approved. Report the outcome from the in-memory row
   // instead of erroring on "row not found."
-  if (!decided) {
-    if (decision === 'Approved' && row.requesttype === 'PROJECT_PERMANENT_DELETE') {
-      return {
-        id: row.approvalrequestid,
-        projectId: projectIdStr,
-        projectTitle: projectName,
-        requestType: row.requesttype,
-        requestedByUserId: requesterId,
-        requestedByName: requesterDisplayName,
-        requestedChanges: null,
-        reason: row.reason,
-        status: 'Approved',
-        reviewedByUserId: actorId,
-        reviewedByName: reviewerDisplayName,
-        decisionReason: decisionReason?.trim() || undefined,
-        createdAt: row.createdatutc.toISOString(),
-        decidedAt: new Date().toISOString()
-      };
-    }
-    throw new ProjectValidationError('This request has already been decided.');
-  }
-
-  return toDTO(decided);
+  return decidedDto;
 };

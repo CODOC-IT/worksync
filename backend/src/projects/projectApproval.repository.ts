@@ -43,7 +43,7 @@ export const findPendingApprovalRequests = async (): Promise<ProjectApprovalRequ
   const result = await query<ProjectApprovalRequestRow>(
     `SELECT ${COLUMNS} FROM work.projectapprovalrequests
       WHERE requeststatus = 'Pending'
-      ORDER BY createdatutc`
+      ORDER BY createdatutc DESC, approvalrequestid DESC`
   );
   return result.rows;
 };

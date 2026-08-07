@@ -664,23 +664,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const derived: SystemApproval[] = [];
 
-    for (const p of projects) {
-      if (p.approvalStatus === 'Pending Approval') {
-        derived.push({
-          id: `sys-approval-prj-${p.id}`,
-          type: 'Project_Creation',
-          targetId: p.id,
-          targetTitle: p.title,
-          requestedBy: p.teamLeadId || '',
-          requestedRole: 'Team_Lead',
-          createdAt: p.createdAt || new Date().toISOString(),
-          details: `Team Lead proposed new project "${p.title}". Pending Admin approval.`,
-          status: 'Pending',
-          projectId: p.id,
-        });
-      }
-    }
-
     for (const t of tasks) {
       if (t.pendingEdit && t.pendingEdit.status === 'Pending') {
         derived.push({
@@ -1090,24 +1073,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev
       ]);
 
-      // Pending Approval projects still need a local SystemApproval record so the Approvals
-      // Inbox can list them -- the backend has no SystemApprovals table of its own (out of this
-      // branch's scope), it only publishes the "approval" notification event to Admins.
-      if (created.status === 'Pending Approval') {
-        const approval: SystemApproval = {
-          id: `app-${Date.now()}`,
-          type: 'Project_Creation',
-          targetId: created.id,
-          targetTitle: created.title,
-          requestedBy: currentUser.id,
-          requestedRole: currentRole,
-          createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-          details: `Team Lead ${currentUser.name} proposed new project "${created.title}". Pending Admin approval.`,
-          status: 'Pending'
-        };
-        setSystemApprovals((prev) => [approval, ...prev]);
-      }
-
       pushActivity('Created project', 'Project', created.id, created.title);
 
       const baseMessage =
@@ -1218,6 +1183,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetDate: data.targetDate,
         status: data.status,
         teamLeadId: data.teamLeadId,
+        memberIds: data.memberIds,
         creationReason: data.creationReason,
         reason: approvalReason
       });
@@ -1239,6 +1205,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushActivity('Updated project', 'Project', projectId, updated.title);
       } else {
         pushActivity('Requested project edit', 'Project', projectId, project.title);
+        confirmActionSuccess('Edit Requested', result.message);
+        return { success: true, message: result.message };
       }
 
       // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
@@ -1370,11 +1338,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (memberErrors.length > 0 || milestoneErrors.length > 0 || fileErrors.length > 0) {
         const message = `Project details saved, but some changes failed: ${[...memberErrors, ...milestoneErrors, ...fileErrors].join(' ')}`;
         return { success: false, message };
-      }
-
-      if (result.pendingApproval) {
-        confirmActionSuccess('Edit Requested', result.message);
-        return { success: true, message: result.message };
       }
 
       const message = `Your changes to "${result.project!.title}" were saved successfully.`;

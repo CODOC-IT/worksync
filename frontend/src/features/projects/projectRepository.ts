@@ -94,6 +94,7 @@ export interface UpdateProjectPayload {
   targetDate?: string;
   status?: Project['status'];
   teamLeadId?: string;
+  memberIds?: string[];
   creationReason?: string;
   // Approval-request reason, only meaningful (and required) when the caller is a Team Lead --
   // see backend/src/projects/project.controller.ts's updateProject. Ignored for Admin's direct
