@@ -1307,6 +1307,214 @@
   color: #A3C0A8;
 }
 
+/* Light-theme premium treatment for the auth screens (login / signup / OTP).
+   Mirrors the dark-mode [data-login-page] overrides above: replaces the dark
+   image gradients with calm off-white surfaces, layered shadows, stronger
+   borders, neutral inputs, and clearer interaction states. Layout untouched. */
+.light [data-login-page] {
+  background-color: #F5F7F4 !important;
+  background-image:
+    radial-gradient(85% 60% at 88% -10%, rgba(95, 128, 107, 0.10), transparent 62%),
+    radial-gradient(70% 50% at -8% 110%, rgba(95, 128, 107, 0.08), transparent 58%),
+    linear-gradient(180deg, #F9FBF8 0%, #EFF4EE 100%) !important;
+  background-size: 100% 100% !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  color: #202A24;
+}
+
+.light [data-login-page] .glass-panel {
+  background: #FFFFFF;
+  border-color: #C4D0C8 !important;
+  box-shadow: 0 1px 2px rgba(25, 40, 31, 0.05), 0 12px 28px rgba(25, 40, 31, 0.14), 0 32px 64px rgba(25, 40, 31, 0.10) !important;
+}
+
+.light [data-login-page] div[class*="bg-slate-900"] {
+  background-color: #FFFFFF !important;
+  border-color: #C4D0C8 !important;
+  box-shadow: 0 1px 2px rgba(25, 40, 31, 0.05), 0 12px 28px rgba(25, 40, 31, 0.14), 0 32px 64px rgba(25, 40, 31, 0.10) !important;
+}
+
+.light [data-login-page] .border-white\/5 {
+  border-color: #D7E0D9 !important;
+}
+
+.light [data-login-page] .border-white\/10 {
+  border-color: #C9D4CC !important;
+}
+
+.light [data-login-page] .text-slate-400,
+.light [data-login-page] .text-slate-500 {
+  color: #4A5850;
+}
+
+.light [data-login-page] .text-slate-600 {
+  color: #5A6A60;
+}
+
+.light [data-login-page] input,
+.light [data-login-page] select {
+  background-color: #FBFDFB;
+  border-color: #A9BAB0;
+  color: #1D2821;
+  box-shadow: none;
+  caret-color: #3F684F;
+}
+
+.light [data-login-page] input::placeholder {
+  color: #8A9A90;
+  opacity: 1;
+}
+
+.light [data-login-page] input:hover,
+.light [data-login-page] select:hover {
+  border-color: #6D8A78;
+}
+
+.light [data-login-page] input:focus,
+.light [data-login-page] select:focus {
+  border-color: #3F684F !important;
+  box-shadow: 0 0 0 3px rgba(63, 104, 79, 0.18);
+}
+
+.light [data-login-page] .glass-button-neon {
+  background: #3F684F;
+  border-color: #31543F;
+  color: #FFFFFF;
+  font-weight: 700;
+  box-shadow: 0 3px 10px rgba(49, 84, 63, 0.22);
+}
+
+.light [data-login-page] .glass-button-neon:hover {
+  background: #355C47;
+  border-color: #2A4A38;
+  box-shadow: 0 6px 16px rgba(49, 84, 63, 0.28);
+}
+
+.light [data-login-page] .glass-button-neon:active {
+  background: #31543F;
+  box-shadow: 0 2px 6px rgba(49, 84, 63, 0.24);
+}
+
+.light [data-login-page] .glass-button-neon:focus-visible {
+  outline: 3px solid rgba(63, 104, 79, 0.35);
+  outline-offset: 2px;
+}
+
+.light [data-login-page] button[class*="from-cyan-500"] {
+  background-image: linear-gradient(135deg, #3F684F 0%, #567E66 100%) !important;
+  background-color: #3F684F !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 12px rgba(49, 84, 63, 0.25);
+}
+
+.light [data-login-page] button[class*="from-cyan-500"]:hover {
+  background-image: linear-gradient(135deg, #355C47 0%, #4A6F58 100%) !important;
+}
+
+.light [data-login-page] .animate-spin {
+  border-color: rgba(255, 255, 255, 0.35) !important;
+  border-top-color: #FFFFFF !important;
+}
+
+.light [data-login-page] .border-2 {
+  background-color: #FFFFFF;
+  border-color: #B9C6BD !important;
+}
+
+.light [data-login-page] .border-2:focus {
+  border-color: #3F684F !important;
+  box-shadow: 0 0 12px rgba(63, 104, 79, 0.25) !important;
+}
+
+.light [data-login-page] .border-cyan-400 {
+  border-color: #3F684F !important;
+  box-shadow: 0 0 12px rgba(63, 104, 79, 0.25) !important;
+}
+
+.light [data-login-page] button.bg-white\/5 {
+  background-color: #FFFFFF;
+  border-color: #A9BAB0;
+  color: #33483C;
+}
+
+.light [data-login-page] button.bg-white\/5:hover {
+  background-color: #EAF1EB;
+  border-color: #6D8A78;
+  color: #26322B;
+}
+
+.light [data-login-page] [data-login-brand] {
+  background-image:
+    linear-gradient(to bottom right, rgba(95, 128, 107, 0.10), transparent 45%),
+    linear-gradient(180deg, #F4F7F3 0%, #E9F0E9 100%) !important;
+  background-size: 100% 100% !important;
+  background-position: center !important;
+  border-color: #C9D4CC !important;
+}
+
+.light [data-login-page] [data-login-brand] .bg-slate-950\/80 {
+  background-color: rgba(255, 255, 255, 0.85) !important;
+  border-color: #C9D4CC !important;
+  box-shadow: 0 4px 12px rgba(25, 40, 31, 0.06);
+}
+
+.light [data-login-page] [data-login-brand] .bg-cyan-500\/20,
+.light [data-login-page] [data-login-brand] .bg-purple-500\/10,
+.light [data-login-page] [data-login-brand] .bg-purple-500\/20 {
+  background-color: #E2EAE4 !important;
+  border-color: #A8BBAE !important;
+}
+
+.light [data-login-page] [data-login-brand] .text-cyan-300,
+.light [data-login-page] [data-login-brand] .text-cyan-400,
+.light [data-login-page] [data-login-brand] .text-purple-300,
+.light [data-login-page] [data-login-brand] .text-purple-300\/70 {
+  color: #33483C !important;
+}
+
+/* Logo lockups: the global light rules flatten gradient badges to gray, so the
+   brand mark gets a green gradient chip to stand out on the pale panel. */
+.light [data-login-page] div[class*="via-purple-600"],
+.light [data-login-page] div[class*="to-purple-600"] {
+  background-image: linear-gradient(135deg, #3F684F 0%, #86A78F 100%) !important;
+  background-color: #3F684F !important;
+  box-shadow: 0 4px 14px rgba(49, 84, 63, 0.25) !important;
+}
+
+/* Signup primary CTA uses a purple/indigo gradient — keep the green brand. */
+.light [data-login-page] button[class*="via-indigo-600"] {
+  background-image: linear-gradient(135deg, #3F684F 0%, #567E66 100%) !important;
+  background-color: #3F684F !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 12px rgba(49, 84, 63, 0.25) !important;
+}
+
+.light [data-login-page] button[class*="via-indigo-600"]:hover {
+  background-image: linear-gradient(135deg, #355C47 0%, #4A6F58 100%) !important;
+}
+
+/* Password-strength panel inside the signup form. */
+.light [data-login-page] div[class*="bg-black\/30"] {
+  background-color: #FFFFFF !important;
+  border-color: #D7E0D9 !important;
+}
+
+/* OTP status alerts use the red family, which the global light rules don't
+   cover — keep them legible on the white card. */
+.light [data-login-page] .bg-red-500\/10 {
+  background-color: #FBE3E0 !important;
+}
+
+.light [data-login-page] .border-red-500\/30,
+.light [data-login-page] .border-red-500\/60 {
+  border-color: #C94A43 !important;
+}
+
+.light [data-login-page] .text-red-400 {
+  color: #A9322D !important;
+}
+
 :root:not(.light) [data-ai-assistant] .bg-purple-500\/20,
 :root:not(.light) [data-ai-assistant] .bg-cyan-500\/20 {
   background-color: #35433A;

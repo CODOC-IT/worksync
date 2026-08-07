@@ -91,6 +91,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       >
         <div className="grid grid-cols-1 lg:grid-cols-12 min-h-0 gap-3">
           <div
+            data-login-brand
             className="lg:col-span-5 relative rounded-2xl overflow-hidden p-5 sm:p-6 md:p-8 flex flex-col justify-between bg-cover bg-center border border-white/10 min-h-[200px] lg:min-h-[560px]"
             style={{
               backgroundImage: `linear-gradient(to bottom, rgba(9, 10, 15, 0.55), rgba(9, 10, 15, 0.90)), url('/assets/images/auth-bg.png')`
