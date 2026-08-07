@@ -295,7 +295,26 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
       return void res.status(400).json({ success: false, message: 'Display name must not exceed 100 characters.' });
     }
 
+    const previousUser = userStore.findById(req.user.id);
     const updatedUser = await userStore.updateDisplayName(req.user.id, sanitizedName);
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName: previousUser?.name || req.user.email,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: req.user.id,
+      affectedUserName: updatedUser?.name || sanitizedName,
+      action: 'Display Name Updated',
+      module: 'Profile',
+      entityType: 'User',
+      entityId: req.user.id,
+      entityName: updatedUser?.name || sanitizedName,
+      description: `${previousUser?.name || req.user.email} changed their display name from "${previousUser?.name || ''}" to "${sanitizedName}".`,
+      changes: [{ field: 'Display Name', previousValue: previousUser?.name || null, newValue: sanitizedName }],
+      source: 'Web',
+      metadata: { field: 'displayName' },
+    });
 
     return void res.status(200).json({
       success: true,
@@ -342,7 +361,26 @@ router.put('/profile/username', authenticateJWT, async (req: AuthenticatedReques
       return void res.status(400).json({ success: false, message: 'Username can only contain letters, numbers, dots, hyphens, and underscores.' });
     }
 
+    const previousUser = userStore.findById(req.user.id);
     const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName: previousUser?.name || req.user.email,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: req.user.id,
+      affectedUserName: updatedUser?.name || previousUser?.name,
+      action: 'Username Updated',
+      module: 'Profile',
+      entityType: 'User',
+      entityId: req.user.id,
+      entityName: updatedUser?.name || previousUser?.name,
+      description: `${previousUser?.name || req.user.email} changed their username from "${previousUser?.username || ''}" to "${normalizedUsername}".`,
+      changes: [{ field: 'Username', previousValue: previousUser?.username || null, newValue: normalizedUsername }],
+      source: 'Web',
+      metadata: { field: 'username' },
+    });
 
     return void res.status(200).json({
       success: true,
@@ -382,7 +420,26 @@ router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, 
       return void res.status(400).json({ success: false, message: 'A valid email address is required.' });
     }
 
+    const previousUser = userStore.findById(req.user.id);
     const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName: previousUser?.name || req.user.email,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: req.user.id,
+      affectedUserName: updatedUser?.name || previousUser?.name,
+      action: 'Email Updated',
+      module: 'Profile',
+      entityType: 'User',
+      entityId: req.user.id,
+      entityName: updatedUser?.name || previousUser?.name,
+      description: `${previousUser?.name || req.user.email} changed their email from "${previousUser?.email || ''}" to "${normalizedEmail}".`,
+      changes: [{ field: 'Email', previousValue: previousUser?.email || null, newValue: normalizedEmail }],
+      source: 'Web',
+      metadata: { field: 'email' },
+    });
 
     return void res.status(200).json({
       success: true,
@@ -443,6 +500,24 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
 
     await userStore.updatePassword(user.email, newPassword);
 
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName: user.name,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: req.user.id,
+      affectedUserName: user.name,
+      action: 'Password Updated',
+      module: 'Profile',
+      entityType: 'User',
+      entityId: req.user.id,
+      entityName: user.name,
+      description: `${user.name} changed their account password.`,
+      changes: [{ field: 'Password', previousValue: null, newValue: '••••••' }],
+      source: 'Web',
+      metadata: { field: 'password' },
+    });
+
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to change password.' });
@@ -483,6 +558,25 @@ router.post('/users', authenticateJWT, async (req: AuthenticatedRequest, res: Re
       role,
       department: String(department).trim(),
       title: String(title).trim(),
+    });
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: newUser.id,
+      affectedUserName: newUser.name,
+      action: 'Account Created',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: newUser.id,
+      entityName: newUser.name,
+      description: `${actorName} created account for ${newUser.name} (${newUser.email}) with the ${newUser.role.replace('_', ' ')} role.`,
+      source: 'Web',
+      important: true,
+      metadata: { role: newUser.role, department: newUser.department, title: newUser.title, email: newUser.email },
     });
 
     res.status(201).json({ success: true, message: 'Account created successfully.', user: userStore.sanitizeUser(newUser) });
@@ -546,6 +640,36 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
       await userStore.updatePassword(updatedUser.email, nextPassword);
     }
 
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    const changes = [
+      targetUser.name !== updatedUser.name ? { field: 'Display Name', previousValue: targetUser.name, newValue: updatedUser.name } : null,
+      targetUser.email !== updatedUser.email ? { field: 'Email', previousValue: targetUser.email, newValue: updatedUser.email } : null,
+      targetUser.role !== updatedUser.role ? { field: 'Role', previousValue: targetUser.role, newValue: updatedUser.role } : null,
+      targetUser.department !== updatedUser.department ? { field: 'Department', previousValue: targetUser.department, newValue: updatedUser.department } : null,
+      targetUser.title !== updatedUser.title ? { field: 'Title', previousValue: targetUser.title, newValue: updatedUser.title } : null,
+      nextPassword ? { field: 'Password', previousValue: null, newValue: '••••••' } : null,
+    ].filter((c): c is { field: string; previousValue: string | null; newValue: string | null } => c !== null);
+
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: updatedUser.id,
+      affectedUserName: updatedUser.name,
+      action: 'Account Updated',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: updatedUser.id,
+      entityName: updatedUser.name,
+      description: changes.length
+        ? `${actorName} updated ${targetUser.name}'s account (${changes.map(c => c.field).join(', ')}).`
+        : `${actorName} updated ${targetUser.name}'s account.`,
+      source: 'Web',
+      important: true,
+      changes,
+    });
+
     let message = 'Account updated successfully.';
     try {
       const displayRole = (role: string): string => role === 'Team_Member' ? 'Team Member' : role.replace('_', ' ');
@@ -596,6 +720,26 @@ router.patch('/users/:id/deactivate', authenticateJWT, async (req: Authenticated
     }
 
     const updatedUser = await userStore.deactivateManagedUser(req.params.id);
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: targetUser.id,
+      affectedUserName: targetUser.name,
+      action: 'Account Deactivated',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: targetUser.id,
+      entityName: targetUser.name,
+      description: `${actorName} deactivated ${targetUser.name}'s account.`,
+      source: 'Web',
+      important: true,
+      changes: [{ field: 'Status', previousValue: 'Active', newValue: 'Deactivated' }],
+    });
+
     res.status(200).json({ success: true, message: 'Account deactivated successfully.', user: updatedUser });
   } catch (error: any) {
     const message = error?.message || 'Failed to deactivate account.';
@@ -623,6 +767,26 @@ router.patch('/users/:id/reactivate', authenticateJWT, async (req: Authenticated
     }
 
     const updatedUser = await userStore.reactivateManagedUser(req.params.id);
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: targetUser.id,
+      affectedUserName: targetUser.name,
+      action: 'Account Reactivated',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: targetUser.id,
+      entityName: targetUser.name,
+      description: `${actorName} reactivated ${targetUser.name}'s account.`,
+      source: 'Web',
+      important: true,
+      changes: [{ field: 'Status', previousValue: 'Deactivated', newValue: 'Active' }],
+    });
+
     res.status(200).json({ success: true, message: 'Account reactivated successfully.', user: updatedUser });
   } catch (error: any) {
     const message = error?.message || 'Failed to reactivate account.';
@@ -650,6 +814,26 @@ router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, r
     }
 
     await userStore.deleteManagedUser(req.params.id);
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      affectedUserId: targetUser.id,
+      affectedUserName: targetUser.name,
+      action: 'Account Deleted',
+      module: 'Authentication',
+      entityType: 'User',
+      entityId: targetUser.id,
+      entityName: targetUser.name,
+      description: `${actorName} deleted ${targetUser.name}'s account (${targetUser.email}).`,
+      source: 'Web',
+      important: true,
+      metadata: { deletedEmail: targetUser.email },
+    });
+
     res.status(200).json({ success: true, message: 'Account deleted successfully.' });
   } catch (error: any) {
     const message = error?.message || 'Failed to delete account.';
