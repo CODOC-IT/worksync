@@ -157,6 +157,7 @@ export interface UpdateProjectInput {
   targetDate?: string;
   status?: ApiProjectStatus;
   teamLeadId?: string;
+  memberIds?: string[];
   creationReason?: string;
 }
 

@@ -201,8 +201,11 @@ export const KanbanView: React.FC = () => {
       ? 'Track progress and approve reviewed work across the projects you lead.'
       : 'View your project context and move your own tasks through the workflow.';
 
+  // min-h-full (not h-full) on the root: the board is allowed to grow past the viewport so
+  // columns can expand with their content, while a short board still fills the screen. The
+  // page-level scroller stays <main> in App.tsx — nothing inside the board scrolls vertically.
   return (
-    <section data-kanban className="mx-auto flex h-full max-w-[1600px] flex-col gap-5">
+    <section data-kanban className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5">
       <header className="shrink-0">
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
           <ListTodo size={15} />
@@ -301,7 +304,23 @@ export const KanbanView: React.FC = () => {
               Loading project board...
             </div>
           ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            /* Desktop (lg+): a 4-column grid, no horizontal scroll. Below lg: a Jira/Trello-style
+               horizontally scrolling track of fixed-width columns. Either way the columns are
+               stretch-aligned, so every column ends up exactly as tall as the tallest one.
+               Two subtleties worth keeping:
+               - `grow shrink-0`, NOT `flex-1`. `flex-1` implies `flex-basis: 0`, which relies on
+                 the item's automatic minimum size to stop it collapsing — and that minimum is 0,
+                 not the content height, for a scroll container (this element is one below lg,
+                 because of overflow-x). The board would then be capped at the viewport and its
+                 overflow clipped. `grow` keeps `flex-basis: auto`, so the track is always at
+                 least as tall as its content and only grows to fill a short viewport.
+               - overflow-y is pinned to hidden below lg: `overflow-x: auto` alone would compute
+                 overflow-y to `auto` as well and reintroduce a nested vertical scrollbar. It
+                 clips nothing, since the track can never be shorter than its content. */
+            <div
+              data-kanban-board
+              className="flex grow shrink-0 snap-x gap-4 overflow-x-auto overflow-y-hidden pb-2 lg:grid lg:grid-cols-4 lg:overflow-visible lg:pb-0"
+            >
               {BOARD_COLUMNS.map((status) => {
                 const columnTasks = boardTasks.filter((task) => task.status === status);
                 return (
@@ -558,7 +577,7 @@ const BoardColumn: React.FC<{
       event.preventDefault();
       onDrop();
     }}
-    className={`glass-panel flex h-[70vh] min-h-[320px] flex-col gap-3 p-3 transition lg:h-full ${
+    className={`glass-panel flex min-h-[14rem] w-[82vw] shrink-0 snap-start flex-col gap-3 p-3 transition sm:w-72 lg:w-auto ${
       isDragOver ? 'border-cyan-400/60 bg-cyan-500/5' : ''
     }`}
   >
@@ -571,11 +590,14 @@ const BoardColumn: React.FC<{
         {tasks.length}
       </span>
     </div>
-    {/* Each column scrolls independently -- min-h-0 lets this flex child shrink below its
-        content size so overflow-y-auto actually kicks in here instead of the whole page
-        growing (the classic flexbox gotcha: without min-h-0, a flex-1 child never shrinks
-        past its content, so it just pushes the page taller instead of scrolling). */}
-    <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto scroll-smooth pr-1">
+    {/* The card list deliberately has no scroll container and no height cap: it grows with its
+        content, which pushes the column (and therefore the whole board) taller so a glance at
+        the board shows where the work actually sits. This is the inverse of the old behaviour,
+        where every column was pinned to 70vh with its own overflow-y-auto and a full column
+        looked identical to a nearly-empty one. `flex-1` matters only for the empty state — it
+        lets the dashed placeholder stretch to the height the tallest sibling column set, so an
+        empty column still lines up instead of collapsing. */}
+    <div className="flex flex-1 flex-col gap-3">
       {tasks.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-white/10 py-8 text-center text-xs text-slate-500">
           No tasks in {getTaskStatusLabel(status)}
@@ -795,7 +817,7 @@ const SubtaskProgress: React.FC<{ task: Task }> = ({ task }) => {
 
 // Shows up to two assignee names inline; any remaining names collapse into a "+N" chip
 // whose hover/click reveals every full name in a portal-rendered popover (so it never gets
-// clipped by the board column's scroll container).
+// clipped by the board's horizontal scroll track on tablet/mobile).
 const AssigneesDisplay: React.FC<{ names: string[] }> = ({ names }) => {
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);

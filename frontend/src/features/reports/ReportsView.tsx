@@ -40,6 +40,7 @@ import {
   UserX,
   Coffee,
   Hourglass,
+  Sun,
   ListTodo,
   ArrowUpRight,
   ArrowDownRight,
@@ -202,6 +203,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [deadlineSearchQuery, setDeadlineSearchQuery] = useState('');
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('');
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
+  const [attendanceRange, setAttendanceRange] = useState<'today' | 'lastWeek' | 'last30' | 'custom' | 'all'>('lastWeek');
+  const [attendanceCustomFrom, setAttendanceCustomFrom] = useState<string>('');
+  const [attendanceCustomTo, setAttendanceCustomTo] = useState<string>('');
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -370,6 +375,51 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       hrRequests: [],
     };
   }, [apiAvailable, reportData, roleFilteredLocal]);
+
+  // ── Attendance tab date filter (default Today, overrides global From→To for Attendance only) ──
+  const attendanceCustomValid = useMemo(() => {
+    return !!attendanceCustomFrom && !!attendanceCustomTo
+      && attendanceCustomFrom <= attendanceCustomTo
+      && attendanceCustomTo <= todayStr();
+  }, [attendanceCustomFrom, attendanceCustomTo]);
+
+  const attendanceWindow = useMemo(() => {
+    const today = todayStr();
+    switch (attendanceRange) {
+      case 'today':
+        return { from: today, to: today };
+      case 'lastWeek':
+        return { from: addDays(today, -6), to: today };
+      case 'last30':
+        return { from: addDays(today, -29), to: today };
+      case 'custom':
+        return attendanceCustomValid
+          ? { from: attendanceCustomFrom, to: attendanceCustomTo }
+          : { from: undefined as string | undefined, to: undefined as string | undefined };
+      case 'all':
+      default:
+        return { from: undefined as string | undefined, to: undefined as string | undefined };
+    }
+  }, [attendanceRange, attendanceCustomValid, attendanceCustomFrom, attendanceCustomTo]);
+
+  const attendanceTabRecords = useMemo(() => {
+    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    const { from, to } = attendanceWindow;
+    if (from === undefined) return raw;
+    return raw.filter((a: any) => isInDateRange(a.date, from, to));
+  }, [roleFiltered.attendance, attendanceWindow]);
+
+  const attendanceTabStats = useMemo(() => {
+    const att = attendanceTabRecords;
+    const present = att.filter((a: any) => a.status === 'Present').length;
+    const late = att.filter((a: any) => a.status === 'Late').length;
+    const absent = att.filter((a: any) => a.status === 'Absent').length;
+    const onLeave = att.filter((a: any) => a.status === 'On Leave').length;
+    const halfDay = att.filter((a: any) => a.status === 'Half Day').length;
+    const totalHours = att.reduce((s: number, a: any) => s + (a.totalHours || 0), 0);
+    const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
+    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length };
+  }, [attendanceTabRecords]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
   useEffect(() => {
@@ -902,12 +952,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
         absentToday: h.absentToday ?? 0,
         onLeaveToday: h.onLeaveToday ?? 0,
         lateToday: h.lateToday ?? 0,
+        halfDayToday: h.halfDayToday ?? 0,
         avgHours: h.avgHours ?? '0',
         pendingLeaveReqs: h.pendingLeaveReqs ?? 0,
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────
@@ -999,6 +1050,28 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   };
 
   const hasError = validationError !== null;
+
+  const handleAttendanceRangeChange = (value: 'today' | 'lastWeek' | 'last30' | 'custom' | 'all') => {
+    setAttendanceError(null);
+    setAttendanceRange(value);
+  };
+
+  const handleAttendanceCustomDate = (field: 'from' | 'to', value: string) => {
+    const next = {
+      from: field === 'from' ? value : attendanceCustomFrom,
+      to: field === 'to' ? value : attendanceCustomTo,
+    };
+    if (field === 'from') setAttendanceCustomFrom(value);
+    else setAttendanceCustomTo(value);
+    const today = todayStr();
+    if (next.to && next.to > today) {
+      setAttendanceError('To Date cannot be later than today.');
+    } else if (next.from && next.to && next.to < next.from) {
+      setAttendanceError('To Date cannot be earlier than From Date.');
+    } else {
+      setAttendanceError(null);
+    }
+  };
 
   const handlePdfExport = () => {
     const tab = activeTab;
@@ -1316,9 +1389,10 @@ ${bodyHtml}
 
   const handleAttendancePdfExport = () => {
     const now = new Date().toLocaleString();
-    const from = dateRange.from;
-    const to = dateRange.to;
-    const raw: any[] = (roleFiltered.attendance || []) as any[];
+    const attWindow = attendanceWindow;
+    const from = attWindow.from || 'All time';
+    const to = attWindow.to || 'All time';
+    const raw: any[] = (attendanceTabRecords || []) as any[];
     let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
     if (attendanceSearchQuery) {
       filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
@@ -1975,11 +2049,12 @@ ${bodyHtml}
               <span>Attendance data unavailable — API request failed.</span>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {renderKPICard('Present Today', hrOverviewStats.presentToday, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
             {renderKPICard('Absent', hrOverviewStats.absentToday, <UserX size={14} className="text-rose-400" />, 'rose')}
             {renderKPICard('On Leave', hrOverviewStats.onLeaveToday, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
             {renderKPICard('Late', hrOverviewStats.lateToday, <Clock size={14} className="text-amber-400" />, 'amber')}
+            {renderKPICard('Half Day', hrOverviewStats.halfDayToday, <Sun size={14} className="text-blue-400" />, 'slate')}
             {renderKPICard('Avg Hours', `${hrOverviewStats.avgHours}h`, <Hourglass size={14} className="text-violet-400" />, 'violet')}
             {renderKPICard('Pending Leaves', hrOverviewStats.pendingLeaveReqs, <FileSpreadsheet size={14} className="text-purple-400" />, 'magenta')}
             {renderKPICard('Pending Corrections', hrOverviewStats.pendingCorrections, <ListTodo size={14} className="text-amber-400" />, 'amber')}
@@ -1994,16 +2069,17 @@ ${bodyHtml}
                     { name: 'Present', value: hrOverviewStats.presentToday },
                     { name: 'Absent', value: hrOverviewStats.absentToday },
                     { name: 'On Leave', value: hrOverviewStats.onLeaveToday },
-                    { name: 'Late', value: hrOverviewStats.lateToday }
+                    { name: 'Late', value: hrOverviewStats.lateToday },
+                    { name: 'Half Day', value: hrOverviewStats.halfDayToday }
                   ]} margin={{ top: 5, right: 5, bottom: 5, left: -10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} />
                     <XAxis dataKey="name" tick={{ fill: chartTextColor, fontSize: 10 }} />
                     <YAxis tick={{ fill: chartTextColor, fontSize: 10 }} />
                     <Tooltip content={<CustomTooltip />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, borderRadius: 0 }} />
                     <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {[0, 1, 2, 3].map((i) => (
-                        <Cell key={i} fill={[chartColors.emerald, chartColors.rose, chartColors.cyan, chartColors.amber][i]} />
-                      ))}
+                      {[0, 1, 2, 3, 4].map((i) => (
+                          <Cell key={i} fill={[chartColors.emerald, chartColors.rose, chartColors.cyan, chartColors.amber, chartColors.blue][i]} />
+                        ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -3578,13 +3654,13 @@ ${bodyHtml}
   const renderAttendanceTab = () => (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-        {renderKPICard('Present', attendanceStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Late', attendanceStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
-        {renderKPICard('Absent', attendanceStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
-        {renderKPICard('On Leave', attendanceStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Half Day', attendanceStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Avg Hours', `${attendanceStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Total Records', attendanceStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
+        {renderKPICard('Present', attendanceTabStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Late', attendanceTabStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
+        {renderKPICard('Absent', attendanceTabStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
+        {renderKPICard('On Leave', attendanceTabStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
+        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Total Records', attendanceTabStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
       <div className="flex justify-end">
@@ -3596,6 +3672,51 @@ ${bodyHtml}
           Export Filtered PDF
         </button>
       </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-slate-400">Attendance date range:</span>
+        <select
+          value={attendanceRange}
+          onChange={(e) => handleAttendanceRangeChange(e.target.value as 'today' | 'lastWeek' | 'last30' | 'custom' | 'all')}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[140px]"
+          title="Overrides the global Report date range for the Attendance tab only"
+        >
+          <option value="today">Today</option>
+          <option value="lastWeek">Last Week</option>
+          <option value="last30">Last 30 Days</option>
+          <option value="custom">Custom</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+
+      {attendanceRange === 'custom' && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-slate-400">Custom range:</span>
+          <label className="text-[10px] font-mono text-slate-400 uppercase">From</label>
+          <input
+            type="date"
+            value={attendanceCustomFrom}
+            max={todayStr()}
+            onChange={(e) => handleAttendanceCustomDate('from', e.target.value)}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-mono border bg-slate-900/60 border-white/10 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
+          />
+          <label className="text-[10px] font-mono text-slate-400 uppercase">To</label>
+          <input
+            type="date"
+            value={attendanceCustomTo}
+            max={todayStr()}
+            onChange={(e) => handleAttendanceCustomDate('to', e.target.value)}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-mono border bg-slate-900/60 border-white/10 text-slate-200 hover:border-white/20 focus:outline-none focus:border-cyan-500/50"
+          />
+        </div>
+      )}
+
+      {attendanceError && (
+        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center gap-2 text-xs text-rose-300">
+          <AlertTriangle size={14} />
+          <span>{attendanceError}</span>
+        </div>
+      )}
 
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
@@ -3633,7 +3754,7 @@ ${bodyHtml}
           <option value="">All Users</option>
           {(() => {
             const seenIds = new Set<string>();
-            return (roleFiltered.attendance || []).filter((a: any) => {
+            return (attendanceTabRecords || []).filter((a: any) => {
               if (seenIds.has(a.userId)) return false;
               seenIds.add(a.userId);
               return true;
@@ -3673,7 +3794,7 @@ ${bodyHtml}
           </thead>
           <tbody>
               {(() => {
-                const raw: any[] = (roleFiltered.attendance || []) as any[];
+                const raw: any[] = (attendanceTabRecords || []) as any[];
                 let filtered = attendanceStatusFilter ? raw.filter((a: any) => a.status === attendanceStatusFilter) : raw;
                 if (attendanceSearchQuery) {
                   filtered = filtered.filter((a: any) => a.userId === attendanceSearchQuery);
@@ -3696,25 +3817,6 @@ ${bodyHtml}
           </tbody>
         </table>
       </div>
-
-      {roleFiltered.hrRequests.length > 0 && (
-        <GlassCard glowColor="amber" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
-          <div className="glass-panel p-4 rounded-lg">
-            {renderSectionHeader(<ListTodo size={16} className="text-amber-400" />, 'Pending HR Requests', `${roleFiltered.hrRequests.length} pending`)}
-            <div className="mt-3 space-y-2">
-              {roleFiltered.hrRequests.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-white/5 text-xs">
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={r.type.replace('_', ' ')} size="sm" />
-                    <span className="text-slate-300">{r.reason.slice(0, 60)}{r.reason.length > 60 ? '...' : ''}</span>
-                  </div>
-                  <span className="font-mono text-[10px] text-slate-400">{r.submittedAt || r.date}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </GlassCard>
-      )}
     </div>
   );
 

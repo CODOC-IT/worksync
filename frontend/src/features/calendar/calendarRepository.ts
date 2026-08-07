@@ -55,6 +55,9 @@ export interface HolidayInput {
   name: string;
   date: string;
   isRecurringAnnual: boolean;
+  audienceType: Holiday['audienceType'];
+  departmentIds: number[];
+  userIds: string[];
 }
 
 export const createHolidayApi = async (input: HolidayInput): Promise<Holiday> => {

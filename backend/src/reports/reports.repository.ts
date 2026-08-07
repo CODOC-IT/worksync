@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 
 // ────────────────────────────────────────────────────────────
 // Helper: get visible project IDs for a user based on role
@@ -135,8 +136,9 @@ export const getOverviewStats = async (
      FROM work.tasks t
      JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
      WHERE t.projectid = ANY($1::int[]) AND t.archivedatutc IS NULL AND t.parenttaskid IS NULL
-        AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
-             OR NOT ts.iscompletedstate)`,
+         AND ((t.duedate >= $2::date AND t.duedate <= $3::date)
+              OR (t.createdatutc::date >= $2::date AND t.createdatutc::date <= $3::date)
+              OR NOT ts.iscompletedstate)`,
      [projectIds, from, to]
    );
 
@@ -739,6 +741,7 @@ export interface AttendanceRecordRow {
   checkOut: string | null;
   totalHours: number;
   breaksCount: number;
+  timeZone: string;
 }
 
 export const getAttendanceRecords = async (
@@ -762,9 +765,13 @@ export const getAttendanceRecords = async (
        astatus.statuscode AS status,
        COALESCE(ar.actualcheckinatutc::text, '') AS "checkIn",
        ar.actualcheckoutatutc::text AS "checkOut",
+       COALESCE(profile.timezoneid, o.timezoneid, '${DEFAULT_BUSINESS_TIME_ZONE}') AS "timeZone",
        COALESCE(ar.workingminutes, 0) AS "totalHours",
        (SELECT COUNT(*) FROM hr.attendancepunches ap WHERE ap.attendancerecordid = ar.attendancerecordid)::int AS "breaksCount"
      FROM hr.attendancerecords ar
+     JOIN iam.users u ON u.userid = ar.userid
+     JOIN org.organizations o ON o.organizationid = u.organizationid
+     LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
      JOIN hr.attendancestatuses astatus ON astatus.attendancestatusid = ar.attendancestatusid
      WHERE ar.workdate >= $1::date AND ar.workdate <= $2::date
        ${userFilter}
@@ -830,25 +837,31 @@ export interface TodayAttendanceResult {
   absentToday: number;
   onLeaveToday: number;
   lateToday: number;
+  halfDayToday: number;
   totalMinutesToday: number;
   totalRecordsToday: number;
 }
 
 export const getTodayAttendance = async (userPks?: number[]): Promise<TodayAttendanceResult> => {
   const userFilter = userPks && userPks.length > 0 ? ' AND ar.userid = ANY($1::int[])' : '';
+  // PKT "today": the app runs in Pakistan local time; Postgres CURRENT_DATE is UTC-based and would
+  // shift the local date during PKT early morning. Keep this consistent with the report deadline
+  // buckets, which already compute the calendar date in Asia/Karachi.
+  const todaySql = `(now() AT TIME ZONE 'Asia/Karachi')::date`;
   const result = await query<TodayAttendanceResult>(
     `SELECT
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Present' THEN 1 ELSE 0 END), 0)::int AS "presentToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS "absentToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS "lateToday",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Half Day' THEN 1 ELSE 0 END), 0)::int AS "halfDayToday",
        COALESCE(SUM(ar.workingminutes), 0)::int AS "totalMinutesToday",
        COUNT(*)::int AS "totalRecordsToday"
      FROM hr.attendancerecords ar
      JOIN hr.attendancestatuses astatus ON astatus.attendancestatusid = ar.attendancestatusid
-     WHERE ar.workdate = CURRENT_DATE${userFilter}`,
+     WHERE ar.workdate = ${todaySql}${userFilter}`,
     userPks && userPks.length > 0 ? [userPks] : []
   );
-  const row = result.rows[0] || { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, totalMinutesToday: 0, totalRecordsToday: 0 };
+  const row = result.rows[0] || { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, totalMinutesToday: 0, totalRecordsToday: 0 };
   return row;
 };

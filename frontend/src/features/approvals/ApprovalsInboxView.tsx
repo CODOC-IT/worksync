@@ -21,6 +21,7 @@ import {
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+import { newestProjectRequestsFirst } from '../projects/projectApprovalRules';
 
 // Account Change Requests -- HR/Lead/Member request a single-field change to their own account
 // (name, email, username, password). Rendered with friendly labels; requested passwords are never
@@ -300,6 +301,7 @@ export const ApprovalsInboxView: React.FC = () => {
           (request.requestType === 'PROJECT_DELETE' ||
             request.requestType === 'PROJECT_PERMANENT_DELETE')))
   );
+  const orderedProjectApprovalRequests = newestProjectRequestsFirst(filteredProjectApprovalRequests);
   const pendingProjectApprovalCount = projectApprovalRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
@@ -407,10 +409,12 @@ export const ApprovalsInboxView: React.FC = () => {
                 : `${reviewTarget.item.type.replace('_', ' ')} for ${reviewTarget.item.date}`}
           </p>
         </div>
+        {(reviewTarget.action === 'reject' || reviewTarget.kind !== 'project') && (
         <label className="block text-xs font-semibold text-slate-300">
           Reason {reviewTarget.action === 'reject' ? '(required)' : '(optional)'}
           <textarea value={reviewReason} onChange={(event) => { setReviewReason(event.target.value); setReviewError(''); }} rows={4} disabled={reviewLoading} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 p-3 text-sm text-white outline-none focus:border-cyan-500/50" />
         </label>
+        )}
         {reviewError && <p className="text-xs text-rose-300">{reviewError}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" disabled={reviewLoading} onClick={() => setReviewTarget(null)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-slate-300 disabled:opacity-50">Cancel</button>
@@ -972,13 +976,13 @@ export const ApprovalsInboxView: React.FC = () => {
         ))}
       </div>
 
-      {filteredProjectApprovalRequests.length > 0 && (
+      {orderedProjectApprovalRequests.length > 0 && (
         <div className="space-y-3">
           <h2 className="flex items-center gap-2 text-sm font-bold text-white">
             <FolderKanban size={16} className="text-cyan-400" />
             Project Management Requests
           </h2>
-          {filteredProjectApprovalRequests.map((request) => (
+          {orderedProjectApprovalRequests.map((request) => (
             <div key={request.id} className="glass-panel space-y-3 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
@@ -1179,7 +1183,7 @@ export const ApprovalsInboxView: React.FC = () => {
       )}
 
       {filteredApprovals.length === 0 &&
-      filteredProjectApprovalRequests.length === 0 &&
+      orderedProjectApprovalRequests.length === 0 &&
       filteredAccountChangeRequests.length === 0 &&
       !(currentRole === 'Admin' && filteredHRRequests.length > 0) ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">

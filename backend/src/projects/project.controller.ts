@@ -88,7 +88,24 @@ export const createProject = async (req: AuthenticatedRequest, res: Response): P
 
   try {
     const data = await service.createProject(req.body as CreateProjectInput, user.id, user.role);
-    res.status(201).json({ success: true, message: 'Project created successfully.', data });
+    if (user.role !== 'Admin') {
+      const input = req.body as CreateProjectInput;
+      await approvalService.createApprovalRequest(
+        data.id,
+        'PROJECT_CREATE',
+        null,
+        input.creationReason || 'New project submitted for Admin approval.',
+        user.id,
+        user.role
+      );
+    }
+    res.status(201).json({
+      success: true,
+      message: user.role === 'Admin'
+        ? 'Project created successfully.'
+        : 'Project submitted for Admin approval.',
+      data
+    });
   } catch (error) {
     handleServiceError(error, res, 'Failed to create project.');
   }

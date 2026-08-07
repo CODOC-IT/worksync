@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Briefcase, Building2, Check, Eye, EyeOff, Lock, Mail, Shield, Sparkles, User as UserIcon, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
@@ -24,25 +24,6 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showOTP, setShowOTP] = useState(false);
   const [role, setRole] = useState<UserRole>('Team_Member');
-  const [roleStatus, setRoleStatus] = useState({ hasAdmin: false, hasHR: false });
-
-  useEffect(() => {
-    fetch('/api/auth/role-status')
-      .then((response) => response.json())
-      .then((data) => {
-        if (!data.success) return;
-        const nextStatus = { hasAdmin: Boolean(data.hasAdmin), hasHR: Boolean(data.hasHR) };
-        setRoleStatus(nextStatus);
-        setRole((currentRole) =>
-          (currentRole === 'Admin' && nextStatus.hasAdmin) || (currentRole === 'HR' && nextStatus.hasHR)
-            ? 'Team_Member'
-            : currentRole
-        );
-      })
-      .catch(() => {
-        // Keep all roles selectable when occupancy status is unavailable.
-      });
-  }, []);
 
   const isLeadOrMember = role === 'Team_Lead' || role === 'Team_Member';
 
@@ -89,14 +70,6 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
     }
     if (password !== confirmPassword) {
       setErrorMsg('Passwords do not match.');
-      return;
-    }
-    if (role === 'Admin' && roleStatus.hasAdmin) {
-      setErrorMsg('An Administrator account already exists in this organization. Only one Admin is permitted.');
-      return;
-    }
-    if (role === 'HR' && roleStatus.hasHR) {
-      setErrorMsg('An HR Specialist account already exists in this organization. Only one HR is permitted.');
       return;
     }
 
@@ -284,12 +257,8 @@ export const SignupView: React.FC<SignupViewProps> = ({ onSignupSuccess, onSwitc
                     >
                       <option value="Team_Member" className="bg-slate-900">Team Member</option>
                       <option value="Team_Lead" className="bg-slate-900">Team Lead</option>
-                      <option value="HR" disabled={roleStatus.hasHR} className="bg-slate-900">
-                        {roleStatus.hasHR ? 'HR Specialist (Occupied - 1 Max)' : 'HR Specialist'}
-                      </option>
-                      <option value="Admin" disabled={roleStatus.hasAdmin} className="bg-slate-900">
-                        {roleStatus.hasAdmin ? 'Administrator (Occupied - 1 Max)' : 'Administrator'}
-                      </option>
+                      <option value="HR" className="bg-slate-900">HR Specialist</option>
+                      <option value="Admin" className="bg-slate-900">Administrator</option>
                     </select>
                   </div>
                 </div>

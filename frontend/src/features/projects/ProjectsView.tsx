@@ -20,10 +20,6 @@ import {
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
-// A project's own lead is also always one of its members (see project.mapper.ts's memberIds,
-// which includes the TeamLead role), so "Led" and "Assigned" can both match the same project --
-// this mirrors that overlap rather than treating the three categories as mutually exclusive.
-type CategoryFilter = 'All' | 'Led' | 'Assigned' | 'Unassigned';
 
 interface ProjectFormState {
   title: string;
@@ -69,7 +65,6 @@ export const ProjectsView: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('All');
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -143,23 +138,22 @@ export const ProjectsView: React.FC = () => {
   const canManage = (project: Project) =>
     currentRole === 'Admin' || (currentRole !== 'HR' && isProjectLead(project));
 
-  // Every role sees every project now (matches the backend's listProjectsForUser) -- Team Lead
-  // isn't a separate account role, so hiding "unassigned" projects from every Team_Member made
-  // them invisible to whoever wasn't already on that specific project, including its own would-be
-  // lead before they'd been assigned. The categoryFilter below distinguishes a user's own
-  // led/assigned/unassigned projects instead of hiding any of them.
+  // The backend (listProjectsForUser) returns every project to every role -- visibility is
+  // narrowed here instead. Admin/HR keep full org-wide visibility; everyone else (Team Lead isn't
+  // a separate account role -- see isProjectLead above) only sees projects they lead or are a
+  // member of.
   const visibleProjects = projects;
 
   const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
-    const matchesCategory =
-      categoryFilter === 'All' ||
-      (categoryFilter === 'Led' && p.teamLeadId === currentUser.id) ||
-      (categoryFilter === 'Assigned' && p.memberIds.includes(currentUser.id)) ||
-      (categoryFilter === 'Unassigned' && !p.memberIds.includes(currentUser.id));
-    return matchesSearch && matchesStatus && matchesCategory;
+    const matchesVisibility =
+      currentRole === 'Admin' ||
+      currentRole === 'HR' ||
+      isProjectLead(p) ||
+      p.memberIds.includes(currentUser.id);
+    return matchesSearch && matchesStatus && matchesVisibility;
   });
 
   const openCreateForm = () => {
@@ -167,8 +161,8 @@ export const ProjectsView: React.FC = () => {
     setEditingProjectId(null);
     setForm({
       ...EMPTY_FORM,
-      // A member creating a project becomes its project-scoped lead once it is approved.
-      teamLeadId: currentRole !== 'Admin' ? currentUser.id : ''
+      teamLeadId: currentRole !== 'Admin' ? currentUser.id : '',
+      memberIds: currentRole !== 'Admin' ? [currentUser.id] : []
     });
     setFormErrors({});
     setFileError('');
@@ -208,6 +202,13 @@ export const ProjectsView: React.FC = () => {
   };
 
   const toggleMember = (userId: string) => {
+    if (userId === form.teamLeadId) {
+      setFormErrors((previous) => ({
+        ...previous,
+        memberIds: 'The current Team Lead must remain a project member. Assign a replacement lead first.'
+      }));
+      return;
+    }
     setForm((prev) => ({
       ...prev,
       memberIds: prev.memberIds.includes(userId)
@@ -312,6 +313,9 @@ export const ProjectsView: React.FC = () => {
     }
 
     if (!data.teamLeadId) errors.teamLeadId = 'A Team Lead must be assigned.';
+    if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
+      errors.memberIds = 'The selected Team Lead must be included in project members.';
+    }
     if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
@@ -438,6 +442,9 @@ export const ProjectsView: React.FC = () => {
     try {
       const result = await updateProject(editingProjectId, editApprovalData, editApprovalReason.trim());
       setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (!result.success) {
+        setEditApprovalReasonError(result.message);
+      }
       if (result.success) {
         setEditApprovalOpen(false);
         setEditApprovalData(null);
@@ -494,6 +501,14 @@ export const ProjectsView: React.FC = () => {
   };
 
   const editingProject = editingProjectId ? projects.find((p) => p.id === editingProjectId) || null : null;
+  // Mirrors the backend gate in project.service.ts's updateProject: Completed requires at least
+  // one task and every task Done. Only checked for the transition INTO Completed -- a project
+  // already Completed keeps showing/selecting that status normally even if a task was added or
+  // reopened afterward, matching how the backend only gates the transition, not a no-op resave.
+  const editingProjectTasks = editingProjectId ? tasks.filter((t) => t.projectId === editingProjectId) : [];
+  const editingProjectCanComplete =
+    editingProject?.status === 'Completed' ||
+    (editingProjectTasks.length > 0 && editingProjectTasks.every((t) => t.status === 'Done'));
   const restoreTarget = projects.find((p) => p.id === restoreTargetId) || null;
   const deleteTarget = projects.find((p) => p.id === deleteTargetId) || null;
   const relatedTasks = deleteTarget ? tasks.filter((t) => t.projectId === deleteTarget.id) : [];
@@ -609,26 +624,6 @@ export const ProjectsView: React.FC = () => {
           <option value="Completed">Completed</option>
           <option value="Archived">Archived</option>
         </select>
-        {/* Meaningful only for accounts that can actually be a project's lead/member -- Admin/HR
-            are never assignable to a project (see nonAdminUsers above), so "Led"/"Assigned" would
-            always be empty and "Unassigned" would always equal "All" for them. "Led by Me" is
-            shown only for currentRole === 'Team_Lead' -- Team Lead is still not a separate
-            account entity (isProjectLead above stays the same per-project
-            teamLeadId === currentUser.id check for both roles; a Team_Member remains eligible to
-            be assigned as a project's lead, see PROJECT_LEAD_ELIGIBLE_ROLES on the backend), this
-            only limits which role sees the extra option in the dropdown itself. */}
-        {(currentRole === 'Team_Lead' || currentRole === 'Team_Member') && (
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
-            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
-          >
-            <option value="All">All Projects</option>
-            {currentRole === 'Team_Lead' && <option value="Led">Led by Me</option>}
-            <option value="Assigned">Assigned to Me</option>
-            <option value="Unassigned">Not Assigned</option>
-          </select>
-        )}
       </div>
 
       {/* Project Grid */}
@@ -743,11 +738,21 @@ export const ProjectsView: React.FC = () => {
                 </select>
               </div>
 
+              {(formMode !== 'create' || currentRole === 'Admin') && (
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Team Lead</label>
                 <select
                   value={form.teamLeadId}
-                  onChange={(e) => setForm((prev) => ({ ...prev, teamLeadId: e.target.value }))}
+                  onChange={(e) => setForm((prev) => {
+                    const teamLeadId = e.target.value;
+                    return {
+                      ...prev,
+                      teamLeadId,
+                      memberIds: teamLeadId && !prev.memberIds.includes(teamLeadId)
+                        ? [...prev.memberIds, teamLeadId]
+                        : prev.memberIds
+                    };
+                  })}
                   // A project's lead can edit their own project but must not reassign its Team
                   // Lead; only Admins are allowed to change this field once a project exists.
                   disabled={
@@ -764,6 +769,7 @@ export const ProjectsView: React.FC = () => {
                 </select>
                 {formErrors.teamLeadId && <p className="text-rose-400 mt-1">{formErrors.teamLeadId}</p>}
               </div>
+              )}
 
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Project Members</label>
@@ -774,6 +780,7 @@ export const ProjectsView: React.FC = () => {
                         type="checkbox"
                         checked={form.memberIds.includes(u.id)}
                         onChange={() => toggleMember(u.id)}
+                        disabled={u.id === form.teamLeadId}
                         className="accent-cyan-500"
                       />
                       {u.name}
@@ -792,8 +799,17 @@ export const ProjectsView: React.FC = () => {
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   >
                     <option value="Active">Active</option>
-                    <option value="Completed">Completed</option>
+                    <option value="Completed" disabled={!editingProjectCanComplete}>
+                      Completed
+                    </option>
                   </select>
+                  {!editingProjectCanComplete && (
+                    <p className="text-slate-500 mt-1">
+                      {editingProjectTasks.length === 0
+                        ? 'Add at least one task before this project can be marked Completed.'
+                        : 'Every task must be completed before this project can be marked Completed.'}
+                    </p>
+                  )}
                 </div>
               )}
 

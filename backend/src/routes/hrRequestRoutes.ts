@@ -5,6 +5,12 @@ import { toUserPk } from '../utils/idMapping.js';
 import { attendanceRole, getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
+import {
+  totalCorrectionBreakMinutes,
+  validateCorrectionValues
+} from '../attendance/correctionValidation.js';
+import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
+import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -62,6 +68,14 @@ export const canReviewRequestStage = (
 ): boolean =>
   (stage === 'HR' && ['Correction', 'Leave', 'Break_Exception'].includes(requestType) && isHR(reviewerRole)) ||
   (stage === 'Admin' && isAdmin(reviewerRole));
+
+export const canSubmitOwnCorrection = (
+  actorId: string,
+  recordUserId: string,
+  actorRole: string,
+  recordIsActive: boolean
+): boolean =>
+  actorId === recordUserId && !isAdmin(actorRole) && !recordIsActive;
 
 const ensureTable = async (): Promise<void> => {
   await query(`
@@ -148,11 +162,14 @@ const loadAttendanceSnapshot = async (
   date: string
 ): Promise<{ checkIn: string; checkOut: string }> => {
   const result = await query<{ checkin: string; checkout: string }>(
-    `SELECT COALESCE(to_char(actualcheckinatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkin,
-            COALESCE(to_char(actualcheckoutatutc AT TIME ZONE 'UTC', 'HH24:MI'), '') AS checkout
-       FROM hr.attendancerecords
-      WHERE userid = $1 AND workdate = $2::date`,
-    [toUserPk(userId), date]
+    `SELECT COALESCE(to_char(ar.actualcheckinatutc AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $3), 'HH24:MI'), '') AS checkin,
+            COALESCE(to_char(ar.actualcheckoutatutc AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $3), 'HH24:MI'), '') AS checkout
+       FROM hr.attendancerecords ar
+       JOIN iam.users u ON u.userid = ar.userid
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
+      WHERE ar.userid = $1 AND ar.workdate = $2::date`,
+    [toUserPk(userId), date, DEFAULT_BUSINESS_TIME_ZONE]
   );
   return {
     checkIn: result.rows[0]?.checkin || '',
@@ -237,6 +254,13 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       res.status(400).json({ success: false, message: 'A valid request date is required.' });
       return;
     }
+    if (type === 'Leave') {
+      const dateError = validateNotPastDate(requestDate, await effectiveBusinessDate());
+      if (dateError) {
+        res.status(400).json({ success: false, message: dateError });
+        return;
+      }
+    }
     await ensureTable();
     const pending = await query(
       `SELECT 1 FROM public.worksync_hr_requests
@@ -253,28 +277,31 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
       cleanDetails.leavePeriod = 'Second Half';
     }
     if (type === 'Correction') {
-      const activeSession = await query(
-        `SELECT 1 FROM hr.attendancerecords
-          WHERE userid = $1 AND workdate = $2::date
-            AND actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL`,
+      const attendance = await query<{ active: boolean }>(
+        `SELECT (actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL) AS active
+           FROM hr.attendancerecords
+          WHERE userid = $1 AND workdate = $2::date`,
         [toUserPk(req.user.id), requestDate]
       );
-      if (activeSession.rowCount) {
+      if (!attendance.rowCount) {
+        res.status(404).json({ success: false, message: 'Attendance record not found.' });
+        return;
+      }
+      if (attendance.rows[0].active) {
         res.status(409).json({
           success: false,
           message: 'Active attendance sessions cannot be corrected. Check out first.'
         });
         return;
       }
-      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-      if (!cleanDetails.requestedCheckIn || !timePattern.test(cleanDetails.requestedCheckIn) ||
-          (cleanDetails.requestedCheckOut && !timePattern.test(cleanDetails.requestedCheckOut))) {
-        res.status(400).json({ success: false, message: 'Requested attendance times must use HH:mm format.' });
-        return;
-      }
-      if (cleanDetails.requestedCheckOut &&
-          cleanDetails.requestedCheckOut <= cleanDetails.requestedCheckIn) {
-        res.status(400).json({ success: false, message: 'Check-out must be later than check-in.' });
+      const correctionError = validateCorrectionValues({
+        checkIn: cleanDetails.requestedCheckIn,
+        checkOut: cleanDetails.requestedCheckOut,
+        breaks: cleanDetails.requestedBreaks || [],
+        completed: true
+      });
+      if (correctionError) {
+        res.status(400).json({ success: false, message: correctionError });
         return;
       }
       const current = await loadAttendanceSnapshot(req.user.id, requestDate);
@@ -352,22 +379,87 @@ const applyCorrection = async (
   row: HRRequestRow
 ): Promise<void> => {
   const details = parseDetails(row.details);
+  const validationError = validateCorrectionValues({
+    checkIn: details.requestedCheckIn,
+    checkOut: details.requestedCheckOut,
+    breaks: details.requestedBreaks || [],
+    completed: true
+  });
+  if (validationError) throw Object.assign(new Error(validationError), { statusCode: 400 });
+  const breakMinutes = totalCorrectionBreakMinutes(
+    (details.requestedBreaks || []) as Array<{ startTime?: unknown; endTime?: unknown }>
+  );
+  const date = formatDate(row.request_date);
+  const scheduleResult = await runQuery<{
+    scheduledstarttime: string | null;
+    scheduledendtime: string | null;
+    graceminutes: number;
+    timezoneid: string;
+  }>(
+    `SELECT scheduledstarttime::text, scheduledendtime::text,
+            COALESCE(ws.graceminutes, 0)::int AS graceminutes,
+            COALESCE(profile.timezoneid, o.timezoneid, $3) AS timezoneid
+       FROM hr.attendancerecords ar
+       JOIN iam.users u ON u.userid = ar.userid
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
+       LEFT JOIN hr.workschedules ws ON ws.workscheduleid = ar.workscheduleid
+      WHERE ar.userid = $1 AND ar.workdate = $2::date`,
+    [toUserPk(row.user_id), date, DEFAULT_BUSINESS_TIME_ZONE]
+  );
+  const schedule = scheduleResult.rows[0];
+  const instants = await runQuery<{ checkinutc: Date; checkoututc: Date; scheduledstartutc: Date | null }>(
+    `SELECT (($1::date + $2::time) AT TIME ZONE $5) AS checkinutc,
+            (($1::date + $3::time) AT TIME ZONE $5) AS checkoututc,
+            CASE WHEN NULLIF($4, '') IS NULL THEN NULL
+                 ELSE (($1::date + $4::time) AT TIME ZONE $5) END AS scheduledstartutc`,
+    [date, details.requestedCheckIn, details.requestedCheckOut, schedule?.scheduledstarttime || '', schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE]
+  );
+  const checkInUtc = new Date(instants.rows[0].checkinutc);
+  const checkOutUtc = new Date(instants.rows[0].checkoututc);
+  const scheduledStartUtc = instants.rows[0].scheduledstartutc ? new Date(instants.rows[0].scheduledstartutc!) : null;
+  const scheduledMinutes = schedule?.scheduledstarttime && schedule?.scheduledendtime
+    ? Math.max(
+        1,
+        Math.floor((
+          new Date(`${date}T${schedule.scheduledendtime}Z`).getTime() -
+          new Date(`${date}T${schedule.scheduledstarttime}Z`).getTime()
+        ) / 60000)
+      )
+    : 480;
+  const outcome = calculateAttendanceOutcome({
+    checkInUtc,
+    checkOutUtc,
+    scheduledStartUtc,
+    scheduledMinutes,
+    graceMinutes: schedule?.graceminutes || 0,
+    breakSeconds: breakMinutes * 60
+  });
   const result = await runQuery<{ attendancerecordid: number }>(
     `UPDATE hr.attendancerecords
-        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
-            actualcheckoutatutc = CASE WHEN NULLIF($4, '') IS NULL THEN NULL
-              ELSE ($2::date + $4::time) AT TIME ZONE 'UTC' END,
-            workingminutes = CASE WHEN NULLIF($4, '') IS NULL THEN 0
-              ELSE GREATEST(0, EXTRACT(EPOCH FROM (
-                (($2::date + $4::time) AT TIME ZONE 'UTC') -
-                (($2::date + $3::time) AT TIME ZONE 'UTC')
-              )) / 60)::int END,
+        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE $8,
+            actualcheckoutatutc = ($2::date + $4::time) AT TIME ZONE $8,
+            workingminutes = $5,
+            lateminutes = $6,
+            attendancestatusid = (
+              SELECT attendancestatusid FROM hr.attendancestatuses
+               WHERE statuscode = $7
+            ),
             sourcecode = 'HRCorrection',
             updatedatutc = CURRENT_TIMESTAMP
       WHERE userid = $1 AND workdate = $2::date
-        AND actualcheckoutatutc IS NOT NULL
+        AND NOT (actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL)
       RETURNING attendancerecordid`,
-    [toUserPk(row.user_id), formatDate(row.request_date), details.requestedCheckIn, details.requestedCheckOut || '']
+    [
+      toUserPk(row.user_id),
+      formatDate(row.request_date),
+      details.requestedCheckIn,
+      details.requestedCheckOut,
+      outcome.workingMinutes,
+      outcome.lateMinutes,
+      outcome.status,
+      schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE
+    ]
   );
   if (!result.rows[0]) {
     throw Object.assign(
@@ -440,16 +532,28 @@ const decideRequest = async (
         throw Object.assign(new Error(`Only ${row.approval_stage} can decide this request.`), { statusCode: 403 });
       }
 
-      if (decision === 'Approved') {
+      const forwardLeaveToAdmin =
+        decision === 'Approved' && row.request_type === 'Leave' && row.approval_stage === 'HR';
+      if (decision === 'Approved' && !forwardLeaveToAdmin) {
         if (row.request_type === 'Correction') await applyCorrection(runQuery, row);
         if (row.request_type === 'Leave') await applyLeave(runQuery, row);
       }
       const final = await runQuery<HRRequestRow>(
         `UPDATE public.worksync_hr_requests
-            SET status = $2, decided_by = $3, decision_reason = $4, decided_at = NOW()
+            SET status = $2,
+                approval_stage = $3,
+                decided_by = CASE WHEN $2 = 'Pending' THEN NULL ELSE $4 END,
+                decision_reason = CASE WHEN $2 = 'Pending' THEN NULL ELSE $5 END,
+                decided_at = CASE WHEN $2 = 'Pending' THEN NULL ELSE NOW() END
           WHERE id = $1
           RETURNING *`,
-        [row.id, decision, req.user!.id, decisionReason || null]
+        [
+          row.id,
+          forwardLeaveToAdmin ? 'Pending' : decision,
+          forwardLeaveToAdmin ? 'Admin' : row.approval_stage,
+          req.user!.id,
+          decisionReason || null
+        ]
       );
       return final.rows[0];
     });

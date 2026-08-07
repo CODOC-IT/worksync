@@ -60,22 +60,6 @@ router.post('/send', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    if (role === 'Admin' && userStore.hasRole('Admin')) {
-      res.status(409).json({
-        success: false,
-        message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-      });
-      return;
-    }
-
-    if (role === 'HR' && userStore.hasRole('HR')) {
-      res.status(409).json({
-        success: false,
-        message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
-      });
-      return;
-    }
-
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(normalizedEmail)) {
       res.status(400).json({ success: false, message: 'Invalid email address format (e.g. user@domain.com).' });
@@ -178,22 +162,6 @@ router.post('/verify', async (req, res: Response): Promise<void> => {
           res.status(409).json({
             success: false,
             message: `An account with the email "${email}" already exists. Please sign in instead.`
-          });
-          return;
-        }
-
-        if (role === 'Admin' && userStore.hasRole('Admin')) {
-          res.status(409).json({
-            success: false,
-            message: 'An Administrator account already exists in this organization. Only one Admin is permitted.'
-          });
-          return;
-        }
-
-        if (role === 'HR' && userStore.hasRole('HR')) {
-          res.status(409).json({
-            success: false,
-            message: 'An HR Specialist account already exists in this organization. Only one HR is permitted.'
           });
           return;
         }

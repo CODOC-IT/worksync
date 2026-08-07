@@ -4,6 +4,7 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import { todayDateKey, toDateKey } from '../calendar/calendarRules';
+import { canShowAttendanceCorrection, isPastDate, validateAttendanceCorrection } from './attendanceValidation';
 import {
   CheckCircle2,
   Clock,
@@ -86,6 +87,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   requestStatus,
   onRequestChange
 }) => {
+  const correctionAvailable = canShowAttendanceCorrection(record.checkIn, record.checkOut, record.status);
   const totalBreakMinutes = getTotalBreakMinutes(record);
   const checkInMinutes = parseTimeInMinutes(record.checkIn);
   const endMinutes = parseTimeInMinutes(record.checkOut);
@@ -127,7 +129,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
 
       <div className="flex items-center gap-2">
         <StatusBadge status={record.status} size="sm" />
-        {canEdit && onEdit && (
+        {correctionAvailable && canEdit && onEdit && (
           <button
             type="button"
             onClick={() => onEdit(record)}
@@ -138,7 +140,7 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
             {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
           </button>
         )}
-        {canRequestChange && onRequestChange && (
+        {correctionAvailable && canRequestChange && onRequestChange && (
           <button
             type="button"
             onClick={() => onRequestChange(record)}
@@ -297,6 +299,11 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
       setMessage(requiresApproval
         ? 'A reason is required for an attendance edit request.'
         : 'A reason is required for an administrator correction.');
+      return;
+    }
+    const validationError = validateAttendanceCorrection(checkIn, checkOut, breaks);
+    if (validationError) {
+      setMessage(validationError);
       return;
     }
     const result = await onSave(record.id, { checkIn, checkOut, breaks }, reason);
@@ -471,6 +478,10 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
       setMessage('Leave type, leave date, and reason are required.');
       return;
     }
+    if (isPastDate(date, todayDateKey())) {
+      setMessage('Leave date cannot be in the past.');
+      return;
+    }
     const result = await onSubmit(
       leaveType,
       leaveType === 'Half Day Leave' ? leavePeriod : undefined,
@@ -525,6 +536,7 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
             <input
               type="date"
               value={date}
+              min={todayDateKey()}
               onChange={(event) => setDate(event.target.value)}
               className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
               required
@@ -693,7 +705,9 @@ export const AttendanceView: React.FC = () => {
   const isOwnRecord = (record: AttendanceRecord) =>
     record.userId === currentUser.id;
   const canEditRecord = (record: AttendanceRecord) =>
-    !isAdmin && isOwnRecord(record) && Boolean(record.checkOut);
+    !isAdmin &&
+    isOwnRecord(record) &&
+    (Boolean(record.checkOut) || record.status === 'Absent');
   const filterByDate = (record: AttendanceRecord) => {
     if (dateFilter === 'today') return record.date === todayStr;
     if (dateFilter === 'custom') {

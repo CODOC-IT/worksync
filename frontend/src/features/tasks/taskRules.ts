@@ -15,6 +15,9 @@ export const TASK_STATUSES: TaskStatus[] = [
   'Done'
 ];
 
+// Completion is reached through the audited task workflow, never at creation time.
+export const CREATE_TASK_STATUSES: TaskStatus[] = TASK_STATUSES.filter((status) => status !== 'Done');
+
 export type TaskModulePriority = TaskPriority;
 
 export const TASK_PRIORITIES: TaskModulePriority[] = [
@@ -103,6 +106,7 @@ export const getAssignableProjectUsers = (project: Project, users: User[]): User
   return users.filter((user) =>
     user.status !== 'inactive'
     && memberIds.has(user.id)
+    && user.id !== project.teamLeadId
     && user.role !== 'Admin'
     && user.role !== 'HR'
   );

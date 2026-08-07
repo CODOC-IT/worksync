@@ -8,6 +8,8 @@ import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
+import { materializeAbsences } from '../attendance/absenceMaterialization.js';
+import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 
 const router = Router();
 
@@ -26,59 +28,6 @@ const ensureBreakStorage = async (): Promise<void> => {
       PRIMARY KEY (user_id, work_date)
     )
   `);
-};
-
-const materializeAbsences = async (from: string, to: string): Promise<void> => {
-  await query(
-    `INSERT INTO hr.attendancerecords
-       (userid, workdate, workscheduleid, attendancestatusid, scheduledstarttime,
-        scheduledendtime, workingminutes, sourcecode, updatedatutc)
-     SELECT u.userid, day.workdate, schedule.workscheduleid,
-            (SELECT attendancestatusid FROM hr.attendancestatuses WHERE statuscode = 'Absent'),
-            wsd.starttime, wsd.endtime, 0, 'System', CURRENT_TIMESTAMP
-       FROM iam.users u
-       CROSS JOIN generate_series($1::date, LEAST($2::date, CURRENT_DATE - 1), interval '1 day')
-         AS day(workdate)
-       LEFT JOIN LATERAL (
-         SELECT ws.workscheduleid
-           FROM hr.workschedules ws
-           LEFT JOIN hr.userworkscheduleassignments uwa
-             ON uwa.workscheduleid = ws.workscheduleid AND uwa.userid = u.userid
-            AND uwa.effectivefrom <= day.workdate
-            AND (uwa.effectiveto IS NULL OR uwa.effectiveto >= day.workdate)
-          WHERE ws.organizationid = u.organizationid
-            AND ws.effectivefrom <= day.workdate
-            AND (ws.effectiveto IS NULL OR ws.effectiveto >= day.workdate)
-            AND (uwa.userid IS NOT NULL OR ws.isdefault)
-          ORDER BY (uwa.userid IS NOT NULL) DESC, ws.effectivefrom DESC
-          LIMIT 1
-       ) schedule ON TRUE
-       LEFT JOIN hr.workscheduledays wsd
-         ON wsd.workscheduleid = schedule.workscheduleid
-        AND wsd.isoweekday = EXTRACT(ISODOW FROM day.workdate)
-      WHERE u.accountstatus = 'Active'
-        AND COALESCE(wsd.isworkingday, EXTRACT(ISODOW FROM day.workdate) < 6)
-        AND NOT EXISTS (
-          SELECT 1 FROM iam.userroles ur JOIN iam.roles r ON r.roleid = ur.roleid
-           WHERE ur.userid = u.userid AND r.rolecode = 'Administrator'
-             AND ur.revokedatutc IS NULL AND ur.startsatutc <= day.workdate + interval '1 day'
-             AND (ur.endsatutc IS NULL OR ur.endsatutc > day.workdate)
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM hr.holidays h
-           WHERE h.organizationid = u.organizationid
-             AND (h.departmentid IS NULL OR h.departmentid = u.departmentid)
-             AND (h.holidaydate = day.workdate OR
-                  (h.isrecurringannual AND to_char(h.holidaydate, 'MM-DD') = to_char(day.workdate, 'MM-DD')))
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM public.worksync_hr_requests wr
-           WHERE wr.user_id = 'usr-' || u.userid AND wr.request_date = day.workdate
-             AND wr.request_type = 'Leave' AND wr.status = 'Approved'
-        )
-     ON CONFLICT (userid, workdate) DO NOTHING`,
-    [from, to]
-  );
 };
 
 function validateDateRange(from: string, to: string): string | null {
@@ -283,17 +232,30 @@ router.post('/check-in', authenticateJWT, async (req: AuthenticatedRequest, res:
       return;
     }
 
-    const { workDate, checkInUtc } = req.body as {
+    const { checkInUtc } = req.body as {
       workDate?: string;
       checkInUtc?: string;
     };
 
-    if (!workDate || !checkInUtc) {
-      res.status(400).json({ success: false, message: 'workDate and checkInUtc are required.' });
+    if (!checkInUtc || !Number.isFinite(new Date(checkInUtc).getTime())) {
+      res.status(400).json({ success: false, message: 'A valid checkInUtc instant is required.' });
       return;
     }
 
     const userPk = toUserPk(req.user.id);
+    const dateResult = await query<{ workdate: string }>(
+      `SELECT ($2::timestamptz AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $3))::date::text AS workdate
+         FROM iam.users u
+         JOIN org.organizations o ON o.organizationid = u.organizationid
+         LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
+        WHERE u.userid = $1`,
+      [userPk, checkInUtc, DEFAULT_BUSINESS_TIME_ZONE]
+    );
+    const workDate = dateResult.rows[0]?.workdate;
+    if (!workDate) {
+      res.status(404).json({ success: false, message: 'Attendance user was not found.' });
+      return;
+    }
     await ensureBreakStorage();
     const recordId = await attendanceRepo.upsertAttendanceRecord(userPk, workDate, checkInUtc, 'In Session');
     if (recordId) {

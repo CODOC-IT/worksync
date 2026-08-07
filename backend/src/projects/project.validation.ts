@@ -69,6 +69,13 @@ export const validateUpdateProjectBody = (body: unknown): ValidationResult => {
   if (input.status !== undefined && !VALID_STATUSES.has(input.status)) {
     return { valid: false, message: 'status is not a recognized project status.' };
   }
+  if (input.teamLeadId !== undefined && !FRONTEND_ID_PATTERN.test(input.teamLeadId)) {
+    return { valid: false, message: 'teamLeadId must look like "usr-<n>".' };
+  }
+  if (input.memberIds !== undefined &&
+      (!Array.isArray(input.memberIds) || input.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id)))) {
+    return { valid: false, message: 'memberIds must be an array of "usr-<n>" ids.' };
+  }
   return { valid: true };
 };
 

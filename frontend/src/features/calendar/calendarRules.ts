@@ -147,8 +147,11 @@ export const buildCalendarEntries = (
 
 // Holiday entries, read-only on the Calendar. hr.Holidays is the single source of truth (see
 // AppContext's `holidays`, fetched from GET /api/calendar/holidays) -- HR manages the underlying
-// rows via Manage Holidays; every role sees the resulting entries. A recurring holiday's stored
-// `date` is one representative occurrence; its month/day is repeated across every year in
+// rows via Manage Holidays. `holidays` here already arrives audience-filtered per viewer (Admin/HR
+// see every holiday; everyone else only the ones their audience includes them in -- see
+// backend/src/calendar/calendar.service.ts's listHolidays), so this function never needs to filter
+// by role itself. A recurring holiday's stored `date` is one representative occurrence; its
+// month/day is repeated across every year in
 // `years`. A non-recurring (dated, e.g. lunar-calendar) holiday only appears in the specific year
 // its stored date falls in. `years` should cover whatever range the caller is currently
 // displaying; requesting the same year twice is harmless (deduped internally).

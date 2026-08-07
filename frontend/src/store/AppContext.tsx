@@ -31,6 +31,10 @@ import {
   SubtaskReviewDecision,
   TaskStatusHistoryEntry
 } from '../types';
+import {
+  businessDateKey,
+  formatAttendanceTime
+} from '../features/attendance/attendanceTime';
 
 import {
   TaskMutationData,
@@ -80,9 +84,11 @@ import {
   fetchHolidays,
   createHolidayApi,
   updateHolidayApi,
-  deleteHolidayApi
+  deleteHolidayApi,
+  HolidayInput
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
+import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -155,8 +161,8 @@ interface AppState {
   calendarEvents: CalendarEvent[];
   approvedLeave: ApprovedLeaveEntry[];
   holidays: Holiday[];
-  createHoliday: (input: { name: string; date: string; isRecurringAnnual: boolean }) => Promise<{ success: boolean; message: string }>;
-  updateHoliday: (id: string, input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>) => Promise<{ success: boolean; message: string }>;
+  createHoliday: (input: HolidayInput) => Promise<{ success: boolean; message: string }>;
+  updateHoliday: (id: string, input: Partial<HolidayInput>) => Promise<{ success: boolean; message: string }>;
   deleteHoliday: (id: string) => Promise<{ success: boolean; message: string }>;
   savedPrompts: SavedPrompt[];
 
@@ -597,12 +603,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: `att-${r.userId}-${r.date}`,
             userId: r.userId,
             date: r.date,
-            checkIn: r.checkIn
-              ? new Date(r.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : '',
-            checkOut: r.checkOut
-              ? new Date(r.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : undefined,
+            checkIn: r.checkIn ? formatAttendanceTime(r.checkIn, r.timeZone) : '',
+            checkOut: r.checkOut ? formatAttendanceTime(r.checkOut, r.timeZone) : undefined,
             totalHours: r.totalHours || 0,
             status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
             breaks: Array.isArray(r.breaks) ? r.breaks : [],
@@ -661,23 +663,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     approvalsHydratedRef.current = true;
 
     const derived: SystemApproval[] = [];
-
-    for (const p of projects) {
-      if (p.approvalStatus === 'Pending Approval') {
-        derived.push({
-          id: `sys-approval-prj-${p.id}`,
-          type: 'Project_Creation',
-          targetId: p.id,
-          targetTitle: p.title,
-          requestedBy: p.teamLeadId || '',
-          requestedRole: 'Team_Lead',
-          createdAt: p.createdAt || new Date().toISOString(),
-          details: `Team Lead proposed new project "${p.title}". Pending Admin approval.`,
-          status: 'Pending',
-          projectId: p.id,
-        });
-      }
-    }
 
     for (const t of tasks) {
       if (t.pendingEdit && t.pendingEdit.status === 'Pending') {
@@ -1088,24 +1073,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev
       ]);
 
-      // Pending Approval projects still need a local SystemApproval record so the Approvals
-      // Inbox can list them -- the backend has no SystemApprovals table of its own (out of this
-      // branch's scope), it only publishes the "approval" notification event to Admins.
-      if (created.status === 'Pending Approval') {
-        const approval: SystemApproval = {
-          id: `app-${Date.now()}`,
-          type: 'Project_Creation',
-          targetId: created.id,
-          targetTitle: created.title,
-          requestedBy: currentUser.id,
-          requestedRole: currentRole,
-          createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-          details: `Team Lead ${currentUser.name} proposed new project "${created.title}". Pending Admin approval.`,
-          status: 'Pending'
-        };
-        setSystemApprovals((prev) => [approval, ...prev]);
-      }
-
       pushActivity('Created project', 'Project', created.id, created.title);
 
       const baseMessage =
@@ -1216,6 +1183,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetDate: data.targetDate,
         status: data.status,
         teamLeadId: data.teamLeadId,
+        memberIds: data.memberIds,
         creationReason: data.creationReason,
         reason: approvalReason
       });
@@ -1237,6 +1205,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushActivity('Updated project', 'Project', projectId, updated.title);
       } else {
         pushActivity('Requested project edit', 'Project', projectId, project.title);
+        confirmActionSuccess('Edit Requested', result.message);
+        return { success: true, message: result.message };
       }
 
       // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
@@ -1368,11 +1338,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (memberErrors.length > 0 || milestoneErrors.length > 0 || fileErrors.length > 0) {
         const message = `Project details saved, but some changes failed: ${[...memberErrors, ...milestoneErrors, ...fileErrors].join(' ')}`;
         return { success: false, message };
-      }
-
-      if (result.pendingApproval) {
-        confirmActionSuccess('Edit Requested', result.message);
-        return { success: true, message: result.message };
       }
 
       const message = `Your changes to "${result.project!.title}" were saved successfully.`;
@@ -1611,7 +1576,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
   // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
   const createHoliday = async (
-    input: { name: string; date: string; isRecurringAnnual: boolean }
+    input: HolidayInput
   ): Promise<{ success: boolean; message: string }> => {
     if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
@@ -1631,7 +1596,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateHoliday = async (
     id: string,
-    input: Partial<{ name: string; date: string; isRecurringAnnual: boolean }>
+    input: Partial<HolidayInput>
   ): Promise<{ success: boolean; message: string }> => {
     if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
@@ -2332,8 +2297,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
         return;
       }
-      const todayStr = todayDateKey();
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const isLate = nowTime > settings.workingHours.start;
 
       // Persist check-in to backend
@@ -2384,8 +2349,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const checkOut = async () => {
       if (currentRole === 'Admin') return;
-      const todayStr = todayDateKey();
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const todayStr = businessDateKey();
+      const nowTime = formatAttendanceTime(new Date().toISOString());
       const hasOpenAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -2548,7 +2513,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!record) {
         return { success: false, message: 'Attendance record not found.' };
       }
-      if (!record.checkOut) {
+      if (!record.checkOut && record.status !== 'Absent') {
         return { success: false, message: 'Active attendance sessions cannot be edited. Check out first.' };
       }
 
@@ -2562,26 +2527,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-      if (!timePattern.test(updates.checkIn) || (updates.checkOut && !timePattern.test(updates.checkOut))) {
-        return { success: false, message: 'Check-in and check-out times must use HH:mm format.' };
-      }
-
       const normalizedBreaks: WorkBreak[] = updates.breaks.map((workBreak, index) => {
-        const duration = Number(workBreak.durationMinutes);
+        const [startHour, startMinute] = workBreak.startTime.split(':').map(Number);
+        const [endHour, endMinute] = (workBreak.endTime || '').split(':').map(Number);
+        const duration = endHour * 60 + endMinute - (startHour * 60 + startMinute);
         return {
           ...workBreak,
           id: workBreak.id || `brk-${recordId}-${index}-${Date.now()}`,
           type: 'Other',
-          startTime: timePattern.test(workBreak.startTime) ? workBreak.startTime : '',
-          endTime: workBreak.endTime && timePattern.test(workBreak.endTime) ? workBreak.endTime : undefined,
-          durationMinutes: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : 0
+          startTime: workBreak.startTime,
+          endTime: workBreak.endTime,
+          durationMinutes: Number.isFinite(duration) ? duration : 0,
+          durationSeconds: Number.isFinite(duration) ? duration * 60 : 0
         };
       });
-
-      if (normalizedBreaks.some((workBreak) => !workBreak.startTime || !workBreak.endTime)) {
-        return { success: false, message: 'Every saved break must have valid start and end times.' };
-      }
+      const validationError = validateAttendanceCorrection(
+        updates.checkIn,
+        updates.checkOut || '',
+        normalizedBreaks
+      );
+      if (validationError) return { success: false, message: validationError };
 
       const cleanReason = reason?.trim() || '';
       if (!cleanReason) {
@@ -2615,13 +2580,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       requestDate?: string
     ): Promise<{ success: boolean; message: string }> => {
       try {
+        if (type === 'Leave' && isPastDate(requestDate || todayDateKey(), todayDateKey())) {
+          return { success: false, message: 'Leave date cannot be in the past.' };
+        }
         const response = await fetch('/api/hr-requests', {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
             userName: currentUser.name,
             type,
-            date: requestDate || new Date().toISOString().split('T')[0],
+            date: requestDate || todayDateKey(),
             reason,
             details
           })
@@ -2781,16 +2749,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (updatedRequest.type === 'Correction') {
-          setAttendanceRecords((prev) => prev.map((record) =>
-            record.userId === updatedRequest.userId && record.date === updatedRequest.date
-              ? {
-                  ...record,
-                  checkIn: updatedRequest.details.requestedCheckIn || record.checkIn,
-                  checkOut: updatedRequest.details.requestedCheckOut || undefined,
-                  breaks: updatedRequest.details.requestedBreaks || []
-                }
-              : record
-          ));
+          const attendanceResponse = await fetch(
+            `/api/attendance?from=${encodeURIComponent(updatedRequest.date)}&to=${encodeURIComponent(updatedRequest.date)}`,
+            { headers: getAuthHeaders() }
+          );
+          const attendanceData = await attendanceResponse.json();
+          if (!attendanceResponse.ok || !attendanceData.success || !Array.isArray(attendanceData.data)) {
+            throw new Error(attendanceData.message || 'Correction was approved, but attendance could not be refreshed.');
+          }
+          const refreshed: AttendanceRecord[] = attendanceData.data.map((record: any) => ({
+            id: `att-${record.userId}-${record.date}`,
+            userId: record.userId,
+            date: record.date,
+            checkIn: record.checkIn ? formatAttendanceTime(record.checkIn, record.timeZone) : '',
+            checkOut: record.checkOut ? formatAttendanceTime(record.checkOut, record.timeZone) : undefined,
+            totalHours: record.totalHours || 0,
+            status: (record.status === 'Leave' ? 'On Leave' : record.status || 'Present') as AttendanceRecord['status'],
+            breaks: Array.isArray(record.breaks) ? record.breaks : []
+          }));
+          setAttendanceRecords((previous) => [
+            ...previous.filter((record) => record.date !== updatedRequest.date),
+            ...refreshed
+          ]);
         } else if (updatedRequest.type === 'Leave') {
           const status = updatedRequest.details.leaveType === 'Half Day Leave' ? 'Half Day' : 'On Leave';
           setAttendanceRecords((prev) => {

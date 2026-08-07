@@ -13,6 +13,7 @@ import {
 import {
   AccountBaseRole,
   CreateAccountInput,
+  CreateDepartmentInput,
   DepartmentOption,
   InvitationStatus,
   ProvisionedAccount,
@@ -59,7 +60,7 @@ export const listPermittedDepartments = async (
   actor: ProvisioningActor,
   dependencies: AccountServiceDependencies = defaultDependencies
 ): Promise<DepartmentOption[]> => {
-  if (actor.role === 'Admin') {
+  if (actor.role === 'Admin' || actor.role === 'HR') {
     const result = await dependencies.query<{ departmentid: number; departmentname: string }>(
       `SELECT departmentid, departmentname
          FROM org.departments
@@ -68,36 +69,7 @@ export const listPermittedDepartments = async (
     );
     return result.rows.map((row) => ({ id: row.departmentid, name: row.departmentname }));
   }
-  if (actor.role !== 'HR') throw new AccountAuthorizationError('Only Admin and HR users can manage accounts.');
-
-  const result = await dependencies.query<{ departmentid: number; departmentname: string }>(
-    `WITH RECURSIVE roots AS (
-       SELECT $1::int AS departmentid WHERE $1::int IS NOT NULL
-       UNION
-       SELECT hds.departmentid
-         FROM iam.userroles ur
-         JOIN iam.roles r ON r.roleid = ur.roleid AND r.rolecode = 'HRRepresentative'
-         JOIN iam.hrdepartmentscopes hds ON hds.userroleid = ur.userroleid
-        WHERE ur.userid = $2
-          AND ur.revokedatutc IS NULL
-          AND ur.startsatutc <= now()
-          AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-     ), permitted AS (
-       SELECT departmentid FROM roots
-       UNION
-       SELECT child.departmentid
-         FROM org.departments child
-         JOIN permitted parent ON child.parentdepartmentid = parent.departmentid
-        WHERE child.organizationid = 1
-     )
-     SELECT d.departmentid, d.departmentname
-       FROM org.departments d
-       JOIN permitted p ON p.departmentid = d.departmentid
-      WHERE d.organizationid = 1 AND d.isactive = TRUE
-      ORDER BY d.departmentname`,
-    [actor.departmentId, toUserPk(actor.id)]
-  );
-  return result.rows.map((row) => ({ id: row.departmentid, name: row.departmentname }));
+  throw new AccountAuthorizationError('Only Admin and HR users can manage accounts.');
 };
 
 const assertDepartmentPermitted = async (
@@ -113,6 +85,123 @@ const assertDepartmentPermitted = async (
         : 'Select an active department.'
     );
   }
+};
+
+const toDepartmentCode = (name: string): string => {
+  const cleaned = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return (cleaned || 'DEPARTMENT').slice(0, 24);
+};
+
+const assertDepartmentNameUnique = async (
+  name: string,
+  dependencies: AccountServiceDependencies
+): Promise<void> => {
+  const existing = await dependencies.query<{ departmentid: number }>(
+    `SELECT departmentid FROM org.departments
+      WHERE organizationid = 1 AND lower(departmentname) = lower($1)
+      LIMIT 1`,
+    [name]
+  );
+  if (existing.rows[0]) throw new AccountConflictError('A department with this name already exists.');
+};
+
+export const createDepartment = async (
+  actor: ProvisioningActor,
+  input: CreateDepartmentInput,
+  dependencies: AccountServiceDependencies = defaultDependencies
+): Promise<DepartmentOption> => {
+  if (actor.role !== 'Admin') {
+    throw new AccountAuthorizationError('Only Administrators can create departments.');
+  }
+
+  const normalizedName = input.name.trim();
+  await assertDepartmentNameUnique(normalizedName, dependencies);
+
+  const baseCode = toDepartmentCode(normalizedName);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const code = attempt === 0 ? baseCode : `${baseCode.slice(0, 20)}_${attempt}`;
+    try {
+      const inserted = await dependencies.query<{ departmentid: number }>(
+        `INSERT INTO org.departments (organizationid, departmentcode, departmentname, isactive)
+         VALUES (1, $1, $2, TRUE)
+         RETURNING departmentid`,
+        [code, normalizedName]
+      );
+      const departmentId = inserted.rows[0]?.departmentid;
+      if (!departmentId) throw new Error('Department insert returned no id.');
+      return { id: departmentId, name: normalizedName };
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('duplicate') || error?.code === '23505') continue;
+      throw error;
+    }
+  }
+
+  // All generated codes collided, but the name is still unique. Re-check the name and surface a
+  // clear conflict instead of failing with an ambiguous DB error.
+  await assertDepartmentNameUnique(normalizedName, dependencies);
+  throw new AccountConflictError('Could not assign a unique department code. Try a different name.');
+};
+
+export const deleteDepartment = async (
+  actor: ProvisioningActor,
+  departmentId: number,
+  dependencies: AccountServiceDependencies = defaultDependencies
+): Promise<DepartmentOption> => {
+  if (actor.role !== 'Admin') {
+    throw new AccountAuthorizationError('Only Administrators can delete departments.');
+  }
+
+  const existing = await dependencies.query<{ departmentid: number; departmentname: string }>(
+    `SELECT departmentid, departmentname
+       FROM org.departments
+      WHERE organizationid = 1 AND departmentid = $1
+      LIMIT 1`,
+    [departmentId]
+  );
+  const department = existing.rows[0];
+  if (!department) throw new AccountConflictError('This department no longer exists.');
+
+  const activeAssigned = await dependencies.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+       FROM iam.users
+      WHERE organizationid = 1 AND departmentid = $1 AND accountstatus = 'Active'`,
+    [departmentId]
+  );
+  if (Number(activeAssigned.rows[0]?.count || 0) > 0) {
+    throw new AccountConflictError('This department still has active members assigned. Reassign them before deleting.');
+  }
+
+  try {
+    await dependencies.withTransaction(async (runQuery) => {
+      await runQuery(
+        `UPDATE iam.users
+            SET departmentid = NULL, updatedatutc = CURRENT_TIMESTAMP
+          WHERE organizationid = 1 AND departmentid = $1`,
+        [departmentId]
+      );
+
+      await runQuery(
+        `DELETE FROM org.departments
+          WHERE organizationid = 1 AND departmentid = $1`,
+        [departmentId]
+      );
+    });
+  } catch (error) {
+    // hr.HolidayAudienceDepartments (database/28_holiday_audience.sql) FKs this department with
+    // no ON DELETE clause (RESTRICT) -- deliberately, so a department still targeted by a
+    // holiday's audience can't silently vanish from it. Surface that as the same clean
+    // AccountConflictError shape as the active-members check above, instead of letting the raw
+    // Postgres foreign-key-violation (23503) propagate as an unhandled 500.
+    if ((error as { code?: string } | null)?.code === '23503') {
+      throw new AccountConflictError(
+        'This department is still referenced by one or more holidays. Remove it from their audience before deleting.'
+      );
+    }
+    throw error;
+  }
+
+  return { id: department.departmentid, name: department.departmentname };
 };
 
 const assertUniqueAccount = async (

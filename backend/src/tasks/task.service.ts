@@ -302,10 +302,15 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (!taskInput.assigneeIds?.length) throw new TaskValidationError(`${label} requires at least one assignee.`);
   }
 
-  const projectMemberIds = new Set((await projectRepo.findMembersForProject(projectRow.projectid)).map((member) => fromUserPk(member.userid)));
+  const projectMembers = await projectRepo.findMembersForProject(projectRow.projectid);
+  const projectMemberIds = new Set(projectMembers.map((member) => fromUserPk(member.userid)));
+  const projectLeadId = resolveTeamLeadUserId(projectRow, projectMembers);
   for (const taskInput of allInputs) {
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
+    }
+    if (taskInput.assigneeIds.includes(projectLeadId)) {
+      throw new TaskValidationError('The active project Team Lead cannot be assigned development tasks in this project.');
     }
     const hrAssignee = taskInput.assigneeIds.find((assigneeId) => userStore.findById(assigneeId)?.role === 'HR');
     if (hrAssignee) {
@@ -401,8 +406,8 @@ export const updateTask = async (
   assertTaskCanBeWorkedOn(row);
   await assertCanEditTask(row, actorId, actorRole);
 
-  if (input.assigneeIds !== undefined) {
-    throw new TaskAuthorizationError('Task assignments cannot be changed from the assignee edit form.');
+  if (input.assigneeIds !== undefined && !(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
+    throw new TaskAuthorizationError('Only this project\'s Team Lead can change task assignments.');
   }
 
   if (input.title !== undefined && !input.title.trim()) throw new TaskValidationError('Task title cannot be empty.');
@@ -425,6 +430,23 @@ export const updateTask = async (
     : [];
   const assigneePks = input.assigneeIds?.map(toUserPk);
   if (input.assigneeIds) {
+    if (input.assigneeIds.length === 0) throw new TaskValidationError('Tasks must retain at least one assignee.');
+    const projectRow = await projectRepo.findProjectById(row.projectid);
+    const projectMembers = await projectRepo.findMembersForProject(row.projectid);
+    const projectMemberIds = new Set(projectMembers.map((member) => fromUserPk(member.userid)));
+    const projectLeadId = projectRow ? resolveTeamLeadUserId(projectRow, projectMembers) : '';
+    if (input.assigneeIds.some((id) => !projectMemberIds.has(id))) {
+      throw new TaskValidationError('Every assignee must be an active project member.');
+    }
+    if (projectLeadId && input.assigneeIds.includes(projectLeadId)) {
+      throw new TaskValidationError('The active project Team Lead cannot be assigned development tasks in this project.');
+    }
+    if (row.parenttaskid) {
+      const parentAssigneeIds = new Set((await repo.findAssigneesForTask(row.parenttaskid)).map((assignee) => fromUserPk(assignee.userid)));
+      if (input.assigneeIds.some((id) => !parentAssigneeIds.has(id))) {
+        throw new TaskValidationError('Subtask assignees must also be assigned to the parent task.');
+      }
+    }
     const hrAssignee = input.assigneeIds.find((id) => userStore.findById(id)?.role === 'HR');
     if (hrAssignee) throw new TaskValidationError('HR users cannot be assigned tasks.');
   }

@@ -10,6 +10,8 @@ import { getSupabaseServiceClient } from '../db/supabase.js';
 import { query } from '../db/pool.js';
 import { toUserPk } from '../utils/idMapping.js';
 import { getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { canAuthenticateAccount } from '../auth/accountAccess.js';
+import { isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../accounts/accounts.validation.js';
 
 const router = Router();
 
@@ -36,7 +38,7 @@ router.post('/login', loginRateLimiter, async (req, res: Response): Promise<void
       return;
     }
 
-    if (user.status !== 'active') {
+    if (!canAuthenticateAccount(user)) {
       recordActivitySafe({ actorId: user.id, actorName: user.name, actorEmail: user.email, actorRole: user.role,
         action: 'Login', module: 'Authentication', entityType: 'User', entityId: user.id, entityName: user.name,
         description: `Blocked login attempt for deactivated account ${user.email}.`, result: 'Blocked',
@@ -101,7 +103,7 @@ router.post('/migrate-legacy-credentials', async (req, res: Response): Promise<v
       return;
     }
 
-    if (user.status !== 'active') {
+    if (!canAuthenticateAccount(user)) {
       res.status(403).json({ success: false, message: 'Account is deactivated. Contact administrator.' });
       return;
     }
@@ -439,8 +441,7 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
       return;
     }
 
-    const newHash = bcrypt.hashSync(newPassword, 10);
-    await userStore.updatePassword(user.email, newHash);
+    await userStore.updatePassword(user.email, newPassword);
 
     res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch {
@@ -503,9 +504,16 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
-    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR' || req.body?.role === 'Admin' || req.body?.role === 'HR')) {
-      res.status(403).json({ success: false, message: 'HR can only edit member accounts.' });
-      return;
+    if (req.user.role === 'HR') {
+      const editingSelf = req.params.id === req.user.id;
+      if (!editingSelf && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+        res.status(403).json({ success: false, message: 'HR can only edit their own profile or member accounts.' });
+        return;
+      }
+      if (req.body?.role && req.body.role !== targetUser.role) {
+        res.status(403).json({ success: false, message: 'HR cannot change roles.' });
+        return;
+      }
     }
     if ((req.body?.role === 'Team_Lead' && targetUser.role !== 'Team_Lead') || (targetUser.role === 'Team_Lead' && req.body?.role && req.body.role !== 'Team_Lead')) {
       res.status(400).json({ success: false, message: 'Team Lead assignment must be managed from the Projects section.' });
@@ -522,8 +530,8 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
         res.status(403).json({ success: false, message: 'Managed password changes are limited to Member and Team Lead accounts, or HR accounts when updated by an Administrator.' });
         return;
       }
-      if (nextPassword.length < 6) {
-        res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+      if (!isStrongPassword(nextPassword)) {
+        res.status(400).json({ success: false, message: `New password must meet the policy: ${PASSWORD_POLICY_MESSAGE}` });
         return;
       }
       if (nextPassword !== confirmPassword) {
@@ -535,18 +543,27 @@ router.put('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, res:
     const updatedUser = await userStore.updateManagedUser(req.params.id, req.body || {}, req.user.id);
 
     if (nextPassword) {
-      const newHash = bcrypt.hashSync(nextPassword, 10);
-      await userStore.updatePassword(updatedUser.email, newHash);
+      await userStore.updatePassword(updatedUser.email, nextPassword);
     }
 
     let message = 'Account updated successfully.';
     try {
+      const displayRole = (role: string): string => role === 'Team_Member' ? 'Team Member' : role.replace('_', ' ');
       await sendAccountUpdateEmail({
         toEmail: updatedUser.email,
         recipientName: updatedUser.name,
-        role: updatedUser.role === 'Team_Member' ? 'Team Member' : updatedUser.role.replace('_', ' '),
+        role: displayRole(updatedUser.role),
+        department: updatedUser.department,
+        title: updatedUser.title,
         changedBy: req.user.email,
         password: nextPassword || undefined,
+        previous: {
+          name: targetUser.name,
+          email: targetUser.email,
+          role: displayRole(targetUser.role),
+          department: targetUser.department,
+          title: targetUser.title
+        },
       });
     } catch {
       message = 'Account updated, but the notification email could not be sent.';
@@ -619,6 +636,16 @@ router.delete('/users/:id', authenticateJWT, async (req: AuthenticatedRequest, r
   try {
     if (!req.user || !canManageAccounts(req.user.role)) {
       res.status(403).json({ success: false, message: 'Admin or HR access required.' });
+      return;
+    }
+
+    const targetUser = userStore.findById(req.params.id);
+    if (!targetUser) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+    if (req.user.role === 'HR' && (targetUser.role === 'Admin' || targetUser.role === 'HR')) {
+      res.status(403).json({ success: false, message: 'HR cannot delete Administrator or HR accounts.' });
       return;
     }
 

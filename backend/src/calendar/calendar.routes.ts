@@ -13,7 +13,13 @@ router.use(authenticateJWT);
 // backend/src/routes/hrRequestRoutes.ts and is untouched by this module.
 router.get('/approved-leave', controller.listApprovedLeave);
 
-// GET /api/calendar/holidays — read-only, unfiltered by role.
+// GET /api/calendar/departments — every active department, HR only (see
+// listDepartmentsForHolidayAudience's comment for why this isn't accounts.routes.ts's
+// /api/accounts/departments). Feeds Manage Holidays' audience picker only.
+router.get('/departments', controller.listDepartments);
+
+// GET /api/calendar/holidays — read-only, visibility is audience-scoped (see
+// calendar.service.ts's listHolidays).
 router.get('/holidays', controller.listHolidays);
 
 // POST /api/calendar/holidays — HR only (403 for everyone else, Admin included; enforced via

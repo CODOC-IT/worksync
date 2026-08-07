@@ -20,6 +20,7 @@ import {
   ChevronRight,
   LogOut
 } from 'lucide-react';
+import { countPendingProjectRequests } from '../../features/projects/projectApprovalRules';
 
 interface SidebarProps {
   currentTab: string;
@@ -38,7 +39,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   mobileOpen,
   onMobileClose
 }) => {
-  const { currentRole, currentUser, systemApprovals, hrRequests, accountChangeRequests, notifications, logoutUser } = useApp();
+  const {
+    currentRole,
+    currentUser,
+    systemApprovals,
+    projectApprovalRequests,
+    hrRequests,
+    accountChangeRequests,
+    notifications,
+    logoutUser
+  } = useApp();
 
   const pendingApprovalsCount = systemApprovals.filter((sa) =>
     sa.status === 'Pending' &&
@@ -58,6 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       (currentRole === 'Admin' && request.assignedApproverRole === 'Admin'))
   ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
+  const pendingProjectApprovalCount = countPendingProjectRequests(projectApprovalRequests);
 
   const totalPendingHR = pendingHrCount + pendingAccountChangeCount;
 
@@ -75,8 +86,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     currentRole === 'HR' && totalPendingHR > 0
         ? totalPendingHR
       : (currentRole === 'Admin' || currentRole === 'Team_Lead') &&
-          pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0) > 0
-        ? pendingApprovalsCount + (currentRole === 'Admin' ? totalPendingHR : 0)
+          pendingApprovalsCount + pendingProjectApprovalCount + (currentRole === 'Admin' ? totalPendingHR : 0) > 0
+        ? pendingApprovalsCount + pendingProjectApprovalCount + (currentRole === 'Admin' ? totalPendingHR : 0)
         : undefined,
   hidden: currentRole === 'Team_Member'
 },

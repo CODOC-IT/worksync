@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { UserRecord, UserRole } from '../types.js';
 import { isDatabaseConfigured, query, withTransaction } from '../db/pool.js';
+import { getSupabaseServiceClient, isSupabaseServiceConfigured } from '../db/supabase.js';
 import { fromUserPk, toUserPk } from '../utils/idMapping.js';
 
 const ROLE_TO_DB: Record<UserRole, string> = {
@@ -51,7 +52,7 @@ const getSystemActorUserId = async (): Promise<number> => {
 
 const USER_QUERY = `
   SELECT u.userid, u.email, u.username, u.displayname, u.designation,
-         u.accountstatus, u.invitationsentatutc, u.createdatutc,
+         u.accountstatus, u.invitationsentatutc, u.createdatutc, u.authuserid,
          r.rolecode, d.departmentname,
          uc.passwordhash, uc.passwordalgorithm
   FROM iam.users u
@@ -72,6 +73,7 @@ interface DbUserRow {
   accountstatus: string;
   invitationsentatutc: string | null;
   createdatutc: string;
+  authuserid: string | null;
   rolecode: string | null;
   departmentname: string | null;
   passwordhash: Buffer | null;
@@ -100,6 +102,7 @@ function rowToUserRecord(row: DbUserRow): UserRecord {
     title: row.designation || 'Team Member',
     status: STATUS_MAP[row.accountstatus] || 'active',
     accountStatus: row.accountstatus as UserRecord['accountStatus'],
+    authUserId: row.authuserid || undefined,
     invitationSentAtUtc: row.invitationsentatutc ? new Date(row.invitationsentatutc).toISOString() : null,
     createdAt: row.createdatutc ? new Date(row.createdatutc).toISOString() : new Date().toISOString()
   };
@@ -109,6 +112,32 @@ const toDepartmentCode = (name: string): string => {
   const cleaned = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return (cleaned || 'DEPARTMENT').slice(0, 24);
 };
+
+// The browser signs in directly against Supabase Auth (signInWithPassword), so the account's
+// login email/password is the one stored in Supabase's auth schema -- not just iam.users /
+// iam.usercredentials. Whenever an Admin/HR edits a member's email or password, Supabase Auth
+// must be kept in sync or the member can't sign in with the new credentials (and the old email
+// keeps working). These helpers update the linked Supabase Auth identity when the account has
+// been provisioned there (iam.users.authuserid set).
+export async function updateSupabaseAuthEmail(authUserId: string, newEmail: string): Promise<void> {
+  if (!isSupabaseServiceConfigured()) return;
+  const supabase = getSupabaseServiceClient();
+  // email_confirm: true keeps the updated address immediately usable for sign-in, matching how
+  // accounts are provisioned (email_confirm: true) at migration/creation time.
+  const { error } = await supabase.auth.admin.updateUserById(authUserId, { email: newEmail, email_confirm: true });
+  if (error) {
+    throw new Error(`Supabase Auth email update failed: ${error.message}`);
+  }
+}
+
+export async function updateSupabaseAuthPassword(authUserId: string, newPassword: string): Promise<void> {
+  if (!isSupabaseServiceConfigured()) return;
+  const supabase = getSupabaseServiceClient();
+  const { error } = await supabase.auth.admin.updateUserById(authUserId, { password: newPassword });
+  if (error) {
+    throw new Error(`Supabase Auth password update failed: ${error.message}`);
+  }
+}
 
 class UserStore {
   private dbAvailable: boolean = false;
@@ -287,7 +316,7 @@ class UserStore {
     await this.reloadUsersFromDb();
   }
 
-  public async refreshUserFromDb(userId: string): Promise<Omit<UserRecord, 'passwordHash'> | undefined> {
+  public async refreshUserFromDb(userId: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'> | undefined> {
     await this.ensureInit();
     if (!this.dbAvailable) {
       const existing = this.findById(userId);
@@ -388,13 +417,6 @@ class UserStore {
     );
     if (usernameDuplicate) {
       throw new Error('This username is already in use.');
-    }
-
-    if (userData.role === 'Admin' && this.hasRole('Admin')) {
-      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
-    }
-    if (userData.role === 'HR' && this.hasRole('HR')) {
-      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
     }
 
     const passwordHash = bcrypt.hashSync(userData.password, 10);
@@ -499,7 +521,7 @@ class UserStore {
     userId: string,
     updates: Partial<Pick<UserRecord, 'name' | 'username' | 'email' | 'role' | 'department' | 'title'>>,
     actorId: string
-  ): Promise<Omit<UserRecord, 'passwordHash'>> {
+  ): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
@@ -519,30 +541,41 @@ class UserStore {
     const duplicate = Array.from(this.fallbackUsers.values()).find(
       (existing) => existing.id !== userId && existing.email.toLowerCase() === nextEmail
     );
-    if (duplicate) throw new Error('A user with this email already exists.');
+    if (duplicate) throw new Error('This email is already in use by another account.');
     const usernameDuplicate = Array.from(this.fallbackUsers.values()).find(
       (existing) => existing.id !== userId && existing.username?.toLowerCase() === nextUsername
     );
     if (usernameDuplicate) throw new Error('This username is already in use.');
 
-    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
-    if (user.role === 'Admin' && nextRole !== 'Admin' && user.status === 'active' && activeAdminsCount <= 1) {
-      throw new Error('Cannot change the role of the sole active Admin account.');
-    }
-
-    if (nextRole === 'Admin' && user.role !== 'Admin' && this.hasRole('Admin')) {
-      throw new Error('An Administrator account already exists. Only one Admin is permitted.');
-    }
-    if (nextRole === 'HR' && user.role !== 'HR' && this.hasRole('HR')) {
-      throw new Error('An HR Specialist account already exists. Only one HR is permitted.');
-    }
-
     if (this.dbAvailable) {
+      // Re-check against the database so a stale in-memory cache can never let a
+      // duplicate slip through to the unique index (which would surface as a vague
+      // "Database user update failed" instead of a clear conflict message).
+      const uid = toUserPk(userId);
+      const [emailInUse, usernameInUse] = await Promise.all([
+        query<{ userid: number }>(
+          `SELECT userid FROM iam.users WHERE organizationid = 1 AND lower(email) = lower($1) AND userid <> $2 LIMIT 1`,
+          [nextEmail, uid]
+        ),
+        query<{ userid: number }>(
+          `SELECT userid FROM iam.users WHERE organizationid = 1 AND lower(username) = lower($1) AND userid <> $2 LIMIT 1`,
+          [nextUsername, uid]
+        ),
+      ]);
+      if (emailInUse.rows.length > 0) throw new Error('This email is already in use by another account.');
+      if (usernameInUse.rows.length > 0) throw new Error('This username is already in use.');
+
       try {
-        const uid = toUserPk(userId);
         const [givenName, ...familyParts] = nextName.split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
         const departmentId = await this.getOrCreateDepartmentId(nextDepartment);
+
+        // The account's sign-in email lives in Supabase Auth. Update it first so a linked
+        // account can never be left with a new iam.users email but an old login email.
+        const emailChanged = nextEmail !== user.email.toLowerCase();
+        if (user.authUserId && emailChanged) {
+          await updateSupabaseAuthEmail(user.authUserId, nextEmail);
+        }
 
         await query(
           `UPDATE iam.users
@@ -600,16 +633,11 @@ class UserStore {
     return this.sanitizeUser(user);
   }
 
-  public async deactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async deactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
     if (user.status === 'inactive') return this.sanitizeUser(user);
-
-    const activeAdminsCount = Array.from(this.fallbackUsers.values()).filter((entry) => entry.role === 'Admin' && entry.status === 'active').length;
-    if (user.role === 'Admin' && activeAdminsCount <= 1) {
-      throw new Error('Cannot deactivate the sole active Admin account.');
-    }
 
     if (this.dbAvailable) {
       try {
@@ -632,28 +660,11 @@ class UserStore {
     return this.sanitizeUser(user);
   }
 
-  public async reactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async reactivateManagedUser(userId: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
     if (user.status === 'active') return this.sanitizeUser(user);
-
-    if (user.role === 'Admin') {
-      const otherActiveAdmin = Array.from(this.fallbackUsers.values()).some(
-        (entry) => entry.id !== userId && entry.role === 'Admin' && entry.status === 'active'
-      );
-      if (otherActiveAdmin) {
-        throw new Error('An active Administrator account already exists. Only one Admin is permitted.');
-      }
-    }
-    if (user.role === 'HR') {
-      const otherActiveHr = Array.from(this.fallbackUsers.values()).some(
-        (entry) => entry.id !== userId && entry.role === 'HR' && entry.status === 'active'
-      );
-      if (otherActiveHr) {
-        throw new Error('An active HR account already exists. Only one HR is permitted.');
-      }
-    }
 
     if (this.dbAvailable) {
       try {
@@ -703,18 +714,25 @@ class UserStore {
     this.persistFile(this.getFileStorePath());
   }
 
-  public sanitizeUser(user: UserRecord): Omit<UserRecord, 'passwordHash'> {
-    const { passwordHash, ...sanitized } = user;
+  public sanitizeUser(user: UserRecord): Omit<UserRecord, 'passwordHash' | 'authUserId'> {
+    const { passwordHash, authUserId, ...sanitized } = user;
     return sanitized;
   }
 
-  public async updatePassword(email: string, newPasswordHash: string): Promise<void> {
+  public async updatePassword(email: string, plaintextPassword: string): Promise<void> {
     await this.ensureInit();
     const user = await this.findByEmailAsync(email);
     if (!user) throw new Error('User not found.');
 
+    const newPasswordHash = bcrypt.hashSync(plaintextPassword, 10);
+
     if (this.dbAvailable) {
       try {
+        // Supabase Auth is authoritative for direct sign-in, so its password must be updated
+        // too or a managed password change never takes effect for a linked account.
+        if (user.authUserId) {
+          await updateSupabaseAuthPassword(user.authUserId, plaintextPassword);
+        }
         const uid = toUserPk(user.id);
         await query(
           `INSERT INTO iam.usercredentials (userid, passwordhash, passwordalgorithm, passwordchangedatutc)
@@ -726,8 +744,9 @@ class UserStore {
           [uid, Buffer.from(newPasswordHash, 'utf-8')]
         );
       } catch (err: any) {
-        console.warn(`[UserStore] DB updatePassword failed: ${err.message}`);
-        throw new Error('Database password update failed.');
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(`[UserStore] updatePassword failed: ${detail}`);
+        throw new Error(detail);
       }
     } else if (!this.isLegacyFileAuthEnabled()) {
       throw new Error('Password updates require database persistence.');
@@ -739,7 +758,7 @@ class UserStore {
     console.log(`[UserStore] Password updated for ${email} ✓`);
   }
 
-  public async updateDisplayName(userId: string, name: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async updateDisplayName(userId: string, name: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
@@ -764,7 +783,7 @@ class UserStore {
     return this.sanitizeUser(user);
   }
 
-  public async updateUsername(userId: string, username: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async updateUsername(userId: string, username: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
@@ -796,7 +815,7 @@ class UserStore {
     return this.sanitizeUser(user);
   }
 
-  public async updateEmail(userId: string, email: string): Promise<Omit<UserRecord, 'passwordHash'>> {
+  public async updateEmail(userId: string, email: string): Promise<Omit<UserRecord, 'passwordHash' | 'authUserId'>> {
     await this.ensureInit();
     const user = this.findById(userId);
     if (!user) throw new Error('User not found.');
@@ -814,12 +833,16 @@ class UserStore {
     if (this.dbAvailable) {
       try {
         const uid = toUserPk(userId);
+        if (user.authUserId && normalizedEmail !== user.email.toLowerCase()) {
+          await updateSupabaseAuthEmail(user.authUserId, normalizedEmail);
+        }
         await query(
           `UPDATE iam.users SET email = $1, updatedatutc = CURRENT_TIMESTAMP WHERE userid = $2`,
           [normalizedEmail, uid]
         );
       } catch (err: any) {
         console.warn(`[UserStore] DB updateEmail failed: ${err.message}`);
+        throw new Error('Database email update failed.');
       }
     }
 

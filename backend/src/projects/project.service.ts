@@ -5,6 +5,8 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { getProjectTaskCompletion } from '../tasks/task.repository.js';
+import { resolveCreateParticipants, resolveUpdatedParticipants } from './projectWorkflow.rules.js';
 import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
@@ -225,10 +227,15 @@ export const createProject = async (
   if (!input.startDate || !input.targetDate) throw new ProjectValidationError('Start and target dates are required.');
   if (input.targetDate < input.startDate) throw new ProjectValidationError('Target date cannot be before the start date.');
 
-  if (input.teamLeadId) {
-    await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+  const participants = resolveCreateParticipants(actorId, actorRole, input.teamLeadId, input.memberIds);
+  if (participants.error) throw new ProjectValidationError(participants.error);
+  const effectiveTeamLeadId = participants.teamLeadId;
+  if (effectiveTeamLeadId) {
+    await assertEligibleAssignee(effectiveTeamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
   }
-  for (const memberId of input.memberIds || []) {
+  const effectiveMemberIds = participants.memberIds;
+  for (const memberId of effectiveMemberIds) {
+    if (memberId === effectiveTeamLeadId) continue;
     await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
   }
 
@@ -241,8 +248,8 @@ export const createProject = async (
   const statusId = await repo.getProjectStatusId(statusCode);
 
   const ownerPk = toUserPk(actorId);
-  const teamLeadPk = input.teamLeadId ? toUserPk(input.teamLeadId) : actorRole !== 'Admin' ? ownerPk : undefined;
-  const memberPks = (input.memberIds || []).map(toUserPk);
+  const teamLeadPk = effectiveTeamLeadId ? toUserPk(effectiveTeamLeadId) : undefined;
+  const memberPks = effectiveMemberIds.map(toUserPk);
 
   const projectId = await repo.insertProject({
     title: input.title.trim(),
@@ -340,6 +347,18 @@ export const updateProject = async (
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
   await assertCanManage(row, actorId, actorRole);
+  const currentMembers = await repo.findMembersForProject(row.projectid);
+  const currentLeadId = resolveTeamLeadUserId(row, currentMembers);
+  const participants = resolveUpdatedParticipants(currentLeadId, input.teamLeadId, input.memberIds);
+  if (participants.error) throw new ProjectValidationError(participants.error);
+  const effectiveLeadId = participants.teamLeadId;
+  if (participants.memberIds !== undefined) {
+    input.memberIds = participants.memberIds;
+    for (const memberId of input.memberIds) {
+      if (memberId === effectiveLeadId) continue;
+      await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
+    }
+  }
 
   if (input.title !== undefined && !input.title.trim()) {
     throw new ProjectValidationError('Project title cannot be empty.');
@@ -389,6 +408,21 @@ export const updateProject = async (
     if (input.status !== row.statuscode && input.status !== 'Pending Approval' && actorRole !== 'Admin') {
       throw new ProjectAuthorizationError('Only Admins can change a project\'s status.');
     }
+    // Gate the transition INTO Completed only (not a no-op resubmission of an already-Completed
+    // project) -- every status-change path funnels through here (a direct Admin update, and a
+    // Team Lead's PROJECT_EDIT request once approved -- see projectApproval.service.ts), so this
+    // is the single choke point a direct API call can't bypass. Scoping to the transition, rather
+    // than every save, means editing an unrelated field on an already-Completed project never
+    // fails just because a task was added or reopened afterward.
+    if (input.status === 'Completed' && input.status !== row.statuscode) {
+      const { total, completed } = await getProjectTaskCompletion(row.projectid);
+      if (total === 0) {
+        throw new ProjectValidationError('A project with no tasks cannot be marked as Completed.');
+      }
+      if (completed < total) {
+        throw new ProjectValidationError('All tasks must be completed before this project can be marked as Completed.');
+      }
+    }
     updates.statusId = await repo.getProjectStatusId(API_TO_DB_PROJECT_STATUS[input.status as ApiProjectStatus]);
   }
 
@@ -401,6 +435,28 @@ export const updateProject = async (
     await assertEligibleAssignee(input.teamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
     previousLeadId = resolveTeamLeadUserId(row, await repo.findMembersForProject(row.projectid));
     await repo.reassignTeamLead(row.projectid, toUserPk(input.teamLeadId), row.owneruserid, toUserPk(actorId));
+  }
+
+  if (input.memberIds !== undefined) {
+    const desiredIds = new Set(input.memberIds);
+    const ownerId = fromUserPk(row.owneruserid);
+    const activeAfterLeadChange = await repo.findMembersForProject(row.projectid);
+    for (const member of activeAfterLeadChange) {
+      const memberId = fromUserPk(member.userid);
+      if (memberId === ownerId || memberId === effectiveLeadId || desiredIds.has(memberId)) continue;
+      await repo.removeProjectMember(
+        row.projectid,
+        member.userid,
+        toUserPk(actorId),
+        'Removed during project update'
+      );
+    }
+    const remaining = await repo.findMembersForProject(row.projectid);
+    const remainingIds = new Set(remaining.map((member) => fromUserPk(member.userid)));
+    for (const memberId of desiredIds) {
+      if (memberId === ownerId || memberId === effectiveLeadId || remainingIds.has(memberId)) continue;
+      await repo.addProjectMember(row.projectid, toUserPk(memberId), 'Member', toUserPk(actorId));
+    }
   }
 
   const updatedRow = await repo.findProjectById(row.projectid);
@@ -629,6 +685,12 @@ export const removeMember = async (
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
   await assertCanManage(row, actorId, actorRole);
+  const currentMembers = await repo.findMembersForProject(row.projectid);
+  if (resolveTeamLeadUserId(row, currentMembers) === memberUserId) {
+    throw new ProjectValidationError(
+      'The current Team Lead cannot be removed. Assign another Team Lead before removing this member.'
+    );
+  }
 
   const removed = await repo.removeProjectMember(
     row.projectid,
