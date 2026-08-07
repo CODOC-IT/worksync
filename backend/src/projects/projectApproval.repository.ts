@@ -6,12 +6,13 @@ import { ProjectApprovalRequestRow, ProjectApprovalRequestType } from './project
 // other module's layering (project.repository.ts, notification.repository.ts, ...).
 
 const COLUMNS = `
-  approvalrequestid, projectid, requesttype, requestedbyuserid, requestedchangesjson,
+  approvalrequestid, projectid, projecttitle, requesttype, requestedbyuserid, requestedchangesjson,
   reason, requeststatus, reviewedbyuserid, decisionreason, createdatutc, decidedatutc
 `;
 
 export interface InsertApprovalRequestInput {
   projectId: number;
+  projectTitle: string;
   requestType: ProjectApprovalRequestType;
   requestedByUserId: number;
   requestedChangesJson: string | null;
@@ -21,10 +22,10 @@ export interface InsertApprovalRequestInput {
 export const insertApprovalRequest = async (input: InsertApprovalRequestInput): Promise<string> => {
   const result = await query<{ approvalrequestid: string }>(
     `INSERT INTO work.projectapprovalrequests
-       (projectid, requesttype, requestedbyuserid, requestedchangesjson, reason)
-     VALUES ($1, $2, $3, $4, $5)
+       (projectid, projecttitle, requesttype, requestedbyuserid, requestedchangesjson, reason)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING approvalrequestid`,
-    [input.projectId, input.requestType, input.requestedByUserId, input.requestedChangesJson, input.reason]
+    [input.projectId, input.projectTitle, input.requestType, input.requestedByUserId, input.requestedChangesJson, input.reason]
   );
   return result.rows[0].approvalrequestid;
 };
