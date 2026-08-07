@@ -14,14 +14,14 @@ const validThread = {
   body: 'A'.repeat(MAX_COMMENT_LENGTH)
 };
 
-test('accepts comments at the 50-character limit', () => {
-  assert.equal(MAX_COMMENT_LENGTH, 50);
+test('accepts comments at the 250-character limit', () => {
+  assert.equal(MAX_COMMENT_LENGTH, 250);
   assert.deepEqual(validateCreateThreadBody(validThread), { valid: true });
   assert.deepEqual(validateAddCommentBody({ body: validThread.body }), { valid: true });
   assert.deepEqual(validateEditCommentBody({ body: validThread.body }), { valid: true });
 });
 
-test('rejects initial messages, replies, and edits over 50 characters', () => {
+test('rejects initial messages, replies, and edits over 250 characters', () => {
   const body = 'A'.repeat(MAX_COMMENT_LENGTH + 1);
   assert.equal(validateCreateThreadBody({ ...validThread, body }).valid, false);
   assert.equal(validateAddCommentBody({ body }).valid, false);
