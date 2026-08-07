@@ -199,7 +199,7 @@ const visibilitySql = (
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
       clause: 'TRUE',
-      extraParams: params.slice(1),
+      extraParams: [],
     };
   }
 
@@ -209,7 +209,7 @@ const visibilitySql = (
   if (effectiveRoles.isHRandTeamLead) {
     return {
       clause: 'TRUE',
-      extraParams: params.slice(1),
+      extraParams: [],
     };
   }
 
