@@ -58,9 +58,13 @@ export const findProjectById = async (projectId: number): Promise<ProjectRow | n
   return result.rows[0] || null;
 };
 
+const MEMBER_COLUMNS = `
+  projectid, userid, memberrolecode, pendingremovalatutc, pendingremovalbyuserid, pendingremovalreason
+`;
+
 export const findMembersForProject = async (projectId: number): Promise<ProjectMemberRow[]> => {
   const result = await query<ProjectMemberRow>(
-    `SELECT projectid, userid, memberrolecode
+    `SELECT ${MEMBER_COLUMNS}
      FROM work.projectmembers
      WHERE projectid = $1 AND leftatutc IS NULL
      ORDER BY projectmemberid`,
@@ -219,7 +223,7 @@ export const insertProjectFile = async (input: InsertProjectFileInput): Promise<
     if (!parsed) {
       throw new Error(`Attachment "${input.originalFileName}" has no readable content to store.`);
     }
-    const written = await writeAttachmentToDisk(parsed.buffer);
+    const written = await writeAttachmentToDisk(parsed.buffer, parsed.mimeType);
     const extension = input.originalFileName.includes('.') ? input.originalFileName.split('.').pop()! : null;
 
     // ScanStatus stays 'Pending' -- this app has no virus-scanning pipeline (same rationale as
@@ -268,7 +272,7 @@ export const removeProjectFile = async (projectId: number, fileId: number): Prom
 export const findMembersForProjects = async (projectIds: number[]): Promise<ProjectMemberRow[]> => {
   if (projectIds.length === 0) return [];
   const result = await query<ProjectMemberRow>(
-    `SELECT projectid, userid, memberrolecode
+    `SELECT ${MEMBER_COLUMNS}
      FROM work.projectmembers
      WHERE projectid = ANY($1::int[]) AND leftatutc IS NULL
      ORDER BY projectmemberid`,
@@ -683,6 +687,39 @@ export const removeProjectMember = async (
     [removedByUserId, removalReason, projectId, userId]
   );
   return (result.rowCount ?? 0) > 0;
+};
+
+// A member with active task/subtask work is kept (never LeftAtUtc) rather than removed -- these
+// three columns record who flagged it and why, so project.service.ts's recheckPendingRemoval can
+// later notify the flagging Admin once the real removal finally happens. Called again on an
+// already-flagged member simply refreshes the timestamp/reason to reflect the latest check.
+export const flagMemberPendingRemoval = async (
+  projectId: number,
+  userId: number,
+  flaggedByUserId: number,
+  reason: string
+): Promise<boolean> => {
+  const result = await query(
+    `UPDATE work.projectmembers
+     SET pendingremovalatutc = CURRENT_TIMESTAMP, pendingremovalbyuserid = $1, pendingremovalreason = $2
+     WHERE projectid = $3 AND userid = $4 AND leftatutc IS NULL`,
+    [flaggedByUserId, reason, projectId, userId]
+  );
+  return (result.rowCount ?? 0) > 0;
+};
+
+// Every currently-flagged member across every project -- the completion-triggered recheck (called
+// from task.service.ts whenever a task/subtask reaches Done) uses this to find who might now be
+// clear to remove, without task.service.ts needing to know ProjectMembers' shape at all.
+export const findPendingRemovalMembersForProject = async (projectId: number): Promise<ProjectMemberRow[]> => {
+  const result = await query<ProjectMemberRow>(
+    `SELECT ${MEMBER_COLUMNS}
+     FROM work.projectmembers
+     WHERE projectid = $1 AND leftatutc IS NULL AND pendingremovalatutc IS NOT NULL
+     ORDER BY projectmemberid`,
+    [projectId]
+  );
+  return result.rows;
 };
 
 // Reassigns a project's Team Lead. TeamLead is a ProjectMembers role, not a projects-table

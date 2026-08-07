@@ -5,7 +5,7 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
+import { isProjectAccessible, isProjectLead, recheckPendingRemovalForMember } from '../projects/project.service.js';
 import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
   API_TO_DB_TASK_STATUS,
@@ -727,6 +727,12 @@ export const changeTaskStatus = async (
   const actorName = actorDisplayName(actorId);
   const projectRow = await projectRepo.findProjectById(row.projectid);
 
+  // This is how a subtask reaches Done (a top-level task's only path to Done is the Approve
+  // action in decideReview below, which has its own identical call) -- Issue #6's completion hook.
+  if (toMeta.isCompletedState) {
+    recheckPendingRemovalSafe(dto.projectId, dto.assigneeIds, actorId);
+  }
+
   // notifyTaskRecipients now always includes the project's Team Lead alongside the assignees,
   // so the Review-specific manual add that used to live here is redundant.
   notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
@@ -1065,6 +1071,20 @@ const announceProjectCompletionSafe = (projectPk: number, actorId: string, actor
   });
 };
 
+// Issue #6: whenever a task or subtask reaches Done, any of its (former) assignees who are
+// currently Pending Removal in this project might now be clear to actually remove -- same
+// "never break the status change that triggered it" rule as announceProjectCompletionSafe above.
+// Fired for every assignee unconditionally; project.service.ts's recheckPendingRemovalForMember
+// itself no-ops for anyone not flagged, so this is cheap for the (overwhelmingly common) case of
+// no one being Pending Removal at all.
+const recheckPendingRemovalSafe = (projectId: string, assigneeIds: string[], actorId: string): void => {
+  for (const memberUserId of assigneeIds) {
+    recheckPendingRemovalForMember(projectId, memberUserId, actorId).catch((error) => {
+      console.error('[task.service] Failed to recheck pending removal.', error);
+    });
+  }
+};
+
 const decideReview = async (
   taskId: string,
   decision: 'Approve' | 'Reject',
@@ -1219,6 +1239,8 @@ const decideReview = async (
   // can become fully complete.
   if (decision === 'Approve') {
     announceProjectCompletionSafe(row.projectid, actorId, actorRole);
+    // Issue #6's completion hook -- same reasoning as changeTaskStatus's identical call above.
+    recheckPendingRemovalSafe(dto.projectId, dto.assigneeIds, actorId);
   }
 
   return dto;

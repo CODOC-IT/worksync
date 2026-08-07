@@ -134,7 +134,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                   onDelete();
                 }}
                 className="rounded-lg p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
-                title="Delete project"
+                title={project.status === 'Archived' ? 'Permanently delete project' : 'Archive project'}
               >
                 <Trash2 size={12} />
               </button>

@@ -29,6 +29,12 @@ Users): an `AudienceType` column on `hr.Holidays`, the `hr.HolidayAudienceDepart
 run more than once; existing holidays default to `AudienceType = 'Everyone'`, matching their prior
 unfiltered visibility.
 
+`20260807_01_project_member_pending_removal.sql` adds `PendingRemovalAtUtc`/
+`PendingRemovalByUserId`/`PendingRemovalReason` columns to `work.ProjectMembers` (a member with
+active task/subtask assignments is flagged instead of removed) and seeds the
+`project_member_pending_removal`/`project_member_auto_removed` notification types. Additive and
+safe to run more than once; existing members default to not pending removal.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
