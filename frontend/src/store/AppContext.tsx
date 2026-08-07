@@ -1557,7 +1557,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Rejecting just marks the request decided -- the project is never touched.
+  // Rejecting normally just marks the request decided. A rejected project creation is different:
+  // the backend permanently deletes the pending proposal, so remove it from every local project
+  // and task view immediately as well.
   const rejectProjectApprovalRequest = async (
     approvalRequestId: string,
     reason?: string
@@ -1567,6 +1569,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const decided = await rejectProjectApprovalRequestApi(approvalRequestId, reason);
       setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      if (decided.requestType === 'PROJECT_CREATE') {
+        setProjects((prev) => prev.filter((project) => project.id !== decided.projectId));
+        setTasks((prev) => prev.filter((task) => task.projectId !== decided.projectId));
+      }
       pushActivity('Rejected project request', 'Project', decided.projectId, decided.projectTitle);
 
       const message = `Request for "${decided.projectTitle}" was rejected.`;

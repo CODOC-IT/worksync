@@ -36,6 +36,11 @@ expanded-detail split) and seeds the `task_edit_approval_requested`/`_approved`/
 Safe to run more than once; existing notifications keep NULL detail/metadata and render exactly
 as before.
 
+`20260807_02_rejected_project_creation_cleanup.sql` preserves project-approval decisions and
+their `DecisionReason` when a rejected project-creation proposal is permanently deleted. It also
+repairs the approval request type constraint in environments created before `PROJECT_CREATE` was
+added to the workflow.
+
 `20260807_01_project_member_pending_removal.sql` adds `PendingRemovalAtUtc`/
 `PendingRemovalByUserId`/`PendingRemovalReason` columns to `work.ProjectMembers` (a member with
 active task/subtask assignments is flagged instead of removed) and seeds the
