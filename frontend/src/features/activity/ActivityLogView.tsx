@@ -38,18 +38,18 @@ const ADMIN_MODULES  = ['Projects', 'Tasks', 'Kanban', 'Project Chats', 'Attenda
 // under 'Assigned'), 'Mentioned' (a single legacy event; mentions are captured on 'Commented'
 // events), 'Deleted Attachment' (no ProjectFile deletions are ever recorded), 'Preference
 // Changed' (preference changes are not written to the audit table).
-const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Commented', 'Uploaded Attachment', 'Checked In', 'Checked Out'];
+const MEMBER_ACTIONS = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Task Edit Requested', 'Task Edit Approved', 'Task Edit Rejected', 'Commented', 'Uploaded Attachment', 'Checked In', 'Checked Out'];
 // Led Project Activity tab options are project-scoped only. Attendance check-ins/outs never
 // carry a projectid (verified org-wide: 0 events with a projectid), so 'Checked In'/'Checked
 // Out' can never match inside a led project. Real priority-change events are near-nonexistent
 // (3 org-wide; 0 inside any led scope). Keeping the list to options with actual matches keeps
 // the tab simple and connected.
-const LEAD_ACTIONS   = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Approved', 'Rejected', 'Commented', 'Uploaded Attachment'];
+const LEAD_ACTIONS   = ['Created', 'Updated', 'Deleted', 'Assigned', 'Status Changed', 'Approved', 'Rejected', 'Task Edit Requested', 'Task Edit Approved', 'Task Edit Rejected', 'Commented', 'Uploaded Attachment'];
 // Admin and HR share one option set: every actioncode recorded across all modules.
 // 'Preference Changed', 'Assigned/Reassigned', permission events, and break events are
 // deliberately excluded — preference changes are not recorded, permissions and breaks are
 // tracked outside the audit table, and reassignments surface under the 'Assigned' option.
-const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Reopened', 'Completed', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Requested Change', 'Requested', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Login', 'Logout', 'Exported', 'Failed Operation', 'Unauthorized Access'];
+const ADMIN_ACTIONS  = ['Created', 'Updated', 'Deleted', 'Archived', 'Assigned', 'Reopened', 'Completed', 'Status Changed', 'Priority Changed', 'Approved', 'Rejected', 'Requested Change', 'Requested', 'Task Edit Requested', 'Task Edit Approved', 'Task Edit Rejected', 'Commented', 'Mentioned', 'Uploaded Attachment', 'Deleted Attachment', 'Checked In', 'Checked Out', 'Attendance Corrected', 'Leave Requested', 'Leave Approved', 'Leave Rejected', 'Login', 'Logout', 'Exported', 'Failed Operation', 'Unauthorized Access'];
 
 const DATE_PRESETS: ActivityFilters['datePreset'][] = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'Custom'];
 const RESULT_OPTIONS = ['Successful', 'Failed', 'Blocked'];
