@@ -244,7 +244,17 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                         key={m.id}
                         className="flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2"
                       >
-                        <span className="text-slate-200">{m.name}</span>
+                        <span className="flex items-center gap-1.5 text-slate-200">
+                          {m.name}
+                          {project?.pendingRemovalMemberIds?.includes(m.id) && (
+                            <span
+                              className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded px-1 py-0.5"
+                              title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
+                            >
+                              Pending Removal
+                            </span>
+                          )}
+                        </span>
                         <span className="text-[11px] text-slate-500">{m.title}</span>
                       </div>
                     ))}
