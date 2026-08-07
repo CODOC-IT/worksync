@@ -368,6 +368,47 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         source: 'Web',
         metadata: leaveMetadata(cleanDetails),
       });
+    } else if (type === 'Correction') {
+      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Attendance Correction Requested',
+        module: 'Attendance',
+        entityType: 'Attendance',
+        entityId: id,
+        entityName: `Attendance ${requestDate}`,
+        description: `${actorName} requested an attendance correction for ${requestDate}.`,
+        source: 'Web',
+        important: true,
+        linkRoute: 'approvals',
+        metadata: {
+          requestId: id,
+          requestedCheckIn: cleanDetails.requestedCheckIn,
+          requestedCheckOut: cleanDetails.requestedCheckOut,
+          requestedBreakCount: (cleanDetails.requestedBreaks || []).length,
+        },
+      });
+    } else if (type === 'Break_Exception') {
+      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
+      recordActivitySafe({
+        actorId: req.user.id,
+        actorName,
+        actorEmail: req.user.email,
+        actorRole: req.user.role,
+        action: 'Break Exception Requested',
+        module: 'Attendance',
+        entityType: 'Attendance',
+        entityId: id,
+        entityName: `Attendance ${requestDate}`,
+        description: `${actorName} requested a break exception for ${requestDate}.`,
+        source: 'Web',
+        important: true,
+        linkRoute: 'approvals',
+        metadata: { requestId: id, reason: cleanReason },
+      });
     }
 
     res.status(201).json({
@@ -615,6 +656,26 @@ const decideRequest = async (
           description: decision === 'Approved'
             ? `${deciderName} approved attendance correction for ${requesterName} on ${requestDateStr}.`
             : `${deciderName} rejected attendance correction for ${requesterName} on ${requestDateStr}.`,
+          source: 'Web',
+          important: true,
+          reason: decisionReason || undefined,
+        });
+      } else if (updated.request_type === 'Break_Exception') {
+        recordActivitySafe({
+          actorId: req.user.id,
+          actorName: deciderName,
+          actorEmail: req.user.email,
+          actorRole: req.user.role,
+          affectedUserId: updated.user_id,
+          affectedUserName: requesterName,
+          action: decision === 'Approved' ? 'Break Exception Approved' : 'Break Exception Rejected',
+          module: 'Attendance',
+          entityType: 'Attendance',
+          entityId: updated.id,
+          entityName: `Attendance ${requestDateStr}`,
+          description: decision === 'Approved'
+            ? `${deciderName} approved break exception request for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected break exception request for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,
