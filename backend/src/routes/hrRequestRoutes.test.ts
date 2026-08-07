@@ -4,6 +4,7 @@ import {
   canReviewRequestStage,
   canSubmitOwnCorrection,
   getInitialApprovalStage,
+  mapHRRequestRow,
   validateNotPastDate
 } from './hrRequestRoutes.js';
 
@@ -45,4 +46,24 @@ test('another user, Admin, and active sessions cannot be corrected', () => {
   assert.equal(canSubmitOwnCorrection('usr-1', 'usr-2', 'Team_Member', false), false);
   assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Admin', false), false);
   assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Team_Member', true), false);
+});
+
+test('Half Day period persists into approval history DTOs', () => {
+  const mapped = mapHRRequestRow({
+    id: 'leave-1',
+    user_id: 'usr-7',
+    user_name: 'Member',
+    requester_role: 'Team_Member',
+    request_type: 'Leave',
+    request_date: '2026-08-10',
+    reason: 'Appointment',
+    status: 'Approved',
+    approval_stage: 'Admin',
+    details: { leaveType: 'Half Day Leave', leavePeriod: 'First Half', leaveDays: 1 },
+    submitted_at: '2026-08-07T10:00:00Z',
+    decided_by: 'usr-1',
+    decision_reason: null
+  });
+  assert.equal(mapped.details.leaveType, 'Half Day Leave');
+  assert.equal(mapped.details.leavePeriod, 'First Half');
 });

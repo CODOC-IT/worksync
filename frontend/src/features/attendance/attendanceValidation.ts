@@ -1,4 +1,4 @@
-import { WorkBreak } from '../../types';
+import { HRRequest, WorkBreak } from '../../types';
 
 export const canShowAttendanceCorrection = (
   checkIn: string | undefined,
@@ -50,3 +50,27 @@ export const validateAttendanceCorrection = (
 };
 
 export const isPastDate = (date: string, today: string): boolean => date < today;
+
+export const validateLeaveRequestOverlap = (
+  date: string,
+  leaveType: 'Full Day Leave' | 'Half Day Leave',
+  leavePeriod: 'First Half' | 'Second Half' | undefined,
+  requests: HRRequest[]
+): string | null => {
+  const existing = requests.filter(
+    (request) =>
+      request.type === 'Leave' &&
+      request.date === date &&
+      request.status !== 'Rejected'
+  );
+  for (const request of existing) {
+    if (leaveType === 'Full Day Leave' || request.details.leaveType === 'Full Day Leave') {
+      return 'Leave conflicts with an existing Full Day leave request.';
+    }
+    if (request.details.leavePeriod === leavePeriod) {
+      return `A ${leavePeriod} Half Day leave already exists for this date.`;
+    }
+    return 'First Half and Second Half cannot be combined on the same date; request Full Day leave instead.';
+  }
+  return null;
+};

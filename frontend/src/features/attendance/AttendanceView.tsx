@@ -4,7 +4,13 @@ import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import { todayDateKey, toDateKey } from '../calendar/calendarRules';
-import { canShowAttendanceCorrection, isPastDate, validateAttendanceCorrection } from './attendanceValidation';
+import {
+  canShowAttendanceCorrection,
+  isPastDate,
+  validateAttendanceCorrection,
+  validateLeaveRequestOverlap
+} from './attendanceValidation';
+import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
 import {
   CheckCircle2,
   Clock,
@@ -684,7 +690,7 @@ export const AttendanceView: React.FC = () => {
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | '30days' | 'custom'>('30days');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'HR' | 'Team_Member' | 'Team_Lead'>('all');
+  const [roleFilter, setRoleFilter] = useState<AttendanceRoleFilter>('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [leaveFormOpen, setLeaveFormOpen] = useState(false);
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
@@ -717,14 +723,8 @@ export const AttendanceView: React.FC = () => {
     start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
     return record.date >= toDateKey(start) && record.date <= todayStr;
   };
-  const filterByRole = (record: AttendanceRecord) => {
-    if (roleFilter === 'all') return true;
-    const user = users.find((candidate) => candidate.id === record.userId);
-    if (!user) return false;
-    if (roleFilter === 'Team_Lead') return user.activePermissions?.teamLead === true;
-    if (roleFilter === 'HR') return user.activePermissions?.hr === true || user.role === 'HR';
-    return user.role === roleFilter && user.activePermissions?.teamLead !== true;
-  };
+  const filterByRole = (record: AttendanceRecord) =>
+    matchesAttendanceRoleFilter(record, users, roleFilter);
   const myAttendanceRecords = attendanceRecords.filter(
     (record) => record.userId === currentUser.id && filterByDate(record)
   );
@@ -786,6 +786,8 @@ export const AttendanceView: React.FC = () => {
     date: string,
     reason: string
   ) => {
+    const overlapError = validateLeaveRequestOverlap(date, leaveType, leavePeriod, hrRequests);
+    if (overlapError) return { success: false, message: overlapError };
     setLeaveSubmitting(true);
     const result = await submitHRRequest(
       'Leave',

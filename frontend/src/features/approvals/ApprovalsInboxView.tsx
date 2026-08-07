@@ -707,7 +707,7 @@ export const ApprovalsInboxView: React.FC = () => {
                   </div>
 
                   {request.type === 'Correction' && (
-                    <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-2">
+                    <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-3">
                       <div>
                         <span className="block text-[10px] uppercase tracking-wider text-slate-500">
                           Requested check-in
@@ -742,6 +742,18 @@ export const ApprovalsInboxView: React.FC = () => {
                         <span className="mt-1 block text-slate-200">
                           {request.details.leaveType ||
                             'Not provided'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wider text-slate-500">
+                          Period
+                        </span>
+
+                        <span className="mt-1 block text-slate-200">
+                          {request.details.leaveType === 'Half Day Leave'
+                            ? request.details.leavePeriod || 'Second Half'
+                            : 'Full Day'}
                         </span>
                       </div>
 
