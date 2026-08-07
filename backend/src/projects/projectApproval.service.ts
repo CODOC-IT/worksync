@@ -1,7 +1,7 @@
 import * as repo from './projectApproval.repository.js';
 import * as projectRepo from './project.repository.js';
 import * as projectService from './project.service.js';
-import { resolveTeamLeadUserId } from './project.mapper.js';
+import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
 import { fromProjectPk, fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -11,9 +11,18 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import {
   buildProjectDecisionMessage,
   projectDecisionEffect,
+  resolveUpdatedParticipants,
   validateProjectDecision
 } from './projectWorkflow.rules.js';
 import { buildProjectApprovalRejectionCopy } from './projectApprovalRejectionCopy.js';
+import { UpdateProjectInput } from './project.types.js';
+import {
+  buildProjectEditPayload,
+  conflictingProjectFields,
+  enrichProjectEditPayload,
+  parseProjectEditPayload,
+  resolveProjectUserIdentity,
+} from './projectApprovalChanges.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -32,17 +41,30 @@ import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError
 
 const actorName = (userId: string): string => actorDisplayName(userId);
 
+const unknownUser = (id: string): string => `Unknown user (ID: ${id})`;
+
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
-  const project = row.projectid == null ? null : await projectRepo.findProjectById(row.projectid);
+  const project = await projectRepo.findProjectById(row.projectid);
   const requestedByFrontendId = fromUserPk(row.requestedbyuserid);
+  const users = await userStore.getAllUsers();
+  const userNames = new Map(users.map((user) => [user.id, user.name]));
+  const requester = resolveProjectUserIdentity(requestedByFrontendId, users);
+  const parsedChanges = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null;
+  const projectEditPayload = row.requesttype === 'PROJECT_EDIT'
+    ? parseProjectEditPayload(row.requestedchangesjson)
+    : null;
   return {
     id: row.approvalrequestid,
-    projectId: row.projectid == null ? '' : fromProjectPk(row.projectid),
-    projectTitle: project?.projectname || row.projecttitle,
+    projectId: fromProjectPk(row.projectid),
+    projectTitle: project?.projectname || fromProjectPk(row.projectid),
     requestType: row.requesttype,
     requestedByUserId: requestedByFrontendId,
-    requestedByName: actorName(requestedByFrontendId),
-    requestedChanges: row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null,
+    requestedByName: requester.name,
+    requestedByRole: requester.role,
+    requestedByEmail: requester.email,
+    requestedChanges: projectEditPayload
+      ? enrichProjectEditPayload(projectEditPayload, (id) => userNames.get(id) || unknownUser(id))
+      : parsedChanges,
     reason: row.reason,
     status: row.requeststatus,
     reviewedByUserId: row.reviewedbyuserid != null ? fromUserPk(row.reviewedbyuserid) : undefined,
@@ -106,14 +128,28 @@ export const createApprovalRequest = async (
     throw new ProjectAuthorizationError('You can only request changes for projects you lead.');
   }
 
+  let persistedChanges = requestedChanges;
+  if (requestType === 'PROJECT_EDIT') {
+    const current = rowToProjectDTO(row, members, 0);
+    const requestedEdit = { ...(requestedChanges || {}) } as UpdateProjectInput;
+    const participants = resolveUpdatedParticipants(current.teamLeadId, requestedEdit.teamLeadId, requestedEdit.memberIds);
+    if (participants.error) throw new ProjectValidationError(participants.error);
+    if (requestedEdit.memberIds !== undefined) requestedEdit.memberIds = participants.memberIds;
+    const payload = buildProjectEditPayload(current, requestedEdit);
+    if (payload.changes.length === 0) {
+      throw new ProjectValidationError('No project changes were detected. Update at least one field before requesting approval.');
+    }
+    persistedChanges = payload as unknown as Record<string, unknown>;
+  }
+
   const approvalRequestId = await repo.insertApprovalRequest({
-    projectId: projectPk,
-    projectTitle: row.projectname,
-    requestType,
-    requestedByUserId: toUserPk(requesterId),
-    requestedChangesJson: requestedChanges ? JSON.stringify(requestedChanges) : null,
-    reason: reason.trim()
-  });
+  projectId: projectPk,
+  projectTitle: row.projectname,
+  requestType,
+  requestedByUserId: toUserPk(requesterId),
+  requestedChangesJson: persistedChanges ? JSON.stringify(persistedChanges) : null,
+  reason: reason.trim()
+});
 
   const requesterDisplayName = actorName(requesterId);
   notifyAdmins({
@@ -152,9 +188,8 @@ export const listMyApprovalRequests = async (userId: string): Promise<ProjectApp
   return Promise.all(rows.map(toDTO));
 };
 
-// Approves or rejects a request. Rejecting normally just marks it decided; rejecting a pending
-// project creation permanently removes that proposal. Approving executes the *existing*
-// project.service.ts function, using the Admin's own
+// Approves or rejects a request. Rejecting just marks it decided -- the project is never
+// touched. Approving executes the *existing* project.service.ts function, using the Admin's own
 // identity, before marking the request decided -- if that execution throws (e.g. a validation
 // rule that became true between request and decision), the request stays Pending and the error
 // surfaces to the Admin, rather than being silently marked Approved with nothing having happened.
@@ -190,13 +225,26 @@ export const decideApprovalRequest = async (
         await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
         break;
       case 'PROJECT_EDIT':
+        {
+          const payload = parseProjectEditPayload(row.requestedchangesjson);
+          if (!payload) throw new ProjectValidationError('This project edit request has invalid or incomplete change details.');
+          const currentRow = await projectRepo.findProjectById(row.projectid);
+          if (!currentRow) throw new ProjectNotFoundError('Project not found.');
+          const currentMembers = await projectRepo.findMembersForProject(row.projectid);
+          const conflicts = conflictingProjectFields(rowToProjectDTO(currentRow, currentMembers, 0), payload);
+          if (conflicts.length > 0) {
+            throw new ProjectValidationError(
+              `This project changed after the request was submitted. Review and resubmit: ${conflicts.join(', ')}.`
+            );
+          }
         await projectService.updateProject(
           projectIdStr,
-          row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : {},
+          payload.proposal,
           actorId,
           'Admin'
         );
         break;
+        }
       case 'PROJECT_ARCHIVE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
@@ -245,11 +293,12 @@ export const decideApprovalRequest = async (
   }
 
   if (projectDecisionEffect(row.requesttype, decision) === 'remove-rejected-creation') {
-    // Do not archive first: archiving emits project/archive notifications and briefly exposes
-    // the rejected proposal as an archived project. The request row has already persisted the
-    // Admin's decision reason, and its FK is SET NULL on project deletion, so remove the
-    // proposal directly.
-    if (row.projectid == null || !await projectRepo.permanentlyDeleteProject(row.projectid, { allowUnarchived: true })) {
+    const archived = await projectRepo.archiveProject(
+      row.projectid,
+      toUserPk(actorId),
+      `Creation rejected: ${decisionReason!.trim()}`
+    );
+    if (!archived || !await projectRepo.permanentlyDeleteProject(row.projectid)) {
       throw new ProjectValidationError('The rejected project proposal could not be removed.');
     }
   }
@@ -264,15 +313,12 @@ export const decideApprovalRequest = async (
       : projectIdStr;
 
   if (decision === 'Rejected') {
-    // The reason comes from `decidedDto`, built via toDTO(decided) above — `decided` is the row
+    // The reason comes from `decidedDto`, built via `toDTO(decided)` above -- `decided` is the row
     // `repo.decideApprovalRequest` just persisted via its own `UPDATE ... RETURNING`, not the raw
     // request-body `decisionReason` parameter this function was called with. They're equal within
     // this one request, but sourcing the notification from the persisted row (the exact same row
     // Notification History and a page refresh will later read) is what guarantees they can never
-    // drift apart. `decidedDto.decisionReason` is only ever the manually-built fallback (line 235,
-    // sourced from the request parameter rather than a DB read) for an approved
-    // PROJECT_PERMANENT_DELETE whose row cascade-deleted itself — a branch only reachable when
-    // `decision === 'Approved'`, never on this Rejected path.
+    // drift apart.
     const copy = buildProjectApprovalRejectionCopy({
       reviewerName: reviewerDisplayName,
       projectName,
@@ -306,7 +352,8 @@ export const decideApprovalRequest = async (
   }
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    action: decision, module: 'Projects', entityType: 'Project', entityId: projectIdStr,
+    action: row.requesttype === 'PROJECT_EDIT' ? `Project Edit ${decision}` : decision,
+    module: 'Projects', entityType: 'Project', entityId: projectIdStr,
     entityName: projectName, projectName,
     description: `${reviewerDisplayName} ${outcomeVerb} ${requesterDisplayName}'s request to ${REQUEST_TYPE_LABEL[row.requesttype]} "${projectName}".`,
     reason: decisionReason?.trim() || undefined, linkRoute: 'approvals', important: true

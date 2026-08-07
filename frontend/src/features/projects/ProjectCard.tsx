@@ -1,12 +1,13 @@
 import React from 'react';
 import { Users, UserRound, Calendar, Flame, Pencil, Trash2, ArchiveRestore } from 'lucide-react';
 import { Project, ProjectStatus, TaskPriority, User, UserRole } from '../../types';
+import type { ProjectCardAction } from './projectActionRules';
 
 interface ProjectCardProps {
   project: Project;
   teamLead?: User;
   isOverdue: boolean;
-  manageable: boolean;
+  actions: ProjectCardAction[];
   // Whose relationship to `project` the Led/Assigned/Unassigned badge below reflects. Team Lead
   // isn't a separate account role -- a Team_Member becomes a project's lead only via
   // project.teamLeadId -- so the badge is computed from that id comparison, never from role.
@@ -73,7 +74,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   project,
   teamLead,
   isOverdue,
-  manageable,
+  actions,
   currentUserId,
   currentRole,
   onEdit,
@@ -104,9 +105,9 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
             {project.status}
             <span className={`h-1.5 w-1.5 rounded-full ${statusColor(project.status).replace('text-', 'bg-')}`} />
           </span>
-          {manageable && (
+          {actions.length > 0 && (
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-              {project.status === 'Archived' && onRestore && (
+              {actions.includes('restore') && onRestore && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -118,7 +119,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                   <ArchiveRestore size={12} />
                 </button>
               )}
-              <button
+              {actions.includes('edit') && <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onEdit();
@@ -127,8 +128,8 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 title="Edit project"
               >
                 <Pencil size={12} />
-              </button>
-              <button
+              </button>}
+              {(actions.includes('archive') || actions.includes('permanent-delete')) && <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete();
@@ -137,7 +138,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 title={project.status === 'Archived' ? 'Permanently delete project' : 'Archive project'}
               >
                 <Trash2 size={12} />
-              </button>
+              </button>}
             </div>
           )}
         </div>

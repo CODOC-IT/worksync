@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
+import { isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
 import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
@@ -159,9 +160,7 @@ export const ProjectsView: React.FC = () => {
   // project's lead only via this project-specific assignment. Every permission decision below
   // must go through this (or an explicit currentRole === 'Admin' check), never a bare
   // currentRole !== 'Admin' -- that's true for a normal Team_Member too.
-  const isProjectLead = (project: Project) => project.teamLeadId === currentUser.id;
-  const canManage = (project: Project) =>
-    currentRole === 'Admin' || (currentRole !== 'HR' && isProjectLead(project));
+  const isProjectLead = (project: Project) => isCurrentProjectLead(project, currentUser.id);
 
   // The backend (listProjectsForUser) returns every project to every role -- visibility is
   // narrowed here instead. Admin/HR keep full org-wide visibility; everyone else (Team Lead isn't
@@ -731,7 +730,7 @@ export const ProjectsView: React.FC = () => {
         {filteredProjects.map((project) => {
           const isOverdue = project.status === 'Active' && project.targetDate < todayStr;
           const teamLead = users.find((u) => u.id === project.teamLeadId);
-          const manageable = canManage(project);
+          const actions = projectCardActions(currentRole, currentUser.id, project);
 
           return (
             <ProjectCard
@@ -739,7 +738,7 @@ export const ProjectsView: React.FC = () => {
               project={project}
               teamLead={teamLead}
               isOverdue={isOverdue}
-              manageable={manageable}
+              actions={actions}
               currentUserId={currentUser.id}
               currentRole={currentRole}
               onEdit={() => openEditForm(project)}

@@ -289,6 +289,8 @@ export interface ProjectApprovalRequest {
   requestType: ProjectApprovalRequestType;
   requestedByUserId: string;
   requestedByName: string;
+  requestedByRole?: UserRole;
+  requestedByEmail?: string;
   requestedChanges: Record<string, unknown> | null;
   reason: string;
   status: 'Pending' | 'Approved' | 'Rejected';
