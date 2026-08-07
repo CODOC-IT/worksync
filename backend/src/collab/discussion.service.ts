@@ -3,6 +3,7 @@ import { buildCommentDTO, buildThreadDTO } from './discussion.mapper.js';
 import { parseAttachmentDataUrl } from './fileStorage.js';
 import { fromProjectPk, fromTaskPk, fromUserPk, toCommentPk, toProjectPk, toTaskPk, toThreadPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
+import { actorDisplayName } from '../utils/actorDisplay.js';
 import * as projectRepo from '../projects/project.repository.js';
 import * as taskRepo from '../tasks/task.repository.js';
 import { isProjectAccessible } from '../projects/project.service.js';
@@ -206,7 +207,7 @@ export const createThread = async (
     taskTitle = taskRow.title;
     const taskAudience = await repo.findMentionableUsersForTask(taskPk, projectRow.projectid);
     if (!hasGlobalDiscussionAccess(actorRole) && !taskAudience.some((candidate) => fromUserPk(candidate.userid) === actorId)) {
-      throw new DiscussionAuthorizationError('Only a task assignee or this project\'s Team Lead can start a task discussion.');
+      throw new DiscussionAuthorizationError('Only an active task assignee or this project\'s current Team Lead can start a task discussion.');
     }
   }
 
@@ -234,7 +235,11 @@ export const createThread = async (
     ? await repo.findMentionableUsersForTask(taskPk, projectRow.projectid)
     : await projectRepo.findMembersForProject(projectRow.projectid);
   await ensureUserCacheWarmed();
-  const actorName = userStore.findById(actorId)?.name || actorId;
+  // actorDisplayName resolves Display Name -> Username -> Email -> Role -> "Unknown User" and
+  // never returns the raw id — the plain `?.name || actorId` this replaced would fall back to a
+  // bare "usr-<n>" in the chat notification's text whenever findById missed, even right after
+  // ensureUserCacheWarmed() above (a transient sync failure, or the actor genuinely not existing).
+  const actorName = actorDisplayName(actorId);
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
 
   notify(
@@ -326,7 +331,11 @@ export const addComment = async (
   const comment = await buildCommentDTO(commentRow!, mentionRows, attachmentRows);
 
   await ensureUserCacheWarmed();
-  const actorName = userStore.findById(actorId)?.name || actorId;
+  // actorDisplayName resolves Display Name -> Username -> Email -> Role -> "Unknown User" and
+  // never returns the raw id — the plain `?.name || actorId` this replaced would fall back to a
+  // bare "usr-<n>" in the chat notification's text whenever findById missed, even right after
+  // ensureUserCacheWarmed() above (a transient sync failure, or the actor genuinely not existing).
+  const actorName = actorDisplayName(actorId);
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
   const projectId = fromProjectPk(row.effectiveprojectid);
   const taskId = row.taskid ? fromTaskPk(row.taskid) : undefined;
@@ -395,7 +404,11 @@ export const editComment = async (commentId: string, body: string, actorId: stri
   await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);
   const taskRow = threadRow.taskid ? await taskRepo.findTaskById(threadRow.taskid) : undefined;
-  const actorName = userStore.findById(actorId)?.name || actorId;
+  // actorDisplayName resolves Display Name -> Username -> Email -> Role -> "Unknown User" and
+  // never returns the raw id — the plain `?.name || actorId` this replaced would fall back to a
+  // bare "usr-<n>" in the chat notification's text whenever findById missed, even right after
+  // ensureUserCacheWarmed() above (a transient sync failure, or the actor genuinely not existing).
+  const actorName = actorDisplayName(actorId);
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: 'Updated', module: 'Project Chats', entityType: 'Comment', entityId: dto.id,
@@ -429,7 +442,11 @@ export const deleteComment = async (commentId: string, actorId: string, actorRol
 
   await ensureUserCacheWarmed();
   const projectRow = await projectRepo.findProjectById(threadRow.effectiveprojectid);
-  const actorName = userStore.findById(actorId)?.name || actorId;
+  // actorDisplayName resolves Display Name -> Username -> Email -> Role -> "Unknown User" and
+  // never returns the raw id — the plain `?.name || actorId` this replaced would fall back to a
+  // bare "usr-<n>" in the chat notification's text whenever findById missed, even right after
+  // ensureUserCacheWarmed() above (a transient sync failure, or the actor genuinely not existing).
+  const actorName = actorDisplayName(actorId);
   const originalAuthor = userStore.findById(fromUserPk(commentRow.authoruserid));
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,

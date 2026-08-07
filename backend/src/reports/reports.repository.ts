@@ -296,7 +296,6 @@ export const getTaskStatusDistribution = async (
      Todo: 'Todo',
      InProgress: 'In Progress',
      Review: 'Review',
-     Blocked: 'Blocked',
      Done: 'Done',
    };
 
@@ -609,7 +608,6 @@ export const getDeadlineBucketTasks = async (
     Todo: 'Todo',
     InProgress: 'In Progress',
     Review: 'Review',
-    Blocked: 'Blocked',
     Done: 'Done',
   };
   const priorityMap: Record<string, string> = {

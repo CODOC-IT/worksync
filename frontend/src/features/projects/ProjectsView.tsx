@@ -53,6 +53,21 @@ const EMPTY_FORM: ProjectFormState = {
 const ALLOWED_FILE_EXTENSIONS = ['pdf', 'doc', 'docx', 'xlsx', 'json', 'fig', 'png', 'jpg', 'jpeg', 'zip'];
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
+// Issue #6 -- Member Removal Workflow. One active task or subtask assignment a member being
+// unchecked from the project still has, shown in the Pending Removal confirmation dialog below.
+interface ActiveWorkItem {
+  id: string;
+  title: string;
+  isSubtask: boolean;
+  parentTitle?: string;
+}
+
+interface BlockedMemberInfo {
+  memberId: string;
+  memberName: string;
+  activeItems: ActiveWorkItem[];
+}
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -99,6 +114,16 @@ export const ProjectsView: React.FC = () => {
   const [editApprovalReason, setEditApprovalReason] = useState('');
   const [editApprovalReasonError, setEditApprovalReasonError] = useState('');
   const [editApprovalSubmitting, setEditApprovalSubmitting] = useState(false);
+
+  // Issue #6 -- shown when an Admin's direct save would remove a member who still has active
+  // task/subtask work in this project. Cancel discards the entire save attempt (per spec, not
+  // just the removal) -- the Admin must reopen Edit and start over; there is no "save everything
+  // except this member" partial path. `data` is the exact payload handleSubmit had already built
+  // before pausing, so confirming just resumes the save unchanged.
+  const [pendingRemovalWarning, setPendingRemovalWarning] = useState<{
+    data: Partial<Project>;
+    blocked: BlockedMemberInfo[];
+  } | null>(null);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -198,6 +223,28 @@ export const ProjectsView: React.FC = () => {
     setFormOpen(false);
     setEditingProjectId(null);
     setFormNotice('');
+  };
+
+  // Issue #6 -- every task/subtask in this project where `memberId` is a current assignee and the
+  // item isn't Done/completed yet. Subtasks are checked independently of their parent task's own
+  // status (a parent can still be In Progress while one of its subtasks is already Done), matching
+  // the backend's identical rule in task.repository.ts's findActiveTaskAssignmentsForUserInProject.
+  const getActiveWorkForMember = (projectId: string, memberId: string): ActiveWorkItem[] => {
+    const items: ActiveWorkItem[] = [];
+    tasks
+      .filter((t) => t.projectId === projectId)
+      .forEach((t) => {
+        const isTaskAssignee = t.assigneeId === memberId || t.assigneeIds?.includes(memberId);
+        if (isTaskAssignee && t.status !== 'Done') {
+          items.push({ id: t.id, title: t.title, isSubtask: false });
+        }
+        t.subtasks.forEach((st) => {
+          if (st.assigneeIds?.includes(memberId) && !st.completed) {
+            items.push({ id: st.id, title: st.title, isSubtask: true, parentTitle: t.title });
+          }
+        });
+      });
+    return items;
   };
 
   const toggleMember = (userId: string) => {
@@ -349,7 +396,43 @@ export const ProjectsView: React.FC = () => {
       }
     }
 
+    // Every non-Admin create becomes a PROJECT_CREATE approval request (see project.service.ts's
+    // actorRole === 'Admin' ? 'Active' : 'PendingActivation'), so the reviewer needs real context
+    // here -- not required on edit, which has its own separate, already-mandatory Edit Approval
+    // Reason field for the "Admin Approval Required" dialog.
+    if (formMode === 'create' && currentRole !== 'Admin' && !data.creationReason.trim()) {
+      errors.creationReason = 'Creation notes are required when submitting a project for Admin approval.';
+    }
+
     return errors;
+  };
+
+  // Actually performs the save -- factored out of handleSubmit so the Issue #6 Pending Removal
+  // warning dialog below can resume the exact same save after the Admin confirms through it,
+  // without duplicating this logic.
+  const submitProjectSave = async (data: Partial<Project>) => {
+    setFormSubmitting(true);
+    setFormNotice('');
+    try {
+      // Real backend call -- the form only closes once the server confirms the change. On
+      // failure the modal stays open with the real error so the user can retry (no fake success).
+      const result =
+        formMode === 'create'
+          ? await createProject(data)
+          : editingProjectId
+            ? await updateProject(editingProjectId, { ...data, status: form.status })
+            : { success: false, message: 'No project selected to update.' };
+
+      if (!result.success) {
+        setFormNotice(result.message);
+        return;
+      }
+
+      setNotice({ type: 'success', message: result.message });
+      closeForm();
+    } finally {
+      setFormSubmitting(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -392,30 +475,47 @@ export const ProjectsView: React.FC = () => {
         setEditApprovalOpen(true);
         return;
       }
-    }
 
-    setFormSubmitting(true);
-    setFormNotice('');
-    try {
-      // Real backend call -- the form only closes once the server confirms the change. On
-      // failure the modal stays open with the real error so the user can retry (no fake success).
-      const result =
-        formMode === 'create'
-          ? await createProject(data)
-          : editingProjectId
-            ? await updateProject(editingProjectId, { ...data, status: form.status })
-            : { success: false, message: 'No project selected to update.' };
+      // Issue #6 -- an Admin's direct save (Team Lead edits above never reach here; their member
+      // changes apply only once an Admin later approves them, going through this same check then
+      // too) must not silently drop a member who still has active work in this project. The
+      // backend's removeMember independently refuses to hard-remove such a member on its own (it
+      // flags Pending Removal instead) -- this pre-check exists purely so the Admin sees that
+      // *before* saving, with the choice to back out entirely, rather than finding out after.
+      if (editingProject) {
+        const projectId = editingProjectId;
+        const removedMemberIds = editingProject.memberIds.filter((id) => !form.memberIds.includes(id));
+        const blocked: BlockedMemberInfo[] = removedMemberIds
+          .map((memberId) => {
+            const activeItems = getActiveWorkForMember(projectId, memberId);
+            return activeItems.length > 0
+              ? { memberId, memberName: users.find((u) => u.id === memberId)?.name || memberId, activeItems }
+              : null;
+          })
+          .filter((entry): entry is BlockedMemberInfo => entry !== null);
 
-      if (!result.success) {
-        setFormNotice(result.message);
-        return;
+        if (blocked.length > 0) {
+          setPendingRemovalWarning({ data, blocked });
+          return;
+        }
       }
-
-      setNotice({ type: 'success', message: result.message });
-      closeForm();
-    } finally {
-      setFormSubmitting(false);
     }
+
+    await submitProjectSave(data);
+  };
+
+  // Per the approved plan: Cancel discards the entire save attempt, not just the blocked
+  // members' removal -- the Admin must reopen Edit and resubmit from scratch.
+  const cancelPendingRemovalWarning = () => {
+    setPendingRemovalWarning(null);
+    closeForm();
+  };
+
+  const confirmPendingRemovalWarning = () => {
+    if (!pendingRemovalWarning) return;
+    const { data } = pendingRemovalWarning;
+    setPendingRemovalWarning(null);
+    void submitProjectSave(data);
   };
 
   const closeEditApproval = () => {
@@ -783,6 +883,14 @@ export const ProjectsView: React.FC = () => {
                         className="accent-cyan-500"
                       />
                       {u.name}
+                      {editingProject?.pendingRemovalMemberIds?.includes(u.id) && (
+                        <span
+                          className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded px-1 py-0.5"
+                          title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
+                        >
+                          Pending Removal
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
@@ -898,20 +1006,30 @@ export const ProjectsView: React.FC = () => {
 
               {/* Creation reason / notes -- a plain project-level note, independent of the
                   PROJECT_EDIT approval request's own required reason (captured in the "Admin
-                  Approval Required" dialog below for a Team Lead's edit). */}
-              <div>
-                <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
-                  <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
-                  <span className="text-slate-500 font-normal">(recommended for Admin review)</span>
-                </label>
-                <textarea
-                  value={form.creationReason}
-                  onChange={(e) => setForm((prev) => ({ ...prev, creationReason: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
-                  placeholder="Why is this project being created? Any context for the reviewer?"
-                />
-              </div>
+                  Approval Required" dialog below for a Team Lead's edit). Admin creates/edits
+                  apply immediately with no approval step, so the field is meaningless for them --
+                  hidden entirely rather than just left optional. Only mandatory at creation
+                  (see validate() below): every non-Admin create becomes a PROJECT_CREATE approval
+                  request, so this is the reviewer's context; an edit's own justification is the
+                  separate Edit Approval Reason field, not this one. */}
+              {currentRole !== 'Admin' && (
+                <div>
+                  <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
+                    <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
+                    <span className="text-slate-500 font-normal">
+                      {formMode === 'create' ? '(required for Admin approval)' : '(recommended for Admin review)'}
+                    </span>
+                  </label>
+                  <textarea
+                    value={form.creationReason}
+                    onChange={(e) => setForm((prev) => ({ ...prev, creationReason: e.target.value }))}
+                    rows={2}
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                    placeholder="Why is this project being created? Any context for the reviewer?"
+                  />
+                  {formErrors.creationReason && <p className="text-rose-400 mt-1">{formErrors.creationReason}</p>}
+                </div>
+              )}
 
               {/* No project exists yet at creation time, so there's no per-project lead to check
                   against -- this must match project.service.ts's own condition for who gets
@@ -1004,6 +1122,60 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
+      {/* Pending Removal warning (Issue #6) -- blocks an Admin's save when it would remove a
+          member who still has active task/subtask work in this project. Cancel discards the
+          entire save attempt (closeForm), not just the blocked removal. */}
+      {pendingRemovalWarning && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="w-full max-w-md glass-panel-glow border border-amber-500/40 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-amber-400">
+              <AlertTriangle size={18} />
+              <h2 className="text-sm font-bold text-white">Members Still Have Active Work</h2>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              The following member{pendingRemovalWarning.blocked.length !== 1 ? 's' : ''} cannot be removed yet --
+              they still have active tasks or subtasks assigned in this project. Continuing will notify the Team
+              Lead and mark {pendingRemovalWarning.blocked.length !== 1 ? 'them' : 'this member'} "Pending Removal";
+              {pendingRemovalWarning.blocked.length !== 1 ? ' they' : ' the member'} will stay in the project until
+              all of their assigned work is reassigned or completed. This save attempt will be discarded if you
+              cancel.
+            </p>
+
+            <div className="space-y-2 max-h-52 overflow-y-auto">
+              {pendingRemovalWarning.blocked.map((b) => (
+                <div key={b.memberId} className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <p className="text-slate-200 font-semibold mb-1.5">{b.memberName}</p>
+                  <ul className="space-y-1">
+                    {b.activeItems.map((item) => (
+                      <li key={item.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 shrink-0 mt-1.5" />
+                        <span>{item.isSubtask ? `${item.parentTitle} → ${item.title}` : item.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                onClick={cancelPendingRemovalWarning}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPendingRemovalWarning}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40"
+              >
+                Notify Team Lead & Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Restore Confirmation (inline) */}
       {restoreTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
@@ -1076,8 +1248,8 @@ export const ProjectsView: React.FC = () => {
                     ? `Permanently delete "${deleteTarget.title}"?`
                     : `Request permanent deletion of "${deleteTarget.title}"?`
                   : currentRole === 'Admin'
-                    ? `Delete "${deleteTarget.title}"?`
-                    : `Request deletion of "${deleteTarget.title}"?`}
+                    ? `Archive "${deleteTarget.title}"?`
+                    : `Request archiving of "${deleteTarget.title}"?`}
               </h2>
             </div>
 
@@ -1157,7 +1329,7 @@ export const ProjectsView: React.FC = () => {
                       ? 'Yes, Permanently Delete'
                       : 'Send Request'
                     : currentRole === 'Admin'
-                      ? 'Delete Project'
+                      ? 'Archive Project'
                       : 'Send Request'}
               </button>
             </div>

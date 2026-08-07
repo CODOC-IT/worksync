@@ -21,7 +21,8 @@ before(async () => {
     CREATE SCHEMA work;
     CREATE TABLE work.ProjectApprovalRequests (
       ApprovalRequestId BIGSERIAL PRIMARY KEY,
-      ProjectId INT NOT NULL,
+      ProjectId INT NULL,
+      ProjectTitle VARCHAR(500) NOT NULL,
       RequestType VARCHAR(30) NOT NULL,
       RequestedByUserId INT NOT NULL,
       RequestedChangesJson TEXT NULL,
@@ -47,6 +48,7 @@ after(async () => {
 test('persists and loads requests through the lowercase-folded project approval table', async () => {
   const id = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'Updated title' }),
@@ -75,6 +77,7 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
   };
   const olderId = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'First proposal' }),
@@ -82,6 +85,7 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
   });
   const newerId = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify(persistedPayload),
@@ -106,6 +110,7 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
 test('rejection persists the required reason for request history and notifications', async () => {
   const id = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'Rejected proposal' }),

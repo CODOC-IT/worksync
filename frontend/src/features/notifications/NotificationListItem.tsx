@@ -1,14 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, ChevronUp, Clock, Info, X } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, ChevronUp, Clock, Info, X } from 'lucide-react';
 import { NotificationItem } from '../../types';
-import { getNotificationTypeMeta, NOTIFICATION_ICON_CLASSES, PRIORITY_CLASSES } from './notificationTypes';
+import {
+  getNotificationActionLabel,
+  getNotificationTypeMeta,
+  humanizeMetadataKey,
+  NOTIFICATION_ICON_CLASSES,
+  PRIORITY_CLASSES
+} from './notificationTypes';
 
 interface NotificationListItemProps {
   notification: NotificationItem;
   onOpen: (notification: NotificationItem) => void;
   onClear?: (id: string) => void;
   compact?: boolean;
+  // Compact-preview / expanded-detail split. When `onToggleDetail` is supplied (the Notification
+  // Center), clicking the row expands it in place — full message, `detail` body, metadata rows
+  // and an action button that navigates — instead of navigating immediately. When it is not
+  // supplied (the bell dropdown, which has no room to expand), clicking still navigates and the
+  // full text stays available through the hover popover, exactly as before.
+  detailExpanded?: boolean;
+  onToggleDetail?: () => void;
   // Grouping (see notificationService.groupNotifications): when groupCount > 1, this row
   // represents a collapsed group rather than a single notification. Clicking it toggles
   // expansion instead of navigating — see NotificationsView for the expanded child rows.
@@ -62,6 +75,8 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
   onOpen,
   onClear,
   compact = false,
+  detailExpanded = false,
+  onToggleDetail,
   groupCount,
   expanded = false,
   onToggleExpand,
@@ -71,6 +86,10 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
   const meta = getNotificationTypeMeta(notification.type);
   const Icon = meta.icon;
   const isGroup = (groupCount ?? 1) > 1;
+  const supportsInlineDetail = Boolean(onToggleDetail) && !isGroup;
+  const metadataEntries = Object.entries(notification.metadata || {}).filter(
+    ([, value]) => value !== undefined && value !== ''
+  );
 
   const [showDetail, setShowDetail] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -106,12 +125,13 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showSnoozeMenu]);
 
-  // Full title/message/actor/priority/timestamp in a portal-rendered popover — the row's own
-  // text is truncated to one line for layout, so this is the only place the complete,
-  // untruncated content is readable without navigating away. Portal + fixed positioning is
-  // required (not plain `absolute`) so it isn't clipped by the bell dropdown's
+  // Full title/message/actor/priority/timestamp in a portal-rendered popover — used only where
+  // the row cannot expand in place (the bell dropdown), since the row's own text is truncated to
+  // one line for layout and that popover is then the only way to read it in full. Portal + fixed
+  // positioning is required (not plain `absolute`) so it isn't clipped by the dropdown's
   // `overflow-y-auto` container, the same issue solved for the board's assignee tooltip.
   const openDetail = () => {
+    if (supportsInlineDetail) return; // the inline expanded panel below supersedes it
     const rect = rowRef.current?.getBoundingClientRect();
     if (!rect) return;
     const showAbove = rect.bottom + DETAIL_POPOVER_ESTIMATED_HEIGHT > window.innerHeight;
@@ -123,18 +143,26 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
   };
   const closeDetail = () => setShowDetail(false);
 
+  const handleRowClick = () => {
+    if (isGroup && onToggleExpand) return onToggleExpand();
+    if (supportsInlineDetail) return onToggleDetail!();
+    return onOpen(notification);
+  };
+
   return (
-    <div
-      ref={rowRef}
-      onMouseEnter={openDetail}
-      onMouseLeave={closeDetail}
-      className={`group relative flex items-start gap-2 px-4 transition hover:bg-white/5 ${
-        compact ? 'py-2.5' : 'py-3.5'
-      } ${!notification.read ? 'bg-cyan-500/[0.04]' : ''}`}
-    >
+    <div className={`group relative ${!notification.read ? 'bg-cyan-500/[0.04]' : ''}`}>
+      <div
+        ref={rowRef}
+        onMouseEnter={openDetail}
+        onMouseLeave={closeDetail}
+        className={`flex items-start gap-2 px-4 transition hover:bg-white/5 ${
+          compact ? 'py-2.5' : 'py-3.5'
+        }`}
+      >
       <button
         type="button"
-        onClick={() => (isGroup && onToggleExpand ? onToggleExpand() : onOpen(notification))}
+        onClick={handleRowClick}
+        aria-expanded={supportsInlineDetail ? detailExpanded : undefined}
         className="flex min-w-0 flex-1 items-start gap-3 text-left"
       >
         <span className={`mt-0.5 shrink-0 rounded-lg border p-1.5 ${NOTIFICATION_ICON_CLASSES[meta.tone]}`}>
@@ -158,7 +186,16 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(0,242,254,0.8)]" />
             )}
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-slate-400">{notification.message}</span>
+          {/* Compact preview: one line, always truncated. The complete message (plus `detail`,
+              metadata and the action button) lives in the expanded panel below, so a long
+              rejection reason can never push the list out of scannable shape. */}
+          <span
+            className={`mt-0.5 block text-[11px] text-slate-400 ${
+              detailExpanded ? 'whitespace-pre-wrap break-words' : 'truncate'
+            }`}
+          >
+            {notification.message}
+          </span>
           <span className="mt-1 block text-[10px] text-slate-500">
             {formatRelativeTime(notification.createdAt, notification.timestamp)}
           </span>
@@ -205,13 +242,28 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
           type="button"
           onClick={(event) => {
             event.stopPropagation();
+            if (supportsInlineDetail) {
+              onToggleDetail!();
+              return;
+            }
             if (showDetail) closeDetail();
             else openDetail();
           }}
-          aria-label="View full notification details"
-          className="rounded-lg p-1 text-slate-500 opacity-100 transition hover:bg-white/10 hover:text-cyan-300 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+          aria-label={
+            supportsInlineDetail
+              ? detailExpanded
+                ? 'Hide notification details'
+                : 'Show notification details'
+              : 'View full notification details'
+          }
+          aria-expanded={supportsInlineDetail ? detailExpanded : undefined}
+          className={`rounded-lg p-1 transition hover:bg-white/10 hover:text-cyan-300 ${
+            supportsInlineDetail && detailExpanded
+              ? 'bg-white/10 text-cyan-300'
+              : 'text-slate-500 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100'
+          }`}
         >
-          <Info size={13} />
+          {supportsInlineDetail && detailExpanded ? <ChevronUp size={13} /> : <Info size={13} />}
         </button>
         {onClear && (
           <button
@@ -224,6 +276,73 @@ export const NotificationListItem: React.FC<NotificationListItemProps> = ({
           </button>
         )}
       </div>
+      </div>
+
+      {/* Expanded details. A CSS grid-rows 0fr -> 1fr transition animates the height without
+          needing a measured pixel value, so the panel opens smoothly whatever its content is,
+          and the surrounding list keeps its scroll position (nothing above the row moves). The
+          panel stays mounted-on-demand rather than always rendered so long detail bodies cost
+          nothing while collapsed. */}
+      {supportsInlineDetail && (
+        <div
+          className={`grid overflow-hidden transition-[grid-template-rows] duration-300 ease-out ${
+            detailExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+          }`}
+        >
+          <div className="min-h-0">
+            {detailExpanded && (
+              <div className="mx-4 mb-3 space-y-3 rounded-xl border border-white/10 bg-slate-950/50 p-3.5 text-[11px]">
+                {notification.detail && (
+                  <p className="whitespace-pre-wrap break-words leading-5 text-slate-300">
+                    {notification.detail}
+                  </p>
+                )}
+
+                {metadataEntries.length > 0 && (
+                  <dl className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+                    {metadataEntries.map(([key, value]) => (
+                      <div key={key} className="min-w-0">
+                        <dt className="text-[9px] uppercase tracking-wider text-slate-500">
+                          {humanizeMetadataKey(key)}
+                        </dt>
+                        <dd className="mt-0.5 break-words text-slate-200">{String(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-2.5 text-[10px] text-slate-500">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span>{meta.label}</span>
+                    {notification.actorName && (
+                      <span>
+                        From <span className="font-medium text-slate-300">{notification.actorName}</span>
+                      </span>
+                    )}
+                    <span>
+                      {notification.createdAt
+                        ? new Date(notification.createdAt).toLocaleString()
+                        : notification.timestamp}
+                    </span>
+                  </span>
+                  {/* The one place a click leaves the Notification Center — labelled with the tab
+                      it actually opens, derived from the notification's own linkRoute. */}
+                  {notification.linkRoute && notification.linkRoute !== 'notifications' && (
+                    <button
+                      type="button"
+                      onClick={() => onOpen(notification)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-500/20"
+                    >
+                      {getNotificationActionLabel(notification.linkRoute)}
+                      <ArrowUpRight size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showDetail &&
         coords &&

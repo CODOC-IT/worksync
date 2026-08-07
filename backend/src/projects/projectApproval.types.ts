@@ -15,7 +15,10 @@ export type ProjectApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected';
 
 export interface ProjectApprovalRequestRow {
   approvalrequestid: string;
-  projectid: number;
+  // A rejected creation removes its project, while the decision record is retained so its
+  // rejection reason remains available to notification/history consumers.
+  projectid: number | null;
+  projecttitle: string;
   requesttype: ProjectApprovalRequestType;
   requestedbyuserid: number;
   requestedchangesjson: string | null;

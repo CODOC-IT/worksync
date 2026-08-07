@@ -135,9 +135,9 @@ export interface DepartmentOptionRow {
 // Every active department in the org, for the Manage Holidays audience picker -- deliberately NOT
 // accounts.service.ts's listPermittedDepartments, which scopes its result to the calling HR
 // actor's own iam.HrDepartmentScopes hierarchy (built for member-provisioning authorization).
-// Holiday management has never been department-scoped (assertIsHR below has no department
-// dimension), so HR must be able to target any department, not just the ones they're scoped to
-// manage members within.
+// Holiday management has never been department-scoped (assertCanManageHolidays below has no
+// department dimension), so holiday managers (Admin/HR) must be able to target any department, not
+// just the ones HR are scoped to manage members within.
 export const findAllActiveDepartments = async (): Promise<DepartmentOptionRow[]> => {
   const result = await query<DepartmentOptionRow>(
     `SELECT departmentid, departmentname FROM org.departments

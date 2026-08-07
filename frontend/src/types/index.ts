@@ -56,6 +56,10 @@ export interface Project {
   createdBy: string; // User ID
   teamLeadId: string;
   memberIds: string[];
+  // Members kept in the project (still in memberIds) because they had active task/subtask
+  // assignments when an Admin tried to remove them -- see ProjectsView.tsx's pending-removal
+  // confirmation dialog and backend/src/projects/project.service.ts's removeMember.
+  pendingRemovalMemberIds?: string[];
   startDate: string;
   targetDate: string;
   priority?: TaskPriority;
@@ -464,6 +468,13 @@ export type NotificationType =
   | 'subtask_due_today'
   | 'subtask_overdue'
   | 'task_reopened'
+  | 'subtask_assignment_changed'
+  | 'task_edit_approval_requested'
+  | 'task_edit_approval_approved'
+  | 'task_edit_approval_rejected'
+  | 'leave_requested'
+  | 'leave_approved'
+  | 'leave_rejected'
   | 'comment_added'
   | 'mention'
   | 'attachment_uploaded'
@@ -474,6 +485,9 @@ export type NotificationType =
   | 'project_deleted'
   | 'project_member_added'
   | 'project_member_removed'
+  | 'project_member_pending_removal'
+  | 'project_member_auto_removed'
+  | 'project_approval_rejected'
   | 'approval'
   | 'user_registered'
   | 'user_role_changed'
@@ -526,7 +540,15 @@ export interface NotificationItem {
   actorId?: string; // who triggered the event (absent for system-generated notifications)
   actorName?: string;
   title: string;
-  message: string; // preview / body text
+  /** Compact preview line (1–2 lines) shown in the notification list by default. */
+  message: string;
+  /**
+   * Full body, rendered only when the recipient expands the notification in the Notification
+   * Center — rejection reasons, review comments, the exact fields an edit changed. Persisted to
+   * notify.Notifications.DetailText; absent on notifications that have nothing to add beyond
+   * their preview (and on every notification created before this column existed).
+   */
+  detail?: string;
   type: NotificationType;
   priority?: NotificationPriority;
   read: boolean;
@@ -536,6 +558,11 @@ export interface NotificationItem {
   linkRoute: string;
   projectId?: string;
   taskId?: string;
+  /**
+   * Structured label/value context for the expanded view (project name, task/subtask title,
+   * approver, changed fields, leave type/period, ...). Persisted to
+   * notify.Notifications.MetadataJson and rendered back verbatim as rows.
+   */
   metadata?: Record<string, string | number | boolean | undefined>;
 }
 

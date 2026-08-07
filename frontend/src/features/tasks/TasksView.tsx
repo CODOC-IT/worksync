@@ -38,6 +38,8 @@ import {
   isTaskOverdue,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  CREATE_TASK_STATUSES,
+  TASK_FILTER_STATUSES,
   TaskFormInput,
   TaskMutationResult,
   TaskModulePriority,
@@ -148,6 +150,8 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
   const [archivedTasksLoading, setArchivedTasksLoading] = useState(false);
   const [archivedTasksError, setArchivedTasksError] = useState<string | null>(null);
   const [showApprovals, setShowApprovals] = useState(false);
+  const [rejectingApprovalId, setRejectingApprovalId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setIsLoading(false));
@@ -225,6 +229,24 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
     () => availableAssignees.filter((user) => form.assigneeIds.includes(user.id)),
     [availableAssignees, form.assigneeIds]
   );
+  const editableAssignees = useMemo(() => {
+    const currentAssigneeIds = new Set(
+      editingTaskSource ? getTaskAssigneeIds(editingTaskSource) : []
+    );
+    const eligibleUsers = editingTaskSource?.parentTaskId
+      ? availableAssignees.filter((user) => {
+          const parent = tasks.find((task) => task.id === editingTaskSource.parentTaskId);
+          return Boolean(parent && getTaskAssigneeIds(parent).includes(user.id));
+        })
+      : availableAssignees;
+
+    // Keep any existing assignee visible even if they were removed from the project or parent
+    // task after this task was created. The lead must be able to remove that stale assignment.
+    return Array.from(new Map([
+      ...eligibleUsers,
+      ...users.filter((user) => currentAssigneeIds.has(user.id))
+    ].map((user) => [user.id, user])).values());
+  }, [availableAssignees, editingTaskSource, tasks, users]);
 
   const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
@@ -299,7 +321,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
       priority: getTaskPriorityValue(task.priority),
       startDate: getTaskStartDate(task),
       dueDate: task.dueDate,
-      assigneeIds: getTaskAssigneeIds(task),
+      assigneeIds: Array.from(new Set(getTaskAssigneeIds(task))),
       status: task.status
     });
     setFieldErrors({});
@@ -379,8 +401,11 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                 description: form.description,
                 priority: form.priority as TaskModulePriority,
                 startDate: form.startDate,
-                dueDate: form.dueDate
-              })
+                dueDate: form.dueDate,
+                ...(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id
+                  ? { assigneeIds: form.assigneeIds }
+                  : {})
+              }, existingTask)
           : createTask({
               projectId: form.projectId,
               title: form.title,
@@ -636,12 +661,21 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
         </div>
       </header>}
 
-      {showApprovals && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onMouseDown={(event) => event.target === event.currentTarget && setShowApprovals(false)}>
-        <div role="dialog" aria-modal="true" aria-labelledby="task-approvals-title" className="glass-panel max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-5">
-          <div className="flex items-center justify-between"><h2 id="task-approvals-title" className="text-lg font-bold text-white">Pending task approvals</h2><button type="button" onClick={() => setShowApprovals(false)} aria-label="Close approvals"><X /></button></div>
-          {!isActingTeamLead ? <p className="mt-5 rounded-xl border border-white/10 p-4 text-sm text-slate-400">Task edit approvals will appear here when you are assigned as Team Lead for a project.</p> : taskEditApprovals.length === 0 ? <p className="mt-5 text-sm text-slate-400">No pending task edit approvals for your active projects.</p> : <div className="mt-4 space-y-3">{taskEditApprovals.map((approval) => <article key={approval.id} className="rounded-xl border border-white/10 p-4"><p className="font-semibold text-white">{approval.targetTitle}</p><p className="mt-1 text-xs text-slate-400">Requested by {users.find((user) => user.id === approval.requestedBy)?.name || approval.requestedBy} · {projects.find((project) => project.id === approval.projectId)?.title}</p><p className="mt-3 text-xs text-slate-300">Previous: {JSON.stringify(approval.previousTaskSnapshot)}<br />Proposed: {JSON.stringify(approval.proposedTaskUpdate)}</p><div className="mt-3 flex gap-2"><button type="button" onClick={() => void approveApprovalItem(approval.id)} className="rounded bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200">Approve</button><button type="button" onClick={() => { const reason = window.prompt('Rejection reason'); if (reason?.trim()) void rejectApprovalItem(approval.id, reason); }} className="rounded bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200">Reject</button></div></article>)}</div>}
+      {showApprovals && <div className="fixed inset-0 z-50 bg-black/70 p-0 backdrop-blur-sm sm:flex sm:items-center sm:justify-center sm:p-4" onMouseDown={(event) => event.target === event.currentTarget && setShowApprovals(false)}>
+        <div role="dialog" aria-modal="true" aria-labelledby="task-approvals-title" className="glass-panel flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden rounded-none sm:h-[calc(100dvh-2rem)] sm:rounded-2xl">
+          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-7 sm:py-5"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Task reviews</p><h2 id="task-approvals-title" className="mt-1 text-xl font-bold text-white">Pending task approvals</h2><p className="mt-1 text-sm text-slate-400">Review requested task changes for the projects you currently lead.</p></div><button type="button" onClick={() => setShowApprovals(false)} aria-label="Close approvals" className="rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"><X size={20} /></button></div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 [&_.space-y-3]:space-y-5 [&_article]:rounded-2xl [&_article]:border-white/15 [&_article]:p-5 [&_article]:shadow-xl [&_article]:shadow-black/10 sm:[&_article]:p-6">
+          {!isActingTeamLead ? <p className="mt-5 rounded-xl border border-white/10 p-4 text-sm text-slate-400">Task edit approvals will appear here when you are assigned as Team Lead for a project.</p> : taskEditApprovals.length === 0 ? <p className="mt-5 text-sm text-slate-400">No pending task edit approvals for your active projects.</p> : <div className="mt-4 space-y-3">{taskEditApprovals.map((approval) => {
+            const requester = users.find((user) => user.id === approval.requestedBy)?.name || approval.requestedBy;
+            const previous = approval.previousTaskSnapshot || {};
+            const proposed = approval.proposedTaskUpdate || {};
+            const changed = Object.keys(proposed).filter((key) => JSON.stringify((previous as any)[key]) !== JSON.stringify((proposed as any)[key]));
+            return <article key={approval.id} className="rounded-xl border border-white/10 bg-slate-950/35 p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-semibold text-white">{approval.targetTitle}</p><p className="mt-1 text-xs text-slate-400">Submitted by <span className="font-semibold text-slate-200">{requester}</span> · {projects.find((project) => project.id === approval.projectId)?.title}</p></div><span className="rounded-full bg-amber-400/10 px-2 py-1 text-[10px] font-bold text-amber-200">Pending review</span></div><div className="mt-4 space-y-2">{changed.map((field) => <div key={field} className="grid gap-1 rounded-lg border border-white/5 bg-white/[0.02] p-2 text-xs sm:grid-cols-2"><p><span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Current {field}</span><span className="text-slate-300">{String((previous as any)[field] ?? '—')}</span></p><p><span className="block text-[10px] font-bold uppercase tracking-wide text-cyan-400">Requested {field}</span><span className="text-cyan-100">{String((proposed as any)[field] ?? '—')}</span></p></div>)}</div><div className="mt-4 flex gap-2"><button type="button" onClick={() => void approveApprovalItem(approval.id)} className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-200">Approve changes</button><button type="button" onClick={() => { setRejectingApprovalId(approval.id); setRejectionReason(''); }} className="rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200">Reject changes</button></div></article>})}</div>}
+          </div>
         </div>
       </div>}
+
+      {rejectingApprovalId && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"><div role="dialog" aria-modal="true" className="glass-panel w-full max-w-md rounded-2xl p-5"><h2 className="text-lg font-bold text-white">Reject task edit request</h2><p className="mt-1 text-sm text-slate-400">Explain why this change cannot be approved. This reason is required.</p><textarea autoFocus value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} className={`${inputClass} mt-4 min-h-28`} placeholder="Enter rejection reason" /><button type="button" disabled={!rejectionReason.trim()} onClick={() => { void rejectApprovalItem(rejectingApprovalId, rejectionReason.trim()); setRejectingApprovalId(null); setRejectionReason(''); }} className="mt-4 w-full rounded-lg bg-rose-500/20 px-4 py-2 text-sm font-bold text-rose-100 disabled:opacity-40">Send rejection reason</button></div></div>}
 
       {!isCreatePage && notice && (
         <div
@@ -737,7 +771,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                 disabled={Boolean(editingTaskId)}
                 className={inputClass}
               >
-                {TASK_STATUSES.map((status) => (
+                {(editingTaskId ? TASK_STATUSES : CREATE_TASK_STATUSES).map((status) => (
                   <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
                 ))}
               </select>
@@ -810,7 +844,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
               />
             </Field>
 
-            {editingTaskId ? (
+            {editingTaskId && !(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id) ? (
               <Field label={`Assigned to (${form.assigneeIds.length})`} className="md:col-span-2 xl:col-span-4">
                 <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3">
                   {form.assigneeIds.map((userId) => {
@@ -825,7 +859,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
               </Field>
             ) : (
               <Field
-                label={`Assignees * (${form.assigneeIds.length} selected)`}
+                label={`Assignees * (${new Set(form.assigneeIds).size} selected)`}
                 error={fieldErrors.assigneeIds}
                 className="md:col-span-2 xl:col-span-4"
               >
@@ -833,13 +867,13 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                   <div className="rounded-lg border border-dashed border-white/10 px-4 py-5 text-center text-xs text-slate-500">
                     Select a project to load its members.
                   </div>
-                ) : availableAssignees.length === 0 ? (
+                ) : (editingTaskId ? editableAssignees : availableAssignees).length === 0 ? (
                   <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-300">
                     This project has no active members available for assignment.
                   </div>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                    {availableAssignees.map((user) => {
+                    {(editingTaskId ? editableAssignees : availableAssignees).map((user) => {
                       const selected = form.assigneeIds.includes(user.id);
                       return (
                         <button
@@ -983,7 +1017,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
                           onChange={(event) => updateSubtask(index, { status: event.target.value as TaskStatus })}
                           className={`${inputClass} py-1.5 text-xs`}
                         >
-                          {TASK_STATUSES.map((status) => (
+                          {CREATE_TASK_STATUSES.map((status) => (
                             <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
                           ))}
                         </select>
@@ -1141,14 +1175,10 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
               />
             </label>
 
-            <FilterSelect value={projectFilter} onChange={setProjectFilter} label="All projects">
-              {taskFilterProjects.map((project) => (
-                <option key={project.id} value={project.id}>{getProjectName(project)}</option>
-              ))}
-            </FilterSelect>
+            <ProjectFilter value={projectFilter} onChange={setProjectFilter} projects={taskFilterProjects} />
 
             <FilterSelect value={statusFilter} onChange={setStatusFilter} label="All statuses">
-              {TASK_STATUSES.map((status) => (
+              {TASK_FILTER_STATUSES.map((status) => (
                 <option key={status} value={status}>{getTaskStatusLabel(status)}</option>
               ))}
             </FilterSelect>
@@ -1537,6 +1567,14 @@ const AssigneeFilter: React.FC<{ value: string; onChange: (value: string) => voi
       </div>}
     </div>
   );
+};
+
+const ProjectFilter: React.FC<{ value: string; onChange: (value: string) => void; projects: Project[] }> = ({ value, onChange, projects }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = projects.find((project) => project.id === value);
+  const matches = projects.filter((project) => getProjectName(project).toLowerCase().includes(query.trim().toLowerCase()));
+  return <div className="relative"><button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className={`${inputClass} flex items-center justify-between text-left text-xs`}><span className="truncate">{selected ? getProjectName(selected) : 'All projects'}</span><ChevronDown size={13} className="text-slate-500" /></button>{open && <div className="absolute z-30 mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-2 shadow-xl"><input autoFocus aria-label="Search projects" value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search projects" /><div role="listbox" className="mt-2 max-h-52 overflow-y-auto"><button type="button" role="option" aria-selected={!value} onClick={() => { onChange(''); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">All projects</button>{matches.map((project) => <button key={project.id} type="button" role="option" aria-selected={value === project.id} onClick={() => { onChange(project.id); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-200 hover:bg-white/10">{getProjectName(project)}</button>)}{matches.length === 0 && <p className="px-2 py-3 text-xs text-slate-500">No projects found</p>}</div></div>}</div>;
 };
 
 const TaskBadge: React.FC<{

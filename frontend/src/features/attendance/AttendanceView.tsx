@@ -1,10 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import { todayDateKey, toDateKey } from '../calendar/calendarRules';
-import { canShowAttendanceCorrection, isPastDate, validateAttendanceCorrection } from './attendanceValidation';
+import {
+  canShowAttendanceCorrection,
+  isPastDate,
+  validateAttendanceCorrection,
+  validateLeaveRequestOverlap
+} from './attendanceValidation';
+import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
 import {
   CheckCircle2,
   Clock,
@@ -684,11 +690,12 @@ export const AttendanceView: React.FC = () => {
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | '30days' | 'custom'>('30days');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'HR' | 'Team_Member' | 'Team_Lead'>('all');
+  const [roleFilter, setRoleFilter] = useState<AttendanceRoleFilter>('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [leaveFormOpen, setLeaveFormOpen] = useState(false);
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [authorizationError, setAuthorizationError] = useState('');
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
   // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
@@ -696,6 +703,17 @@ export const AttendanceView: React.FC = () => {
   // could be recorded for the wrong day, then render on the wrong Calendar day. See
   // calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
+  const customDateError =
+    dateFilter === 'custom' && Boolean(customFrom) && Boolean(customTo) && customFrom > customTo
+      ? 'From date cannot be later than the To date.'
+      : '';
+
+  useEffect(() => {
+    if (editingRecordId && editorRef.current) {
+      editorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [editingRecordId]);
+
   const todayAttendance = attendanceRecords.find(
     (record) => record.userId === currentUser.id && record.date === todayStr
   );
@@ -717,14 +735,8 @@ export const AttendanceView: React.FC = () => {
     start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
     return record.date >= toDateKey(start) && record.date <= todayStr;
   };
-  const filterByRole = (record: AttendanceRecord) => {
-    if (roleFilter === 'all') return true;
-    const user = users.find((candidate) => candidate.id === record.userId);
-    if (!user) return false;
-    if (roleFilter === 'Team_Lead') return user.activePermissions?.teamLead === true;
-    if (roleFilter === 'HR') return user.activePermissions?.hr === true || user.role === 'HR';
-    return user.role === roleFilter && user.activePermissions?.teamLead !== true;
-  };
+  const filterByRole = (record: AttendanceRecord) =>
+    matchesAttendanceRoleFilter(record, users, roleFilter);
   const myAttendanceRecords = attendanceRecords.filter(
     (record) => record.userId === currentUser.id && filterByDate(record)
   );
@@ -786,6 +798,8 @@ export const AttendanceView: React.FC = () => {
     date: string,
     reason: string
   ) => {
+    const overlapError = validateLeaveRequestOverlap(date, leaveType, leavePeriod, hrRequests);
+    if (overlapError) return { success: false, message: overlapError };
     setLeaveSubmitting(true);
     const result = await submitHRRequest(
       'Leave',
@@ -996,9 +1010,12 @@ export const AttendanceView: React.FC = () => {
           </label>
           {dateFilter === 'custom' && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
-              <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || todayStr} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} max={todayStr} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
             </div>
+          )}
+          {customDateError && (
+            <p role="alert" className="mt-2 text-xs text-rose-300">{customDateError}</p>
           )}
         </div>
       )}
@@ -1031,6 +1048,7 @@ export const AttendanceView: React.FC = () => {
       )}
 
       {editingRecord && canEditRecord(editingRecord) && (
+        <div ref={editorRef}>
         <AttendanceEditor
           key={editingRecord.id}
           record={editingRecord}
@@ -1039,6 +1057,7 @@ export const AttendanceView: React.FC = () => {
           onCancel={() => setEditingRecordId(null)}
           onSave={updateAttendanceRecord}
         />
+        </div>
       )}
 
       {canViewOthers && (
@@ -1084,9 +1103,12 @@ export const AttendanceView: React.FC = () => {
             </div>
             {dateFilter === 'custom' && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
-                <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+                <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || todayStr} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+                <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} max={todayStr} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
               </div>
+            )}
+            {customDateError && (
+              <p role="alert" className="mt-2 text-xs text-rose-300">{customDateError}</p>
             )}
             <p className="text-[11px] text-slate-500">
               {isAdmin

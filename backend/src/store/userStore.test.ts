@@ -30,7 +30,8 @@ before(async () => {
        accountstatus text NOT NULL,
        invitationsentatutc timestamptz,
        createdatutc timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      deactivatedatutc timestamptz
+      deactivatedatutc timestamptz,
+      authuserid uuid
     );
 
     CREATE TABLE iam.roles (

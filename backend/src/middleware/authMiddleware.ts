@@ -33,21 +33,16 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
     return false;
   }
   const token = header.slice(7);
-  const diag: Record<string, unknown> = {};
   let supabaseUserId: string | undefined;
 
   // Primary path: service-role client (intended server-side token validation).
   try {
     const { data, error } = await getSupabaseServiceClient().auth.getUser(token);
-    if (error || !data.user) {
-      diag.supabaseStatus = error?.status;
-      diag.supabaseCode = error?.code;
-      diag.supabaseMessage = error?.message;
-    } else {
+    if (!error && data.user) {
       supabaseUserId = data.user.id;
     }
-  } catch (err) {
-    diag.serviceClientError = err instanceof Error ? err.message : String(err);
+  } catch {
+    // fall through to the anon/publishable-key validation path below
   }
 
   // Fallback: validate via the project's public anon/publishable key. This performs the exact same
@@ -59,22 +54,17 @@ const resolveSession = async (req: AuthenticatedRequest, res: Response): Promise
     if (anonClient) {
       try {
         const { data, error } = await anonClient.auth.getUser(token);
-        if (error || !data.user) {
-          diag.anonStatus = error?.status;
-          diag.anonCode = error?.code;
-          diag.anonMessage = error?.message;
-        } else {
+        if (!error && data.user) {
           supabaseUserId = data.user.id;
         }
-      } catch (err) {
-        diag.anonClientError = err instanceof Error ? err.message : String(err);
+      } catch {
+        // leave supabaseUserId undefined; handled by the auth failure below
       }
     }
   }
 
   if (!supabaseUserId) {
-    try { console.log('[AuthDIAG] getUser failed:', JSON.stringify(diag)); } catch { /* diagnostic only */ }
-    res.status(401).json({ success: false, message: 'Invalid or expired session.', diag });
+    res.status(401).json({ success: false, message: 'Invalid or expired session.' });
     return false;
   }
   const result = await query<{ userid: number; email: string; accountstatus: string; departmentid: number | null; rolecode: string | null }>(`

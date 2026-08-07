@@ -29,7 +29,16 @@ import { NotificationAnalyticsPanel } from './NotificationAnalyticsPanel';
 // moment where it becomes more actionable). The user picks the actual duration from a preset
 // menu (see NotificationListItem's SNOOZE_PRESETS); this set only gates which notification
 // types get the clock button in the first place.
-const SNOOZABLE_TYPES = new Set<NotificationType>(['task_due_tomorrow', 'task_due_today', 'task_overdue', 'approval']);
+const SNOOZABLE_TYPES = new Set<NotificationType>([
+  'task_due_tomorrow',
+  'task_due_today',
+  'task_overdue',
+  'approval',
+  // Both are pending decisions addressed to a reviewer, exactly like `approval` — there is a
+  // future moment where acting on them still makes sense, which is what makes a snooze meaningful.
+  'task_edit_approval_requested',
+  'leave_requested'
+]);
 
 const inputClass =
   'w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/10';
@@ -83,6 +92,10 @@ export const NotificationsView: React.FC<{ onNavigate?: (tab: string) => void }>
   const [showPreferences, setShowPreferences] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Which individual notifications are showing their expanded details. Kept per-notification (a
+  // Set, not a single id) so opening one never collapses another the user is still reading, and
+  // so nothing re-orders or scrolls when a row expands.
+  const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
 
   const myNotifications = useMemo(
     () => getNotificationsByUser(notifications, currentUser.id, currentRole),
@@ -119,10 +132,29 @@ export const NotificationsView: React.FC<{ onNavigate?: (tab: string) => void }>
     setPage(1);
   };
 
+  // Navigation — the deliberate exit from the Notification Center, reached from the expanded
+  // panel's "Open ..." button (and from any row the bell dropdown renders). `linkRoute` is
+  // derived per notification type server-side (notification.mapper.ts's deriveLinkRoute), so an
+  // approval lands on Approvals, a board event on Kanban, a leave decision on Attendance, and so
+  // on — the tab that actually owns the thing being notified about.
   const handleOpen = (notification: NotificationItem) => {
     markNotificationRead(notification.id);
     const target = resolveNavigationTarget(notification.linkRoute);
     if (target) onNavigate?.(target);
+  };
+
+  // Clicking a row reveals its full details in place rather than navigating away. Expanding also
+  // marks it read: the user has now seen everything the notification had to say.
+  const toggleDetailExpanded = (notification: NotificationItem) => {
+    setExpandedDetails((prev) => {
+      const next = new Set(prev);
+      if (next.has(notification.id)) next.delete(notification.id);
+      else next.add(notification.id);
+      return next;
+    });
+    if (!notification.read && !expandedDetails.has(notification.id)) {
+      markNotificationRead(notification.id);
+    }
   };
 
   const toggleGroupExpanded = (key: string) => {
@@ -359,6 +391,8 @@ export const NotificationsView: React.FC<{ onNavigate?: (tab: string) => void }>
                         onOpen={handleOpen}
                         onClear={isGroup ? undefined : clearNotification}
                         onSnooze={!isGroup && canSnooze ? handleSnooze : undefined}
+                        detailExpanded={expandedDetails.has(representative.id)}
+                        onToggleDetail={() => toggleDetailExpanded(representative)}
                         groupCount={group.items.length}
                         expanded={isExpanded}
                         onToggleExpand={isGroup ? () => toggleGroupExpanded(group.key) : undefined}
@@ -386,6 +420,8 @@ export const NotificationsView: React.FC<{ onNavigate?: (tab: string) => void }>
                               onOpen={handleOpen}
                               onClear={clearNotification}
                               onSnooze={SNOOZABLE_TYPES.has(notification.type) ? handleSnooze : undefined}
+                              detailExpanded={expandedDetails.has(notification.id)}
+                              onToggleDetail={() => toggleDetailExpanded(notification)}
                               compact
                             />
                           </div>

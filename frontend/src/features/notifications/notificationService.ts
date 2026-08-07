@@ -30,7 +30,14 @@ export interface CreateNotificationInput {
   recipientId: string;
   type: NotificationType;
   title: string;
+  /** Compact preview line rendered in the notification list. Keep it to 1–2 lines. */
   message: string;
+  /**
+   * Full body, revealed only when the recipient expands the notification (rejection reasons,
+   * review comments, the exact fields that changed). Optional — an event whose preview says
+   * everything simply omits it.
+   */
+  detail?: string;
   actorId?: string;
   actorName?: string;
   linkRoute: string;
@@ -49,6 +56,7 @@ export const createNotification = (input: CreateNotificationInput): Notification
     actorName: input.actorName,
     title: input.title,
     message: input.message,
+    detail: input.detail,
     type: input.type,
     priority: input.priority || getNotificationTypeMeta(input.type).priority,
     read: false,
@@ -68,6 +76,8 @@ export interface SendNotificationInput extends Omit<CreateNotificationInput, 're
   // same event should see "assigned Priya" (never "assigned you", since it wasn't them).
   // Falls back to `message` for any recipient not present in this map.
   recipientMessages?: Record<string, string>;
+  /** Per-recipient `detail` override, for the same reason as `recipientMessages`. */
+  recipientDetails?: Record<string, string>;
 }
 
 // The single entry point AppContext calls after every trigger event. Builds one
@@ -79,7 +89,8 @@ export const sendNotification = (input: SendNotificationInput): NotificationItem
     createNotification({
       ...input,
       recipientId,
-      message: input.recipientMessages?.[recipientId] ?? input.message
+      message: input.recipientMessages?.[recipientId] ?? input.message,
+      detail: input.recipientDetails?.[recipientId] ?? input.detail
     })
   );
 };
@@ -239,7 +250,17 @@ export const filterNotifications = (
     if (filters.priority && filters.priority !== 'All' && notification.priority !== filters.priority) return false;
     if (!isWithinDateRange(notification.createdAt, filters.dateRange)) return false;
     if (search) {
-      const haystack = `${notification.title} ${notification.message}`.toLowerCase();
+      // Searches the expanded body and metadata too, not just the compact preview — otherwise a
+      // rejection reason or changed-field list, which now deliberately lives only in `detail`,
+      // would be unfindable by the words it actually contains.
+      const haystack = [
+        notification.title,
+        notification.message,
+        notification.detail ?? '',
+        Object.values(notification.metadata ?? {}).join(' ')
+      ]
+        .join(' ')
+        .toLowerCase();
       if (!haystack.includes(search)) return false;
     }
     return true;

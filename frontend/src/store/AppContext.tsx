@@ -89,6 +89,7 @@ import {
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
+import { mapAttendanceApiRecords, restoreActiveBreak } from '../features/attendance/attendanceHydration';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -202,7 +203,7 @@ interface AppState {
   approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
-  updateTask: (taskId: string, data: TaskMutationData) => Promise<TaskMutationResult>;
+  updateTask: (taskId: string, data: TaskMutationData, sourceTask?: Task) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
   updateTaskStatus: (
     taskId: string,
@@ -599,17 +600,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           throw new Error(data.message || 'Failed to load attendance.');
         }
         if (isActive) {
-          const mapped: AttendanceRecord[] = data.data.map((r: any) => ({
-            id: `att-${r.userId}-${r.date}`,
-            userId: r.userId,
-            date: r.date,
-            checkIn: r.checkIn ? formatAttendanceTime(r.checkIn, r.timeZone) : '',
-            checkOut: r.checkOut ? formatAttendanceTime(r.checkOut, r.timeZone) : undefined,
-            totalHours: r.totalHours || 0,
-            status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
-            breaks: Array.isArray(r.breaks) ? r.breaks : [],
-          }));
+          const mapped = mapAttendanceApiRecords(data.data);
           setAttendanceRecords(mapped);
+          setActiveBreak(restoreActiveBreak(data.activeBreak, currentUser.id));
         }
       } catch (error) {
         console.warn('Attendance API request failed; falling back to local data.', error);
@@ -1743,17 +1736,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // dispatches one itself (main's per-field notification differentiation -- reassigned/priority/
   // due-date/checklist -- had no backend equivalent to call through to, so it's not carried
   // forward here; see docs/ProjectBoardNotification_Implementation_Notes.md).
-  const updateTask = async (taskId: string, data: TaskMutationData): Promise<TaskMutationResult> => {
+  const updateTask = async (
+    taskId: string,
+    data: TaskMutationData,
+    sourceTask?: Task
+  ): Promise<TaskMutationResult> => {
     const validationResult = prepareTaskUpdate(taskId, data, {
       currentRole,
       currentUserId: currentUser.id,
       projects,
-      tasks,
+      tasks: sourceTask ? [...tasks, sourceTask] : tasks,
       users
     });
     if (!validationResult.success) return validationResult;
 
-    const existingTask = tasks.find((task) => task.id === taskId) || validationResult.task;
+    const existingTask = tasks.find((task) => task.id === taskId) || sourceTask || validationResult.task;
     const project = existingTask && projects.find((item) => item.id === existingTask.projectId);
     const isMemberOwnedTask = Boolean(
       existingTask
@@ -2405,11 +2402,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const startBreak = (breakType: BreakType) => {
+    const startBreak = async (breakType: BreakType) => {
       if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
-      const todayStr = todayDateKey();
+      const todayStr = businessDateKey();
       const openAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -2418,14 +2415,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (!openAttendance) return;
 
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const startedAtUtc = new Date().toISOString();
+      const nowTime = formatAttendanceTime(startedAtUtc);
+      const breakId = `brk-${Date.now()}`;
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      const response = await fetch('/api/attendance/breaks/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workDate: todayStr, id: breakId, type: breakType, startedAtUtc })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        pushToast('error', 'Break Failed', data?.message || 'Failed to start break.');
+        return;
+      }
       setActiveBreak({
         isBreaking: true,
         userId: currentUser.id,
         breakType,
         startTime: nowTime,
         elapsedSeconds: 0,
-        startedAtUtc: new Date().toISOString()
+        startedAtUtc
       });
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -2442,7 +2456,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const endBreak = async () => {
       if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
-      const todayStr = todayDateKey();
+      const todayStr = businessDateKey();
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const endedAtUtc = new Date().toISOString();
       const durationSeconds = Math.max(
@@ -2463,22 +2477,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         endedAtUtc
       };
 
-      setAttendanceRecords((prev) =>
-        prev.map((a) => {
-          if (a.userId === currentUser.id && a.date === todayStr) {
-            return {
-              ...a,
-              breaks: [...a.breaks, newBreak]
-            };
-          }
-          return a;
-        })
-      );
-
-      setActiveBreak(null);
       const token = localStorage.getItem('worksync_auth_token');
-      if (token) {
-        await fetch('/api/attendance/breaks', {
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      {
+        const response = await fetch('/api/attendance/breaks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({
@@ -2488,8 +2493,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             startedAtUtc: activeBreak.startedAtUtc,
             endedAtUtc
           })
-        }).catch((err) => console.error('[Attendance] Failed to persist break:', err));
+        }).catch((err) => {
+          console.error('[Attendance] Failed to persist break:', err);
+          return null;
+        });
+        if (!response?.ok) {
+          pushToast('error', 'Break Failed', 'Failed to end and save the active break.');
+          return;
+        }
       }
+      setAttendanceRecords((prev) =>
+        prev.map((a) => a.userId === currentUser.id && a.date === todayStr
+          ? { ...a, breaks: [...a.breaks, newBreak] }
+          : a)
+      );
+      setActiveBreak(null);
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
         type: exceeded ? 'break_exceeded' : 'break_ended',
@@ -2606,11 +2624,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           newReq.approvalStage === 'Admin'
             ? resolveAdminRecipients(users, currentUser.id)
             : resolveHRRecipients();
+        const leavePeriodLabel = type === 'Leave' && newReq.details.leaveType === 'Half Day Leave'
+          ? ` (${newReq.details.leavePeriod || 'Second Half'})`
+          : '';
         dispatchNotifications({
           recipientIds: recipients,
           type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
           title: type === 'Leave' ? 'Leave Submitted' : 'New Attendance Edit Request',
-          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
+          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request: "${reason}".`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
@@ -2720,6 +2741,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
@@ -2729,7 +2753,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             recipientIds: resolveAdminRecipients(users, currentUser.id),
             type: 'attendance',
             title: 'Leave Forwarded to Admin',
-            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'} request for ${updatedRequest.date}.`,
+            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}.`,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'approvals'
@@ -2738,7 +2762,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
             type: 'attendance',
             title: 'Leave Forwarded to Admin',
-            message: `HR approved your leave request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
+            message: `HR approved your ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'attendance'
@@ -2810,7 +2834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : updatedRequest.type === 'Correction'
               ? 'Attendance Approved'
               : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
-          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
+          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'
@@ -2841,6 +2865,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
@@ -2859,7 +2886,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : updatedRequest.type === 'Correction'
               ? 'Attendance Rejected'
               : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
-          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
+          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
           actorId: currentUser.id,
           actorName: currentUser.name,
           linkRoute: 'attendance'

@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { authenticateJWT, AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import { query, withTransaction } from '../db/pool.js';
-import { userStore } from '../store/userStore.js';
+import { userStore, updateSupabaseAuthEmail } from '../store/userStore.js';
 import { toUserPk } from '../utils/idMapping.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
@@ -424,6 +424,7 @@ const reviewRequest = async (
       : undefined;
 
     await ensureTable();
+    let approvedProfileChange: ReturnType<typeof getApprovedProfileChange> | undefined;
     const reviewed = await withTransaction(async (runQuery) => {
       const selected = await runQuery<AccountChangeRequestRow>(
         `SELECT * FROM public.worksync_account_change_requests
@@ -445,13 +446,12 @@ const reviewRequest = async (
 
       if (shouldApplyAccountProfileChange(action)) {
         const changes = parseChanges(request.requested_changes);
-        let approvedChange: ReturnType<typeof getApprovedProfileChange>;
         try {
-          approvedChange = getApprovedProfileChange(request.requested_field, changes);
+          approvedProfileChange = getApprovedProfileChange(request.requested_field, changes);
         } catch (error: any) {
           throw new ReviewError(request.requested_field === 'password' ? 409 : 400, error.message);
         }
-        const { field, value } = approvedChange;
+        const { field, value } = approvedProfileChange;
         const userPk = toUserPk(request.user_id);
 
         if (field === 'name') {
@@ -523,6 +523,17 @@ const reviewRequest = async (
     });
 
     if (shouldApplyAccountProfileChange(action)) {
+      // Keep the Supabase Auth identity's email in sync when the iam.users email is approved,
+      // otherwise the requester still signs in with the old email.
+      if (approvedProfileChange?.field === 'email') {
+        const authRow = await query<{ authuserid: string | null }>(
+          'SELECT authuserid FROM iam.users WHERE userid = $1 AND organizationid = 1',
+          [toUserPk(reviewed.user_id)]
+        );
+        if (authRow.rows[0]?.authuserid) {
+          await updateSupabaseAuthEmail(authRow.rows[0].authuserid, approvedProfileChange.value.toLowerCase());
+        }
+      }
       await userStore.refreshUserFromDb(reviewed.user_id);
     }
 
