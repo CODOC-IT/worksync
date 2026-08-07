@@ -129,7 +129,12 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
     // Team_Member's call through the approval-request path even when they weren't the project's
     // lead at all.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
-      const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
+      // Member management is Admin-only regardless of path (see project.service.ts's
+      // assertCanManageMembers) -- memberIds is dropped here, before it's ever persisted, so a
+      // Team Lead can't smuggle a membership change into a PROJECT_EDIT request via a direct API
+      // call that bypasses the edit form's disabled member checkboxes. teamLeadId (handing off
+      // their own leadership) is unaffected -- that's a distinct, still-approval-gated action.
+      const { reason, memberIds, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
       const requestType = getProjectUpdateApprovalType(changes.status);
       const data = await createApprovalRequest(
         req.params.id, requestType, requestType === 'PROJECT_ARCHIVE' ? null : changes, reason || '', user.id, user.role

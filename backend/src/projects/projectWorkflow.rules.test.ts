@@ -26,6 +26,11 @@ test('Admin may choose lead and the new lead automatically becomes a member', ()
   assert.deepEqual(result.memberIds, ['usr-9', 'usr-8']);
 });
 
+test('a project cannot be created with the Team Lead as its only member', () => {
+  const result = resolveCreateParticipants('usr-1', 'Admin', 'usr-8', []);
+  assert.match(result.error || '', /at least one member besides the Team Lead/i);
+});
+
 test('current lead cannot be removed without replacement', () => {
   const result = resolveUpdatedParticipants('usr-7', undefined, ['usr-8']);
   assert.match(result.error || '', /cannot be removed/i);
@@ -35,6 +40,17 @@ test('replacement lead is automatically included in members', () => {
   const result = resolveUpdatedParticipants('usr-7', 'usr-8', ['usr-9']);
   assert.equal(result.error, undefined);
   assert.deepEqual(result.memberIds, ['usr-9', 'usr-8']);
+});
+
+test('a project cannot be edited down to the Team Lead as its only member', () => {
+  const result = resolveUpdatedParticipants('usr-7', undefined, ['usr-7']);
+  assert.match(result.error || '', /at least one member besides the Team Lead/i);
+});
+
+test('editing an unrelated field without proposing memberIds does not require a non-lead member', () => {
+  const result = resolveUpdatedParticipants('usr-7', undefined, undefined);
+  assert.equal(result.error, undefined);
+  assert.equal(result.memberIds, undefined);
 });
 
 test('project approval works without an approval reason', () => {

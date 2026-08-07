@@ -23,10 +23,15 @@ export const resolveCreateParticipants = (
   if (!teamLeadId) {
     return { teamLeadId: '', memberIds: [], error: 'An Admin must choose a Team Lead.' };
   }
-  return {
-    teamLeadId,
-    memberIds: Array.from(new Set([...selectedMemberIds, teamLeadId]))
-  };
+  const memberIds = Array.from(new Set([...selectedMemberIds, teamLeadId]));
+  // A Team Lead is an existing project member designated as lead, not a separate entity -- so
+  // "at least 1 Team Lead and at least 1 regular member" means memberIds must contain someone
+  // other than the lead, not merely be non-empty (a lead-only memberIds list already satisfies
+  // "non-empty" on its own).
+  if (memberIds.length < 2) {
+    return { teamLeadId, memberIds: [], error: 'A project must have at least one member besides the Team Lead.' };
+  }
+  return { teamLeadId, memberIds };
 };
 
 export const resolveUpdatedParticipants = (
@@ -42,10 +47,13 @@ export const resolveUpdatedParticipants = (
       error: 'The current Team Lead cannot be removed from project members without assigning a replacement lead.'
     };
   }
-  return {
-    teamLeadId,
-    memberIds: Array.from(new Set([...proposedMemberIds, teamLeadId]))
-  };
+  const memberIds = Array.from(new Set([...proposedMemberIds, teamLeadId]));
+  // Same "lead alone isn't enough" rule as resolveCreateParticipants -- memberIds always includes
+  // the lead by this point, so length < 2 means every other member was edited out.
+  if (memberIds.length < 2) {
+    return { teamLeadId, error: 'A project must have at least one member besides the Team Lead.' };
+  }
+  return { teamLeadId, memberIds };
 };
 
 export const validateProjectDecision = (
