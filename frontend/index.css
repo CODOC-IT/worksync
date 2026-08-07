@@ -583,6 +583,25 @@
   color: #334E3D;
 }
 
+/* Project selector's SELECTED and HOVERED/keyboard-highlighted rows only — `.text-cyan-200`
+   (selected title), `.text-cyan-300/80` (selected code) and `.text-cyan-100` (hovered code) are
+   used nowhere else under [data-kanban], so none of this touches an unselected, non-hovered row
+   (`.text-slate-200`/`.text-slate-400`) — see KanbanView.tsx's ProjectSelect. The hovered row's
+   title (`.text-white`) needs no override: Light Theme already remaps `--shade-white` to a near-
+   black ink color for exactly this reason.
+   --tone-accent-100/200/300 all resolve to pale sage tones in Light Theme with too little
+   contrast against either row's fill to read reliably; a dark neutral reads correctly instead,
+   since the point of a "selected"/"hovered" indicator is legibility, not matching the accent
+   color. Selected/hover background, ring and check icon are untouched. */
+.light [data-kanban] .text-cyan-200 {
+  color: #111827;
+}
+
+.light [data-kanban] .text-cyan-300\/80,
+.light [data-kanban] .text-cyan-100 {
+  color: #4B5563;
+}
+
 .light [data-calendar] .glass-panel {
   border-color: #BEC9C2 !important;
 }
