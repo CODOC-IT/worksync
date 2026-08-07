@@ -6,6 +6,7 @@ import { userStore, updateSupabaseAuthEmail } from '../store/userStore.js';
 import { toUserPk } from '../utils/idMapping.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { buildAccountChangeApprovalCopy, buildAccountChangeRejectionCopy, humanizeAccountField } from './accountChangeRequestCopy.js';
 
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
 
@@ -539,19 +540,36 @@ const reviewRequest = async (
 
     const requesterName = reviewed.user_name || 'Requester';
     const reviewer = userStore.findById(req.user.id);
+    const reviewerName = reviewer?.name || req.user.email;
     const field = reviewed.requested_field || 'profile';
-    const reviewMessages = buildAccountReviewMessages(
-      action,
-      reviewer?.name || req.user.email,
-      requesterName,
-      field,
-      decisionReason
-    );
+    const fieldLabel = humanizeAccountField(reviewed.requested_field);
+    // Read from `reviewed` -- the row this function's own UPDATE ... RETURNING just persisted --
+    // rather than the request-body-derived `decisionReason` local: they're equal within this one
+    // request, but sourcing the notification from the same row Notification History will later
+    // read back is what guarantees the two can never drift apart. Mirrors
+    // projectApproval.service.ts's identical reasoning for the project-approval-rejection notice.
+    const decidedAt = reviewed.decided_at ? new Date(reviewed.decided_at) : new Date();
+    const reviewMessages = buildAccountReviewMessages(action, reviewerName, requesterName, field, decisionReason);
+    const decisionCopy = action === 'Approved'
+      ? buildAccountChangeApprovalCopy({ reviewerName, fieldLabel, decidedAt })
+      : buildAccountChangeRejectionCopy({
+          reviewerName,
+          fieldLabel,
+          reason: reviewed.decision_reason || '',
+          decidedAt
+        });
 
+    // Only the requester is notified -- they are the sole person with a stake in this decision;
+    // no other HR/Admin/Team Member is related to it. Dedicated account_change_request_approved/
+    // _rejected types (not the generic 'approval' this used to publish) so the preview names the
+    // reviewer and the field, and — on rejection — the mandatory reason lives in an expanded
+    // `detail`/`metadata` body rather than crammed into the one-line preview.
     await notificationService.publishEvent({
-      type: 'approval',
-      title: `Account Change Request ${action}`,
-      message: reviewMessages.notification,
+      type: action === 'Approved' ? 'account_change_request_approved' : 'account_change_request_rejected',
+      title: decisionCopy.title,
+      message: decisionCopy.message,
+      detail: decisionCopy.detail,
+      metadata: decisionCopy.metadata,
       recipientIds: [reviewed.user_id],
       actorId: req.user.id,
     }).catch((error) => {

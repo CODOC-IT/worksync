@@ -12,8 +12,42 @@ import { toUserPk } from '../utils/idMapping.js';
 import { getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { canAuthenticateAccount } from '../auth/accountAccess.js';
 import { isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../accounts/accounts.validation.js';
+import * as notificationService from '../notifications/notification.service.js';
 
 const router = Router();
+
+// Recipients for an Admin's own direct profile self-edit: the Admin themselves (an in-app
+// confirmation, and for the security-sensitive fields below, an "if this wasn't you" alert) plus
+// every OTHER Admin. There is no higher role to review an Admin's own account, so peer Admins are
+// the only people who could notice a compromised account being used to change its own
+// credentials — mirrors the notifyAdmins-style recipient helper already used in
+// projectApproval.service.ts, but including the actor. HR/Lead/Member never see these: these
+// routes are Admin-only (see each handler's own role check just below).
+const notifySelfAndOtherAdmins = (
+  actorId: string,
+  event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds' | 'message' | 'recipientMessages' | 'detail' | 'recipientDetails'> & {
+    selfMessage: string;
+    otherAdminsMessage: string;
+    selfDetail: string;
+    otherAdminsDetail: string;
+  }
+): void => {
+  const { selfMessage, otherAdminsMessage, selfDetail, otherAdminsDetail, ...base } = event;
+  (async () => {
+    const allUsers = await userStore.getAllUsers();
+    const otherAdminIds = allUsers
+      .filter((user) => user.role === 'Admin' && user.id !== actorId)
+      .map((user) => user.id);
+    await notificationService.publishEvent({
+      ...base,
+      message: otherAdminsMessage,
+      detail: otherAdminsDetail,
+      recipientMessages: { [actorId]: selfMessage },
+      recipientDetails: { [actorId]: selfDetail },
+      recipientIds: [actorId, ...otherAdminIds]
+    });
+  })().catch((error) => console.error('[authRoutes] Failed to publish profile self-edit notification.', error));
+};
 
 const canManageAccounts = (role?: string) => role === 'Admin' || role === 'HR';
 const DEFAULT_TEMPORARY_ACCOUNT_PASSWORD = 'Codoc@123';
@@ -296,11 +330,17 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
     }
 
     const previousUser = userStore.findById(req.user.id);
+    // Snapshotted as its own primitive string BEFORE the mutation below, not read from
+    // `previousUser` afterward: userStore.updateDisplayName finds the SAME cached object via its
+    // own internal findById() and mutates it in place (`user.name = name`), so `previousUser` is
+    // a live reference into the same UserRecord, not a copy -- reading `previousUser.name` after
+    // this call would already return the NEW name, making "changed from X to X" nonsensical.
+    const previousDisplayName = previousUser?.name || req.user.email;
     const updatedUser = await userStore.updateDisplayName(req.user.id, sanitizedName);
 
     recordActivitySafe({
       actorId: req.user.id,
-      actorName: previousUser?.name || req.user.email,
+      actorName: previousDisplayName,
       actorEmail: req.user.email,
       actorRole: req.user.role,
       affectedUserId: req.user.id,
@@ -310,10 +350,21 @@ router.put('/profile/display-name', authenticateJWT, async (req: AuthenticatedRe
       entityType: 'User',
       entityId: req.user.id,
       entityName: updatedUser?.name || sanitizedName,
-      description: `${previousUser?.name || req.user.email} changed their display name from "${previousUser?.name || ''}" to "${sanitizedName}".`,
-      changes: [{ field: 'Display Name', previousValue: previousUser?.name || null, newValue: sanitizedName }],
+      description: `${previousDisplayName} changed their display name from "${previousDisplayName}" to "${sanitizedName}".`,
+      changes: [{ field: 'Display Name', previousValue: previousDisplayName, newValue: sanitizedName }],
       source: 'Web',
       metadata: { field: 'displayName' },
+    });
+
+    notifySelfAndOtherAdmins(req.user.id, {
+      type: 'account_profile_updated',
+      title: 'Display Name Updated',
+      selfMessage: `Your display name was changed to "${sanitizedName}".`,
+      otherAdminsMessage: `${previousDisplayName} changed their display name to "${sanitizedName}".`,
+      selfDetail: `Your display name was changed from "${previousDisplayName}" to "${sanitizedName}".`,
+      otherAdminsDetail: `${previousDisplayName}'s display name was changed from "${previousDisplayName}" to "${sanitizedName}".`,
+      metadata: { field: 'Display Name', previousValue: previousDisplayName, newValue: sanitizedName },
+      actorId: req.user.id
     });
 
     return void res.status(200).json({
@@ -362,6 +413,12 @@ router.put('/profile/username', authenticateJWT, async (req: AuthenticatedReques
     }
 
     const previousUser = userStore.findById(req.user.id);
+    // Snapshotted before the mutation below: userStore.updateUsername finds the same cached
+    // object via its own internal findById() and mutates `.username` on it in place, so
+    // `previousUser.username` would already read back as the NEW value afterward (the identical
+    // in-place-mutation hazard as the display-name route above -- `.name` itself is untouched by
+    // this call, so it alone is still safe to read live from `previousUser` below).
+    const previousUsername = previousUser?.username || '';
     const updatedUser = await userStore.updateUsername(req.user.id, normalizedUsername);
 
     recordActivitySafe({
@@ -376,10 +433,22 @@ router.put('/profile/username', authenticateJWT, async (req: AuthenticatedReques
       entityType: 'User',
       entityId: req.user.id,
       entityName: updatedUser?.name || previousUser?.name,
-      description: `${previousUser?.name || req.user.email} changed their username from "${previousUser?.username || ''}" to "${normalizedUsername}".`,
-      changes: [{ field: 'Username', previousValue: previousUser?.username || null, newValue: normalizedUsername }],
+      description: `${previousUser?.name || req.user.email} changed their username from "${previousUsername}" to "${normalizedUsername}".`,
+      changes: [{ field: 'Username', previousValue: previousUsername || null, newValue: normalizedUsername }],
       source: 'Web',
       metadata: { field: 'username' },
+    });
+
+    const usernameActor = previousUser?.name || req.user.email;
+    notifySelfAndOtherAdmins(req.user.id, {
+      type: 'account_profile_updated',
+      title: 'Username Changed',
+      selfMessage: `Your username was changed to "${normalizedUsername}".`,
+      otherAdminsMessage: `${usernameActor} changed their username to "${normalizedUsername}".`,
+      selfDetail: `Your username was changed from "${previousUsername}" to "${normalizedUsername}".`,
+      otherAdminsDetail: `${usernameActor}'s username was changed from "${previousUsername}" to "${normalizedUsername}".`,
+      metadata: { field: 'Username', previousValue: previousUsername, newValue: normalizedUsername },
+      actorId: req.user.id
     });
 
     return void res.status(200).json({
@@ -421,6 +490,10 @@ router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, 
     }
 
     const previousUser = userStore.findById(req.user.id);
+    // Snapshotted before the mutation below, for the same reason as the display-name/username
+    // routes above: userStore.updateEmail mutates `.email` on the same cached object in place,
+    // so `previousUser.email` would already read back as the NEW address afterward.
+    const previousEmail = previousUser?.email || '';
     const updatedUser = await userStore.updateEmail(req.user.id, normalizedEmail);
 
     recordActivitySafe({
@@ -435,10 +508,25 @@ router.put('/profile/email', authenticateJWT, async (req: AuthenticatedRequest, 
       entityType: 'User',
       entityId: req.user.id,
       entityName: updatedUser?.name || previousUser?.name,
-      description: `${previousUser?.name || req.user.email} changed their email from "${previousUser?.email || ''}" to "${normalizedEmail}".`,
-      changes: [{ field: 'Email', previousValue: previousUser?.email || null, newValue: normalizedEmail }],
+      description: `${previousUser?.name || req.user.email} changed their email from "${previousEmail}" to "${normalizedEmail}".`,
+      changes: [{ field: 'Email', previousValue: previousEmail || null, newValue: normalizedEmail }],
       source: 'Web',
       metadata: { field: 'email' },
+    });
+
+    // security_alert, not account_profile_updated: email is the account-recovery channel, so a
+    // change to it is treated as a security event (the same tier password changes below get),
+    // not a routine profile edit -- notified to every Admin, not just the one who made it.
+    const emailActor = previousUser?.name || req.user.email;
+    notifySelfAndOtherAdmins(req.user.id, {
+      type: 'security_alert',
+      title: 'Account Email Changed',
+      selfMessage: `Your account email was changed to ${normalizedEmail}. If this wasn't you, contact another Administrator immediately.`,
+      otherAdminsMessage: `${emailActor}'s account email was changed to ${normalizedEmail}.`,
+      selfDetail: `Your WorkSync login email was changed from ${previousEmail} to ${normalizedEmail}. If you did not make this change, contact another Administrator immediately to secure your account.`,
+      otherAdminsDetail: `${emailActor}'s login email was changed from ${previousEmail} to ${normalizedEmail}.`,
+      metadata: { field: 'Email', previousValue: previousEmail, newValue: normalizedEmail },
+      actorId: req.user.id
     });
 
     return void res.status(200).json({
@@ -516,6 +604,20 @@ router.put('/profile/password', authenticateJWT, async (req: AuthenticatedReques
       changes: [{ field: 'Password', previousValue: null, newValue: '••••••' }],
       source: 'Web',
       metadata: { field: 'password' },
+    });
+
+    // security_alert: a password change is the single most sensitive self-edit this account can
+    // make. Every other Admin is notified alongside the actor themselves, since there is no
+    // higher role to review it -- the same reasoning as the email-change alert above.
+    notifySelfAndOtherAdmins(req.user.id, {
+      type: 'security_alert',
+      title: 'Account Password Changed',
+      selfMessage: "Your account password was changed. If this wasn't you, contact another Administrator immediately.",
+      otherAdminsMessage: `${user.name}'s account password was changed.`,
+      selfDetail: 'Your WorkSync password was changed. If you did not make this change, contact another Administrator immediately to secure your account.',
+      otherAdminsDetail: `${user.name}'s account password was changed.`,
+      metadata: { field: 'Password', account: user.name },
+      actorId: req.user.id
     });
 
     res.status(200).json({ success: true, message: 'Password changed successfully.' });

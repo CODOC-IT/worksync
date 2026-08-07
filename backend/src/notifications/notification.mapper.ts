@@ -86,7 +86,18 @@ const TYPE_LINK_ROUTES: Record<string, string> = {
   holiday_created: 'calendar',
   user_registered: 'members',
   user_role_changed: 'members',
-  user_deactivated: 'members'
+  user_deactivated: 'members',
+  // Profile: the decision on the requester's own account change request, and an Admin's direct
+  // self-edit -- both are about the viewer's own account, so both land on their Profile screen
+  // rather than the generic System->'notifications' fallback or the reviewer-facing Approvals
+  // inbox (which the requester, as a non-reviewer, has no standing to act in).
+  account_change_request_approved: 'profile',
+  account_change_request_rejected: 'profile',
+  account_profile_updated: 'profile',
+  // security_alert has no single owning screen in general (a future non-Profile trigger might
+  // want somewhere else), but Profile is the only trigger that exists today and is where the
+  // recipient would go to review/re-secure their account.
+  security_alert: 'profile'
 };
 
 export const deriveLinkRoute = (categoryCode: string, typeCode: string): string =>

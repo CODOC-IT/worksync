@@ -10,7 +10,7 @@
 [![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-4.1.14-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Express](https://img.shields.io/badge/Express-4.21.2-000000?style=for-the-badge&logo=express&logoColor=white)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Vercel](https://img.shields.io/badge/Live%20Demo-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync-taupe.vercel.app/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-worksync.codoc.it.com-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync.codoc.it.com/)
 
 <br/>
 
@@ -67,7 +67,7 @@
 
 <div align="center">
 
-[![🌐 View Live Application](https://img.shields.io/badge/%F0%9F%8C%90%20View%20Live%20Application-worksync--taupe.vercel.app-00C7B7?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync-taupe.vercel.app/)
+[![🌐 View Live Application](https://img.shields.io/badge/%F0%9F%8C%90%20View%20Live%20Application-worksync.codoc.it.com-00C7B7?style=for-the-badge&logo=vercel&logoColor=white)](https://worksync.codoc.it.com/)
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-CODOC--IT%2Fworksync-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/CODOC-IT/worksync)
 
@@ -413,7 +413,7 @@ As defined in Section 23 of the functional specification, future iterations of W
 
 **WorkSync Office Management System** &bull; Built with ❤️ by the Intern Engineering Team
 
-[![Vercel](https://img.shields.io/badge/Hosted%20on-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)](https://worksync-taupe.vercel.app/)
+[![Vercel](https://img.shields.io/badge/Hosted%20on-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)](https://worksync.codoc.it.com/)
 [![GitHub](https://img.shields.io/badge/Source-GitHub-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/CODOC-IT/worksync)
 
 </div>

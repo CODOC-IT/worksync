@@ -2662,21 +2662,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const newReq = data.request as AccountChangeRequest;
         setAccountChangeRequests((prev) => [newReq, ...prev.filter((item) => item.id !== newReq.id)]);
 
-        const hrRecipients = users.filter((u) => u.role === 'HR').map((u) => u.id);
-        const adminRecipients = resolveAdminRecipients(users, currentUser.id);
-        const allRecipientIds = currentRole === 'HR'
-          ? adminRecipients
-          : [...new Set([...hrRecipients, ...adminRecipients])];
-
-        dispatchNotifications({
-          recipientIds: allRecipientIds,
-          type: 'approval',
-          title: 'Account Change Request',
-          message: `${currentUser.name} (${currentRole}) requested an account change: "${reason}".`,
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: 'approvals'
-        });
+        // No dispatchNotifications here: POST /api/account-change-requests already published the
+        // 'Account Change Request' notification server-side (accountChangeRequestRoutes.ts's
+        // notifyApprovers, called in-process inside that same request) to the correct HR/Admin
+        // reviewers. Dispatching it again here would double-notify every reviewer -- each got two
+        // identical copies of this notification until this call was removed.
         confirmActionSuccess('Request Submitted', 'Your account change request was submitted for approval.');
         pushActivity('Requested account/profile change', 'Approval', newReq.id, currentUser.name);
         return { success: true, message: data.message || 'Account change request submitted successfully.' };
