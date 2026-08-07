@@ -6,7 +6,6 @@ import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { ActivityChange } from '../activity/activity.types.js';
-import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
 import { isProjectAccessible, isProjectLead, recheckPendingRemovalForMember } from '../projects/project.service.js';
 import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
