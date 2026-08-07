@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { query } from '../db/pool.js';
-import { getSupabaseServiceClient, getSupabaseAnonClient, isSupabaseServiceConfigured } from '../db/supabase.js';
+import { getSupabaseServiceClient, getSupabaseAnonClient, isSupabaseServiceConfigured, isSupabaseAnonConfigured } from '../db/supabase.js';
 import { fromUserPk } from '../utils/idMapping.js';
 import { canAuthenticateAccount } from '../auth/accountAccess.js';
 
@@ -16,9 +16,24 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export const validateAuthConfig = (): void => {
-  if (!isSupabaseServiceConfigured() && process.env.NODE_ENV !== 'test') {
-    throw new Error('Supabase Auth requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  if (isSupabaseServiceConfigured() || process.env.NODE_ENV === 'test') return;
+
+  // Token validation still works through the anon/publishable-key fallback in resolveSession,
+  // so a missing service-role key must never crash the whole API at boot -- on serverless
+  // deployments that surfaces to the client as a bare non-JSON 500 (e.g. the login screen's
+  // "Authentication service returned an unexpected response (HTTP 500)"). Warn loudly instead.
+  if (isSupabaseAnonConfigured()) {
+    console.warn(
+      '[Auth] SUPABASE_SERVICE_ROLE_KEY is not configured. Falling back to anon-key token validation; ' +
+      'server-side admin operations (password resets, email changes, user deactivation, storage) will be unavailable.'
+    );
+    return;
   }
+
+  throw new Error(
+    'Supabase Auth requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY ' +
+    '(or SUPABASE_PUBLISHABLE_KEY for anon-key token validation).'
+  );
 };
 
 // Kept only so legacy route modules compile during this one-release retirement window. No route
