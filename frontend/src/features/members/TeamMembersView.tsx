@@ -138,7 +138,7 @@ const EMPTY_MEMBER_FORM: MemberFormState = {
 };
 
 export const TeamMembersView: React.FC = () => {
-  const { users, tasks, projects, currentRole, currentUser, refreshUsers, showToast } = useApp();
+  const { users, tasks, projects, currentRole, refreshUsers, showToast } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<SearchField>('name');
@@ -226,15 +226,14 @@ export const TeamMembersView: React.FC = () => {
     () => (selectedMember ? getMemberInsights(selectedMember, projects, tasks) : null),
     [projects, selectedMember, tasks],
   );
-  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR'));
-  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || (selectedMember?.role === 'HR' && selectedMember.id !== currentUser.id));
+  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && selectedMember?.role === 'Admin');
+  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR');
   const canEditSelectedMember = Boolean(selectedMember) && !hrCannotManageSelectedMember;
   const selectedMemberIsAdmin = selectedMember?.role === 'Admin';
 
   const activeMembersCount = useMemo(() => directoryUsers.filter((member) => member.status !== 'inactive').length, [directoryUsers]);
   const deactivatedMembersCount = useMemo(() => directoryUsers.filter((member) => member.status === 'inactive').length, [directoryUsers]);
   const roleLockedToProjectLead = manageMode === 'edit' && Boolean(manageTargetId) && activeProjectLeadIds.has(manageTargetId || '');
-  const isEditingSelf = manageMode === 'edit' && Boolean(manageTargetId) && manageTargetId === currentUser.id;
 
   useEffect(() => {
     if (!canInspectMembers) {
@@ -1267,7 +1266,7 @@ export const TeamMembersView: React.FC = () => {
               </label>
                 <label className="text-sm text-slate-300">
                   <span className="mb-1 block text-xs">Role</span>
-                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && (isEditingSelf || memberForm.role === 'Admin')) || roleLockedToProjectLead} className={surfaceInputClass}>
+                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin') || roleLockedToProjectLead} className={surfaceInputClass}>
                     {currentRole === 'Admin' && <option value="Admin">Administrator</option>}
                     {currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin' && <option value="Admin">Administrator</option>}
                     {roleLockedToProjectLead && <option value="Team_Lead">Team Lead</option>}
@@ -1276,11 +1275,9 @@ export const TeamMembersView: React.FC = () => {
                   </select>
                   {(currentRole === 'HR' || roleLockedToProjectLead) && (
                     <p className="mt-2 text-xs text-slate-500">
-                      {isEditingSelf
-                        ? 'Your role cannot be changed from this screen.'
-                        : roleLockedToProjectLead
-                          ? 'Team Lead assignment is managed from the Projects section.'
-                          : 'HR cannot create or change Administrator roles.'}
+                      {roleLockedToProjectLead
+                        ? 'Team Lead assignment is managed from the Projects section.'
+                        : 'HR cannot create or change Administrator roles.'}
                     </p>
                   )}
                 </label>
