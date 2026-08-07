@@ -635,7 +635,8 @@ export const decideTaskEditApproval = async (
   approvalId: string,
   decision: 'Approved' | 'Rejected',
   actorId: string,
-  actorRole: string
+  actorRole: string,
+  reason?: string
 ): Promise<TaskDTO | null> => {
   const requestPk = Number(approvalId.replace(/^task-edit-/, ''));
   if (!Number.isInteger(requestPk) || requestPk <= 0) {
@@ -654,7 +655,8 @@ export const decideTaskEditApproval = async (
     requestPk,
     toUserPk(actorId),
     decision,
-    approval.proposedTaskUpdate
+    approval.proposedTaskUpdate,
+    reason
   );
   if (!taskPk) throw new TaskValidationError('This task edit request is no longer pending.');
   if (decision === 'Rejected') return null;

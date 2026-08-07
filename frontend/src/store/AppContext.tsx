@@ -2272,7 +2272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
         }
         try {
-          await decideTaskEditApprovalViaApi(approvalId, 'Rejected');
+          await decideTaskEditApprovalViaApi(approvalId, 'Rejected', reason?.trim());
         } catch (error: any) {
           return { success: false, message: error?.message || 'Unable to reject the task update.' };
         }

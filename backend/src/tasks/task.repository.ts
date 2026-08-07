@@ -283,7 +283,8 @@ export const decideTaskEditApproval = async (
   requestId: number,
   reviewerUserId: number,
   decision: 'Approved' | 'Rejected',
-  proposed: TaskEditApprovalInput
+  proposed: TaskEditApprovalInput,
+  reviewNote?: string
 ): Promise<number | null> => withTransaction(async (runQuery) => {
   const locked = await runQuery<{ taskid: number }>(
     `SELECT taskid FROM work.taskchangerequests
@@ -324,9 +325,9 @@ export const decideTaskEditApproval = async (
   );
   await runQuery(
     `INSERT INTO work.changerequestreviews
-       (changerequestid, revieweruserid, reviewaction, reviewerrolecode)
-     VALUES ($1, $2, $3, 'TeamLead')`,
-    [requestId, reviewerUserId, decision]
+       (changerequestid, revieweruserid, reviewaction, reviewnote, reviewerrolecode)
+     VALUES ($1, $2, $3, $4, 'TeamLead')`,
+    [requestId, reviewerUserId, decision, reviewNote || null]
   );
   return locked.rows[0].taskid;
 });
