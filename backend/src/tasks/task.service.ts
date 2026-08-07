@@ -7,7 +7,6 @@ import * as projectRepo from '../projects/project.repository.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
 import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
-import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
   API_TO_DB_TASK_STATUS,
   ApiTaskStatus,
