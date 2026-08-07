@@ -5,6 +5,7 @@ interface Option {
   value: string;
   label: string;
   sublabel?: string;
+  disabled?: boolean;
 }
 
 interface SearchableSelectProps {
@@ -54,6 +55,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   }, [open]);
 
   const handleSelect = (opt: Option) => {
+    if (opt.disabled) return;
     onChange(opt.value);
     setOpen(false);
     setSearch('');
@@ -113,8 +115,10 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                   key={opt.value}
                   type="button"
                   onClick={() => handleSelect(opt)}
-                  className={`w-full text-left px-3 py-2.5 text-sm transition-colors flex items-center justify-between gap-2 ${
-                    opt.value === value
+                  disabled={opt.disabled}
+                  className={`w-full text-left px-3 py-2.5 text-sm transition-colors flex items-center justify-between gap-2 ${opt.disabled
+                    ? 'cursor-not-allowed text-slate-500 opacity-60'
+                    : opt.value === value
                       ? 'bg-purple-500/20 text-purple-200 border-l-2 border-purple-400'
                       : 'text-slate-300 hover:bg-white/5 hover:text-white'
                   }`}
