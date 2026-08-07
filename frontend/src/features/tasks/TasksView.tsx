@@ -1160,11 +1160,7 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
               />
             </label>
 
-            <FilterSelect value={projectFilter} onChange={setProjectFilter} label="All projects">
-              {taskFilterProjects.map((project) => (
-                <option key={project.id} value={project.id}>{getProjectName(project)}</option>
-              ))}
-            </FilterSelect>
+            <ProjectFilter value={projectFilter} onChange={setProjectFilter} projects={taskFilterProjects} />
 
             <FilterSelect value={statusFilter} onChange={setStatusFilter} label="All statuses">
               {TASK_STATUSES.map((status) => (
@@ -1556,6 +1552,14 @@ const AssigneeFilter: React.FC<{ value: string; onChange: (value: string) => voi
       </div>}
     </div>
   );
+};
+
+const ProjectFilter: React.FC<{ value: string; onChange: (value: string) => void; projects: Project[] }> = ({ value, onChange, projects }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = projects.find((project) => project.id === value);
+  const matches = projects.filter((project) => getProjectName(project).toLowerCase().includes(query.trim().toLowerCase()));
+  return <div className="relative"><button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className={`${inputClass} flex items-center justify-between text-left text-xs`}><span className="truncate">{selected ? getProjectName(selected) : 'All projects'}</span><ChevronDown size={13} className="text-slate-500" /></button>{open && <div className="absolute z-30 mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-2 shadow-xl"><input autoFocus aria-label="Search projects" value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder="Search projects" /><div role="listbox" className="mt-2 max-h-52 overflow-y-auto"><button type="button" role="option" aria-selected={!value} onClick={() => { onChange(''); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-300 hover:bg-white/10">All projects</button>{matches.map((project) => <button key={project.id} type="button" role="option" aria-selected={value === project.id} onClick={() => { onChange(project.id); setOpen(false); setQuery(''); }} className="block w-full rounded px-2 py-2 text-left text-xs text-slate-200 hover:bg-white/10">{getProjectName(project)}</button>)}{matches.length === 0 && <p className="px-2 py-3 text-xs text-slate-500">No projects found</p>}</div></div>}</div>;
 };
 
 const TaskBadge: React.FC<{

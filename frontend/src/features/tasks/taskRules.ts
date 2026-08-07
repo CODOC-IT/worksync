@@ -106,6 +106,7 @@ export const getAssignableProjectUsers = (project: Project, users: User[]): User
   return users.filter((user) =>
     user.status !== 'inactive'
     && memberIds.has(user.id)
+    && user.id !== project.teamLeadId
     && user.role !== 'Admin'
     && user.role !== 'HR'
   );
