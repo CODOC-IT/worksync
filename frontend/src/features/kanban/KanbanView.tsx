@@ -490,7 +490,7 @@ const ProjectSelect: React.FC<{
         {selectedProject ? (
           <span className="min-w-0 truncate">
             <span className="font-semibold text-slate-100">{selectedProject.title}</span>
-            <span className="ml-1.5 font-mono text-[10px] text-slate-500">{selectedProject.code}</span>
+            <span className="ml-1.5 font-mono text-[10px] text-slate-400">{selectedProject.code}</span>
           </span>
         ) : (
           <span className="text-slate-500">Select a project…</span>
@@ -526,25 +526,53 @@ const ProjectSelect: React.FC<{
             {filteredProjects.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-500">No projects match "{query}".</p>
             ) : (
-              filteredProjects.map((project, index) => (
-                <button
-                  key={project.id}
-                  type="button"
-                  role="option"
-                  aria-selected={project.id === selectedProjectId}
-                  onMouseEnter={() => setHighlightIndex(index)}
-                  onClick={() => selectProject(project.id)}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition ${
-                    index === highlightIndex ? 'bg-cyan-500/15 text-cyan-200' : 'text-slate-300 hover:bg-white/5'
-                  }`}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">{project.title}</span>
-                    <span className="block font-mono text-[10px] text-slate-500">{project.code}</span>
-                  </span>
-                  {project.id === selectedProjectId && <Check size={13} className="shrink-0 text-cyan-400" />}
-                </button>
-              ))
+              filteredProjects.map((project, index) => {
+                const isHighlighted = index === highlightIndex;
+                const isSelected = project.id === selectedProjectId;
+                return (
+                  <button
+                    key={project.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setHighlightIndex(index)}
+                    onClick={() => selectProject(project.id)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition ${
+                      isHighlighted
+                        ? 'bg-cyan-500/20 ring-1 ring-inset ring-cyan-400/50'
+                        : isSelected
+                        ? 'bg-white/[0.07] ring-1 ring-inset ring-white/10'
+                        : 'hover:bg-white/[0.07]'
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      {/* Both lines get an explicit colour per state rather than inheriting: the
+                          project code used to stay at text-slate-500 on top of the cyan hover
+                          fill, which fell below a readable contrast ratio. Hovered/keyboard-
+                          highlighted rows now read near-white over a slightly stronger fill, and
+                          the selected-but-not-hovered row stays distinguishable through its own
+                          fill + ring + check mark rather than through text colour alone. */}
+                      <span
+                        className={`block truncate font-semibold ${
+                          isHighlighted ? 'text-white' : isSelected ? 'text-cyan-200' : 'text-slate-200'
+                        }`}
+                      >
+                        {project.title}
+                      </span>
+                      <span
+                        className={`block font-mono text-[10px] ${
+                          isHighlighted ? 'text-cyan-100' : isSelected ? 'text-cyan-300/80' : 'text-slate-400'
+                        }`}
+                      >
+                        {project.code}
+                      </span>
+                    </span>
+                    {isSelected && (
+                      <Check size={13} className={`shrink-0 ${isHighlighted ? 'text-white' : 'text-cyan-300'}`} />
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
