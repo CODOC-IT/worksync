@@ -30,9 +30,10 @@ export const validateAuthConfig = (): void => {
     return;
   }
 
-  throw new Error(
-    'Supabase Auth requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY ' +
-    '(or SUPABASE_PUBLISHABLE_KEY for anon-key token validation).'
+  console.warn(
+    '[Auth] No Supabase credentials configured (missing SUPABASE_SERVICE_ROLE_KEY / SUPABASE_PUBLISHABLE_KEY / ' +
+    'VITE_SUPABASE_PUBLISHABLE_KEY). Token validation will reject all requests. Add the Supabase keys to the ' +
+    'deployment environment so login and authenticated routes can work.'
   );
 };
 
