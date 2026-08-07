@@ -303,6 +303,7 @@ export const TeamMembersView: React.FC = () => {
   const openEditModal = (member: User) => {
     setManageMode('edit');
     setManageTargetId(member.id);
+    setNotice(null);
     void loadDepartments();
     const departmentId = departments.find((department) => department.name === member.department)?.id;
     setMemberForm({
@@ -323,6 +324,7 @@ export const TeamMembersView: React.FC = () => {
     if (manageSubmitting) return;
     setManageModalOpen(false);
     setManageTargetId(null);
+    setNotice(null);
     setMemberForm({ ...EMPTY_MEMBER_FORM });
     setShowTemporaryPassword(false);
   };
@@ -1243,6 +1245,12 @@ export const TeamMembersView: React.FC = () => {
                 <X size={18} />
               </button>
             </div>
+
+            {notice && notice.type === 'error' && (
+              <div role="alert" className="border-b border-rose-500/30 bg-rose-500/10 px-5 py-3 text-sm text-rose-300">
+                {notice.message}
+              </div>
+            )}
 
             <div className="grid max-h-[70vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
               <label className="text-sm text-slate-300">

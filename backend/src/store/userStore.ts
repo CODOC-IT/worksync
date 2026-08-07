@@ -541,15 +541,31 @@ class UserStore {
     const duplicate = Array.from(this.fallbackUsers.values()).find(
       (existing) => existing.id !== userId && existing.email.toLowerCase() === nextEmail
     );
-    if (duplicate) throw new Error('A user with this email already exists.');
+    if (duplicate) throw new Error('This email is already in use by another account.');
     const usernameDuplicate = Array.from(this.fallbackUsers.values()).find(
       (existing) => existing.id !== userId && existing.username?.toLowerCase() === nextUsername
     );
     if (usernameDuplicate) throw new Error('This username is already in use.');
 
     if (this.dbAvailable) {
+      // Re-check against the database so a stale in-memory cache can never let a
+      // duplicate slip through to the unique index (which would surface as a vague
+      // "Database user update failed" instead of a clear conflict message).
+      const uid = toUserPk(userId);
+      const [emailInUse, usernameInUse] = await Promise.all([
+        query<{ userid: number }>(
+          `SELECT userid FROM iam.users WHERE organizationid = 1 AND lower(email) = lower($1) AND userid <> $2 LIMIT 1`,
+          [nextEmail, uid]
+        ),
+        query<{ userid: number }>(
+          `SELECT userid FROM iam.users WHERE organizationid = 1 AND lower(username) = lower($1) AND userid <> $2 LIMIT 1`,
+          [nextUsername, uid]
+        ),
+      ]);
+      if (emailInUse.rows.length > 0) throw new Error('This email is already in use by another account.');
+      if (usernameInUse.rows.length > 0) throw new Error('This username is already in use.');
+
       try {
-        const uid = toUserPk(userId);
         const [givenName, ...familyParts] = nextName.split(/\s+/);
         const familyName = familyParts.join(' ') || givenName;
         const departmentId = await this.getOrCreateDepartmentId(nextDepartment);
