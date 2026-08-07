@@ -66,3 +66,46 @@ test('persists and loads requests through the lowercase-folded project approval 
   assert.equal(decided?.reviewedbyuserid, 1);
   assert.equal((await findPendingApprovalRequests()).length, 0);
 });
+
+test('Team Lead project edit request persists and appears in Admin inbox newest first', async () => {
+  const olderId = await insertApprovalRequest({
+    projectId: 42,
+    requestType: 'PROJECT_EDIT',
+    requestedByUserId: 7,
+    requestedChangesJson: JSON.stringify({ title: 'First proposal' }),
+    reason: 'First scope update'
+  });
+  const newerId = await insertApprovalRequest({
+    projectId: 42,
+    requestType: 'PROJECT_EDIT',
+    requestedByUserId: 7,
+    requestedChangesJson: JSON.stringify({ title: 'Latest proposal' }),
+    reason: 'Latest scope update'
+  });
+  await pool.query(
+    `UPDATE work.projectapprovalrequests
+        SET createdatutc = CASE approvalrequestid
+          WHEN $1 THEN '2026-08-01T00:00:00Z'::timestamptz
+          WHEN $2 THEN '2026-08-02T00:00:00Z'::timestamptz
+        END`,
+    [olderId, newerId]
+  );
+
+  const pending = await findPendingApprovalRequests();
+  assert.deepEqual(pending.map((item) => item.approvalrequestid), [newerId, olderId]);
+  assert.deepEqual(JSON.parse(pending[0].requestedchangesjson || '{}'), { title: 'Latest proposal' });
+});
+
+test('rejection persists the required reason for request history and notifications', async () => {
+  const id = await insertApprovalRequest({
+    projectId: 42,
+    requestType: 'PROJECT_EDIT',
+    requestedByUserId: 7,
+    requestedChangesJson: JSON.stringify({ title: 'Rejected proposal' }),
+    reason: 'Requested scope update'
+  });
+  const decided = await decideApprovalRequest(id, 'Rejected', 1, 'The approved scope must remain unchanged.');
+  assert.equal(decided?.requeststatus, 'Rejected');
+  assert.equal(decided?.decisionreason, 'The approved scope must remain unchanged.');
+  assert.equal((await findApprovalRequestsForUser(7))[0].decisionreason, 'The approved scope must remain unchanged.');
+});

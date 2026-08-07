@@ -55,6 +55,10 @@ const decide = async (req: AuthenticatedRequest, res: Response, decision: 'Appro
   const user = requireUser(req, res);
   if (!user) return;
   const { reason } = (req.body || {}) as { reason?: string };
+  if (decision === 'Rejected' && !reason?.trim()) {
+    res.status(400).json({ success: false, message: 'A rejection reason is required.' });
+    return;
+  }
   try {
     const data = await service.decideApprovalRequest(req.params.id, decision, user.id, user.role, reason || null);
     res.json({

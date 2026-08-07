@@ -161,8 +161,8 @@ export const ProjectsView: React.FC = () => {
     setEditingProjectId(null);
     setForm({
       ...EMPTY_FORM,
-      // A member creating a project becomes its project-scoped lead once it is approved.
-      teamLeadId: currentRole !== 'Admin' ? currentUser.id : ''
+      teamLeadId: currentRole !== 'Admin' ? currentUser.id : '',
+      memberIds: currentRole !== 'Admin' ? [currentUser.id] : []
     });
     setFormErrors({});
     setFileError('');
@@ -202,6 +202,13 @@ export const ProjectsView: React.FC = () => {
   };
 
   const toggleMember = (userId: string) => {
+    if (userId === form.teamLeadId) {
+      setFormErrors((previous) => ({
+        ...previous,
+        memberIds: 'The current Team Lead must remain a project member. Assign a replacement lead first.'
+      }));
+      return;
+    }
     setForm((prev) => ({
       ...prev,
       memberIds: prev.memberIds.includes(userId)
@@ -306,6 +313,9 @@ export const ProjectsView: React.FC = () => {
     }
 
     if (!data.teamLeadId) errors.teamLeadId = 'A Team Lead must be assigned.';
+    if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
+      errors.memberIds = 'The selected Team Lead must be included in project members.';
+    }
     if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
@@ -432,6 +442,9 @@ export const ProjectsView: React.FC = () => {
     try {
       const result = await updateProject(editingProjectId, editApprovalData, editApprovalReason.trim());
       setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (!result.success) {
+        setEditApprovalReasonError(result.message);
+      }
       if (result.success) {
         setEditApprovalOpen(false);
         setEditApprovalData(null);
@@ -725,11 +738,21 @@ export const ProjectsView: React.FC = () => {
                 </select>
               </div>
 
+              {(formMode !== 'create' || currentRole === 'Admin') && (
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Team Lead</label>
                 <select
                   value={form.teamLeadId}
-                  onChange={(e) => setForm((prev) => ({ ...prev, teamLeadId: e.target.value }))}
+                  onChange={(e) => setForm((prev) => {
+                    const teamLeadId = e.target.value;
+                    return {
+                      ...prev,
+                      teamLeadId,
+                      memberIds: teamLeadId && !prev.memberIds.includes(teamLeadId)
+                        ? [...prev.memberIds, teamLeadId]
+                        : prev.memberIds
+                    };
+                  })}
                   // A project's lead can edit their own project but must not reassign its Team
                   // Lead; only Admins are allowed to change this field once a project exists.
                   disabled={
@@ -746,6 +769,7 @@ export const ProjectsView: React.FC = () => {
                 </select>
                 {formErrors.teamLeadId && <p className="text-rose-400 mt-1">{formErrors.teamLeadId}</p>}
               </div>
+              )}
 
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Project Members</label>
@@ -756,6 +780,7 @@ export const ProjectsView: React.FC = () => {
                         type="checkbox"
                         checked={form.memberIds.includes(u.id)}
                         onChange={() => toggleMember(u.id)}
+                        disabled={u.id === form.teamLeadId}
                         className="accent-cyan-500"
                       />
                       {u.name}
