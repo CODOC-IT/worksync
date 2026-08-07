@@ -129,6 +129,13 @@ const formatDateTime = (value: string | Date): string =>
 const parseDetails = (details: HRRequestRow['details']): HRRequestDetails =>
   typeof details === 'string' ? JSON.parse(details) : details || {};
 
+export const validateNotPastDate = (date: string, today: string): string | null =>
+  date < today ? 'Leave date cannot be in the past.' : null;
+const effectiveBusinessDate = async (): Promise<string> => {
+  const result = await query<{ today: string }>('SELECT CURRENT_DATE::text AS today');
+  return result.rows[0].today;
+};
+
 // Labels used when composing leave audit entries so the Activity Log distinguishes
 // half-day from full-day leave (and the half-day period) like attendance records do.
 const leaveTypeLabel = (details: HRRequestDetails): string =>
