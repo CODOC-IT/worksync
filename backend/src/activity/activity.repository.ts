@@ -37,17 +37,18 @@ export interface ActivityRow {
 interface ChangeRow { auditeventid: string; fieldname: string; oldvalue: string | null; newvalue: string | null }
 
 // ── Administrator-actor exclusion ─────────────────────────────────────────────────
-// HR, Team Members and Team Leads must never see events performed by Administrators.
+// HR, Team Members and Team Leads must never see events performed by Administrators —
+// HR included, so admins' own oversight actions stay private to Admin viewers.
 // The `actorrolesnapshot` check covers events recorded with the actor's role, but legacy
 // rows can carry a NULL snapshot while the actor is (or was) an Administrator — e.g.
 // task-review approvals recorded without a snapshot. So the exclusion ALSO denies any
 // event whose actor currently holds the active `Administrator` role (same window that
 // `getEffectiveRoles` uses). `actoruserid IS NULL` events (system/failed logins) stay
 // visible, which is why the window check is wrapped in an OR NULL guard.
-// Note: HR viewers are exempt from this exclusion (they see all organization events,
-// including Administrator-performed ones), and the exclusion is waived for Member/Lead
-// viewers when the event is recorded against the viewer themselves (affected user), so a
-// member can always see an approval decision made on their own request.
+// The exclusion is waived for Member/Lead viewers when the event is recorded against the
+// viewer themselves (affected user), so a member can always see an approval decision made
+// on their own request. HR gets no such waiver: organization-wide HR visibility excludes
+// Administrator-performed events unconditionally.
 const ADMIN_ACTOR_EXCLUSION = `(COALESCE(a.actorrolesnapshot, '') <> 'Admin'
   AND (a.actoruserid IS NULL OR a.actoruserid NOT IN (
     SELECT hrur.userid FROM iam.userroles hrur
@@ -193,22 +194,24 @@ const visibilitySql = (
     return scopeClause;
   };
 
-  // ── HR: organization-wide visibility — all events, including Administrator-performed ones ──
-  // HR can see everything an Admin sees. Applies whether the HR role is permanent or
-  // temporary (the HR + Team Lead combination below shares this path).
+  // ── HR: organization-wide visibility, excluding Administrator-performed events ──
+  // HR can see everything an Admin sees except events performed by Administrators — the
+  // same ADMIN_ACTOR_EXCLUSION applied to Members and Leads. This applies whether the HR
+  // role is permanent or temporary (the HR + Team Lead combination below shares this path).
   if (effectiveRoles.isActiveHR && !effectiveRoles.isActiveTeamLead) {
     return {
-      clause: 'TRUE',
+      clause: ADMIN_ACTOR_EXCLUSION,
       extraParams: [],
     };
   }
 
-  // ── HR + Team Lead combined: same organization-wide scope ─────────────────
+  // ── HR + Team Lead combined: same HR scope ─────────────────────────────
   // When both are active the HR scope already covers everything the lead scope would; no
-  // need to enumerate project membership predicates on top.
+  // need to enumerate project membership predicates on top. Administrator-performed events
+  // stay excluded exactly as they are for a pure HR viewer.
   if (effectiveRoles.isHRandTeamLead) {
     return {
-      clause: 'TRUE',
+      clause: ADMIN_ACTOR_EXCLUSION,
       extraParams: [],
     };
   }
@@ -270,8 +273,9 @@ const buildWhere = (
   const clauses: string[] = ['a.organizationid = 1', `(${visibilityClause})`];
 
   // Comment deletion is retained as an audit record for oversight, but must never appear in a
-  // Team Member's or Team Lead's Activity Log — including the actor's own deletion. HR and
-  // Admin retain visibility through their higher-privilege paths above.
+  // Team Member's or Team Lead's Activity Log — including the actor's own deletion. Admin
+  // viewers see every deletion; HR viewers see deletions performed by non-Administrators
+  // (their Admin-actor exclusion above keeps Administrator-performed deletions hidden).
   if (effectiveRoles.permanentRole !== 'Admin' && !effectiveRoles.isActiveHR) {
     clauses.push("NOT (a.actioncode = 'Deleted' AND a.entitytypecode = 'Comment')");
   }
