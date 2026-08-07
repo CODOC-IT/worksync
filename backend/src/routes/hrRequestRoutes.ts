@@ -11,6 +11,7 @@ import {
 } from '../attendance/correctionValidation.js';
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
+import { validateLeaveOverlap, type LeaveWindow } from '../attendance/leaveOverlap.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -135,7 +136,6 @@ const effectiveBusinessDate = async (): Promise<string> => {
   const result = await query<{ today: string }>('SELECT CURRENT_DATE::text AS today');
   return result.rows[0].today;
 };
-
 // Labels used when composing leave audit entries so the Activity Log distinguishes
 // half-day from full-day leave (and the half-day period) like attendance records do.
 const leaveTypeLabel = (details: HRRequestDetails): string =>
@@ -148,7 +148,7 @@ const leaveMetadata = (details: HRRequestDetails): Record<string, unknown> => ({
   leavePeriod: details.leavePeriod,
   leaveDays: details.leaveDays ?? 1,
 });
-const mapRow = (row: HRRequestRow) => ({
+export const mapHRRequestRow = (row: HRRequestRow) => ({
   id: row.id,
   userId: row.user_id,
   userName: row.user_name || undefined,
@@ -216,7 +216,7 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
         [req.user.id]
       );
     }
-    res.json({ success: true, requests: result.rows.map(mapRow) });
+    res.json({ success: true, requests: result.rows.map(mapHRRequestRow) });
   } catch (error: any) {
     console.error('[HR Requests Load Error]', error?.stack || error?.message || error);
     res.status(500).json({ success: false, message: 'Failed to load approval requests.' });
@@ -282,6 +282,33 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     const cleanDetails: HRRequestDetails = { ...(details || {}) };
     if (type === 'Leave' && cleanDetails.leaveType === 'Half Day Leave' && !cleanDetails.leavePeriod) {
       cleanDetails.leavePeriod = 'Second Half';
+    }
+    if (type === 'Leave') {
+      const existingLeave = await query<{ request_date: string | Date; details: HRRequestDetails | string }>(
+        `SELECT request_date, details
+           FROM public.worksync_hr_requests
+          WHERE user_id = $1 AND request_type = 'Leave' AND status IN ('Pending', 'Approved')`,
+        [req.user.id]
+      );
+      const existingWindows: LeaveWindow[] = existingLeave.rows.map((row) => {
+        const existingDetails = parseDetails(row.details);
+        return {
+          date: formatDate(row.request_date),
+          leaveType: existingDetails.leaveType || 'Full Day Leave',
+          leavePeriod: existingDetails.leavePeriod,
+          leaveDays: existingDetails.leaveDays
+        };
+      });
+      const overlapError = validateLeaveOverlap({
+        date: requestDate,
+        leaveType: cleanDetails.leaveType!,
+        leavePeriod: cleanDetails.leavePeriod,
+        leaveDays: cleanDetails.leaveDays
+      }, existingWindows);
+      if (overlapError) {
+        res.status(409).json({ success: false, message: overlapError });
+        return;
+      }
     }
     if (type === 'Correction') {
       const attendance = await query<{ active: boolean }>(
@@ -414,7 +441,7 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
     res.status(201).json({
       success: true,
       message: `${type === 'Leave' ? 'Leave' : 'Attendance edit'} request submitted successfully.`,
-      request: mapRow(result.rows[0])
+      request: mapHRRequestRow(result.rows[0])
     });
   } catch (error: any) {
     console.error('[HR Request Create Error]', error?.stack || error?.message || error);
@@ -582,6 +609,30 @@ const decideRequest = async (
 
       const forwardLeaveToAdmin =
         decision === 'Approved' && row.request_type === 'Leave' && row.approval_stage === 'HR';
+      if (decision === 'Approved' && row.request_type === 'Leave') {
+        const details = parseDetails(row.details);
+        const approvedRows = await runQuery<{ request_date: string | Date; details: HRRequestDetails | string }>(
+          `SELECT request_date, details
+             FROM public.worksync_hr_requests
+            WHERE user_id = $1 AND request_type = 'Leave' AND status = 'Approved' AND id <> $2`,
+          [row.user_id, row.id]
+        );
+        const overlapError = validateLeaveOverlap({
+          date: formatDate(row.request_date),
+          leaveType: details.leaveType || 'Full Day Leave',
+          leavePeriod: details.leavePeriod,
+          leaveDays: details.leaveDays
+        }, approvedRows.rows.map((existing) => {
+          const existingDetails = parseDetails(existing.details);
+          return {
+            date: formatDate(existing.request_date),
+            leaveType: existingDetails.leaveType || 'Full Day Leave',
+            leavePeriod: existingDetails.leavePeriod,
+            leaveDays: existingDetails.leaveDays
+          };
+        }));
+        if (overlapError) throw Object.assign(new Error(overlapError), { statusCode: 409 });
+      }
       if (decision === 'Approved' && !forwardLeaveToAdmin) {
         if (row.request_type === 'Correction') await applyCorrection(runQuery, row);
         if (row.request_type === 'Leave') await applyLeave(runQuery, row);
@@ -611,7 +662,7 @@ const decideRequest = async (
       message: updated.status === 'Pending'
         ? 'Leave request approved by HR and forwarded to Admin.'
         : `Request ${decision.toLowerCase()} successfully.`,
-      request: mapRow(updated)
+      request: mapHRRequestRow(updated)
     });
 
     if (updated.status !== 'Pending') {
@@ -620,6 +671,9 @@ const decideRequest = async (
       const requestDateStr = formatDate(updated.request_date);
       if (updated.request_type === 'Leave') {
         const leaveDetails = parseDetails(updated.details);
+        const leaveLabel = leaveDetails.leaveType === 'Half Day Leave'
+          ? `Half Day (${leaveDetails.leavePeriod || 'Second Half'})`
+          : 'Full Day';
         recordActivitySafe({
           actorId: req.user.id,
           actorName: deciderName,
@@ -633,8 +687,8 @@ const decideRequest = async (
           entityId: updated.id,
           entityName: `${leaveTypeLabel(leaveDetails)} ${requestDateStr}`,
           description: decision === 'Approved'
-            ? `${deciderName} approved leave request (${leaveTypeLabel(leaveDetails)}) for ${requesterName} on ${requestDateStr}.`
-            : `${deciderName} rejected leave request (${leaveTypeLabel(leaveDetails)}) for ${requesterName} on ${requestDateStr}.`,
+            ? `${deciderName} approved ${leaveLabel} leave request for ${requesterName} on ${requestDateStr}.`
+            : `${deciderName} rejected ${leaveLabel} leave request for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,

@@ -89,12 +89,7 @@ import {
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
 import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
-import {
-  buildLeaveDecisionCopy,
-  buildLeaveForwardedCopy,
-  buildLeaveForwardedRequesterCopy,
-  buildLeaveRequestedCopy
-} from '../features/attendance/leaveNotifications';
+import { mapAttendanceApiRecords, restoreActiveBreak } from '../features/attendance/attendanceHydration';
 import {
   fetchPendingProjectApprovals,
   fetchMyProjectApprovalRequests,
@@ -605,17 +600,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           throw new Error(data.message || 'Failed to load attendance.');
         }
         if (isActive) {
-          const mapped: AttendanceRecord[] = data.data.map((r: any) => ({
-            id: `att-${r.userId}-${r.date}`,
-            userId: r.userId,
-            date: r.date,
-            checkIn: r.checkIn ? formatAttendanceTime(r.checkIn, r.timeZone) : '',
-            checkOut: r.checkOut ? formatAttendanceTime(r.checkOut, r.timeZone) : undefined,
-            totalHours: r.totalHours || 0,
-            status: (r.status === 'Leave' ? 'On Leave' : r.status || 'Present') as AttendanceRecord['status'],
-            breaks: Array.isArray(r.breaks) ? r.breaks : [],
-          }));
+          const mapped = mapAttendanceApiRecords(data.data);
           setAttendanceRecords(mapped);
+          setActiveBreak(restoreActiveBreak(data.activeBreak, currentUser.id));
         }
       } catch (error) {
         console.warn('Attendance API request failed; falling back to local data.', error);
@@ -718,12 +705,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!isActive) return;
         const validApprovals = persistedApprovals.filter((approval) => {
           const project = projects.find((candidate) => candidate.id === approval.projectId);
-          // The list endpoint deliberately returns parent tasks only. Subtasks are loaded into
-          // a detail cache when expanded, so requiring an approval target to appear in `tasks`
-          // incorrectly hides valid subtask requests. The API already scopes this response to
-          // the assigned reviewer; retain the project-lead check here only to clear access as
-          // soon as the lead assignment changes in the client.
-          return Boolean(project && project.teamLeadId === currentUser.id);
+          if (!project || project.teamLeadId !== currentUser.id) return false;
+          return tasks.some((task) =>
+            task.id === approval.targetId ||
+            task.subtasks.some((subtask) => subtask.id === approval.targetId)
+          );
         });
         setSystemApprovals((prev) => {
           const persistedIds = new Set(validApprovals.map((approval) => approval.id));
@@ -1557,9 +1543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Rejecting normally just marks the request decided. A rejected project creation is different:
-  // the backend permanently deletes the pending proposal, so remove it from every local project
-  // and task view immediately as well.
+  // Rejecting just marks the request decided -- the project is never touched.
   const rejectProjectApprovalRequest = async (
     approvalRequestId: string,
     reason?: string
@@ -1569,10 +1553,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const decided = await rejectProjectApprovalRequestApi(approvalRequestId, reason);
       setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
-      if (decided.requestType === 'PROJECT_CREATE') {
-        setProjects((prev) => prev.filter((project) => project.id !== decided.projectId));
-        setTasks((prev) => prev.filter((task) => task.projectId !== decided.projectId));
-      }
       pushActivity('Rejected project request', 'Project', decided.projectId, decided.projectTitle);
 
       const message = `Request for "${decided.projectTitle}" was rejected.`;
@@ -1586,13 +1566,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Holiday management (Calendar module). The currentRole check here is a UX convenience only --
   // the real gate is server-side, via effectiveRoles.ts in backend/src/calendar/calendar.service.ts
-  // (isAdmin || isActiveHR). hr.Holidays is the single source of truth; every role reads the same
-  // list (hydrateHolidays above); only Admin and HR can mutate it.
+  // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
+  // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
   const createHoliday = async (
     input: HolidayInput
   ): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Admin' && currentRole !== 'HR')
-      return { success: false, message: 'Only Admin or HR can manage holidays.' };
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
     try {
       const created = await createHolidayApi(input);
@@ -1612,8 +1591,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     id: string,
     input: Partial<HolidayInput>
   ): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Admin' && currentRole !== 'HR')
-      return { success: false, message: 'Only Admin or HR can manage holidays.' };
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
     try {
       const updated = await updateHolidayApi(id, input);
@@ -1630,8 +1608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteHoliday = async (id: string): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'Admin' && currentRole !== 'HR')
-      return { success: false, message: 'Only Admin or HR can manage holidays.' };
+    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
 
     const holiday = holidays.find((h) => h.id === id);
     try {
@@ -1768,9 +1745,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentRole,
       currentUserId: currentUser.id,
       projects,
-      // Expanded subtasks are loaded into a view-local detail cache rather than the list's
-      // top-level task collection. Include that known source so an edit can be validated and
-      // submitted instead of being rejected locally as an unknown task.
       tasks: sourceTask ? [...tasks, sourceTask] : tasks,
       users
     });
@@ -1831,10 +1805,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : subtask)
         };
       }));
-      // No dispatchNotifications here: POST /api/tasks/:id/edit-approval already published the
-      // `task_edit_approval_requested` event server-side, in the same request that wrote the
-      // change request — with the exact list of fields being changed, which this client-side
-      // call never had. Dispatching again would double-notify the Team Lead.
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
+        type: 'approval',
+        title: 'Task Update Requested',
+        message: `${currentUser.name} requested an update to "${existingTask.title}".`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: 'approvals',
+        projectId: existingTask.projectId,
+        taskId
+      });
       pushActivity('Requested task update approval', 'Approval', approval.id, existingTask.title);
       confirmActionSuccess('Task Update Requested', `Your changes to "${existingTask.title}" were sent to the Team Lead for approval.`);
       return { success: true, message: 'Task update requested for Team Lead approval.', task: pendingTask };
@@ -2159,9 +2140,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSystemApprovals((prev) => prev.map((approval) => approval.id === approvalId
             ? { ...approval, status: 'Approved' }
             : approval));
-          // The requester's `task_edit_approval_approved` notification is published server-side by
-          // decideTaskEditApproval (it carries the approved field list and the approver's
-          // comment), so nothing is dispatched here — see the matching note in updateTask.
+          dispatchNotifications({
+            recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+            type: 'approval',
+            title: 'Task Update Approved',
+            message: `${currentUser.name} approved your update to "${item.targetTitle}".`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            linkRoute: 'tasks',
+            projectId: relatedProject.id,
+            taskId: item.targetId
+          });
           result = { success: true, message: `You approved the update to "${item.targetTitle}".` };
           confirmActionSuccess('Task Update Approved', result.message);
         } catch (error: any) {
@@ -2243,7 +2232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { success: false, message: 'Only this task\'s Team Lead can reject the update.' };
         }
         try {
-          await decideTaskEditApprovalViaApi(approvalId, 'Rejected', reason?.trim());
+          await decideTaskEditApprovalViaApi(approvalId, 'Rejected');
         } catch (error: any) {
           return { success: false, message: error?.message || 'Unable to reject the task update.' };
         }
@@ -2274,34 +2263,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? item.projectId
           : tasks.find((t) => t.id === item.targetId)?.projectId;
       const relatedProject = relatedProjectId ? projects.find((p) => p.id === relatedProjectId) : undefined;
-      // A rejected controlled task edit is notified server-side by decideTaskEditApproval, which
-      // is the only place that has the mandatory rejection reason as it was actually persisted
-      // (work.ChangeRequestReviews.ReviewNote) and can therefore put it in the notification body.
-      // Dispatching the generic "Request Rejected" here too would deliver a second, vaguer copy.
-      if (!(item.type === 'Controlled_Edit' && item.proposedTaskUpdate)) {
-        dispatchNotifications({
-          recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
-          type: 'approval',
-          title: 'Request Rejected',
-          message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
-          // The reviewer's reason is mandatory on every rejection path that supplies one, so it
-          // belongs in the expanded body rather than forcing the requester to open the item.
-          detail: reason?.trim()
-            ? `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.\n\nReason: ${reason.trim()}`
-            : undefined,
-          metadata: {
-            request: item.targetTitle,
-            ...(relatedProject ? { project: relatedProject.title } : {}),
-            rejectedBy: currentUser.name,
-            ...(reason?.trim() ? { rejectionReason: reason.trim() } : {})
-          },
-          actorId: currentUser.id,
-          actorName: currentUser.name,
-          linkRoute: targetsProject ? 'projects' : 'tasks',
-          taskId: targetsProject || item.type === 'Task_Creation' ? undefined : item.targetId,
-          projectId: targetsProject ? item.targetId : relatedProjectId
-        });
-      }
+      dispatchNotifications({
+        recipientIds: resolveSingleRecipient(item.requestedBy, currentUser.id),
+        type: 'approval',
+        title: 'Request Rejected',
+        message: `${currentUser.name} rejected your request for "${item.targetTitle}"${relatedProject ? ` in ${relatedProject.title}` : ''}.`,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        linkRoute: targetsProject ? 'projects' : 'tasks',
+        taskId: targetsProject || item.type === 'Task_Creation' ? undefined : item.targetId,
+        projectId: targetsProject ? item.targetId : relatedProjectId
+      });
       const message = `You rejected the request for "${item.targetTitle}" successfully.`;
       confirmActionSuccess('Request Rejected', message);
       return { success: true, message };
@@ -2430,11 +2402,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushActivity('Checked out from work', 'Attendance', currentUser.id, currentUser.name);
     };
 
-    const startBreak = (breakType: BreakType) => {
+    const startBreak = async (breakType: BreakType) => {
       if (currentRole === 'Admin') return;
       if (activeBreak?.isBreaking) return;
 
-      const todayStr = todayDateKey();
+      const todayStr = businessDateKey();
       const openAttendance = attendanceRecords.some(
         (record) =>
           record.userId === currentUser.id &&
@@ -2443,14 +2415,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (!openAttendance) return;
 
-      const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const startedAtUtc = new Date().toISOString();
+      const nowTime = formatAttendanceTime(startedAtUtc);
+      const breakId = `brk-${Date.now()}`;
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      const response = await fetch('/api/attendance/breaks/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workDate: todayStr, id: breakId, type: breakType, startedAtUtc })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        pushToast('error', 'Break Failed', data?.message || 'Failed to start break.');
+        return;
+      }
       setActiveBreak({
         isBreaking: true,
         userId: currentUser.id,
         breakType,
         startTime: nowTime,
         elapsedSeconds: 0,
-        startedAtUtc: new Date().toISOString()
+        startedAtUtc
       });
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
@@ -2467,7 +2456,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const endBreak = async () => {
       if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
-      const todayStr = todayDateKey();
+      const todayStr = businessDateKey();
       const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       const endedAtUtc = new Date().toISOString();
       const durationSeconds = Math.max(
@@ -2488,22 +2477,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         endedAtUtc
       };
 
-      setAttendanceRecords((prev) =>
-        prev.map((a) => {
-          if (a.userId === currentUser.id && a.date === todayStr) {
-            return {
-              ...a,
-              breaks: [...a.breaks, newBreak]
-            };
-          }
-          return a;
-        })
-      );
-
-      setActiveBreak(null);
       const token = localStorage.getItem('worksync_auth_token');
-      if (token) {
-        await fetch('/api/attendance/breaks', {
+      if (!token) {
+        pushToast('error', 'Break Failed', 'Your session has expired. Please sign in again.');
+        return;
+      }
+      {
+        const response = await fetch('/api/attendance/breaks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({
@@ -2513,8 +2493,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             startedAtUtc: activeBreak.startedAtUtc,
             endedAtUtc
           })
-        }).catch((err) => console.error('[Attendance] Failed to persist break:', err));
+        }).catch((err) => {
+          console.error('[Attendance] Failed to persist break:', err);
+          return null;
+        });
+        if (!response?.ok) {
+          pushToast('error', 'Break Failed', 'Failed to end and save the active break.');
+          return;
+        }
       }
+      setAttendanceRecords((prev) =>
+        prev.map((a) => a.userId === currentUser.id && a.date === todayStr
+          ? { ...a, breaks: [...a.breaks, newBreak] }
+          : a)
+      );
+      setActiveBreak(null);
       dispatchNotifications({
         recipientIds: resolveHRRecipients(),
         type: exceeded ? 'break_exceeded' : 'break_ended',
@@ -2594,15 +2587,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // HR Requests
-    // 'Correction' and 'Leave' each have their own dedicated notification types
-    // ('attendance_correction_*' / 'leave_*'); 'Break_Exception' reuses 'break_approved'/
-    // 'break_rejected' on decision and the generic 'attendance' type on submission.
-    //
-    // Leave copy is built by features/attendance/leaveNotifications.ts rather than inline here,
-    // so submitted / forwarded / approved / rejected all name the leave the same way — a
-    // recipient can always tell a Full Day Leave from a Half Day Leave (and which half) from the
-    // notification alone. Previously every one of these read "...your leave request", which is
-    // the specific gap this replaces.
+    // 'Correction' has its own dedicated notification type; 'Leave' and 'Break_Exception' reuse
+    // the generic 'approval' type already used elsewhere in this file for every other
+    // pending-decision flow (project creation, controlled edits) — see approveApprovalItem/
+    // rejectApprovalItem above for the same convention.
     const submitHRRequest = async (
       type: HRRequest['type'],
       reason: string,
@@ -2636,32 +2624,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           newReq.approvalStage === 'Admin'
             ? resolveAdminRecipients(users, currentUser.id)
             : resolveHRRecipients();
-        if (type === 'Leave') {
-          const copy = buildLeaveRequestedCopy({ requesterName: currentUser.name, request: newReq });
-          dispatchNotifications({
-            recipientIds: recipients,
-            type: 'leave_requested',
-            title: copy.title,
-            message: copy.message,
-            detail: copy.detail,
-            metadata: copy.metadata,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            // Reviewers act on a leave request from the Approvals inbox, not the Attendance
-            // screen, so the deep link takes them straight to where the decision is made.
-            linkRoute: 'approvals'
-          });
-        } else {
-          dispatchNotifications({
-            recipientIds: recipients,
-            type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
-            title: 'New Attendance Edit Request',
-            message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')} request: "${reason}".`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-        }
+        const leavePeriodLabel = type === 'Leave' && newReq.details.leaveType === 'Half Day Leave'
+          ? ` (${newReq.details.leavePeriod || 'Second Half'})`
+          : '';
+        dispatchNotifications({
+          recipientIds: recipients,
+          type: type === 'Correction' ? 'attendance_correction_submitted' : 'attendance',
+          title: type === 'Leave' ? 'Leave Submitted' : 'New Attendance Edit Request',
+          message: `${currentUser.name} submitted a ${type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request: "${reason}".`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
         confirmActionSuccess('Request Submitted', `Your ${type.toLowerCase().replace('_', ' ')} request was submitted successfully.`);
         pushActivity(`Submitted HR ${type} request`, 'Attendance', newReq.id, currentUser.name);
         return { success: true, message: data.message || 'HR request submitted successfully.' };
@@ -2767,39 +2741,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
 
         if (data.forwarded) {
-          const requesterName = updatedRequest.userName || 'an employee';
-          const adminCopy = buildLeaveForwardedCopy({
-            requesterName,
-            approverName: currentUser.name,
-            request: updatedRequest
-          });
           dispatchNotifications({
             recipientIds: resolveAdminRecipients(users, currentUser.id),
-            type: 'leave_requested',
-            title: adminCopy.title,
-            message: adminCopy.message,
-            detail: adminCopy.detail,
-            metadata: adminCopy.metadata,
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}.`,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'approvals'
           });
-          const requesterCopy = buildLeaveForwardedRequesterCopy({
-            approverName: currentUser.name,
-            request: updatedRequest
-          });
           dispatchNotifications({
             recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: 'leave_requested',
-            title: requesterCopy.title,
-            message: requesterCopy.message,
-            detail: requesterCopy.detail,
-            metadata: requesterCopy.metadata,
+            type: 'attendance',
+            title: 'Leave Forwarded to Admin',
+            message: `HR approved your ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
             actorId: currentUser.id,
             actorName: currentUser.name,
             linkRoute: 'attendance'
@@ -2857,40 +2820,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         }
 
-        if (updatedRequest.type === 'Leave') {
-          const copy = buildLeaveDecisionCopy({
-            decision: 'Approved',
-            approverName: currentUser.name,
-            request: updatedRequest,
-            decisionReason
-          });
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: 'leave_approved',
-            title: copy.title,
-            message: copy.message,
-            detail: copy.detail,
-            metadata: copy.metadata,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-        } else {
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: updatedRequest.type === 'Correction' ? 'attendance_correction_approved' : 'break_approved',
-            title: updatedRequest.type === 'Correction'
+        const notifType =
+          updatedRequest.type === 'Correction'
+            ? 'attendance_correction_approved'
+            : updatedRequest.type === 'Break_Exception'
+              ? 'break_approved'
+              : 'attendance';
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+          type: notifType,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Approved'
+            : updatedRequest.type === 'Correction'
               ? 'Attendance Approved'
               : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
-            message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.`,
-            detail: decisionReason?.trim()
-              ? `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')} request.\n\nComment: ${decisionReason.trim()}`
-              : undefined,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-        }
+          message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
         confirmActionSuccess('Request Approved', `You approved the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
         pushActivity('Approved HR request', 'Attendance', requestId, 'HR Approval');
         return { success: true, message: data.message || 'HR request approved successfully.' };
@@ -2917,52 +2865,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const updatedRequest = data.request as HRRequest;
+        const leavePeriodLabel = updatedRequest.details.leaveType === 'Half Day Leave'
+          ? ` (${updatedRequest.details.leavePeriod || 'Second Half'})`
+          : '';
         setHrRequests((prev) =>
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
 
-        if (updatedRequest.type === 'Leave') {
-          const copy = buildLeaveDecisionCopy({
-            decision: 'Rejected',
-            approverName: currentUser.name,
-            request: updatedRequest,
-            decisionReason
-          });
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: 'leave_rejected',
-            title: copy.title,
-            message: copy.message,
-            detail: copy.detail,
-            metadata: copy.metadata,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-        } else {
-          const requestLabel = updatedRequest.type.toLowerCase().replace('_', ' ');
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: updatedRequest.type === 'Correction' ? 'attendance_correction_rejected' : 'break_rejected',
-            title: updatedRequest.type === 'Correction'
+        const notifType =
+          updatedRequest.type === 'Correction'
+            ? 'attendance_correction_rejected'
+            : updatedRequest.type === 'Break_Exception'
+              ? 'break_rejected'
+              : 'attendance';
+        dispatchNotifications({
+          recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
+          type: notifType,
+          title: updatedRequest.type === 'Leave'
+            ? 'Leave Rejected'
+            : updatedRequest.type === 'Correction'
               ? 'Attendance Rejected'
               : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
-            // The mandatory rejection reason moves out of the preview and into the expanded body:
-            // the list stays scannable, and a long reason is no longer truncated mid-sentence.
-            message: `${currentUser.name} rejected your ${requestLabel} request.`,
-            detail: decisionReason?.trim()
-              ? `${currentUser.name} rejected your ${requestLabel} request.\n\nReason: ${decisionReason.trim()}`
-              : undefined,
-            metadata: {
-              rejectedBy: currentUser.name,
-              date: updatedRequest.date,
-              ...(decisionReason?.trim() ? { rejectionReason: decisionReason.trim() } : {})
-            },
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-        }
+          message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
+          actorId: currentUser.id,
+          actorName: currentUser.name,
+          linkRoute: 'attendance'
+        });
         confirmActionSuccess('Request Rejected', `You rejected the ${updatedRequest.type.toLowerCase().replace('_', ' ')} request successfully.`);
         pushActivity('Rejected HR request', 'Attendance', requestId, 'HR Rejection');
         return { success: true, message: data.message || 'HR request rejected successfully.' };

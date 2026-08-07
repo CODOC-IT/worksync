@@ -4,12 +4,13 @@ import { toUserPk } from '../utils/idMapping.js';
 import { query } from '../db/pool.js';
 import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
-import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
 import { materializeAbsences } from '../attendance/absenceMaterialization.js';
 import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
+import { resolveAttendanceViewerRole, visibleAttendanceUserIds } from '../attendance/attendanceAccess.js';
 
 const router = Router();
 
@@ -18,6 +19,16 @@ const ensureBreakStorage = async (): Promise<void> => {
     INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
     VALUES ('In Session', 'In Session', FALSE)
     ON CONFLICT (statuscode) DO NOTHING
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS public.worksync_active_attendance_breaks (
+      user_id TEXT PRIMARY KEY,
+      work_date DATE NOT NULL,
+      break_id TEXT NOT NULL,
+      break_type TEXT NOT NULL,
+      started_at_utc TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
   await query(`
     CREATE TABLE IF NOT EXISTS public.worksync_attendance_breaks (
@@ -57,7 +68,8 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
     }
 
     const userPk = toUserPk(req.user.id);
-    const role = attendanceRole(await getEffectiveRoles(req.user.id));
+    const effectiveRoles = await getEffectiveRoles(req.user.id);
+    const role = resolveAttendanceViewerRole(req.user.role, effectiveRoles);
     if (role !== 'Member') await materializeAbsences(from, to);
     let visibleUserPks: number[];
     if (role === 'Member') {
@@ -80,8 +92,11 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
             )`,
         [userPk]
       );
-      visibleUserPks = visible.rows.map((row) => row.userid);
-      if (role === 'HR') visibleUserPks.push(userPk);
+      visibleUserPks = visibleAttendanceUserIds(
+        userPk,
+        role,
+        visible.rows.map((row) => row.userid)
+      );
     }
     const records = visibleUserPks.length
       ? await repo.getAttendanceRecords(from, to, visibleUserPks)
@@ -101,12 +116,40 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
       ])
     );
 
+    const activeBreakResult = await query<{
+      break_id: string;
+      break_type: string;
+      started_at_utc: string | Date;
+      work_date: string | Date;
+    }>(
+      `SELECT active_break.break_id, active_break.break_type,
+              active_break.started_at_utc, active_break.work_date
+         FROM public.worksync_active_attendance_breaks active_break
+         JOIN hr.attendancerecords attendance
+           ON attendance.userid = $2
+          AND attendance.workdate = active_break.work_date
+          AND attendance.actualcheckinatutc IS NOT NULL
+          AND attendance.actualcheckoutatutc IS NULL
+        WHERE active_break.user_id = $1`,
+      [req.user.id, userPk]
+    );
+    const persistedActiveBreak = activeBreakResult.rows[0];
+
     res.json({
       success: true,
       data: records.map((record) => ({
         ...record,
         breaks: breaksByDate.get(`${record.userId}:${record.date}`) || []
-      }))
+      })),
+      activeBreak: persistedActiveBreak
+        ? {
+            id: persistedActiveBreak.break_id,
+            userId: req.user.id,
+            workDate: new Date(persistedActiveBreak.work_date).toISOString().split('T')[0],
+            breakType: persistedActiveBreak.break_type,
+            startedAtUtc: new Date(persistedActiveBreak.started_at_utc).toISOString()
+          }
+        : null
     });
   } catch (err: any) {
     console.error('[Attendance Error]', err);
@@ -405,6 +448,8 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
       outcome.lateMinutes
     );
     await attendanceRepo.insertAttendancePunch(recordId, 'CheckOut', checkOutUtc, userPk);
+    await ensureBreakStorage();
+    await query('DELETE FROM public.worksync_active_attendance_breaks WHERE user_id = $1', [req.user.id]);
 
     const actorName = userStore.findById(req.user.id)?.name || req.user.email;
 
@@ -433,6 +478,48 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
   } catch (err: any) {
     console.error('[Attendance CheckOut Error]', err);
     res.status(500).json({ success: false, message: 'Failed to persist check-out.', details: err.message });
+  }
+});
+
+router.post('/breaks/start', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
+      res.status(403).json({ success: false, message: 'Personal attendance is unavailable.' });
+      return;
+    }
+    const { workDate, id, type, startedAtUtc } = req.body as Record<string, string>;
+    const started = new Date(startedAtUtc);
+    if (!workDate || !id || !Number.isFinite(started.getTime())) {
+      res.status(400).json({ success: false, message: 'Valid active-break data is required.' });
+      return;
+    }
+    const activeAttendance = await query(
+      `SELECT 1 FROM hr.attendancerecords
+        WHERE userid = $1 AND workdate = $2::date
+          AND actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL`,
+      [toUserPk(req.user.id), workDate]
+    );
+    if (!activeAttendance.rowCount) {
+      res.status(409).json({ success: false, message: 'Breaks require an active attendance session.' });
+      return;
+    }
+    await ensureBreakStorage();
+    await query(
+      `INSERT INTO public.worksync_active_attendance_breaks
+         (user_id, work_date, break_id, break_type, started_at_utc, updated_at)
+       VALUES ($1, $2::date, $3, $4, $5::timestamptz, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         work_date = EXCLUDED.work_date,
+         break_id = EXCLUDED.break_id,
+         break_type = EXCLUDED.break_type,
+         started_at_utc = EXCLUDED.started_at_utc,
+         updated_at = NOW()`,
+      [req.user.id, workDate, id, type || 'Other', started.toISOString()]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Attendance Break Start Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to start break.' });
   }
 });
 
@@ -474,6 +561,10 @@ router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: R
        ON CONFLICT (user_id, work_date) DO UPDATE
        SET breaks = public.worksync_attendance_breaks.breaks || EXCLUDED.breaks, updated_at = NOW()`,
       [req.user.id, workDate, JSON.stringify(savedBreak)]
+    );
+    await query(
+      'DELETE FROM public.worksync_active_attendance_breaks WHERE user_id = $1 AND break_id = $2',
+      [req.user.id, id]
     );
     res.json({ success: true, data: savedBreak });
   } catch (err: any) {
