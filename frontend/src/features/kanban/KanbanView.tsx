@@ -237,11 +237,14 @@ export const KanbanView: React.FC = () => {
       {accessibleProjects.length === 0 ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <UsersIcon className="text-slate-500" size={26} />
-          <h3 className="mt-3 font-semibold text-slate-200">No projects assigned</h3>
+          <h3 className="mt-3 font-semibold text-slate-200">No active projects</h3>
+          {/* "Active" is load-bearing here: getAccessibleProjects deliberately hides projects
+              that are still Pending Approval, Draft, On Hold, Completed or Archived, so someone
+              who *is* on a project but whose only project is awaiting approval lands here. */}
           <p className="mt-1 text-xs text-slate-500">
             {currentRole === 'Team_Lead'
-              ? "You aren't leading any projects yet."
-              : "You haven't been added to a project yet."}
+              ? "You aren't leading any active projects yet. Projects awaiting approval appear here once they're activated."
+              : "You haven't been added to an active project yet. Projects awaiting approval appear here once they're activated."}
           </p>
         </div>
       ) : (
@@ -1589,12 +1592,24 @@ const TaskDetailsModal: React.FC<{
                   <h3 className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
                     <History size={12} />
                     Status History
+                    <span className="ml-auto font-normal normal-case tracking-normal text-slate-600">
+                      {history.length} {history.length === 1 ? 'entry' : 'entries'}
+                    </span>
                   </h3>
                   {/* Newest first — the reverse of the API's chronological order, since the most
                       recent change is what a reader opening this task is looking for. Covers the
                       parent and its subtasks (see findStatusHistoryForTask), so a subtask entry is
-                      labelled with its own title to keep the two apart. */}
-                  <ul className="space-y-1.5">
+                      labelled with its own title to keep the two apart.
+
+                      The list owns its own bounded scroll region. Previously it had none, so a
+                      task with a long audit trail pushed the whole dialog to its 88vh cap and the
+                      *entire* body — task info, description, assignees, subtasks — scrolled with
+                      it, burying the fixed context a reader needs while reading history. Capping
+                      the timeline instead keeps the dialog's height independent of how many
+                      history entries exist: everything above stays put and only the timeline
+                      scrolls. The cap is viewport-relative (40vh) with a fixed ceiling from `sm`
+                      up so it stays sensible on short laptop screens and on phones. */}
+                  <ul className="max-h-[40vh] space-y-1.5 overflow-y-auto overscroll-contain scroll-smooth pr-1 sm:max-h-72">
                     {[...history].reverse().map((entry) => {
                       const forSubtask =
                         entry.taskId && entry.taskId !== task.id
