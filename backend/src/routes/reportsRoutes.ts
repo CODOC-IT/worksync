@@ -12,7 +12,6 @@ const STATUS_DISPLAY: Record<string, string> = {
   Todo: 'Todo',
   InProgress: 'In Progress',
   Review: 'Review',
-  Blocked: 'Blocked',
   Done: 'Done',
 };
 
@@ -23,8 +22,19 @@ const PRIORITY_DISPLAY: Record<string, string> = {
   Critical: 'Urgent',
 };
 
+function pktToday(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const part = (type: string): string => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 function validateDateRange(from: string, to: string): string | null {
-  const today = new Date().toISOString().split('T')[0];
+  const today = pktToday();
   if (from > today) return 'From Date cannot be in the future.';
   if (to > today) return 'To Date cannot be in the future.';
   if (to < from) return 'To Date cannot be earlier than From Date.';
