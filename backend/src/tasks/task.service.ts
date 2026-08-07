@@ -506,6 +506,51 @@ const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
   }
 };
 
+// --- Controlled task edits: what actually changed -------------------------------------------
+// A Team Member's edit request and its decision both need to say *which fields* are involved —
+// a bare "your edit request was rejected" forces the recipient to open the task and diff it
+// themselves, which is exactly what the notification is supposed to save them. One shared
+// differ so the request, the approval and the rejection can never describe the same change set
+// differently.
+
+const TASK_EDIT_FIELD_LABELS: Record<keyof TaskEditApprovalInput, string> = {
+  title: 'Title',
+  description: 'Description',
+  priority: 'Priority',
+  startDate: 'Start date',
+  dueDate: 'Due date'
+};
+
+interface TaskEditFieldChange {
+  label: string;
+  previousValue: string;
+  newValue: string;
+}
+
+const diffTaskEdit = (
+  previous: TaskEditApprovalInput,
+  proposed: TaskEditApprovalInput
+): TaskEditFieldChange[] =>
+  (Object.keys(TASK_EDIT_FIELD_LABELS) as (keyof TaskEditApprovalInput)[])
+    .filter((field) => previous[field] !== proposed[field])
+    .map((field) => ({
+      label: TASK_EDIT_FIELD_LABELS[field],
+      previousValue: String(previous[field] ?? ''),
+      newValue: String(proposed[field] ?? '')
+    }));
+
+// Long free-text fields (title/description) are summarized rather than reproduced in full: the
+// expanded notification body is a summary of the request, not a replacement for opening it.
+const formatTaskEditChange = (change: TaskEditFieldChange): string => {
+  const shorten = (value: string): string =>
+    value.length > 80 ? `${value.slice(0, 77)}...` : value;
+  if (change.label === 'Description') return 'Description updated';
+  return `${change.label}: "${shorten(change.previousValue)}" → "${shorten(change.newValue)}"`;
+};
+
+const summarizeTaskEditFields = (changes: TaskEditFieldChange[]): string =>
+  changes.map((change) => change.label).join(', ') || 'task details';
+
 export interface TaskEditApprovalDTO {
   id: string;
   type: 'Controlled_Edit';
@@ -577,6 +622,40 @@ export const createTaskEditApproval = async (
     throw error;
   }
   const createdAt = new Date().toISOString();
+
+  // The project's current Team Lead is the only recipient: they are the sole person authorized to
+  // decide this request (decideTaskEditApproval re-checks isProjectLead), so nobody else has an
+  // action to take and nobody else is told. Published server-side, in the same request that wrote
+  // work.TaskChangeRequests, so it is persisted, appears in notification history, and survives a
+  // refresh — the frontend no longer dispatches anything for this event.
+  const changes = diffTaskEdit(previous, proposed);
+  const requesterName = actorDisplayName(actorId);
+  publishSafely(
+    {
+      type: 'task_edit_approval_requested',
+      title: 'Task Edit Request',
+      message: `${requesterName} requested an edit to "${row.title}" (${summarizeTaskEditFields(changes)}).`,
+      detail: [
+        `${requesterName} submitted an edit request for "${row.title}" in ${project.projectname} and is waiting on your decision.`,
+        '',
+        'Requested changes:',
+        ...changes.map((change) => `• ${formatTaskEditChange(change)}`)
+      ].join('\n'),
+      metadata: {
+        project: project.projectname,
+        task: row.title,
+        requestedBy: requesterName,
+        fieldsChanged: changes.map((change) => change.label).join(', '),
+        requestedAt: createdAt
+      },
+      actorId,
+      projectId: fromProjectPk(row.projectid),
+      taskId
+    },
+    [reviewerId],
+    actorId
+  );
+
   return {
     id: `task-edit-${requestPk}`,
     type: 'Controlled_Edit',
@@ -659,6 +738,102 @@ export const decideTaskEditApproval = async (
     reason
   );
   if (!taskPk) throw new TaskValidationError('This task edit request is no longer pending.');
+
+  // Only the Team Member who submitted the request is notified — nobody else asked for anything,
+  // so nobody else hears about the outcome (and in particular the rejection reason, which is
+  // feedback addressed to one person, never broadcast).
+  //
+  // `reason` is the exact value repo.decideTaskEditApproval just persisted to
+  // work.ChangeRequestReviews.ReviewNote in the transaction above, so the notification body and
+  // the stored review history can never disagree; it is also written to
+  // notify.Notifications.DetailText here, which is what keeps it visible in the Notification
+  // Center after a refresh without re-reading the change-request tables.
+  const changes = diffTaskEdit(approval.previousTaskSnapshot, approval.proposedTaskUpdate);
+  const approverName = actorDisplayName(actorId);
+  const projectRow = await projectRepo.findProjectById(row.projectid);
+  const projectName = projectRow?.projectname || 'the project';
+  const decidedAt = new Date().toISOString();
+  const trimmedReason = reason?.trim();
+
+  publishSafely(
+    decision === 'Approved'
+      ? {
+          type: 'task_edit_approval_approved',
+          title: 'Task Edit Request Approved',
+          message: `${approverName} approved your edit request for "${approval.targetTitle}".`,
+          detail: [
+            `${approverName} approved your edit request for "${approval.targetTitle}" in ${projectName}. The changes are now live on the task.`,
+            '',
+            'Approved changes:',
+            ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
+            ...(trimmedReason ? ['', `Comment: ${trimmedReason}`] : [])
+          ].join('\n'),
+          metadata: {
+            project: projectName,
+            task: approval.targetTitle,
+            approvedBy: approverName,
+            fieldsChanged: changes.map((change) => change.label).join(', '),
+            decidedAt
+          },
+          actorId,
+          projectId: approval.projectId,
+          taskId: approval.targetId
+        }
+      : {
+          type: 'task_edit_approval_rejected',
+          title: 'Task Edit Request Rejected',
+          message: `${approverName} rejected your edit request for "${approval.targetTitle}".`,
+          detail: [
+            `${approverName} rejected your edit request for "${approval.targetTitle}" in ${projectName}. The task is unchanged.`,
+            '',
+            'Requested changes:',
+            ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
+            '',
+            `Reason: ${trimmedReason || 'No reason was recorded.'}`
+          ].join('\n'),
+          metadata: {
+            project: projectName,
+            task: approval.targetTitle,
+            rejectedBy: approverName,
+            fieldsChanged: changes.map((change) => change.label).join(', '),
+            rejectionReason: trimmedReason || '',
+            decidedAt
+          },
+          actorId,
+          projectId: approval.projectId,
+          taskId: approval.targetId
+        },
+    [approval.requestedBy],
+    actorId
+  );
+
+  recordActivitySafe({
+    actorId,
+    actorName: approverName,
+    actorEmail: userStore.findById(actorId)?.email,
+    actorRole,
+    action: decision === 'Approved' ? 'Approved' : 'Rejected',
+    module: 'Approvals',
+    entityType: 'Approval',
+    entityId: approval.id,
+    entityName: approval.targetTitle,
+    projectId: approval.projectId,
+    projectName: projectRow?.projectname,
+    taskId: approval.targetId,
+    taskName: approval.targetTitle,
+    description: decision === 'Approved'
+      ? `${approverName} approved the task edit request for “${approval.targetTitle}”.`
+      : `${approverName} rejected the task edit request for “${approval.targetTitle}”.`,
+    reason: trimmedReason,
+    linkRoute: 'tasks',
+    important: true,
+    changes: changes.map((change) => ({
+      field: change.label,
+      previousValue: change.previousValue,
+      newValue: change.newValue
+    }))
+  });
+
   if (decision === 'Rejected') return null;
   const updated = await repo.findTaskById(taskPk);
   return updated ? buildDTO(updated) : null;
