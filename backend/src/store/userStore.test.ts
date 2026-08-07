@@ -91,6 +91,33 @@ test('configured database replaces fallback users without backfilling them', asy
   assert.equal(result.rows[0].count, 1);
 });
 
+// Documents a real hazard authRoutes.ts's profile self-edit routes tripped on:
+// updateDisplayName/updateUsername/updateEmail all locate the SAME cached UserRecord via their
+// own internal findById() and mutate the changed field on it in place (`user.name = name`, not a
+// replacement object) -- so a caller holding an earlier findById() reference sees the field
+// change out from under them the moment the update call resolves, not just future lookups. A
+// caller that wants the "previous" value for an activity-log entry or notification (e.g. "changed
+// from X to Y") MUST copy the primitive string into its own local BEFORE calling the update
+// method; reading it off the held reference afterward silently returns the new value, producing
+// "changed from Y to Y". This test pins that behavior down so it can't regress unnoticed, and so
+// the next call site that reaches for `previousUser.name` after an update call has something to
+// grep for.
+test('updateDisplayName mutates the cached record in place -- callers must snapshot the old value first', async () => {
+  const { userStore } = await import('./userStore.js');
+  await userStore.syncUsersToDb();
+
+  const heldReference = userStore.findById('usr-101');
+  assert.equal(heldReference?.name, 'Database User');
+  const snapshotBeforeUpdate = heldReference?.name;
+
+  await userStore.updateDisplayName('usr-101', 'Renamed User');
+
+  assert.equal(heldReference?.name, 'Renamed User', 'the reference held before the call sees the new value, not the old one');
+  assert.equal(snapshotBeforeUpdate, 'Database User', 'a primitive copied out beforehand is unaffected by the later mutation');
+
+  await userStore.updateDisplayName('usr-101', 'Database User'); // restore for later tests in this file
+});
+
 test('syncUsersToDb reloads users created after the initial cache warmup', async () => {
   const { userStore } = await import('./userStore.js');
 
