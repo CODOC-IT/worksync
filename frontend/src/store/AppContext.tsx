@@ -69,7 +69,6 @@ import {
   permanentlyDeleteProjectApi,
   restoreProjectApi,
   addProjectMemberApi,
-  removeProjectMemberApi,
   addMilestoneApi,
   updateMilestoneApi,
   deleteMilestoneApi,
@@ -1202,26 +1201,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: true, message: result.message };
       }
 
-      // Membership has no bulk field on PUT /api/projects/:id (see projectRepository.ts's
-      // UpdateProjectPayload) -- it goes through the dedicated member endpoints instead, one
-      // call per added/removed user, diffed against the project's current membership. Member
-      // changes are never approval-gated (not one of this workflow's five integration points),
-      // so they apply immediately regardless of whether the rest of this edit is pending.
+      // Additions have no bulk field on PUT /api/projects/:id (see projectRepository.ts's
+      // UpdateProjectPayload) -- they go through their own dedicated call below, one per added
+      // user, diffed against the project's current membership. Removals are different: the PUT
+      // above already sent the full desired `memberIds` list, and project.service.ts's
+      // updateProject() diffs it server-side and routes every dropped member through the same
+      // removeMember() workflow the dedicated DELETE endpoint uses -- active-task check, Pending
+      // Removal flagging, and notifications all already happened as part of that one request, and
+      // `updated` (merged into state just above) already reflects the resulting membership. A
+      // second, separate removeProjectMemberApi call per dropped member here would just hit an
+      // already-removed (or already-Pending-Removal-flagged) row: a hard removal fails with "not
+      // an active member of this project" even though it succeeded, and a Pending Removal flag
+      // gets silently re-flagged and re-notified. So only additions get a client-side diff call.
       const memberErrors: string[] = [];
       let membershipChanged = false;
       if (data.memberIds) {
-        // Both sides of this diff must go through the same eligibility filter. project.memberIds
-        // (the "before" set) includes the project's Team Lead, whose account role is virtually
-        // never 'Team_Member' -- comparing it unfiltered against the filtered `afterIds` made the
-        // lead look "removed" on every single save (the edit form's member checkboxes never
-        // touch the lead's own membership, see ProjectsView.tsx's assignableMembers), silently
-        // firing a real removeProjectMemberApi call and a false "removed from project"
-        // notification. Filtering both sides identically fixes the root cause instead of
+        // project.memberIds (the "before" set) includes the project's Team Lead, whose account
+        // role is virtually never 'Team_Member' -- comparing it unfiltered against the filtered
+        // `afterIds` made the lead look "added" on every single save (the edit form's member
+        // checkboxes never touch the lead's own membership, see ProjectsView.tsx's
+        // assignableMembers). Filtering both sides identically fixes the root cause instead of
         // special-casing the lead's id.
         const beforeIds = new Set(eligibleProjectMemberIds(project.memberIds));
         const afterIds = eligibleProjectMemberIds(data.memberIds);
         const added = afterIds.filter((id) => !beforeIds.has(id));
-        const removed = Array.from(beforeIds).filter((id) => !afterIds.includes(id));
 
         for (const userId of added) {
           try {
@@ -1230,14 +1233,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberErrors.push(error?.message || `Failed to add member ${userId}.`);
           }
         }
-        for (const userId of removed) {
-          try {
-            await removeProjectMemberApi(projectId, userId);
-          } catch (error: any) {
-            memberErrors.push(error?.message || `Failed to remove member ${userId}.`);
-          }
-        }
-        membershipChanged = added.length > 0 || removed.length > 0;
+        membershipChanged = added.length > 0;
       }
 
       // Milestones now have their own dedicated endpoints (POST/PATCH/DELETE
