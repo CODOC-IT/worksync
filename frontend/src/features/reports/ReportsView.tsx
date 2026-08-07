@@ -93,6 +93,13 @@ function formatActivityTime(iso: string): string {
   return date.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatActivityPdfTime(iso: string | undefined): string {
+  if (!iso) return '\u2014';
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return iso;
+  return date.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function getShortName(fullName: string): string {
   const parts = fullName.trim().split(/\s+/);
   if (parts.length <= 1) return parts[0] || fullName;
@@ -1574,6 +1581,20 @@ ${bodyHtml}
     bodyHtml += section('Completion Summary');
     bodyHtml += `<p style="font-size:11px;color:#475569;margin:4px 0;">${t.completionSummary || 'No completion summary provided.'}</p>`;
 
+    if (taskTimeline.length > 0) {
+      bodyHtml += section(`Activity Timeline (${taskTimeline.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Action')}${th('Entity')}${th('User')}${th('Changes')}${th('Date')}</tr></thead><tbody>`;
+      taskTimeline.forEach((item: ActivityItem) => {
+        const actorName = item.actor?.name || 'System';
+        const details = (item.changes && item.changes.length > 0)
+          ? item.changes.map((c: any) => `${c.field}: ${c.previousValue || '\u2014'} \u2192 ${c.newValue || '\u2014'}`).join('; ')
+          : item.description || '\u2014';
+        bodyHtml += `<tr>${td(item.action || '\u2014', '#0f172a')}${td(item.entityType || '\u2014')}${td(actorName)}${td(details)}${td(formatActivityPdfTime(item.timestamp))}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
     const fullHtml = `<!DOCTYPE html><html><head><title>Task - ${t.taskNumber || t.title}</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1e293b;margin:0;}
@@ -1842,6 +1863,21 @@ ${bodyHtml}
         const fileSize = f.size != null ? (typeof f.size === 'number' ? formatFileSize(f.size) : f.size) : '';
         const fileType = f.mimeType || f.type || '';
         bodyHtml += `<tr>${td(f.name, '#0f172a')}${td(fileType)}${td(fileSize)}${td(`${uploader?.name || f.uploadedBy || ''} ${f.uploadedAt ? formatDate(f.uploadedAt) : ''}`)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
+    if (projectTimeline.length > 0) {
+      bodyHtml += section(`Activity Timeline (${projectTimeline.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
+      bodyHtml += `<thead><tr>${th('Action')}${th('Entity')}${th('Task')}${th('User')}${th('Changes')}${th('Date')}</tr></thead><tbody>`;
+      projectTimeline.forEach((item: ActivityItem) => {
+        const actorName = item.actor?.name || 'System';
+        const taskCol = item.task?.name || '\u2014';
+        const details = (item.changes && item.changes.length > 0)
+          ? item.changes.map((c: any) => `${c.field}: ${c.previousValue || '\u2014'} \u2192 ${c.newValue || '\u2014'}`).join('; ')
+          : item.description || '\u2014';
+        bodyHtml += `<tr>${td(item.action || '\u2014', '#0f172a')}${td(item.entityType || '\u2014')}${td(taskCol)}${td(actorName)}${td(details)}${td(formatActivityPdfTime(item.timestamp))}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
