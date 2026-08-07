@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
-import * as approvalService from './projectApproval.service.js';
+import { createApprovalRequest } from './projectApproval.service.js';
 import { getAttachmentUrl, parseAttachmentDataUrl } from '../collab/fileStorage.js';
 import { getProjectUpdateApprovalType, PROJECT_ARCHIVE_APPROVAL_TYPE } from './projectApproval.routing.js';
 import {
@@ -90,7 +90,7 @@ export const createProject = async (req: AuthenticatedRequest, res: Response): P
     const data = await service.createProject(req.body as CreateProjectInput, user.id, user.role);
     if (user.role !== 'Admin') {
       const input = req.body as CreateProjectInput;
-      await approvalService.createApprovalRequest(
+      await createApprovalRequest(
         data.id,
         'PROJECT_CREATE',
         null,
@@ -131,7 +131,7 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
       const requestType = getProjectUpdateApprovalType(changes.status);
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, requestType, requestType === 'PROJECT_ARCHIVE' ? null : changes, reason || '', user.id, user.role
       );
       res.json({
@@ -156,7 +156,7 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
   try {
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, PROJECT_ARCHIVE_APPROVAL_TYPE, null, reason || '', user.id, user.role
       );
       res.json({
@@ -180,7 +180,7 @@ export const permanentlyDeleteProject = async (req: AuthenticatedRequest, res: R
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, 'PROJECT_PERMANENT_DELETE', null, reason || '', user.id, user.role
       );
       res.json({
@@ -204,7 +204,7 @@ export const restoreProject = async (req: AuthenticatedRequest, res: Response): 
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, 'PROJECT_RESTORE', null, reason || '', user.id, user.role
       );
       res.json({
