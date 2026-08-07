@@ -667,10 +667,36 @@ and none of them could see either the field-level diff or the persisted rejectio
 `rejectApprovalItem` still dispatches for every *other* approval type, and now puts the reviewer's
 reason in `detail`/`metadata` rather than the preview line.
 
-Field diffing lives in one place (`diffTaskEdit` / `formatTaskEditChange`), so the request, the
-approval and the rejection can never describe the same change set differently. Description changes
-are summarized as "Description updated" rather than reproduced — the expanded body is a summary of
-the request, not a replacement for opening it.
+Field diffing and copy-building live in one pure, unit-tested module
+(`backend/src/tasks/taskEditCopy.ts`), so the request, the approval and the rejection can never
+describe the same edit differently. Description changes are summarized as "Description updated"
+rather than reproduced — the expanded body is a summary of the request, not a replacement for
+opening it.
+
+**Subtasks are named together with their parent task.** A Team Member may edit an assigned
+standalone task or an assigned *subtask*, but never a parent task that has subtasks (that is
+refused outright with "Tasks with subtasks cannot be edited by Team Members."). A subtask's own
+title is rarely enough to identify it — "Testing", "API Integration" and "Documentation" repeat
+across parents — so all three events render it as `subtask "Testing" under task "Notification
+Module"`, title themselves "Subtask Edit Request …", say "The subtask is unchanged", and carry
+the parent under `metadata.task` with the subtask under `metadata.subtask`.
+`describeTaskEditTarget` is the single source of that wording, matching what `notifyTaskEdited`
+already uses for subtask assignment changes. If the parent row cannot be read the copy degrades
+to the bare subtask title rather than rendering an empty `under task ""`.
+
+The notification's `taskId` stays the edited row's own id even for a subtask: it is the accurate
+provenance of the event and is what `groupNotifications` keys on, so two subtasks of the same
+parent never collapse into one row.
+
+The decision notifications name the target from the snapshot taken when the request was
+*submitted*, not from the task's current title — an approved title change would otherwise report
+the outcome under the new name, leaving the requester unable to match it to the request they made.
+
+Note on who decides: `decideTaskEditApproval` resolves the request through
+`listTaskEditApprovals`, which queries `WHERE cr.assignedrevieweruserid = $1`, and that reviewer
+was fixed at submission time to the project's resolved Team Lead. An Admin who is not that lead
+gets 403 "This task edit request is not assigned to you." — `isProjectLead`'s usual Admin bypass
+never comes into play, because the request was never routed to them.
 
 ### 15.5 Task edits fan out per change, not per task
 

@@ -22,6 +22,13 @@ import {
   UpdateTaskInput
 } from './task.types.js';
 import { getTaskEditDenialReason } from './task.authorization.js';
+import {
+  describeTaskEditTarget,
+  diffTaskEdit,
+  formatTaskEditChange,
+  summarizeTaskEditFields,
+  TaskEditTarget
+} from './taskEditCopy.js';
 import { shouldAnnounceProjectCompletion } from './task.projectCompletion.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 
@@ -667,50 +674,16 @@ const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
   }
 };
 
-// --- Controlled task edits: what actually changed -------------------------------------------
-// A Team Member's edit request and its decision both need to say *which fields* are involved —
-// a bare "your edit request was rejected" forces the recipient to open the task and diff it
-// themselves, which is exactly what the notification is supposed to save them. One shared
-// differ so the request, the approval and the rejection can never describe the same change set
-// differently.
-
-const TASK_EDIT_FIELD_LABELS: Record<keyof TaskEditApprovalInput, string> = {
-  title: 'Title',
-  description: 'Description',
-  priority: 'Priority',
-  startDate: 'Start date',
-  dueDate: 'Due date'
+// --- Controlled task edits ------------------------------------------------------------------
+// The diffing and copy-building are pure and live in taskEditCopy.ts (unit-tested there). This
+// is the only part that needs the database: resolving a subtask's parent title so the
+// notification can name it. Costs one indexed primary-key lookup, and only for subtasks — a
+// top-level task never touches the database here.
+const resolveTaskEditTarget = async (row: TaskRow, title: string): Promise<TaskEditTarget> => {
+  if (!row.parenttaskid) return describeTaskEditTarget(title);
+  const parent = await repo.findTaskById(row.parenttaskid);
+  return describeTaskEditTarget(title, parent?.title || '');
 };
-
-interface TaskEditFieldChange {
-  label: string;
-  previousValue: string;
-  newValue: string;
-}
-
-const diffTaskEdit = (
-  previous: TaskEditApprovalInput,
-  proposed: TaskEditApprovalInput
-): TaskEditFieldChange[] =>
-  (Object.keys(TASK_EDIT_FIELD_LABELS) as (keyof TaskEditApprovalInput)[])
-    .filter((field) => previous[field] !== proposed[field])
-    .map((field) => ({
-      label: TASK_EDIT_FIELD_LABELS[field],
-      previousValue: String(previous[field] ?? ''),
-      newValue: String(proposed[field] ?? '')
-    }));
-
-// Long free-text fields (title/description) are summarized rather than reproduced in full: the
-// expanded notification body is a summary of the request, not a replacement for opening it.
-const formatTaskEditChange = (change: TaskEditFieldChange): string => {
-  const shorten = (value: string): string =>
-    value.length > 80 ? `${value.slice(0, 77)}...` : value;
-  if (change.label === 'Description') return 'Description updated';
-  return `${change.label}: "${shorten(change.previousValue)}" → "${shorten(change.newValue)}"`;
-};
-
-const summarizeTaskEditFields = (changes: TaskEditFieldChange[]): string =>
-  changes.map((change) => change.label).join(', ') || 'task details';
 
 export interface TaskEditApprovalDTO {
   id: string;
@@ -791,26 +764,30 @@ export const createTaskEditApproval = async (
   // refresh — the frontend no longer dispatches anything for this event.
   const changes = diffTaskEdit(previous, proposed);
   const requesterName = actorDisplayName(actorId);
+  const target = await resolveTaskEditTarget(row, row.title);
   publishSafely(
     {
       type: 'task_edit_approval_requested',
-      title: 'Task Edit Request',
-      message: `${requesterName} requested an edit to "${row.title}" (${summarizeTaskEditFields(changes)}).`,
+      title: target.isSubtask ? 'Subtask Edit Request' : 'Task Edit Request',
+      message: `${requesterName} requested an edit to ${target.label} (${summarizeTaskEditFields(changes)}).`,
       detail: [
-        `${requesterName} submitted an edit request for "${row.title}" in ${project.projectname} and is waiting on your decision.`,
+        `${requesterName} submitted an edit request for ${target.label} in ${project.projectname} and is waiting on your decision.`,
         '',
         'Requested changes:',
         ...changes.map((change) => `• ${formatTaskEditChange(change)}`)
       ].join('\n'),
       metadata: {
         project: project.projectname,
-        task: row.title,
+        ...target.metadata,
         requestedBy: requesterName,
         fieldsChanged: changes.map((change) => change.label).join(', '),
         requestedAt: createdAt
       },
       actorId,
       projectId: fromProjectPk(row.projectid),
+      // Stays the edited row's own id, including for a subtask: it is the accurate provenance of
+      // the event and is what groupNotifications keys on, so two subtasks of the same parent
+      // never collapse into one row. The parent is carried in `metadata.task` instead.
       taskId
     },
     [reviewerId],
@@ -915,15 +892,20 @@ export const decideTaskEditApproval = async (
   const projectName = projectRow?.projectname || 'the project';
   const decidedAt = new Date().toISOString();
   const trimmedReason = reason?.trim();
+  // Named from the snapshot taken when the request was submitted, not from `row.title`: an
+  // approved title change would otherwise report the outcome under the *new* name, leaving the
+  // requester unable to match the notification to the request they actually made.
+  const target = await resolveTaskEditTarget(row, approval.targetTitle);
+  const subject = target.isSubtask ? 'Subtask' : 'Task';
 
   publishSafely(
     decision === 'Approved'
       ? {
           type: 'task_edit_approval_approved',
-          title: 'Task Edit Request Approved',
-          message: `${approverName} approved your edit request for "${approval.targetTitle}".`,
+          title: `${subject} Edit Request Approved`,
+          message: `${approverName} approved your edit request for ${target.label}.`,
           detail: [
-            `${approverName} approved your edit request for "${approval.targetTitle}" in ${projectName}. The changes are now live on the task.`,
+            `${approverName} approved your edit request for ${target.label} in ${projectName}. The changes are now live on the ${target.noun}.`,
             '',
             'Approved changes:',
             ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
@@ -931,7 +913,7 @@ export const decideTaskEditApproval = async (
           ].join('\n'),
           metadata: {
             project: projectName,
-            task: approval.targetTitle,
+            ...target.metadata,
             approvedBy: approverName,
             fieldsChanged: changes.map((change) => change.label).join(', '),
             decidedAt
@@ -942,10 +924,10 @@ export const decideTaskEditApproval = async (
         }
       : {
           type: 'task_edit_approval_rejected',
-          title: 'Task Edit Request Rejected',
-          message: `${approverName} rejected your edit request for "${approval.targetTitle}".`,
+          title: `${subject} Edit Request Rejected`,
+          message: `${approverName} rejected your edit request for ${target.label}.`,
           detail: [
-            `${approverName} rejected your edit request for "${approval.targetTitle}" in ${projectName}. The task is unchanged.`,
+            `${approverName} rejected your edit request for ${target.label} in ${projectName}. The ${target.noun} is unchanged.`,
             '',
             'Requested changes:',
             ...changes.map((change) => `• ${formatTaskEditChange(change)}`),
@@ -954,7 +936,7 @@ export const decideTaskEditApproval = async (
           ].join('\n'),
           metadata: {
             project: projectName,
-            task: approval.targetTitle,
+            ...target.metadata,
             rejectedBy: approverName,
             fieldsChanged: changes.map((change) => change.label).join(', '),
             rejectionReason: trimmedReason || '',
@@ -983,8 +965,8 @@ export const decideTaskEditApproval = async (
     taskId: approval.targetId,
     taskName: approval.targetTitle,
     description: decision === 'Approved'
-      ? `${approverName} approved the task edit request for “${approval.targetTitle}”.`
-      : `${approverName} rejected the task edit request for “${approval.targetTitle}”.`,
+      ? `${approverName} approved the ${target.noun} edit request for ${target.label}.`
+      : `${approverName} rejected the ${target.noun} edit request for ${target.label}.`,
     reason: trimmedReason,
     linkRoute: 'tasks',
     important: true,
