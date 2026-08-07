@@ -1574,12 +1574,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Holiday management (Calendar module). The currentRole check here is a UX convenience only --
   // the real gate is server-side, via effectiveRoles.ts in backend/src/calendar/calendar.service.ts
-  // (isActiveHR, which an Admin can never satisfy by construction). hr.Holidays is the single
-  // source of truth; every role reads the same list (hydrateHolidays above), only HR can mutate it.
+  // (isAdmin || isActiveHR). hr.Holidays is the single source of truth; every role reads the same
+  // list (hydrateHolidays above); only Admin and HR can mutate it.
   const createHoliday = async (
     input: HolidayInput
   ): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+    if (currentRole !== 'Admin' && currentRole !== 'HR')
+      return { success: false, message: 'Only Admin or HR can manage holidays.' };
 
     try {
       const created = await createHolidayApi(input);
@@ -1599,7 +1600,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     id: string,
     input: Partial<HolidayInput>
   ): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+    if (currentRole !== 'Admin' && currentRole !== 'HR')
+      return { success: false, message: 'Only Admin or HR can manage holidays.' };
 
     try {
       const updated = await updateHolidayApi(id, input);
@@ -1616,7 +1618,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteHoliday = async (id: string): Promise<{ success: boolean; message: string }> => {
-    if (currentRole !== 'HR') return { success: false, message: 'Only HR can manage holidays.' };
+    if (currentRole !== 'Admin' && currentRole !== 'HR')
+      return { success: false, message: 'Only Admin or HR can manage holidays.' };
 
     const holiday = holidays.find((h) => h.id === id);
     try {

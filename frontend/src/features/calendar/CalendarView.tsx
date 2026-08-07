@@ -234,10 +234,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ initialEntryId, onIn
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* HR-only: hidden completely for Admin and every other role. This is a UX
+          {/* Holiday managers: Admin and HR. Hidden completely for every other role. This is a UX
               convenience -- the real gate is server-side (see AppContext's createHoliday's
-              comment / backend/src/calendar/calendar.service.ts's assertIsHR). */}
-          {currentRole === 'HR' && (
+              comment / backend/src/calendar/calendar.service.ts's assertCanManageHolidays). */}
+          {(currentRole === 'Admin' || currentRole === 'HR') && (
             <button
               type="button"
               onClick={() => setManageHolidaysOpen(true)}
@@ -365,7 +365,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ initialEntryId, onIn
         onClose={closeDayModal}
       />
 
-      {manageHolidaysOpen && currentRole === 'HR' && (
+      {(manageHolidaysOpen && (currentRole === 'Admin' || currentRole === 'HR')) && (
         <ManageHolidaysModal onClose={() => setManageHolidaysOpen(false)} />
       )}
     </div>
