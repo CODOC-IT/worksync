@@ -413,6 +413,21 @@ ALTER TABLE ai.PromptGenerations
 ALTER TABLE ai.PromptGenerations
     ADD CONSTRAINT FK_PromptGenerations_Parent FOREIGN KEY (ParentGenerationId) REFERENCES ai.PromptGenerations(PromptGenerationId);
 
+ALTER TABLE ai.PromptLibraries
+    ADD CONSTRAINT FK_PromptLibraries_User FOREIGN KEY (UserId) REFERENCES iam.Users(UserId);
+
+ALTER TABLE ai.PromptLibraries
+    ADD CONSTRAINT FK_PromptLibraries_Project FOREIGN KEY (ProjectId) REFERENCES work.Projects(ProjectId);
+
+ALTER TABLE ai.PromptLibraries
+    ADD CONSTRAINT FK_PromptLibraries_Task FOREIGN KEY (TaskId) REFERENCES work.Tasks(TaskId);
+
+ALTER TABLE ai.PromptVersions
+    ADD CONSTRAINT FK_PromptVersions_Library FOREIGN KEY (PromptLibraryId) REFERENCES ai.PromptLibraries(PromptLibraryId) ON DELETE CASCADE;
+
+ALTER TABLE ai.PromptVersions
+    ADD CONSTRAINT FK_PromptVersions_CreatedBy FOREIGN KEY (CreatedByUserId) REFERENCES iam.Users(UserId);
+
 ALTER TABLE notify.UserNotificationPreferences
     ADD CONSTRAINT FK_NotificationPreferences_User FOREIGN KEY (UserId) REFERENCES iam.Users(UserId) ON DELETE CASCADE;
 

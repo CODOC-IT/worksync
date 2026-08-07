@@ -5,8 +5,8 @@ import { projectStore } from '../store/projectStore.js';
 
 // ─── Prompt Store Tests ────────────────────────────────────────
 
-test('promptStore: creates a new prompt with version 1', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: creates a new prompt with version 1', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-1',
     projectId: 'prj-1',
     taskId: null,
@@ -28,8 +28,8 @@ test('promptStore: creates a new prompt with version 1', () => {
   assert.equal(prompt.isArchived, false);
 });
 
-test('promptStore: updating prompt creates a new version', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: updating prompt creates a new version', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-2',
     projectId: null,
     taskId: null,
@@ -41,7 +41,7 @@ test('promptStore: updating prompt creates a new version', () => {
     isAiGenerated: true,
   });
 
-  const updated = promptStore.updatePrompt(prompt.id, 'usr-2', {
+  const updated = await promptStore.updatePrompt(prompt.id, 'usr-2', {
     content: 'Edited content',
     title: 'Updated Title',
   });
@@ -57,8 +57,8 @@ test('promptStore: updating prompt creates a new version', () => {
   assert.equal(updated!.versions[0].content, 'Original content');
 });
 
-test('promptStore: updating another user\'s prompt returns null', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: updating another user\'s prompt returns null', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-1',
     projectId: null,
     taskId: null,
@@ -70,12 +70,12 @@ test('promptStore: updating another user\'s prompt returns null', () => {
     isAiGenerated: true,
   });
 
-  const result = promptStore.updatePrompt(prompt.id, 'usr-3', { content: 'Hacked content' });
+  const result = await promptStore.updatePrompt(prompt.id, 'usr-3', { content: 'Hacked content' });
   assert.equal(result, null, 'Should not allow updating another user\'s prompt');
 });
 
-test('promptStore: restore version creates a new version with restored content', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: restore version creates a new version with restored content', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-1',
     projectId: null,
     taskId: null,
@@ -88,18 +88,18 @@ test('promptStore: restore version creates a new version with restored content',
   });
 
   // Create version 2
-  promptStore.updatePrompt(prompt.id, 'usr-1', { content: 'Version 2 content' });
+  await promptStore.updatePrompt(prompt.id, 'usr-1', { content: 'Version 2 content' });
 
   // Restore version 1
-  const restored = promptStore.restoreVersion(prompt.id, prompt.versions[0].versionId, 'usr-1');
+  const restored = await promptStore.restoreVersion(prompt.id, prompt.versions[0].versionId, 'usr-1');
   assert.ok(restored, 'Should restore version');
   assert.equal(restored!.versions.length, 3);
   assert.equal(restored!.versions[2].versionNumber, 3);
   assert.equal(restored!.versions[2].content, 'Version 1 content');
 });
 
-test('promptStore: archive prompt marks it as archived', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: archive prompt marks it as archived', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-1',
     projectId: null,
     taskId: null,
@@ -111,15 +111,15 @@ test('promptStore: archive prompt marks it as archived', () => {
     isAiGenerated: true,
   });
 
-  const result = promptStore.archivePrompt(prompt.id, 'usr-1');
+  const result = await promptStore.archivePrompt(prompt.id, 'usr-1');
   assert.equal(result, true);
 
-  const archived = promptStore.getPromptById(prompt.id);
+  const archived = await promptStore.getPromptById(prompt.id);
   assert.equal(archived?.isArchived, true);
 });
 
-test('promptStore: archive another user\'s prompt returns false', () => {
-  const prompt = promptStore.createPrompt({
+test('promptStore: archive another user\'s prompt returns false', async () => {
+  const prompt = await promptStore.createPrompt({
     userId: 'usr-1',
     projectId: null,
     taskId: null,
@@ -131,13 +131,13 @@ test('promptStore: archive another user\'s prompt returns false', () => {
     isAiGenerated: true,
   });
 
-  const result = promptStore.archivePrompt(prompt.id, 'usr-4');
+  const result = await promptStore.archivePrompt(prompt.id, 'usr-4');
   assert.equal(result, false);
 });
 
-test('promptStore: getPromptsForUser returns only that user\'s prompts', () => {
-  const user1Prompts = promptStore.getPromptsForUser('usr-1');
-  const user2Prompts = promptStore.getPromptsForUser('usr-2');
+test('promptStore: getPromptsForUser returns only that user\'s prompts', async () => {
+  const user1Prompts = await promptStore.getPromptsForUser('usr-1');
+  const user2Prompts = await promptStore.getPromptsForUser('usr-2');
 
   // All prompts created for usr-1 should be returned
   const allUser1 = user1Prompts.every((p) => p.userId === 'usr-1');

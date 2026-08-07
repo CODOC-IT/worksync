@@ -238,7 +238,7 @@ router.post('/prompts', async (req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const prompt = promptStore.createPrompt({
+    const prompt = await promptStore.createPrompt({
       userId: req.user.id,
       projectId: projectId || null,
       taskId: taskId || null,
@@ -272,16 +272,14 @@ router.post('/prompts', async (req: AuthenticatedRequest, res: Response): Promis
   }
 });
 
-// All remaining routes (GET/PUT/DELETE prompts) are unchanged since they use promptStore directly
-
-router.get('/prompts', (req: AuthenticatedRequest, res: Response): void => {
+router.get('/prompts', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
   const includeArchived = req.query.includeArchived === 'true';
   const category = req.query.category as string | undefined;
   const search = (req.query.search as string || '').toLowerCase();
 
-  let prompts = promptStore.getPromptsForUser(req.user.id, includeArchived);
+  let prompts = await promptStore.getPromptsForUser(req.user.id, includeArchived);
 
   if (category) {
     prompts = prompts.filter((p) => p.category === category);
@@ -310,10 +308,10 @@ router.get('/prompts', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: safe });
 });
 
-router.get('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
+router.get('/prompts/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const prompt = promptStore.getPromptById(req.params.id);
+  const prompt = await promptStore.getPromptById(req.params.id);
   if (!prompt || prompt.userId !== req.user.id) {
     res.status(404).json({ success: false, message: 'Prompt not found.' });
     return;
@@ -322,7 +320,7 @@ router.get('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: prompt });
 });
 
-router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
+router.put('/prompts/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
   const { content, title } = req.body;
@@ -331,7 +329,7 @@ router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
     return;
   }
 
-  const updated = promptStore.updatePrompt(req.params.id, req.user.id, { content, title });
+  const updated = await promptStore.updatePrompt(req.params.id, req.user.id, { content, title });
   if (!updated) {
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
@@ -341,10 +339,10 @@ router.put('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
   res.json({ success: true, data: updated });
 });
 
-router.get('/prompts/:id/versions', (req: AuthenticatedRequest, res: Response): void => {
+router.get('/prompts/:id/versions', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const prompt = promptStore.getPromptById(req.params.id);
+  const prompt = await promptStore.getPromptById(req.params.id);
   if (!prompt || prompt.userId !== req.user.id) {
     res.status(404).json({ success: false, message: 'Prompt not found.' });
     return;
@@ -363,10 +361,10 @@ router.get('/prompts/:id/versions', (req: AuthenticatedRequest, res: Response): 
   res.json({ success: true, data: safe });
 });
 
-router.post('/prompts/:id/restore/:versionId', (req: AuthenticatedRequest, res: Response): void => {
+router.post('/prompts/:id/restore/:versionId', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const updated = promptStore.restoreVersion(req.params.id, req.params.versionId, req.user.id);
+  const updated = await promptStore.restoreVersion(req.params.id, req.params.versionId, req.user.id);
   if (!updated) {
     res.status(404).json({ success: false, message: 'Prompt or version not found, or access denied.' });
     return;
@@ -376,29 +374,29 @@ router.post('/prompts/:id/restore/:versionId', (req: AuthenticatedRequest, res: 
   res.json({ success: true, data: updated });
 });
 
-router.delete('/prompts/:id', (req: AuthenticatedRequest, res: Response): void => {
+router.delete('/prompts/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const archived = promptStore.archivePrompt(req.params.id, req.user.id);
+  const archived = await promptStore.archivePrompt(req.params.id, req.user.id);
   if (!archived) {
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
   }
-  const archivedPrompt = promptStore.getPromptById(req.params.id);
+  const archivedPrompt = await promptStore.getPromptById(req.params.id);
   auditAssistant(req, 'Archived', req.params.id, archivedPrompt?.title || req.params.id, `Archived assistant prompt “${archivedPrompt?.title || req.params.id}”.`, archivedPrompt?.projectId || undefined, archivedPrompt?.taskId || undefined);
 
   res.json({ success: true, message: 'Prompt archived.' });
 });
 
-router.patch('/prompts/:id/unarchive', (req: AuthenticatedRequest, res: Response): void => {
+router.patch('/prompts/:id/unarchive', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ success: false, message: 'Not authenticated.' }); return; }
 
-  const unarchived = promptStore.unarchivePrompt(req.params.id, req.user.id);
+  const unarchived = await promptStore.unarchivePrompt(req.params.id, req.user.id);
   if (!unarchived) {
     res.status(404).json({ success: false, message: 'Prompt not found or access denied.' });
     return;
   }
-  const restoredPrompt = promptStore.getPromptById(req.params.id);
+  const restoredPrompt = await promptStore.getPromptById(req.params.id);
   auditAssistant(req, 'Updated', req.params.id, restoredPrompt?.title || req.params.id, `Restored assistant prompt “${restoredPrompt?.title || req.params.id}”.`, restoredPrompt?.projectId || undefined, restoredPrompt?.taskId || undefined);
 
   res.json({ success: true, message: 'Prompt restored from archive.' });

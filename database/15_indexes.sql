@@ -57,6 +57,10 @@ CREATE INDEX IX_ReportRuns_RequesterDate ON reporting.ReportRuns(RequestedByUser
 
 CREATE INDEX IX_PromptGenerations_UserDate ON ai.PromptGenerations(UserId, CreatedAtUtc DESC);
 
+CREATE INDEX IX_PromptLibraries_UserArchived ON ai.PromptLibraries(UserId, IsArchived, UpdatedAtUtc DESC);
+
+CREATE INDEX IX_PromptVersions_LibraryNumber ON ai.PromptVersions(PromptLibraryId, VersionNumber);
+
 CREATE INDEX IX_UserNotifications_Inbox ON notify.UserNotifications(RecipientUserId, ReadAtUtc, ClearedAtUtc) INCLUDE (NotificationId, DeliveryStatus);
 
 CREATE INDEX IX_Notifications_Date ON notify.Notifications(CreatedAtUtc DESC) INCLUDE (NotificationTypeId, PriorityCode);
