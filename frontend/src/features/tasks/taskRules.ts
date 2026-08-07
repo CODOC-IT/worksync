@@ -15,8 +15,13 @@ export const TASK_STATUSES: TaskStatus[] = [
   'Done'
 ];
 
-// Completion is reached through the audited task workflow, never at creation time.
-export const CREATE_TASK_STATUSES: TaskStatus[] = TASK_STATUSES.filter((status) => status !== 'Done');
+// Completion and blockers are managed through their dedicated workflows, never at creation time.
+export const CREATE_TASK_STATUSES: TaskStatus[] = TASK_STATUSES.filter(
+  (status) => status !== 'Done' && status !== 'Blocked'
+);
+
+// Existing blocked tasks remain readable, but Blocked is not a Task-module filter choice.
+export const TASK_FILTER_STATUSES: TaskStatus[] = TASK_STATUSES.filter((status) => status !== 'Blocked');
 
 export type TaskModulePriority = TaskPriority;
 
