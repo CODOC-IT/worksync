@@ -471,7 +471,10 @@ export const archiveProject = async (
 // not possible without violating audit immutability. Instead, FK_AuditEvents_Project was dropped
 // (database/24_audit_project_fk_relax.sql) -- a permanently-deleted project's audit history simply
 // keeps its now-historical ProjectId value forever, exactly as it was written.
-export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
+export const permanentlyDeleteProject = async (
+  projectId: number,
+  options: { allowUnarchived?: boolean } = {}
+): Promise<boolean> =>
   withTransaction(async (runQuery) => {
     await runQuery(
       `UPDATE notify.notifications
@@ -602,8 +605,10 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
     await runQuery('UPDATE notify.notifications SET projectid = NULL WHERE projectid = $1', [projectId]);
 
     const result = await runQuery(
-      'DELETE FROM work.projects WHERE projectid = $1 AND archivedatutc IS NOT NULL',
-      [projectId]
+      `DELETE FROM work.projects
+       WHERE projectid = $1
+         AND ($2::boolean OR archivedatutc IS NOT NULL)`,
+      [projectId, options.allowUnarchived === true]
     );
     return (result.rowCount ?? 0) > 0;
   });
