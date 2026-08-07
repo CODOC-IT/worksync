@@ -248,7 +248,7 @@ export const decideApprovalRequest = async (
     // the rejected proposal as an archived project. The request row has already persisted the
     // Admin's decision reason, and its FK is SET NULL on project deletion, so remove the
     // proposal directly.
-    if (row.projectid == null || !await projectRepo.permanentlyDeleteProject(row.projectid)) {
+    if (row.projectid == null || !await projectRepo.permanentlyDeleteProject(row.projectid, { allowUnarchived: true })) {
       throw new ProjectValidationError('The rejected project proposal could not be removed.');
     }
   }
