@@ -5,6 +5,7 @@ import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import * as projectRepo from '../projects/project.repository.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
+import { ActivityChange } from '../activity/activity.types.js';
 import { isProjectAccessible, isProjectLead } from '../projects/project.service.js';
 import { resolveTeamLeadUserId } from '../projects/project.mapper.js';
 import {
@@ -495,6 +496,18 @@ const taskEditSnapshot = (row: TaskRow): TaskEditApprovalInput => ({
   dueDate: row.duedate
 });
 
+// Field-level diff between the stored task snapshot and the proposed edit, recorded on both the
+// request event (what the member wants changed) and the decision event (what was actually
+// applied or rejected). Mirrors the changes[] shape updateTask writes for direct edits so the
+// Activity Log renders one consistent edit trail regardless of which path changed the task.
+const taskEditDiff = (previous: TaskEditApprovalInput, proposed: TaskEditApprovalInput): ActivityChange[] => [
+  previous.title !== proposed.title ? { field: 'Title', previousValue: previous.title, newValue: proposed.title } : null,
+  previous.description !== proposed.description ? { field: 'Description', previousValue: previous.description, newValue: proposed.description } : null,
+  previous.priority !== proposed.priority ? { field: 'Priority', previousValue: previous.priority, newValue: proposed.priority } : null,
+  previous.startDate !== proposed.startDate ? { field: 'Start date', previousValue: previous.startDate, newValue: proposed.startDate } : null,
+  previous.dueDate !== proposed.dueDate ? { field: 'Due date', previousValue: previous.dueDate, newValue: proposed.dueDate } : null,
+].filter((change): change is ActivityChange => Boolean(change));
+
 const validateTaskEditApprovalInput = (input: TaskEditApprovalInput): void => {
   if (!input.title?.trim()) throw new TaskValidationError('Task title cannot be empty.');
   if (!input.description?.trim()) throw new TaskValidationError('Task description cannot be empty.');
@@ -577,6 +590,24 @@ export const createTaskEditApproval = async (
     throw error;
   }
   const createdAt = new Date().toISOString();
+  // The request must land in the Activity Log before the response is sent: it is the member's
+  // only audit trace for their proposed edit (the task itself is not touched until approval).
+  // affectedUser is the reviewing Team Lead, so the request surfaces in the Lead's activity as
+  // well as the member's own, and the changes[] diff previews exactly what was proposed.
+  const requesterName = userStore.findById(actorId)?.name || actorDisplayName(actorId);
+  const reviewerName = userStore.findById(reviewerId)?.name || reviewerId;
+  recordActivitySafe({
+    actorId, actorName: requesterName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: reviewerId, affectedUserName: reviewerName,
+    action: 'Task Edit Requested', module: 'Tasks', entityType: 'Task',
+    entityId: taskId, entityName: row.title,
+    projectId: fromProjectPk(row.projectid), projectName: project.projectname,
+    taskId, taskName: row.title,
+    description: `${requesterName} requested an edit to task “${row.title}” — pending ${reviewerName}'s approval.`,
+    linkRoute: 'approvals', important: true,
+    changes: taskEditDiff(previous, proposed),
+    metadata: { approvalId: `task-edit-${requestPk}`, requestedBy: actorId, reviewerId }
+  });
   return {
     id: `task-edit-${requestPk}`,
     type: 'Controlled_Edit',
@@ -659,6 +690,30 @@ export const decideTaskEditApproval = async (
     reason
   );
   if (!taskPk) throw new TaskValidationError('This task edit request is no longer pending.');
+  // The decision is the audit event for the applied edit: the change is executed inside the
+  // repository transaction (never through service.updateTask, which writes its own activity), so
+  // this is the only place an approved member edit can be recorded. affectedUser is the
+  // requesting member, which is exactly how approval decisions on their own requests are wired
+  // to surface in the member's Activity Log (affecteduseridtext matches the viewer's frontend
+  // id in backend/src/activity/activity.repository.ts).
+  const reviewerName = actorDisplayName(actorId);
+  const requesterName = userStore.findById(approval.requestedBy)?.name || approval.requestedBy;
+  const project = await projectRepo.findProjectById(row.projectid);
+  recordActivitySafe({
+    actorId, actorName: reviewerName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: approval.requestedBy, affectedUserName: requesterName,
+    action: decision === 'Approved' ? 'Task Edit Approved' : 'Task Edit Rejected',
+    module: 'Tasks', entityType: 'Task',
+    entityId: approval.targetId, entityName: approval.targetTitle,
+    projectId: fromProjectPk(row.projectid), projectName: project?.projectname,
+    taskId: approval.targetId, taskName: approval.targetTitle,
+    description: decision === 'Approved'
+      ? `${reviewerName} approved ${requesterName}'s edit request for task “${approval.targetTitle}”.`
+      : `${reviewerName} rejected ${requesterName}'s edit request for task “${approval.targetTitle}”.`,
+    reason: reason || undefined, linkRoute: 'approvals', important: true,
+    changes: taskEditDiff(approval.previousTaskSnapshot, approval.proposedTaskUpdate),
+    metadata: { approvalId, requestedBy: approval.requestedBy, decidedBy: actorId }
+  });
   if (decision === 'Rejected') return null;
   const updated = await repo.findTaskById(taskPk);
   return updated ? buildDTO(updated) : null;
