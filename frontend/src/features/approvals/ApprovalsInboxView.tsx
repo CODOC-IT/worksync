@@ -22,6 +22,7 @@ import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
 import { newestProjectRequestsFirst } from '../projects/projectApprovalRules';
+import { formatProjectChangeValue, projectEditChanges } from '../projects/projectApprovalDisplay';
 
 // Account Change Requests -- HR/Lead/Member request a single-field change to their own account
 // (name, email, username, password). Rendered with friendly labels; requested passwords are never
@@ -999,8 +1000,11 @@ export const ApprovalsInboxView: React.FC = () => {
                       {PROJECT_REQUEST_TYPE_META[request.requestType].description}
                     </p>
                   )}
-                  <p className="text-xs text-slate-400">
-                    Requested by {request.requestedByName} · {new Date(request.createdAt).toLocaleString()}
+                  <p className="break-words text-xs text-slate-400">
+                    Requested by <span className="font-semibold text-slate-300">{request.requestedByName}</span>
+                    {request.requestedByRole ? ` · ${request.requestedByRole.replace('_', ' ')}` : ''}
+                    {request.requestedByEmail ? ` · ${request.requestedByEmail}` : ''}
+                    {' · '}{new Date(request.createdAt).toLocaleString()}
                   </p>
                 </div>
               </div>
@@ -1010,18 +1014,26 @@ export const ApprovalsInboxView: React.FC = () => {
                 <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
               </div>
 
-              {request.requestType === 'PROJECT_EDIT' && request.requestedChanges && (
+              {request.requestType === 'PROJECT_EDIT' && projectEditChanges(request).length > 0 && (
                 <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested changes</span>
-                  <div className="mt-1 space-y-1">
-                    {Object.entries(request.requestedChanges)
-                      .filter(([, value]) => value !== undefined)
-                      .map(([field, value]) => (
-                        <div key={field} className="flex items-center gap-2">
-                          <span className="text-slate-500">{field}:</span>
-                          <span className="text-emerald-300">{String(value)}</span>
-                        </div>
-                      ))}
+                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Changes Requested</span>
+                  <div className="mt-3 space-y-3">
+                    {projectEditChanges(request).map((change) => (
+                      <div key={change.fieldKey} className="min-w-0 rounded-lg border border-white/5 bg-white/[0.025] p-3">
+                        <p className="font-semibold text-slate-100">{change.fieldLabel}</p>
+                        {change.fieldKey === 'memberIds' ? (
+                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            <p className="break-words"><span className="block text-[10px] uppercase text-slate-500">Removed</span><span className="text-rose-300">{formatProjectChangeValue(change.fieldKey, change.removed)}</span></p>
+                            <p className="break-words"><span className="block text-[10px] uppercase text-slate-500">Added</span><span className="text-emerald-300">{formatProjectChangeValue(change.fieldKey, change.added)}</span></p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            <p className="min-w-0 whitespace-pre-wrap break-words"><span className="block text-[10px] uppercase text-slate-500">Before</span><span className="text-slate-300">{formatProjectChangeValue(change.fieldKey, change.oldDisplayValue)}</span></p>
+                            <p className="min-w-0 whitespace-pre-wrap break-words"><span className="block text-[10px] uppercase text-cyan-500">After</span><span className="text-cyan-100">{formatProjectChangeValue(change.fieldKey, change.newDisplayValue)}</span></p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

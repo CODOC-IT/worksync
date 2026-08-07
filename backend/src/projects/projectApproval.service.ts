@@ -1,7 +1,7 @@
 import * as repo from './projectApproval.repository.js';
 import * as projectRepo from './project.repository.js';
 import * as projectService from './project.service.js';
-import { resolveTeamLeadUserId } from './project.mapper.js';
+import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
 import { fromProjectPk, fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -11,8 +11,21 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import {
   buildProjectDecisionMessage,
   projectDecisionEffect,
+  resolveUpdatedParticipants,
   validateProjectDecision
 } from './projectWorkflow.rules.js';
+<<<<<<< HEAD
+=======
+import { buildProjectApprovalRejectionCopy } from './projectApprovalRejectionCopy.js';
+import { UpdateProjectInput } from './project.types.js';
+import {
+  buildProjectEditPayload,
+  conflictingProjectFields,
+  enrichProjectEditPayload,
+  parseProjectEditPayload,
+  resolveProjectUserIdentity,
+} from './projectApprovalChanges.js';
+>>>>>>> 35a1498 (fix: improve project edit approvals and lead actions)
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -31,17 +44,30 @@ import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError
 
 const actorName = (userId: string): string => actorDisplayName(userId);
 
+const unknownUser = (id: string): string => `Unknown user (ID: ${id})`;
+
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
   const project = await projectRepo.findProjectById(row.projectid);
   const requestedByFrontendId = fromUserPk(row.requestedbyuserid);
+  const users = await userStore.getAllUsers();
+  const userNames = new Map(users.map((user) => [user.id, user.name]));
+  const requester = resolveProjectUserIdentity(requestedByFrontendId, users);
+  const parsedChanges = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null;
+  const projectEditPayload = row.requesttype === 'PROJECT_EDIT'
+    ? parseProjectEditPayload(row.requestedchangesjson)
+    : null;
   return {
     id: row.approvalrequestid,
     projectId: fromProjectPk(row.projectid),
     projectTitle: project?.projectname || fromProjectPk(row.projectid),
     requestType: row.requesttype,
     requestedByUserId: requestedByFrontendId,
-    requestedByName: actorName(requestedByFrontendId),
-    requestedChanges: row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null,
+    requestedByName: requester.name,
+    requestedByRole: requester.role,
+    requestedByEmail: requester.email,
+    requestedChanges: projectEditPayload
+      ? enrichProjectEditPayload(projectEditPayload, (id) => userNames.get(id) || unknownUser(id))
+      : parsedChanges,
     reason: row.reason,
     status: row.requeststatus,
     reviewedByUserId: row.reviewedbyuserid != null ? fromUserPk(row.reviewedbyuserid) : undefined,
@@ -105,11 +131,25 @@ export const createApprovalRequest = async (
     throw new ProjectAuthorizationError('You can only request changes for projects you lead.');
   }
 
+  let persistedChanges = requestedChanges;
+  if (requestType === 'PROJECT_EDIT') {
+    const current = rowToProjectDTO(row, members, 0);
+    const requestedEdit = { ...(requestedChanges || {}) } as UpdateProjectInput;
+    const participants = resolveUpdatedParticipants(current.teamLeadId, requestedEdit.teamLeadId, requestedEdit.memberIds);
+    if (participants.error) throw new ProjectValidationError(participants.error);
+    if (requestedEdit.memberIds !== undefined) requestedEdit.memberIds = participants.memberIds;
+    const payload = buildProjectEditPayload(current, requestedEdit);
+    if (payload.changes.length === 0) {
+      throw new ProjectValidationError('No project changes were detected. Update at least one field before requesting approval.');
+    }
+    persistedChanges = payload as unknown as Record<string, unknown>;
+  }
+
   const approvalRequestId = await repo.insertApprovalRequest({
     projectId: projectPk,
     requestType,
     requestedByUserId: toUserPk(requesterId),
-    requestedChangesJson: requestedChanges ? JSON.stringify(requestedChanges) : null,
+    requestedChangesJson: persistedChanges ? JSON.stringify(persistedChanges) : null,
     reason: reason.trim()
   });
 
@@ -187,13 +227,26 @@ export const decideApprovalRequest = async (
         await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
         break;
       case 'PROJECT_EDIT':
+        {
+          const payload = parseProjectEditPayload(row.requestedchangesjson);
+          if (!payload) throw new ProjectValidationError('This project edit request has invalid or incomplete change details.');
+          const currentRow = await projectRepo.findProjectById(row.projectid);
+          if (!currentRow) throw new ProjectNotFoundError('Project not found.');
+          const currentMembers = await projectRepo.findMembersForProject(row.projectid);
+          const conflicts = conflictingProjectFields(rowToProjectDTO(currentRow, currentMembers, 0), payload);
+          if (conflicts.length > 0) {
+            throw new ProjectValidationError(
+              `This project changed after the request was submitted. Review and resubmit: ${conflicts.join(', ')}.`
+            );
+          }
         await projectService.updateProject(
           projectIdStr,
-          row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : {},
+          payload.proposal,
           actorId,
           'Admin'
         );
         break;
+        }
       case 'PROJECT_ARCHIVE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
@@ -274,7 +327,8 @@ export const decideApprovalRequest = async (
   });
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    action: decision, module: 'Projects', entityType: 'Project', entityId: projectIdStr,
+    action: row.requesttype === 'PROJECT_EDIT' ? `Project Edit ${decision}` : decision,
+    module: 'Projects', entityType: 'Project', entityId: projectIdStr,
     entityName: projectName, projectName,
     description: `${reviewerDisplayName} ${outcomeVerb} ${requesterDisplayName}'s request to ${REQUEST_TYPE_LABEL[row.requesttype]} "${projectName}".`,
     reason: decisionReason?.trim() || undefined, linkRoute: 'approvals', important: true

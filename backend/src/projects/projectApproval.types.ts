@@ -34,6 +34,8 @@ export interface ProjectApprovalRequestDTO {
   requestType: ProjectApprovalRequestType;
   requestedByUserId: string;
   requestedByName: string;
+  requestedByRole?: string;
+  requestedByEmail?: string;
   requestedChanges: Record<string, unknown> | null;
   reason: string;
   status: ProjectApprovalRequestStatus;
