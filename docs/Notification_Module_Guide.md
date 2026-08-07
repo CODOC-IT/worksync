@@ -43,6 +43,28 @@ back to.
 > see `backend/src/utils/actorDisplay.ts` and `notification.repository.ts`'s
 > `insertNotificationWithFanout`/`findByUser` — and needed no changes here.
 
+> **Update (`feature/board-notification-enhancements`)**: The module gained a compact-preview /
+> expanded-detail split and a set of diff-driven Task/Leave events. Read §15 for the full change;
+> the short version:
+> 1. **Two new columns** on `notify.Notifications` — `DetailText` (the full body, shown only when
+>    a notification is expanded) and `MetadataJson` (structured label/value context). The list
+>    stays scannable; long rejection reasons and changed-field lists live in the expanded view.
+>    One record, two renderings — never two notifications. See `database/29_notify_detail_metadata.sql`
+>    and `database/migrations/20260807_01_notification_detail_metadata.sql`.
+> 2. **Seven new types** — `task_edit_approval_requested`/`_approved`/`_rejected`,
+>    `subtask_assignment_changed`, `leave_requested`/`_approved`/`_rejected`.
+> 3. **Controlled task edits are now server-published** (`task.service.ts`), carrying the exact
+>    fields changed and, on rejection, the reviewer's mandatory reason. The three frontend
+>    `dispatchNotifications` calls that used to cover this were removed — they would double-publish
+>    and could not see the persisted reason.
+> 4. **`updateTask` no longer sends one generic `task_updated`** to everyone; it diffs the edit and
+>    fans out per change to only the affected people (§9).
+> 5. **Leave notifications name the leave** — "Full Day Leave" / "Half Day Leave (Morning)" — in
+>    every template (submitted / forwarded / approved / rejected), built by the new pure
+>    `frontend/src/features/attendance/leaveNotifications.ts` (unit-tested).
+> 6. **`linkRoute` is per-type, not per-category** (`deriveLinkRoute`), so clicking a notification
+>    lands on the tab that actually owns it.
+
 ## 1. Purpose
 
 Deliver role-scoped, in-app notifications (plus bottom-right toasts) whenever a tracked event
@@ -300,8 +322,8 @@ regardless of role.
 | Event | Wired in | Notes |
 |---|---|---|
 | Task assigned | `AppContext.createTask` | |
-| Task reassigned | `AppContext.updateTask` | Detected by diffing assignee ids before/after |
-| Task updated / priority changed / due date changed | `AppContext.updateTask` | One specific type fires per call — priority/due-date change takes precedence over the generic "updated" notice when detected |
+| Task assignee added / removed | `task.service.ts`'s `updateTask` (server-side) | Separate, individually-worded notifications per added and per removed user (`task_reassigned`, or `subtask_assignment_changed` on a subtask) — never one shared "assignments changed" notice. See §15.5 |
+| Task updated / priority changed / due date changed | `task.service.ts`'s `updateTask` (server-side) | The edit is diffed and one notification is published *per kind of change*, to the retained assignees + Team Lead only. Replaces the previous single generic `task_updated` sent to everyone regardless of what changed. See §15.5 |
 | Checklist completed | `AppContext.updateTask` | Fires when `subtasks` transitions from not-all-complete to all-complete |
 | Task deleted | `AppContext.deleteTask` | |
 | Task status changed / Review requested / Review approved / Review rejected / Task completed | `AppContext.updateTaskStatus` | Same action the Project Board module already calls; this branch only adds the notification dispatch, no board logic changed |
@@ -310,7 +332,7 @@ regardless of role.
 | Project updated / archived / restored | `AppContext.updateProject` | Detected via `status` transitions in/out of `'Archived'` |
 | User added to / removed from project | `AppContext.updateProject` | Diffs `memberIds` before/after |
 | Project deleted | `AppContext.deleteProject` | |
-| Controlled edit requested / approved / rejected | `AppContext.proposeControlledEdit`, `approveApprovalItem`, `rejectApprovalItem` | `approval` type, routed to Admin + the task's Team Lead |
+| Controlled task edit requested / approved / rejected | `task.service.ts`'s `createTaskEditApproval` / `decideTaskEditApproval` (server-side) | Dedicated `task_edit_approval_requested`/`_approved`/`_rejected` types carrying the exact fields changed and, on rejection, the reviewer's mandatory reason as persisted to `work.ChangeRequestReviews.ReviewNote`. Request → the project's Team Lead only; decision → the requester only. See §15.4 |
 | Mention | `AppContext.sendChatMessage` | Simple `@Full Name` substring match against `users` — see §11 limitations |
 | User deactivated | `AppContext.deactivateUser` | Notifies Admins + the affected user |
 | Backup completed | `AppContext.exportBackup` | Notifies Admins including the acting Admin (self-notification doubles as an in-app success confirmation) |
@@ -318,8 +340,8 @@ regardless of role.
 | Check-in / late check-in | `AppContext.checkIn` | Recipients: HR-role users (`resolveHRRecipients`, mirrors the pre-existing "Notify HR" pattern in `submitHRRequest`). "Late" = check-in time after `settings.workingHours.start` |
 | Check-out | `AppContext.checkOut` | Recipients: HR |
 | Break started / ended / exceeded | `AppContext.startBreak` / `endBreak` | "Exceeded" = duration over `settings.breakLimitMinutes`; recipients: HR |
-| Attendance correction / leave / break-exception requested | `AppContext.submitHRRequest` | `type === 'Correction'` → `attendance_correction_submitted`; `'Leave'`/`'Break_Exception'` → the existing generic `approval` type (no dedicated Leave notification type was requested — reuses the same convention as `proposeControlledEdit`'s `approval` events) |
-| Attendance correction / leave / break-exception approved or rejected | `AppContext.approveHRRequest` / `rejectHRRequest` | Notifies the original requester; type follows the same per-`HRRequest.type` mapping as submission (`break_approved`/`break_rejected` for `'Break_Exception'`) — previously these two actions sent no notification at all |
+| Attendance correction / leave / break-exception requested | `AppContext.submitHRRequest` | `type === 'Correction'` → `attendance_correction_submitted`; `'Leave'` → `leave_requested`, whose copy names the leave ("Full Day Leave" / "Half Day Leave (Morning)") and its date — see §15.6; `'Break_Exception'` → the generic `attendance` type |
+| Attendance correction / leave / break-exception approved or rejected | `AppContext.approveHRRequest` / `rejectHRRequest` | Notifies the original requester; `'Leave'` → `leave_approved`/`leave_rejected` (leave named, reviewer's reason in the expanded body — §15.6), `'Correction'` → `attendance_correction_approved`/`_rejected`, `'Break_Exception'` → `break_approved`/`break_rejected`. HR approving a leave forwards it to Admin and notifies both the Admins and the requester |
 | New chat message | `AppContext.sendChatMessage` | `chat_new_message` to the rest of the project (`resolveProjectRecipients`), excluding anyone who already got the more specific `mention` notification for the same message |
 | AI prompt generated | `backend/src/routes/assistantRoutes.ts`'s `POST /prompts` | Self-notification to the author confirming generation completed (AI Assistant has no team-visibility concept — saved prompts are private per user); `category === 'ProjectBreakdown'` → `ai_tasks_generated`, everything else → `ai_recommendation_available` |
 
@@ -552,10 +574,13 @@ triggered the event. A real multi-user deployment would need:
 
 ## 14. Developer Notes
 
-- **Adding a new notification type**: add it to `NotificationType` in `types/index.ts`, add
-  one row to `NOTIFICATION_TYPE_META` in `notificationTypes.ts` (label/icon/tone/priority),
-  decide if it needs a deny-list entry in the per-role sets, then call `dispatchNotifications`
-  from wherever the triggering action lives — nothing else needs to change.
+- **Adding a new notification type**: add it to `NotificationType` in `types/index.ts` **and**
+  `backend/src/notifications/notification.types.ts` (the two unions are duplicated on purpose —
+  separate TS projects), add one row to `NOTIFICATION_TYPE_META` in `notificationTypes.ts`
+  (label/icon/tone/priority), seed a `notify.NotificationTypes` row (a baseline
+  `database/NN_*.sql` **and** a `database/migrations/*.sql` so existing databases get it too —
+  `publishEvent` throws on an unseeded type), decide if it needs a deny-list entry in the
+  per-role sets and a `TYPE_LINK_ROUTES` entry in `notification.mapper.ts`, then publish it.
 - **Adding a new trigger point**: call `dispatchNotifications({ recipientIds, type, title,
   message, actorId: currentUser.id, actorName: currentUser.name, linkRoute, projectId?,
   taskId? })` from inside the relevant `AppContext` action, after its existing state update.
@@ -568,3 +593,134 @@ triggered the event. A real multi-user deployment would need:
   mutate a `NotificationItem` — always go through an `AppContext` action, even for new code,
   so the "UI never touches notification data directly" rule (Step 7) holds for future
   contributors too.
+
+## 15. Compact preview / expanded details, and diff-driven Task & Leave events
+
+### 15.1 One record, two renderings
+
+`notify.Notifications` gained two nullable columns (`database/29_notify_detail_metadata.sql`,
+migration `20260807_01_notification_detail_metadata.sql`):
+
+| Column | Holds | Rendered |
+|---|---|---|
+| `SafePreviewText` (existing) | the compact 1–2 line summary | always, truncated to one line in the list |
+| `DetailText` (new, `varchar(4000)`) | the full body — rejection reasons, review comments, the exact fields an edit changed | only when the row is expanded |
+| `MetadataJson` (new, `jsonb`) | structured label/value context (project, task/subtask, approver, changed fields, leave type/period, timestamps) | only when the row is expanded, as label/value rows |
+
+There is **one notification record**. The preview and the expanded view are two renderings of it,
+which is why expanding never issues a request and why the expanded content survives a refresh.
+`NotificationEvent`/`NotificationDTO` carry `detail` and `metadata` end to end; `publishEvent`
+buckets recipients by `message + detail` (both support per-recipient overrides via
+`recipientMessages` / `recipientDetails`).
+
+`MetadataJson` is deliberately `jsonb` rather than typed columns: the keys are per-event-type, and
+adding an event must not require a migration. Nothing queries inside it — it is written at publish
+time and rendered back verbatim, with `humanizeMetadataKey` turning `rejectionReason` into
+"Rejection reason". `notification.validation.ts` rejects nested objects/arrays so a metadata value
+can never render as `[object Object]`.
+
+### 15.2 UI
+
+`NotificationListItem` renders the compact row by default: icon, title, one truncated summary
+line, relative timestamp, unread dot. In the **Notification Center**, clicking the row (or its
+chevron) expands it in place — full message, `detail` body, metadata grid, type/actor/timestamp
+footer, and a primary action button. Expanding also marks the notification read.
+
+- The animation is a CSS `grid-template-rows: 0fr -> 1fr` transition, so it needs no measured
+  pixel height and works for any content length. Nothing above the row moves, so the list's
+  scroll position is preserved.
+- In the **bell dropdown** there is no room to expand, so clicking still navigates and the
+  pre-existing hover popover still provides the untruncated text. The component decides by
+  whether `onToggleDetail` was passed — the two surfaces keep sharing one row implementation.
+
+### 15.3 Deep links are per-type
+
+`deriveLinkRoute` was category-only, which sent every Task-category event to the Tasks tab and
+every System event to a `settings` tab that does not exist in `App.tsx`'s router. It now consults
+a `TYPE_LINK_ROUTES` map first: board events (`task_status_changed`, review decisions,
+`checklist_completed`, subtask completion/reopen) → `kanban`; `task_edit_approval_requested` →
+`approvals` while its `_approved`/`_rejected` outcomes → `tasks`; `leave_requested` → `approvals`
+while `leave_approved`/`_rejected` → `attendance`; `holiday_created` → `calendar`; `user_*` →
+`members`; Chat → `project-chats` (the tab's real id — `chat` remains aliased for older rows).
+`publishEvent` now stamps this same derived route onto the DTOs it returns, so a just-published
+notification deep-links correctly instead of being inert until the next refetch.
+
+### 15.4 Controlled task edits (server-published)
+
+| Event | Recipient | Trigger | Carries |
+|---|---|---|---|
+| `task_edit_approval_requested` | the project's Team Lead **only** | a Team Member submits a controlled edit | task title, project, requester, the exact fields changed (old → new), link to Approvals |
+| `task_edit_approval_approved` | the requester **only** | the Lead approves | task title, project, approver, approved fields, link to the task |
+| `task_edit_approval_rejected` | the requester **only** | the Lead rejects | task title, project, approver, **the mandatory rejection reason**, link to the task |
+
+All three are published by `task.service.ts` (`createTaskEditApproval` / `decideTaskEditApproval`),
+in the same request that writes `work.TaskChangeRequests` / `work.ChangeRequestReviews`. The
+rejection reason in the notification is the same string just persisted to
+`ChangeRequestReviews.ReviewNote`, so the notification and the review history cannot disagree, and
+copying it into `DetailText` is what keeps it readable in the Notification Center after a refresh
+without re-reading the change-request tables.
+
+The three `dispatchNotifications` calls that previously covered this flow from `AppContext`
+(`updateTask`'s "Task Update Requested", `approveApprovalItem`'s "Task Update Approved",
+`rejectApprovalItem`'s generic "Request Rejected") were removed. They would now double-publish,
+and none of them could see either the field-level diff or the persisted rejection reason.
+`rejectApprovalItem` still dispatches for every *other* approval type, and now puts the reviewer's
+reason in `detail`/`metadata` rather than the preview line.
+
+Field diffing lives in one place (`diffTaskEdit` / `formatTaskEditChange`), so the request, the
+approval and the rejection can never describe the same change set differently. Description changes
+are summarized as "Description updated" rather than reproduced — the expanded body is a summary of
+the request, not a replacement for opening it.
+
+### 15.5 Task edits fan out per change, not per task
+
+`updateTask` used to raise a single `task_updated` ("X updated <task>.") addressed to every
+assignee plus the Lead, whatever changed. It now diffs the edit and publishes only what happened,
+only to whom it concerns (`notifyTaskEdited`):
+
+| Change | Type | Recipients |
+|---|---|---|
+| assignee added | `task_reassigned` (`subtask_assignment_changed` on a subtask) | the newly assigned people — "You have been assigned to …" |
+| assignee removed | same type | the removed people — "You have been removed from …" |
+| priority changed | `task_priority_changed` | remaining assignees + Team Lead |
+| due date changed | `task_due_date_changed` | remaining assignees + Team Lead |
+| title / description / start date | `task_updated`, naming the fields it covers | remaining assignees + Team Lead |
+
+Added and removed people get **separate, individually-worded notifications**, never one shared
+"assignments changed" notice. Newly-added assignees deliberately do *not* also receive the
+field-change notices: their assignment notification already states the task's current priority and
+dates, so sending both would describe a change from a state they never saw. Subtask events
+additionally name the parent task ("subtask 'API Integration' under task 'Notification Module'"),
+since a subtask title alone is rarely enough to locate.
+
+Publishing is fire-and-forget behind a `try`/`catch` — the edit has already committed by the time
+it runs, so a notification failure is logged, never surfaced as a failed edit.
+
+### 15.6 Leave notifications name the leave
+
+Every leave template (submitted → HR/Admin, HR-approved-and-forwarded → Admin *and* requester,
+final approved/rejected → requester) is built by the pure, unit-tested
+`frontend/src/features/attendance/leaveNotifications.ts`, so all of them describe the leave the
+same way: **"Full Day Leave"** or **"Half Day Leave (Morning)" / "(Afternoon)"**, with the date as
+`12 Aug 2026` (never an ambiguous `08/12`) and the approver named.
+
+- `First Half`/`Second Half` is what the API stores; Morning/Afternoon is what a person reads.
+- A request with no `leaveType` (created before the half-day option existed) reads as Full Day —
+  every one of those was.
+- The reviewer's reason goes in `detail`/`metadata`, not the preview, so the list stays scannable
+  and a long reason is never truncated mid-sentence.
+
+Leave now has its own `leave_requested`/`leave_approved`/`leave_rejected` types instead of the
+generic `attendance` type, which is what makes "Leave Approved" a filterable type in the
+Notification Center and gives the events their own deep links (§15.3).
+
+### 15.7 Known limitation — the pg-mem suite
+
+`notification.repository.test.ts` is currently red, and was **before** this branch: every
+`publishEvent` goes through `filterDeliverableRecipients`, whose
+`WHERE userid = ANY($1::int[])` returns zero rows under pg-mem when the compared column carries a
+unique index — and `UserId` is the primary key. Confirmed with a minimal repro (the same query
+works against a non-indexed column, and `IN (2,3)` works against the PK), so it is an index-path
+bug in the emulator, not a defect in the SQL. It is deliberately not "fixed" by reshaping the
+production query. The branch's own new logic is covered by
+`frontend/src/features/attendance/leaveNotifications.test.ts` instead, which is green.
