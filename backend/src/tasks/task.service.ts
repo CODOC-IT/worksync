@@ -395,6 +395,164 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   return dto;
 };
 
+// --- Task edit notifications ----------------------------------------------------------------
+// An edit used to raise a single generic `task_updated` ("X updated <task>.") addressed to every
+// assignee plus the Team Lead, no matter what actually changed — which told a recipient nothing
+// and reached people the change did not concern. It is replaced by a diff-driven fan-out:
+//
+//   * someone newly assigned            -> their own "you have been assigned" notification
+//   * someone removed from the task     -> their own "you have been removed" notification
+//   * priority / due date / other fields-> one notification per *kind* of change, addressed only
+//                                          to the people still working on the task (+ the Lead)
+//
+// Newly-added assignees deliberately do NOT also receive the field-change notices: their
+// assignment notification already carries the task's current priority and dates, so sending both
+// would describe a change from a state they never saw.
+
+interface TaskFieldChange {
+  field: string;
+  previousValue: string;
+  newValue: string;
+}
+
+// Which notification type reports which field. Anything not listed here rolls up into the
+// generic `task_updated`, which names the fields it covers rather than staying vague.
+const FIELD_CHANGE_EVENTS: Record<string, { type: 'task_priority_changed' | 'task_due_date_changed'; title: string }> = {
+  Priority: { type: 'task_priority_changed', title: 'Task Priority Changed' },
+  'Due date': { type: 'task_due_date_changed', title: 'Task Due Date Changed' }
+};
+
+const notifyTaskEdited = (context: {
+  row: TaskRow;
+  dto: TaskDTO;
+  actorId: string;
+  actorName: string;
+  projectName?: string;
+  previousAssigneeIds: string[];
+  changedAssignees: boolean;
+  fieldChanges: TaskFieldChange[];
+}): void => {
+  const { row, dto, actorId, actorName, previousAssigneeIds, changedAssignees, fieldChanges } = context;
+  const projectName = context.projectName || 'the project';
+
+  void (async () => {
+    try {
+      const isSubtask = Boolean(row.parenttaskid);
+      const parentRow = row.parenttaskid ? await repo.findTaskById(row.parenttaskid) : null;
+      const parentTitle = parentRow?.title || '';
+      // A subtask's own notifications name both titles, so the recipient knows which checklist
+      // item of which task is being talked about without opening anything.
+      const where = isSubtask && parentTitle
+        ? `subtask "${dto.title}" under task "${parentTitle}"`
+        : `"${dto.title}"`;
+      const teamLeadId = await resolveProjectTeamLead(row.projectid);
+
+      const previous = new Set(previousAssigneeIds);
+      const current = new Set(dto.assigneeIds);
+      const added = changedAssignees ? dto.assigneeIds.filter((id) => !previous.has(id)) : [];
+      const removed = changedAssignees ? previousAssigneeIds.filter((id) => !current.has(id)) : [];
+      const retained = dto.assigneeIds.filter((id) => !added.includes(id));
+
+      const assignmentType = isSubtask ? 'subtask_assignment_changed' : 'task_reassigned';
+      const sharedMetadata = {
+        project: projectName,
+        task: isSubtask && parentTitle ? parentTitle : dto.title,
+        ...(isSubtask ? { subtask: dto.title } : {}),
+        priority: dto.priority,
+        dueDate: dto.dueDate,
+        updatedBy: actorName
+      };
+
+      if (added.length > 0) {
+        publishSafely(
+          {
+            type: assignmentType,
+            title: isSubtask ? 'Subtask Assigned' : 'Task Assigned',
+            message: `You have been assigned to ${where} in ${projectName}.`,
+            detail: [
+              `${actorName} assigned you to ${where} in ${projectName}.`,
+              '',
+              `Priority: ${dto.priority}`,
+              `Due: ${dto.dueDate}`
+            ].join('\n'),
+            metadata: { ...sharedMetadata, change: 'Assigned' },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          added,
+          actorId
+        );
+      }
+
+      if (removed.length > 0) {
+        publishSafely(
+          {
+            type: assignmentType,
+            title: isSubtask ? 'Removed From Subtask' : 'Removed From Task',
+            message: `You have been removed from ${where} in ${projectName}.`,
+            detail: `${actorName} removed you from ${where} in ${projectName}. It no longer appears in your assigned work.`,
+            metadata: { ...sharedMetadata, change: 'Removed' },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          removed,
+          actorId
+        );
+      }
+
+      if (fieldChanges.length === 0) return;
+
+      // One notification per kind of change, so "priority raised to Urgent" is never buried
+      // inside a generic update notice — and so a recipient can mute or filter by the specific
+      // type. Recipients are the people the change actually affects: whoever is still working on
+      // the task, plus the Lead who oversees it.
+      const fieldRecipients = [...retained, teamLeadId];
+      const grouped = new Map<string, { title: string; changes: TaskFieldChange[] }>();
+      for (const change of fieldChanges) {
+        const event = FIELD_CHANGE_EVENTS[change.field];
+        const key = event ? event.type : 'task_updated';
+        const title = event ? event.title : 'Task Updated';
+        const bucket = grouped.get(key) || { title, changes: [] };
+        bucket.changes.push(change);
+        grouped.set(key, bucket);
+      }
+
+      for (const [type, { title, changes }] of grouped) {
+        const fieldList = changes.map((change) => change.field.toLowerCase()).join(', ');
+        const summary =
+          changes.length === 1
+            ? `${actorName} changed the ${fieldList} of ${where} from "${changes[0].previousValue}" to "${changes[0].newValue}".`
+            : `${actorName} updated the ${fieldList} of ${where}.`;
+        publishSafely(
+          {
+            type: type as Parameters<typeof notificationService.publishEvent>[0]['type'],
+            title,
+            message: summary,
+            detail: [
+              `${actorName} updated ${where} in ${projectName}.`,
+              '',
+              'Changes:',
+              ...changes.map((change) => `• ${change.field}: "${change.previousValue}" → "${change.newValue}"`)
+            ].join('\n'),
+            metadata: { ...sharedMetadata, fieldsChanged: changes.map((change) => change.field).join(', ') },
+            actorId,
+            projectId: dto.projectId,
+            taskId: dto.id
+          },
+          fieldRecipients,
+          actorId
+        );
+      }
+    } catch (error) {
+      // A notification failure must never surface as a failed edit — the task update itself has
+      // already committed by the time this runs.
+      console.error('[task.service] Failed to publish task edit notifications.', error);
+    }
+  })();
+};
+
 export const updateTask = async (
   taskId: string,
   input: UpdateTaskInput,
@@ -456,15 +614,6 @@ export const updateTask = async (
   const dto = await buildDTO(updatedRow!);
   const actorName = actorDisplayName(actorId);
 
-  notifyTaskRecipients(updatedRow!, dto.assigneeIds, actorId, {
-    type: 'task_updated',
-    title: 'Task Updated',
-    message: `${actorName} updated "${dto.title}".`,
-    actorId,
-    projectId: dto.projectId,
-    taskId: dto.id
-  });
-
   const taskChanges = [
     input.title !== undefined && input.title.trim() !== row.title ? { field: 'Title', previousValue: row.title, newValue: dto.title } : null,
     input.description !== undefined && input.description.trim() !== row.description ? { field: 'Description', previousValue: row.description, newValue: dto.description } : null,
@@ -476,6 +625,18 @@ export const updateTask = async (
   const hasPriorityChange = taskChanges.some((c) => c.field === 'Priority');
   const hasAssigneeChange = taskChanges.some((c) => c.field === 'Assignee');
   const project = await projectRepo.findProjectById(row.projectid);
+
+  notifyTaskEdited({
+    row,
+    dto,
+    actorId,
+    actorName,
+    projectName: project?.projectname,
+    previousAssigneeIds,
+    changedAssignees: input.assigneeIds !== undefined,
+    fieldChanges: taskChanges.filter((change) => change.field !== 'Assignee')
+  });
+
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: hasAssigneeChange ? 'Assigned/Reassigned' : hasPriorityChange ? 'Priority Changed' : 'Updated',
