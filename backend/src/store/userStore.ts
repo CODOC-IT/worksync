@@ -744,8 +744,9 @@ class UserStore {
           [uid, Buffer.from(newPasswordHash, 'utf-8')]
         );
       } catch (err: any) {
-        console.warn(`[UserStore] DB updatePassword failed: ${err.message}`);
-        throw new Error('Database password update failed.');
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(`[UserStore] updatePassword failed: ${detail}`);
+        throw new Error(detail);
       }
     } else if (!this.isLegacyFileAuthEnabled()) {
       throw new Error('Password updates require database persistence.');

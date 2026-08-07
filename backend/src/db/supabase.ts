@@ -38,16 +38,15 @@ function deriveSupabaseUrlFromDatabaseUrl(): string {
   }
 }
 
-// The database pool and the Auth API belong to the same Supabase project, so the Auth URL is
-// derived from DATABASE_URL when available. This guarantees the backend validates tokens against
-// the same project that issues the frontend access tokens even if a stray SUPABASE_URL /
-// VITE_SUPABASE_URL placeholder or wrong-project URL is set on the deployment.
+// The frontend signs in directly against the project referenced by VITE_SUPABASE_URL, and the
+// service-role key belongs to that same project. Auth API calls (token validation, admin user
+// updates) MUST therefore target that project. DATABASE_URL can belong to a different Supabase
+// project (the Postgres backend), so it is only used as a last resort -- never preferred over an
+// explicitly configured VITE_SUPABASE_URL / SUPABASE_URL.
 function resolveSupabaseUrl(): string {
-  const derived = deriveSupabaseUrlFromDatabaseUrl();
-  if (derived) return derived;
-  const explicit = cleanEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  const explicit = cleanEnvValue(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL);
   if (explicit && !looksLikePlaceholder(explicit)) return explicit;
-  return explicit;
+  return deriveSupabaseUrlFromDatabaseUrl() || explicit;
 }
 
 function resolveServiceRoleKey(): string {
