@@ -453,12 +453,17 @@ export const updateProject = async (
     for (const member of activeAfterLeadChange) {
       const memberId = fromUserPk(member.userid);
       if (memberId === ownerId || memberId === effectiveLeadId || desiredIds.has(memberId)) continue;
-      await repo.removeProjectMember(
-        row.projectid,
-        member.userid,
-        toUserPk(actorId),
-        'Removed during project update'
-      );
+      // Issue #6: route through removeMember() instead of repo.removeProjectMember() directly,
+      // so a member dropped via an ordinary project-edit save gets the same active-task check /
+      // Pending Removal flagging / notifications as the dedicated DELETE endpoint -- a direct
+      // repo call here bypassed all of that. Each member is awaited and caught independently so
+      // one failure (or one Pending Removal flag) doesn't stop the rest of this diff from
+      // applying to the other members being edited in the same save.
+      try {
+        await removeMember(projectId, memberId, 'Removed during project update', actorId, actorRole);
+      } catch (error) {
+        console.error(`[project.service] Failed to remove member ${memberId} during project update.`, error);
+      }
     }
     const remaining = await repo.findMembersForProject(row.projectid);
     const remainingIds = new Set(remaining.map((member) => fromUserPk(member.userid)));

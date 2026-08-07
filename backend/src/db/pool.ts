@@ -131,6 +131,7 @@ export const bootstrapDatabase = async (): Promise<void> => {
       ['project_archived', 'Project', 'Normal'], ['project_restored', 'Project', 'Normal'],
       ['project_deleted', 'Project', 'High'], ['project_member_added', 'Project', 'Normal'],
       ['project_member_removed', 'Project', 'Normal'],
+      ['project_member_pending_removal', 'Project', 'Normal'], ['project_member_auto_removed', 'Project', 'Normal'],
       // Approvals / system / admin
       ['approval', 'Approval', 'High'], ['user_registered', 'System', 'Normal'],
       ['user_role_changed', 'System', 'High'], ['user_deactivated', 'System', 'High'],
