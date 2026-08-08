@@ -45,15 +45,15 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
 }) => (
   <div
     onClick={onClick}
-    className="group grid min-h-[380px] h-full cursor-pointer grid-rows-[auto_minmax(190px,1fr)_auto] rounded-2xl border border-white/10 bg-slate-900/55 p-7 transition-colors duration-200 hover:border-white/20 hover:bg-slate-900/70 lg:p-8"
+    className="group grid h-full min-h-[340px] min-w-0 cursor-pointer grid-rows-[auto_minmax(160px,1fr)_auto] overflow-hidden rounded-2xl border border-white/10 bg-slate-900/55 p-6 transition-colors duration-200 hover:border-white/20 hover:bg-slate-900/70"
   >
     {/* Header zone: action space remains reserved so the status never shifts on hover. */}
-    <div className="flex min-h-8 items-start justify-between gap-3">
-      <span className="pt-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+    <div className="flex min-h-7 min-w-0 items-start justify-between gap-2">
+      <span className="min-w-0 truncate pt-1 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-500">
         {project.code}
       </span>
-      <div className="flex shrink-0 items-center gap-2">
-        <span className={`flex items-center gap-1.5 whitespace-nowrap text-[11px] font-semibold uppercase tracking-wide ${statusColor(project.status)}`}>
+      <div className="flex min-w-0 shrink-0 items-start gap-1.5">
+        <span className={`flex max-w-32 items-center justify-end gap-1.5 break-words text-right text-[10px] font-semibold uppercase leading-4 tracking-wide [overflow-wrap:anywhere] ${statusColor(project.status)}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${statusColor(project.status).replace('text-', 'bg-')}`} />
           {project.status}
         </span>
@@ -80,41 +80,41 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
     </div>
 
     {/* Main information zone with reserved title and description space. */}
-    <div className="pt-5">
-      <h3 className="min-h-14 text-xl font-semibold leading-7 tracking-tight text-white line-clamp-2">{project.title}</h3>
-      <div className="mt-3 min-h-7">
+    <div className="min-w-0 pt-4">
+      <h3 className="min-h-12 break-words text-lg font-semibold leading-6 tracking-tight text-white line-clamp-2 [overflow-wrap:anywhere]">{project.title}</h3>
+      <div className="mt-2 min-h-6">
         {project.priority && (
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${priorityStyle(project.priority)}`}>
             <Flag size={12} /> {project.priority} Priority
           </span>
         )}
       </div>
-      <p className="mt-4 min-h-[4.5rem] text-sm leading-6 text-slate-400 line-clamp-3">{project.description}</p>
+      <p className="mt-3 min-h-[4.25rem] break-words text-sm leading-[1.4rem] text-slate-400 line-clamp-3 [overflow-wrap:anywhere]">{project.description}</p>
     </div>
 
     {/* Details zone stays pinned at the same vertical position across cards. */}
-    <div className="min-h-32 border-t border-white/10 pt-5">
-      <div className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2">
-        <div className="flex items-start gap-2.5">
+    <div className="min-h-28 border-t border-white/10 pt-4">
+      <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
+        <div className="flex min-w-0 items-start gap-2">
           <Users size={15} className="mt-0.5 text-slate-500" />
           <div>
             <p className="text-[11px] text-slate-500">Members</p>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+            <div className="mt-0.5 flex flex-wrap items-center gap-1">
               <p className="text-sm font-medium text-slate-200">{project.memberIds.length} member{project.memberIds.length !== 1 ? 's' : ''}</p>
               {(project.pendingRemovalMemberIds?.length || 0) > 0 && (
-                <span className="rounded-full bg-amber-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-900" title="One or more members are pending removal">Pending removal</span>
+                <span className="h-2 w-2 rounded-full bg-amber-300" title="One or more members are pending removal" aria-label="Members pending removal" />
               )}
             </div>
           </div>
         </div>
-        <div className={`flex items-start gap-2.5 ${isOverdue ? 'text-rose-300' : ''}`}>
+        <div className={`flex min-w-0 items-start gap-2 ${isOverdue ? 'text-rose-300' : ''}`}>
           <Calendar size={15} className={`mt-0.5 ${isOverdue ? 'text-rose-400' : 'text-slate-500'}`} />
           <div><p className="text-[11px] text-slate-500">Due date</p><p className="mt-0.5 text-sm font-medium">{formatShortDate(project.targetDate)}</p></div>
         </div>
       </div>
-      <div className="mt-5 flex items-start gap-2.5">
+      <div className="mt-4 flex min-w-0 items-start gap-2">
         <UserRound size={15} className="mt-0.5 text-slate-500" />
-        <div><p className="text-[11px] text-slate-500">Project lead</p><p className="mt-0.5 text-sm font-medium text-slate-200">{teamLead?.name || 'Not assigned'}</p></div>
+        <div className="min-w-0"><p className="text-[11px] text-slate-500">Project lead</p><p className="mt-0.5 break-words text-sm font-medium text-slate-200 [overflow-wrap:anywhere]">{teamLead?.name || 'Not assigned'}</p></div>
       </div>
     </div>
   </div>
