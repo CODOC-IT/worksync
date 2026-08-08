@@ -17,7 +17,8 @@ import {
   StickyNote,
   Check,
   AlertCircle,
-  ArchiveRestore
+  ArchiveRestore,
+  UserRound
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
@@ -85,6 +86,7 @@ export const ProjectsView: React.FC = () => {
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [showArchivedProjects, setShowArchivedProjects] = useState(false);
 
@@ -172,7 +174,12 @@ export const ProjectsView: React.FC = () => {
 
   const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
+    const leadQuery = leadSearchQuery.trim().toLowerCase();
+    const lead = users.find((user) => user.id === p.teamLeadId);
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    const matchesLead = !leadQuery || Boolean(
+      lead && (lead.name.toLowerCase().includes(leadQuery) || lead.username?.toLowerCase().includes(leadQuery))
+    );
     const matchesArchiveView = showArchivedProjects ? p.status === 'Archived' : p.status !== 'Archived';
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
     const matchesVisibility =
@@ -180,7 +187,7 @@ export const ProjectsView: React.FC = () => {
       currentRole === 'HR' ||
       isProjectLead(p) ||
       p.memberIds.includes(currentUser.id);
-    return matchesSearch && matchesArchiveView && matchesStatus && matchesVisibility;
+    return matchesSearch && matchesLead && matchesArchiveView && matchesStatus && matchesVisibility;
   }).sort((left, right) => {
     const order: Partial<Record<ProjectStatus, number>> = {
       Active: 0,
@@ -763,8 +770,9 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
-      {/* Search + Status Filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Project search and filters */}
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
         <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900/50 border border-white/10 flex-1">
           <Search size={15} className="text-cyan-400 shrink-0" />
           <input
@@ -772,12 +780,14 @@ export const ProjectsView: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by title or code..."
+            aria-label="Search projects by title or code"
             className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          aria-label="Filter projects by status"
           className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
         >
           <option value="All">All Statuses</option>
@@ -785,22 +795,36 @@ export const ProjectsView: React.FC = () => {
           <option value="Pending Approval">Pending Approval</option>
           <option value="Completed">Completed</option>
         </select>
-        <button
-          type="button"
-          onClick={() => {
-            setShowArchivedProjects((current) => !current);
-            setStatusFilter('All');
-          }}
-          className={`px-3 py-2 rounded-xl border text-sm transition-colors ${showArchivedProjects
-            ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
-            : 'bg-slate-900/50 border-white/10 text-slate-200 hover:border-amber-400/40'}`}
-        >
-          {showArchivedProjects ? 'Show Current Projects' : 'Archived Projects'}
-        </button>
+        </div>
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+          <div className="flex w-full max-w-sm items-center gap-2 rounded-xl border border-white/10 bg-slate-900/50 px-4 py-2">
+            <UserRound size={15} className="shrink-0 text-slate-500" />
+            <input
+              type="text"
+              value={leadSearchQuery}
+              onChange={(e) => setLeadSearchQuery(e.target.value)}
+              placeholder="Search by project lead..."
+              aria-label="Search projects by assigned lead name or username"
+              className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowArchivedProjects((current) => !current);
+              setStatusFilter('All');
+            }}
+            className={`px-3 py-2 rounded-xl border text-sm transition-colors ${showArchivedProjects
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+              : 'bg-slate-900/50 border-white/10 text-slate-200 hover:border-amber-400/40'}`}
+          >
+            {showArchivedProjects ? 'Show Current Projects' : 'Archived Projects'}
+          </button>
+        </div>
       </div>
 
       {/* Project Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         {filteredProjects.map((project) => {
           const isOverdue = project.status === 'Active' && project.targetDate < todayStr;
           const teamLead = users.find((u) => u.id === project.teamLeadId);
@@ -813,8 +837,6 @@ export const ProjectsView: React.FC = () => {
               teamLead={teamLead}
               isOverdue={isOverdue}
               actions={actions}
-              currentUserId={currentUser.id}
-              currentRole={currentRole}
               onEdit={() => openEditForm(project)}
               onDelete={() => openDeleteConfirm(project.id)}
               onRestore={() => openRestoreConfirm(project.id)}
