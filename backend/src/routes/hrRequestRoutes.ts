@@ -12,6 +12,7 @@ import {
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 import { validateLeaveOverlap, type LeaveWindow } from '../attendance/leaveOverlap.js';
+import { DEFAULT_SHIFT_NET_MINUTES, scheduleNetMinutes } from '../attendance/workingSchedule.js';
 
 type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
@@ -469,16 +470,21 @@ const applyCorrection = async (
     scheduledstarttime: string | null;
     scheduledendtime: string | null;
     graceminutes: number;
+    breakminutes: number;
     timezoneid: string;
   }>(
-    `SELECT scheduledstarttime::text, scheduledendtime::text,
+    `SELECT wsd.starttime::text AS scheduledstarttime,
+            wsd.endtime::text AS scheduledendtime,
             COALESCE(ws.graceminutes, 0)::int AS graceminutes,
+            COALESCE(wsd.breakminutes, 0)::int AS breakminutes,
             COALESCE(profile.timezoneid, o.timezoneid, $3) AS timezoneid
        FROM hr.attendancerecords ar
        JOIN iam.users u ON u.userid = ar.userid
        JOIN org.organizations o ON o.organizationid = u.organizationid
        LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
        LEFT JOIN hr.workschedules ws ON ws.workscheduleid = ar.workscheduleid
+       LEFT JOIN hr.workscheduledays wsd ON wsd.workscheduleid = ws.workscheduleid
+        AND wsd.isoweekday = EXTRACT(ISODOW FROM ar.workdate)
       WHERE ar.userid = $1 AND ar.workdate = $2::date`,
     [toUserPk(row.user_id), date, DEFAULT_BUSINESS_TIME_ZONE]
   );
@@ -494,14 +500,12 @@ const applyCorrection = async (
   const checkOutUtc = new Date(instants.rows[0].checkoututc);
   const scheduledStartUtc = instants.rows[0].scheduledstartutc ? new Date(instants.rows[0].scheduledstartutc!) : null;
   const scheduledMinutes = schedule?.scheduledstarttime && schedule?.scheduledendtime
-    ? Math.max(
-        1,
-        Math.floor((
-          new Date(`${date}T${schedule.scheduledendtime}Z`).getTime() -
-          new Date(`${date}T${schedule.scheduledstarttime}Z`).getTime()
-        ) / 60000)
+    ? scheduleNetMinutes(
+        schedule.scheduledstarttime,
+        schedule.scheduledendtime,
+        schedule.breakminutes
       )
-    : 480;
+    : DEFAULT_SHIFT_NET_MINUTES;
   const outcome = calculateAttendanceOutcome({
     checkInUtc,
     checkOutUtc,

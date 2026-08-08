@@ -59,6 +59,14 @@ instead of the backend's in-memory `PromptStore`, which lost every saved prompt 
 restart / serverless recycle. Safe to run more than once; there is no data to backfill because
 nothing was ever persisted before.
 
+`20260809_01_attendance_working_schedule.sql` enables Admin-configurable attendance working
+schedules. It relaxes `CK_WorkScheduleDays_Times` so a working day may cross midnight (e.g.
+16:00 -> 00:00) with `EndTime < StartTime`, adds the overnight-aware helpers
+`hr.schedule_window_minutes` / `hr.schedule_net_minutes` as the SQL single source of truth for
+schedule math, and seeds one default 8-hour (16:00 -> 00:00, 60-minute break, 7-hour net,
+Mon-Fri) `IsDefault` `hr.WorkSchedules` per active organization. Idempotent: an existing
+default schedule is left untouched.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

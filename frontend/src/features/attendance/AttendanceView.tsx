@@ -532,8 +532,8 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
                 className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
                 required
               >
-                <option value="First Half">First Half (work from 12:00 PM)</option>
-                <option value="Second Half">Second Half (work until 12:00 PM)</option>
+                <option value="First Half">First Half (work from 12:00)</option>
+                <option value="Second Half">Second Half (work until 12:00)</option>
               </select>
             </label>
           )}
@@ -684,7 +684,10 @@ export const AttendanceView: React.FC = () => {
     startBreak,
     endBreak,
     updateAttendanceRecord,
-    submitHRRequest
+    submitHRRequest,
+    workingSchedule,
+    updateWorkingSchedule,
+    showToast
   } = useApp();
   const [selectedUserId, setSelectedUserId] = useState('all');
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | '30days' | 'custom'>('30days');
@@ -695,7 +698,18 @@ export const AttendanceView: React.FC = () => {
   const [leaveFormOpen, setLeaveFormOpen] = useState(false);
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [authorizationError, setAuthorizationError] = useState('');
+  const [scheduleStart, setScheduleStart] = useState('');
+  const [scheduleEnd, setScheduleEnd] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
   const editorRef = useRef<HTMLDivElement | null>(null);
+
+  const currentScheduleStart = workingSchedule?.startTime || '';
+  const currentScheduleEnd = workingSchedule?.endTime || '';
+  useEffect(() => {
+    setScheduleStart(currentScheduleStart);
+    setScheduleEnd(currentScheduleEnd);
+  }, [currentScheduleStart, currentScheduleEnd]);
 
   // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
   // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
@@ -811,6 +825,25 @@ export const AttendanceView: React.FC = () => {
     return result;
   };
 
+  const saveWorkingSchedule = async () => {
+    const start = scheduleStart.trim();
+    const end = scheduleEnd.trim();
+    if (!start || !end) {
+      setScheduleError('Shift start and end times are required.');
+      return;
+    }
+    setScheduleError('');
+    setScheduleSaving(true);
+    const result = await updateWorkingSchedule(start, end);
+    setScheduleSaving(false);
+    if (!result.success) {
+      setScheduleError(result.message);
+      showToast('error', 'Working Schedule Not Updated', result.message);
+      return;
+    }
+    showToast('success', 'Working Schedule Updated', 'The attendance shift has been updated.');
+  };
+
   return (
     <div className="space-y-6">
       <div className="glass-panel-glow p-6 border-cyan-500/30">
@@ -849,6 +882,68 @@ export const AttendanceView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {isAdmin && (
+        <div className="glass-panel p-5">
+          <div className="flex items-center gap-2 border-b border-white/10 pb-3 mb-4">
+            <Clock size={18} className="text-cyan-400" />
+            <div>
+              <h2 className="text-base font-bold text-white">Attendance Working Schedule</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Shift start/end in {workingSchedule?.timeZone || 'Asia/Karachi'} (PKT), shown in HH:mm. The 8-hour window and 60-minute break allowance are fixed.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            {[
+              { label: 'Shift Window', value: `${workingSchedule?.windowMinutes ?? 480} min (8h)` },
+              { label: 'Break Allowance', value: `${workingSchedule?.breakMinutes ?? 60} min` },
+              { label: 'Expected Net Work', value: `${workingSchedule?.netMinutes ?? 420} min (7h)` },
+              { label: 'Working Days', value: 'Monday - Friday' }
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-lg bg-slate-950/60 border border-white/10 px-3 py-2">
+                <p className="text-[11px] text-slate-400 uppercase tracking-wide">{stat.label}</p>
+                <p className="text-sm font-bold text-cyan-300 mt-0.5">{stat.value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col sm:flex-row items-end gap-3">
+            <label className="text-xs text-slate-400 flex flex-col gap-1">
+              Shift start
+              <input
+                type="time"
+                value={scheduleStart}
+                onChange={(event) => setScheduleStart(event.target.value)}
+                className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </label>
+            <label className="text-xs text-slate-400 flex flex-col gap-1">
+              Shift end
+              <input
+                type="time"
+                value={scheduleEnd}
+                onChange={(event) => setScheduleEnd(event.target.value)}
+                className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={saveWorkingSchedule}
+              disabled={scheduleSaving}
+              className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-500/40 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              <Save size={14} />
+              {scheduleSaving ? 'Saving…' : 'Save Schedule'}
+            </button>
+            {scheduleError && (
+              <p role="alert" className="text-xs text-rose-300">{scheduleError}</p>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-3">
+            An end time earlier than the start time means the shift crosses midnight (for example 16:00 – 00:00).
+          </p>
+        </div>
+      )}
 
       {!isAdmin && (<>
         <div className="flex items-center gap-2">
