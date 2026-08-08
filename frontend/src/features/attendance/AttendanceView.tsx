@@ -12,6 +12,7 @@ import {
   type CorrectionShift
 } from './attendanceValidation';
 import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
+import { AttendanceTimeInput } from './Time24Input';
 import {
   CheckCircle2,
   Clock,
@@ -344,19 +345,19 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="text-xs text-slate-400">
           Check-in time
-          <input
-            type="time"
+          <AttendanceTimeInput
             value={checkIn}
-            onChange={(event) => setCheckIn(event.target.value)}
+            onChange={setCheckIn}
+            aria-label="Check-in time in 24-hour HH:mm format"
             className={`${inputClass} mt-1`}
           />
         </label>
         <label className="text-xs text-slate-400">
           Check-out time
-          <input
-            type="time"
+          <AttendanceTimeInput
             value={checkOut}
-            onChange={(event) => setCheckOut(event.target.value)}
+            onChange={setCheckOut}
+            aria-label="Check-out time in 24-hour HH:mm format"
             className={`${inputClass} mt-1`}
           />
         </label>
@@ -387,19 +388,19 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             >
               <label className="text-[11px] text-slate-500">
                 Start
-                <input
-                  type="time"
+                <AttendanceTimeInput
                   value={workBreak.startTime}
-                  onChange={(event) => updateBreak(index, { startTime: event.target.value })}
+                  onChange={(next) => updateBreak(index, { startTime: next })}
+                  aria-label={`Break start time in 24-hour HH:mm format`}
                   className={`${inputClass} mt-1`}
                 />
               </label>
               <label className="text-[11px] text-slate-500">
                 End
-                <input
-                  type="time"
+                <AttendanceTimeInput
                   value={workBreak.endTime || ''}
-                  onChange={(event) => updateBreak(index, { endTime: event.target.value })}
+                  onChange={(next) => updateBreak(index, { endTime: next })}
+                  aria-label={`Break end time in 24-hour HH:mm format`}
                   className={`${inputClass} mt-1`}
                 />
               </label>
@@ -946,19 +947,19 @@ export const AttendanceView: React.FC = () => {
           <div className="flex flex-col sm:flex-row items-end gap-3">
             <label className="text-xs text-slate-400 flex flex-col gap-1">
               Shift start
-              <input
-                type="time"
+              <AttendanceTimeInput
                 value={scheduleStart}
-                onChange={(event) => setScheduleStart(event.target.value)}
+                onChange={setScheduleStart}
+                aria-label="Shift start time in 24-hour HH:mm format"
                 className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
               />
             </label>
             <label className="text-xs text-slate-400 flex flex-col gap-1">
               Shift end
-              <input
-                type="time"
+              <AttendanceTimeInput
                 value={scheduleEnd}
-                onChange={(event) => setScheduleEnd(event.target.value)}
+                onChange={setScheduleEnd}
+                aria-label="Shift end time in 24-hour HH:mm format"
                 className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
               />
             </label>
