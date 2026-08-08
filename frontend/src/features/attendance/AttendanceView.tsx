@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -83,6 +83,8 @@ interface AttendanceRowProps {
   canRequestChange?: boolean;
   requestStatus?: HRRequest['status'];
   onRequestChange?: (record: AttendanceRecord) => void;
+  editingRecordId?: string | null;
+  renderEditor?: (record: AttendanceRecord) => React.ReactNode;
 }
 
 const AttendanceRow: React.FC<AttendanceRowProps> = ({
@@ -93,7 +95,9 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   onEdit,
   canRequestChange = false,
   requestStatus,
-  onRequestChange
+  onRequestChange,
+  editingRecordId,
+  renderEditor
 }) => {
   const correctionAvailable = canShowAttendanceCorrection(record.checkIn, record.checkOut, record.status);
   const totalBreakMinutes = getTotalBreakMinutes(record);
@@ -117,67 +121,75 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
       : 'Incomplete';
 
   return (
-    <div className="p-4 rounded-xl bg-slate-900/50 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div>
-        {employee && (
-          <span className="text-sm font-bold text-white block mb-1">
-            {employee.name}
+    <div className="p-4 rounded-xl bg-slate-900/50 border border-white/5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          {employee && (
+            <span className="text-sm font-bold text-white block mb-1">
+              {employee.name}
+            </span>
+          )}
+          <span className="text-xs font-bold text-cyan-300 font-mono">
+            {record.date}
           </span>
-        )}
-        <span className="text-xs font-bold text-cyan-300 font-mono">
-          {record.date}
-        </span>
-        <div className="flex flex-wrap gap-4 mt-1 text-xs text-slate-300">
-          <span>Check In: {record.checkIn || 'Not recorded'}</span>
-          <span>Check Out: {checkOutLabel}</span>
-          <span>Breaks: {formatDuration(totalBreakMinutes)}</span>
-          <span>Net Working Time: {netWorkingTimeLabel}</span>
+          <div className="flex flex-wrap gap-4 mt-1 text-xs text-slate-300">
+            <span>Check In: {record.checkIn || 'Not recorded'}</span>
+            <span>Check Out: {checkOutLabel}</span>
+            <span>Breaks: {formatDuration(totalBreakMinutes)}</span>
+            <span>Net Working Time: {netWorkingTimeLabel}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <StatusBadge status={record.status} size="sm" />
+          {correctionAvailable && canEdit && onEdit && (
+            <button
+              type="button"
+              onClick={() => onEdit(record)}
+              disabled={requestStatus === 'Pending'}
+              className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Pencil size={13} />
+              {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
+            </button>
+          )}
+          {correctionAvailable && canRequestChange && onRequestChange && (
+            <button
+              type="button"
+              onClick={() => onRequestChange(record)}
+              disabled={requestStatus === 'Pending' || requestStatus === 'Approved'}
+              className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+                requestStatus === 'Approved'
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed'
+                  : requestStatus === 'Pending'
+                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
+                    : requestStatus === 'Rejected'
+                      ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                      : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
+              }`}
+            >
+              {requestStatus === 'Approved' ? (
+                <CheckCircle2 size={13} />
+              ) : (
+                <FileText size={13} />
+              )}
+              {requestStatus === 'Approved'
+                ? 'Approved'
+                : requestStatus === 'Pending'
+                  ? 'Pending'
+                  : requestStatus === 'Rejected'
+                    ? 'Request Again'
+                    : 'Request Change'}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <StatusBadge status={record.status} size="sm" />
-        {correctionAvailable && canEdit && onEdit && (
-          <button
-            type="button"
-            onClick={() => onEdit(record)}
-            disabled={requestStatus === 'Pending'}
-            className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Pencil size={13} />
-            {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
-          </button>
-        )}
-        {correctionAvailable && canRequestChange && onRequestChange && (
-          <button
-            type="button"
-            onClick={() => onRequestChange(record)}
-            disabled={requestStatus === 'Pending' || requestStatus === 'Approved'}
-            className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
-              requestStatus === 'Approved'
-                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed'
-                : requestStatus === 'Pending'
-                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
-                  : requestStatus === 'Rejected'
-                    ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
-                    : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
-            }`}
-          >
-            {requestStatus === 'Approved' ? (
-              <CheckCircle2 size={13} />
-            ) : (
-              <FileText size={13} />
-            )}
-            {requestStatus === 'Approved'
-              ? 'Approved'
-              : requestStatus === 'Pending'
-                ? 'Pending'
-                : requestStatus === 'Rejected'
-                  ? 'Request Again'
-                  : 'Request Change'}
-          </button>
-        )}
-      </div>
+      {canEdit && renderEditor && editingRecordId === record.id && (
+        <div className="mt-3 rounded-lg border-t border-cyan-500/20 pt-3">
+          {renderEditor(record)}
+        </div>
+      )}
     </div>
   );
 };
@@ -193,6 +205,8 @@ interface AttendanceHistoryProps {
   canRequestChange?: boolean;
   getRequestStatus?: (record: AttendanceRecord) => HRRequest['status'] | undefined;
   onRequestChange?: (record: AttendanceRecord) => void;
+  editingRecordId?: string | null;
+  renderEditor?: (record: AttendanceRecord) => React.ReactNode;
   icon?: 'history' | 'team';
   emptyMessage: string;
 }
@@ -208,6 +222,8 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
   canRequestChange = false,
   getRequestStatus,
   onRequestChange,
+  editingRecordId,
+  renderEditor,
   icon = 'history',
   emptyMessage
 }) => (
@@ -249,6 +265,8 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
             canRequestChange={canRequestChange}
             requestStatus={getRequestStatus?.(record)}
             onRequestChange={onRequestChange}
+            editingRecordId={editingRecordId}
+            renderEditor={renderEditor}
           />
         ))
       )}
@@ -333,13 +351,6 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             {employee?.name || record.userId} · {record.date}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs text-slate-400 hover:text-white"
-        >
-          Cancel
-        </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -449,14 +460,23 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
 
       {message && <p className="text-xs text-rose-300 mt-3">{message}</p>}
 
-      <button
-        type="button"
-        onClick={handleSave}
-        className="mt-4 w-full py-3 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2"
-      >
-        <Save size={15} />
-        {requiresApproval ? 'Submit Attendance Edit Request' : 'Save Attendance Changes'}
-      </button>
+      <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex-1 sm:flex-none rounded-xl bg-white/5 px-4 py-3 text-xs font-bold text-slate-300 transition-colors hover:bg-white/10"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          className="flex-1 sm:flex-none rounded-xl glass-button-neon px-4 py-3 text-xs font-bold flex items-center justify-center gap-2"
+        >
+          <Save size={15} />
+          {requiresApproval ? 'Submit Attendance Edit Request' : 'Save Attendance Changes'}
+        </button>
+      </div>
     </div>
   );
 };
@@ -708,7 +728,6 @@ export const AttendanceView: React.FC = () => {
   const [scheduleEnd, setScheduleEnd] = useState('');
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [scheduleError, setScheduleError] = useState('');
-  const editorRef = useRef<HTMLDivElement | null>(null);
 
   const currentScheduleStart = workingSchedule?.startTime || '';
   const currentScheduleEnd = workingSchedule?.endTime || '';
@@ -758,12 +777,6 @@ export const AttendanceView: React.FC = () => {
     dateFilter === 'custom' && Boolean(customFrom) && Boolean(customTo) && customFrom > customTo
       ? 'From date cannot be later than the To date.'
       : '';
-
-  useEffect(() => {
-    if (editingRecordId && editorRef.current) {
-      editorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [editingRecordId]);
 
   const todayAttendance = attendanceRecords.find(
     (record) => record.userId === currentUser.id && record.date === todayStr
@@ -827,9 +840,6 @@ export const AttendanceView: React.FC = () => {
       (selectedUserId === 'all' || record.userId === selectedUserId) &&
       filterByDate(record) &&
       filterByRole(record)
-  );
-  const editingRecord = attendanceRecords.find(
-    (record) => record.id === editingRecordId
   );
   const openEditor = (record: AttendanceRecord) => {
     if (!canEditRecord(record)) {
@@ -1152,7 +1162,7 @@ export const AttendanceView: React.FC = () => {
         </div>
       )}
 
-      <AttendanceHistory
+<AttendanceHistory
         title="My Attendance History"
         records={myAttendanceRecords}
         users={users}
@@ -1161,6 +1171,20 @@ export const AttendanceView: React.FC = () => {
         onEdit={openEditor}
         canRequestChange={false}
         getRequestStatus={getCorrectionRequestStatus}
+        editingRecordId={editingRecordId}
+        renderEditor={(record) =>
+          canEditRecord(record) ? (
+            <AttendanceEditor
+              key={record.id}
+              record={record}
+              employee={users.find((user) => user.id === record.userId)}
+              requiresApproval={!isAdmin}
+              shift={editingShift}
+              onCancel={() => setEditingRecordId(null)}
+              onSave={updateAttendanceRecord}
+            />
+          ) : null
+        }
         emptyMessage="No personal attendance records found."
       />
       </>)}
@@ -1178,20 +1202,6 @@ export const AttendanceView: React.FC = () => {
         <p role="alert" className="text-xs text-rose-300">
           {authorizationError}
         </p>
-      )}
-
-      {editingRecord && canEditRecord(editingRecord) && (
-        <div ref={editorRef}>
-        <AttendanceEditor
-          key={editingRecord.id}
-          record={editingRecord}
-          employee={users.find((user) => user.id === editingRecord.userId)}
-          requiresApproval={!isAdmin}
-          shift={editingShift}
-          onCancel={() => setEditingRecordId(null)}
-          onSave={updateAttendanceRecord}
-        />
-        </div>
       )}
 
       {canViewOthers && (
