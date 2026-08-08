@@ -97,7 +97,15 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
       <div className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2">
         <div className="flex items-start gap-2.5">
           <Users size={15} className="mt-0.5 text-slate-500" />
-          <div><p className="text-[11px] text-slate-500">Members</p><p className="mt-0.5 text-sm font-medium text-slate-200">{project.memberIds.length} member{project.memberIds.length !== 1 ? 's' : ''}</p></div>
+          <div>
+            <p className="text-[11px] text-slate-500">Members</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+              <p className="text-sm font-medium text-slate-200">{project.memberIds.length} member{project.memberIds.length !== 1 ? 's' : ''}</p>
+              {(project.pendingRemovalMemberIds?.length || 0) > 0 && (
+                <span className="rounded-full bg-amber-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-900" title="One or more members are pending removal">Pending removal</span>
+              )}
+            </div>
+          </div>
         </div>
         <div className={`flex items-start gap-2.5 ${isOverdue ? 'text-rose-300' : ''}`}>
           <Calendar size={15} className={`mt-0.5 ${isOverdue ? 'text-rose-400' : 'text-slate-500'}`} />

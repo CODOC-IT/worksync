@@ -79,7 +79,7 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export const ProjectsView: React.FC = () => {
+export const ProjectsView: React.FC<{ onViewProjectTasks: (projectId: string) => void }> = ({ onViewProjectTasks }) => {
   const {
     projects, tasks, users, currentRole, currentUser,
     createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
@@ -1470,7 +1470,9 @@ export const ProjectsView: React.FC = () => {
       <ProjectDetailsDrawer
         project={selectedProject}
         users={users}
+        tasks={tasks}
         onClose={() => setSelectedProjectId(null)}
+        onViewTasks={onViewProjectTasks}
       />
     </div>
   );
