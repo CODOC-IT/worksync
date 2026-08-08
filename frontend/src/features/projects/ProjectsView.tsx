@@ -3,7 +3,7 @@ import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
-import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
+import { Project, ProjectStatus, Task, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
 import {
   FolderKanban,
