@@ -68,6 +68,11 @@ interface BlockedMemberInfo {
   activeItems: ActiveWorkItem[];
 }
 
+interface ImmediateRemovalMember {
+  memberId: string;
+  memberName: string;
+}
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -116,14 +121,12 @@ export const ProjectsView: React.FC = () => {
   const [editApprovalReasonError, setEditApprovalReasonError] = useState('');
   const [editApprovalSubmitting, setEditApprovalSubmitting] = useState(false);
 
-  // Issue #6 -- shown when an Admin's direct save would remove a member who still has active
-  // task/subtask work in this project. Cancel discards the entire save attempt (per spec, not
-  // just the removal) -- the Admin must reopen Edit and start over; there is no "save everything
-  // except this member" partial path. `data` is the exact payload handleSubmit had already built
-  // before pausing, so confirming just resumes the save unchanged.
+  // Shown before an Admin save when any selected removal still has active work. The dialog lets
+  // the Admin restore individual members to the project before confirming the final member list.
   const [pendingRemovalWarning, setPendingRemovalWarning] = useState<{
     data: Partial<Project>;
     blocked: BlockedMemberInfo[];
+    immediate: ImmediateRemovalMember[];
   } | null>(null);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -255,6 +258,7 @@ export const ProjectsView: React.FC = () => {
   };
 
   const toggleMember = (userId: string) => {
+    if (editingProject?.pendingRemovalMemberIds?.includes(userId)) return;
     if (userId === form.teamLeadId) {
       setFormErrors((previous) => ({
         ...previous,
@@ -530,17 +534,20 @@ export const ProjectsView: React.FC = () => {
       if (editingProject) {
         const projectId = editingProjectId;
         const removedMemberIds = editingProject.memberIds.filter((id) => !form.memberIds.includes(id));
-        const blocked: BlockedMemberInfo[] = removedMemberIds
-          .map((memberId) => {
-            const activeItems = getActiveWorkForMember(projectId, memberId);
-            return activeItems.length > 0
-              ? { memberId, memberName: users.find((u) => u.id === memberId)?.name || memberId, activeItems }
-              : null;
-          })
-          .filter((entry): entry is BlockedMemberInfo => entry !== null);
+        const removalCandidates = removedMemberIds.map((memberId) => ({
+          memberId,
+          memberName: users.find((u) => u.id === memberId)?.name || memberId,
+          activeItems: getActiveWorkForMember(projectId, memberId)
+        }));
+        const blocked: BlockedMemberInfo[] = removalCandidates
+          .filter((entry) => entry.activeItems.length > 0)
+          .map(({ memberId, memberName, activeItems }) => ({ memberId, memberName, activeItems }));
+        const immediate: ImmediateRemovalMember[] = removalCandidates
+          .filter((entry) => entry.activeItems.length === 0)
+          .map(({ memberId, memberName }) => ({ memberId, memberName }));
 
         if (blocked.length > 0) {
-          setPendingRemovalWarning({ data, blocked });
+          setPendingRemovalWarning({ data, blocked, immediate });
           return;
         }
       }
@@ -553,6 +560,18 @@ export const ProjectsView: React.FC = () => {
   // adjust the membership list instead of starting over.
   const cancelPendingRemovalWarning = () => {
     setPendingRemovalWarning(null);
+  };
+
+  const keepMemberFromRemoval = (memberId: string) => {
+    if (!pendingRemovalWarning) return;
+    const memberIds = Array.from(new Set([...(pendingRemovalWarning.data.memberIds || []), memberId]));
+    const data = { ...pendingRemovalWarning.data, memberIds };
+    setForm((current) => ({ ...current, memberIds }));
+    setPendingRemovalWarning({
+      data,
+      blocked: pendingRemovalWarning.blocked.filter((member) => member.memberId !== memberId),
+      immediate: pendingRemovalWarning.immediate.filter((member) => member.memberId !== memberId)
+    });
   };
 
   const confirmPendingRemovalWarning = () => {
@@ -937,6 +956,7 @@ export const ProjectsView: React.FC = () => {
                         // Team Lead <select>.
                         disabled={
                           u.id === form.teamLeadId ||
+                          editingProject?.pendingRemovalMemberIds?.includes(u.id) ||
                           (formMode === 'edit' &&
                             currentRole !== 'Admin' &&
                             (!editingProject || isProjectLead(editingProject)))
@@ -946,7 +966,7 @@ export const ProjectsView: React.FC = () => {
                       {u.name}
                       {editingProject?.pendingRemovalMemberIds?.includes(u.id) && (
                         <span
-                          className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded px-1 py-0.5"
+                          className="inline-flex min-w-24 items-center justify-center rounded-full bg-amber-300 px-2 py-1 text-center text-[9px] font-bold uppercase tracking-wide text-amber-900"
                           title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
                         >
                           Pending Removal
@@ -1183,9 +1203,7 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
-      {/* Pending Removal warning (Issue #6) -- blocks an Admin's save when it would remove a
-          member who still has active task/subtask work in this project. Cancel discards the
-          entire save attempt (closeForm), not just the blocked removal. */}
+      {/* Pending-removal confirmation for an Admin's member changes. */}
       {pendingRemovalWarning && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
           <div className="w-full max-w-md glass-panel-glow border border-amber-500/40 shadow-2xl p-5 space-y-4">
@@ -1195,18 +1213,24 @@ export const ProjectsView: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400">
-              The following member{pendingRemovalWarning.blocked.length !== 1 ? 's' : ''} cannot be removed yet --
-              they still have active tasks or subtasks assigned in this project. Continuing will notify the Team
-              Lead and mark {pendingRemovalWarning.blocked.length !== 1 ? 'them' : 'this member'} "Pending Removal";
-              {pendingRemovalWarning.blocked.length !== 1 ? ' they' : ' the member'} will stay in the project until
-              all of their assigned work is reassigned or completed. Cancel returns you to this edit form without
-              saving, so you can revise the member changes.
+              Members with active tasks will be removed automatically when their active work is completed or removed.
             </p>
 
             <div className="space-y-2 max-h-52 overflow-y-auto">
               {pendingRemovalWarning.blocked.map((b) => (
                 <div key={b.memberId} className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <p className="text-slate-200 font-semibold mb-1.5">{b.memberName}</p>
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <p className="text-slate-200 font-semibold">{b.memberName}</p>
+                    <button
+                      type="button"
+                      onClick={() => keepMemberFromRemoval(b.memberId)}
+                      className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                      title={`Keep ${b.memberName} in this project`}
+                      aria-label={`Keep ${b.memberName} in this project`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                   <ul className="space-y-1">
                     {b.activeItems.map((item) => (
                       <li key={item.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
@@ -1217,6 +1241,29 @@ export const ProjectsView: React.FC = () => {
                   </ul>
                 </div>
               ))}
+              {pendingRemovalWarning.immediate.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-300">
+                    Removed immediately
+                  </p>
+                  <div className="space-y-1.5">
+                    {pendingRemovalWarning.immediate.map((member) => (
+                      <div key={member.memberId} className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                        <span>{member.memberName}</span>
+                        <button
+                          type="button"
+                          onClick={() => keepMemberFromRemoval(member.memberId)}
+                          className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                          title={`Keep ${member.memberName} in this project`}
+                          aria-label={`Keep ${member.memberName} in this project`}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
