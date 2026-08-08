@@ -462,9 +462,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
     const absent = att.filter((a: any) => a.status === 'Absent').length;
     const onLeave = att.filter((a: any) => a.status === 'On Leave').length;
     const halfDay = att.filter((a: any) => a.status === 'Half Day').length;
+    const shortHours = att.filter((a: any) => a.status === 'Short Hours').length;
     const totalHours = att.reduce((s: number, a: any) => s + (a.totalHours || 0), 0);
     const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length };
+    return { present, late, absent, onLeave, halfDay, shortHours, avgHours, total: att.length };
   }, [attendanceTabRecords]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
@@ -3821,13 +3822,14 @@ ${bodyHtml}
 
   const renderAttendanceTab = () => (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
         {renderKPICard('Present', attendanceTabStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Late', attendanceTabStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
+        {renderKPICard('Short Hours', attendanceTabStats.shortHours, <Hourglass size={14} className="text-orange-400" />, 'slate')}
         {renderKPICard('Absent', attendanceTabStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
         {renderKPICard('On Leave', attendanceTabStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Target size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <BarChart3 size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Total Records', attendanceTabStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
@@ -3889,7 +3891,7 @@ ${bodyHtml}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
         <div className="flex flex-wrap gap-1.5">
-          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+          {(['', 'Present', 'Late', 'Short Hours', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
             const isActive = attendanceStatusFilter === s;
             if (s === '') {
               return (

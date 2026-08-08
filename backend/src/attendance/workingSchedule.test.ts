@@ -5,6 +5,7 @@ import {
   DEFAULT_SHIFT_NET_MINUTES,
   DEFAULT_SHIFT_WINDOW_MINUTES,
   SHIFT_TIME_PATTERN,
+  halfDayBoundaryTime,
   minutesToTime,
   scheduleNetMinutes,
   scheduleWindowMinutes,
@@ -15,6 +16,14 @@ test('the fixed schedule constants match 8h / 60m / 7h', () => {
   assert.equal(DEFAULT_SHIFT_WINDOW_MINUTES, 480);
   assert.equal(DEFAULT_SHIFT_BREAK_MINUTES, 60);
   assert.equal(DEFAULT_SHIFT_NET_MINUTES, 420);
+});
+
+test('halfDayBoundaryTime is derived from the configured shift, not a fixed noon', () => {
+  assert.equal(halfDayBoundaryTime('16:00', '00:00'), '20:00');
+  assert.equal(halfDayBoundaryTime('18:00', '02:00'), '22:00');
+  assert.equal(halfDayBoundaryTime('09:00', '17:00'), '13:00');
+  assert.equal(halfDayBoundaryTime('09:00', '00:00'), '16:30');
+  assert.equal(halfDayBoundaryTime(null, '17:00'), null);
 });
 
 test('scheduleWindowMinutes handles a same-day window', () => {

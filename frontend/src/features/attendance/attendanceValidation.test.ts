@@ -13,12 +13,41 @@ test('frontend blocks past leave dates and allows today/future', () => {
   assert.equal(isPastDate('2026-08-03', '2026-08-02'), false);
 });
 
-test('frontend correction validation exposes clear interval errors', () => {
-  assert.equal(validateAttendanceCorrection('09:00', '09:00', []),
-    'Check-out must be later than check-in.');
-  assert.equal(validateAttendanceCorrection('09:00', '17:00', [{
-    id: '1', type: 'Other', startTime: '08:30', endTime: '09:15', durationMinutes: 45
-  }]), 'Break start must be at or after check-in.');
+test('frontend correction validation accepts an overnight PKT shift', () => {
+  const shift = { startTime: '16:00', endTime: '00:00' };
+  assert.equal(validateAttendanceCorrection('16:10', '00:00', [], shift), null);
+  assert.equal(validateAttendanceCorrection('22:10', '00:00', [
+    { id: '1', type: 'Other', startTime: '23:20', endTime: '23:50', durationMinutes: 30 }
+  ], shift), null);
+  assert.equal(validateAttendanceCorrection('15:00', '23:00', [], shift),
+    'Check-in must be within the selected shift window.');
+  assert.equal(validateAttendanceCorrection('16:00', '01:00', [], shift),
+    'Check-out must be within the selected shift window.');
+  assert.equal(validateAttendanceCorrection('16:00', '17:30', [
+    { id: '1', type: 'Other', startTime: '09:00', endTime: '09:15', durationMinutes: 15 }
+  ], shift), 'Break end must be at or before check-out.');
+});
+
+test('frontend caps total break duration at 60 minutes like the backend', () => {
+  const overnight = { startTime: '16:00', endTime: '00:00' };
+  assert.equal(validateAttendanceCorrection('16:10', '23:50', [
+    { id: '1', type: 'Other', startTime: '18:00', endTime: '18:20', durationMinutes: 20 },
+    { id: '2', type: 'Other', startTime: '20:00', endTime: '20:45', durationMinutes: 45 }
+  ], overnight), 'Total break duration cannot exceed 60 minutes per shift.');
+  assert.equal(validateAttendanceCorrection('16:10', '23:50', [
+    { id: '1', type: 'Other', startTime: '18:00', endTime: '18:20', durationMinutes: 20 },
+    { id: '2', type: 'Other', startTime: '20:00', endTime: '20:40', durationMinutes: 40 }
+  ], overnight), null);
+});
+
+test('frontend against a 18:00 -> 02:00 overnight shift accepts next-day checkout', () => {
+  const evening = { startTime: '18:00', endTime: '02:00' };
+  assert.equal(validateAttendanceCorrection('22:00', '02:00', [
+    { id: '1', type: 'Other', startTime: '23:00', endTime: '23:20', durationMinutes: 20 },
+    { id: '2', type: 'Other', startTime: '00:30', endTime: '01:10', durationMinutes: 40 }
+  ], evening), null);
+  assert.equal(validateAttendanceCorrection('14:00', '23:00', [], evening),
+    'Check-in must be within the selected shift window.');
 });
 
 test('correction controls are hidden in-session and retained for completed or absent records', () => {

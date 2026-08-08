@@ -51,3 +51,16 @@ export const scheduleNetMinutes = (
   if (windowMinutes === null) return DEFAULT_SHIFT_NET_MINUTES;
   return Math.max(0, windowMinutes - (breakMinutes ?? DEFAULT_SHIFT_BREAK_MINUTES));
 };
+
+// Wall-clock time (HH:mm) that splits the shift into First Half / Second Half. Derived from
+// the configured shift itself so half-day leave semantics move when the Admin changes the
+// schedule (16:00 -> 00:00 yields 20:00, 18:00 -> 02:00 yields 22:00). Returns null when
+// the window cannot be derived.
+export const halfDayBoundaryTime = (
+  startTime: string | null | undefined,
+  endTime: string | null | undefined
+): string | null => {
+  const windowMinutes = scheduleWindowMinutes(startTime, endTime);
+  if (windowMinutes === null || !startTime) return null;
+  return minutesToTime(timeToMinutes(startTime) + Math.floor(windowMinutes / 2));
+};

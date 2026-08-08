@@ -215,7 +215,7 @@ export interface AttendanceRecord {
   checkIn: string; // HH:mm
   checkOut?: string; // HH:mm
   totalHours: number;
-  status: 'In Session' | 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
+  status: 'In Session' | 'Present' | 'Late' | 'Short Hours' | 'Half Day' | 'Absent' | 'On Leave';
   breaks: WorkBreak[];
 }
 

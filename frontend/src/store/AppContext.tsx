@@ -2819,30 +2819,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           prev.map((request) => request.id === requestId ? updatedRequest : request)
         );
 
-        if (data.forwarded) {
-          dispatchNotifications({
-            recipientIds: resolveAdminRecipients(users, currentUser.id),
-            type: 'attendance',
-            title: 'Leave Forwarded to Admin',
-            message: `${currentUser.name} approved ${updatedRequest.userName || 'an employee'}'s ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'approvals'
-          });
-          dispatchNotifications({
-            recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
-            type: 'attendance',
-            title: 'Leave Forwarded to Admin',
-            message: `HR approved your ${updatedRequest.details.leaveType || 'leave'}${leavePeriodLabel} request for ${updatedRequest.date}. It is awaiting final Admin approval.`,
-            actorId: currentUser.id,
-            actorName: currentUser.name,
-            linkRoute: 'attendance'
-          });
-          const message = data.message || 'Leave request forwarded to Admin.';
-          confirmActionSuccess('Leave Forwarded', message);
-          return { success: true, message };
-        }
-
         if (updatedRequest.type === 'Correction') {
           const attendanceResponse = await fetch(
             `/api/attendance?from=${encodeURIComponent(updatedRequest.date)}&to=${encodeURIComponent(updatedRequest.date)}`,
