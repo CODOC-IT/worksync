@@ -8,7 +8,8 @@ import {
   canShowAttendanceCorrection,
   isPastDate,
   validateAttendanceCorrection,
-  validateLeaveRequestOverlap
+  validateLeaveRequestOverlap,
+  type CorrectionShift
 } from './attendanceValidation';
 import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
 import {
@@ -258,6 +259,7 @@ interface AttendanceEditorProps {
   record: AttendanceRecord;
   employee?: User;
   requiresApproval?: boolean;
+  shift?: CorrectionShift;
   onCancel: () => void;
   onSave: (
     recordId: string,
@@ -270,6 +272,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   record,
   employee,
   requiresApproval = false,
+  shift,
   onCancel,
   onSave
 }) => {
@@ -307,7 +310,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         : 'A reason is required for an administrator correction.');
       return;
     }
-    const validationError = validateAttendanceCorrection(checkIn, checkOut, breaks);
+    const validationError = validateAttendanceCorrection(checkIn, checkOut, breaks, shift);
     if (validationError) {
       setMessage(validationError);
       return;
@@ -460,6 +463,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
 interface LeaveApplicationFormProps {
   pending: boolean;
   onClose: () => void;
+  halfDayBoundary?: string;
   onSubmit: (
     leaveType: 'Full Day Leave' | 'Half Day Leave',
     leavePeriod: 'First Half' | 'Second Half' | undefined,
@@ -471,6 +475,7 @@ interface LeaveApplicationFormProps {
 const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
   pending,
   onClose,
+  halfDayBoundary = '12:00',
   onSubmit
 }) => {
   const [leaveType, setLeaveType] = useState<'Full Day Leave' | 'Half Day Leave'>('Full Day Leave');
@@ -532,8 +537,8 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
                 className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
                 required
               >
-                <option value="First Half">First Half (work from 12:00)</option>
-                <option value="Second Half">Second Half (work until 12:00)</option>
+                <option value="First Half">First Half (work from {halfDayBoundary})</option>
+                <option value="Second Half">Second Half (work until {halfDayBoundary})</option>
               </select>
             </label>
           )}
@@ -710,6 +715,37 @@ export const AttendanceView: React.FC = () => {
     setScheduleStart(currentScheduleStart);
     setScheduleEnd(currentScheduleEnd);
   }, [currentScheduleStart, currentScheduleEnd]);
+
+  const parseTime = (time?: string): number | null => {
+    if (!time) return null;
+    const match = time.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  };
+  const formatMinutesAsHhmm = (totalMinutes: number): string => {
+    const safe = ((totalMinutes % 1440) + 1440) % 1440;
+    const hours = Math.floor(safe / 60);
+    const minutes = safe % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  };
+  const shiftStartMinutes = parseTime(currentScheduleStart);
+  const shiftEndMinutes = parseTime(currentScheduleEnd);
+  const shiftWindowMinutes =
+    shiftStartMinutes !== null && shiftEndMinutes !== null
+      ? ((shiftEndMinutes - shiftStartMinutes + 1440) % 1440) || 0
+      : 0;
+  const halfDayBoundary =
+    shiftStartMinutes !== null && shiftWindowMinutes > 0
+      ? formatMinutesAsHhmm(shiftStartMinutes + Math.floor(shiftWindowMinutes / 2))
+      : '12:00';
+  const editingShift: CorrectionShift = currentScheduleStart && currentScheduleEnd
+    ? { startTime: currentScheduleStart, endTime: currentScheduleEnd }
+    : {};
 
   // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
   // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
@@ -1132,6 +1168,7 @@ export const AttendanceView: React.FC = () => {
         <LeaveApplicationForm
           pending={leaveSubmitting}
           onClose={() => setLeaveFormOpen(false)}
+          halfDayBoundary={halfDayBoundary}
           onSubmit={submitLeave}
         />
       )}
@@ -1149,6 +1186,7 @@ export const AttendanceView: React.FC = () => {
           record={editingRecord}
           employee={users.find((user) => user.id === editingRecord.userId)}
           requiresApproval={!isAdmin}
+          shift={editingShift}
           onCancel={() => setEditingRecordId(null)}
           onSave={updateAttendanceRecord}
         />

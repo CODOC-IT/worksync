@@ -618,8 +618,7 @@ export const ApprovalsInboxView: React.FC = () => {
             </h1>
 
             <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Review Team Member leave requests before they are forwarded
-              to Admin for final approval.
+              Review and finalize Team Member attendance, leave, and correction requests.
             </p>
           </div>
 

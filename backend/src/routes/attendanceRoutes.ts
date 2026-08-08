@@ -24,7 +24,8 @@ const router = Router();
 const ensureBreakStorage = async (): Promise<void> => {
   await query(`
     INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
-    VALUES ('In Session', 'In Session', FALSE)
+    VALUES ('In Session', 'In Session', FALSE),
+           ('Short Hours', 'Short Hours', TRUE)
     ON CONFLICT (statuscode) DO NOTHING
   `);
   await query(`
@@ -77,7 +78,7 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
     const userPk = toUserPk(req.user.id);
     const effectiveRoles = await getEffectiveRoles(req.user.id);
     const role = resolveAttendanceViewerRole(req.user.role, effectiveRoles);
-    if (role !== 'Member') await materializeAbsences(from, to);
+    await materializeAbsences(from, to);
     let visibleUserPks: number[];
     if (role === 'Member') {
       visibleUserPks = [userPk];
@@ -417,7 +418,10 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
                    AND wr.details->>'leaveType' = 'Half Day Leave'
                  ORDER BY wr.decided_at DESC NULLS LAST LIMIT 1
               ), 'Second Half') AS approvedleaveperiod,
-              (ar.workdate + TIME '12:00') AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $4) AS halfdayboundaryatutc
+              CASE WHEN wsd.starttime IS NULL THEN NULL
+                   ELSE ((ar.workdate + wsd.starttime) AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $4))
+                        + (hr.schedule_window_minutes(wsd.starttime, wsd.endtime) / 2.0) * interval '1 minute'
+                   END AS halfdayboundaryatutc
          FROM hr.attendancerecords ar
          JOIN iam.users u ON u.userid = ar.userid
          JOIN org.organizations o ON o.organizationid = u.organizationid

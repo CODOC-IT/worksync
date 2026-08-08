@@ -41,6 +41,9 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   } else if (['urgent', 'high'].includes(normalized)) {
     colorClasses = 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30 shadow-[0_0_10px_rgba(217,70,239,0.15)]';
     Icon = AlertTriangle;
+  } else if (['short hours'].includes(normalized)) {
+    colorClasses = 'bg-orange-500/15 text-orange-400 border-orange-500/30 shadow-[0_0_10px_rgba(249,115,22,0.15)]';
+    Icon = Clock;
   } else if (['archived'].includes(normalized)) {
     colorClasses = 'bg-slate-600/20 text-slate-400 border-slate-600/30';
     Icon = FileCheck;

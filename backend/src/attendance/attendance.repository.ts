@@ -27,7 +27,7 @@ export const upsertAttendanceRecord = async (
 export const updateAttendanceCheckOut = async (
   attendanceRecordId: number,
   checkOutUtc: string,
-  statusCode: 'Present' | 'Late' | 'Half Day' | 'Absent' | 'Leave',
+  statusCode: 'Present' | 'Late' | 'Short Hours' | 'Half Day' | 'Absent' | 'Leave',
   workingMinutes: number,
   lateMinutes: number
 ): Promise<void> => {

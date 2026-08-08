@@ -79,6 +79,18 @@ export const canSubmitOwnCorrection = (
 ): boolean =>
   actorId === recordUserId && !isAdmin(actorRole) && !recordIsActive;
 
+// There is exactly one approval stage per request type: Member/Lead corrections and leave are
+// decided by HR; HR corrections and leave are decided by Admin. A reviewer's decision is final —
+// it is never re-routed to a second approver. Returns the state the approved request should
+// reach (the applied attendances happen when status is Approved).
+export const resolveApprovalDecision = (
+  requestType: RequestType,
+  decision: 'Approved' | 'Rejected'
+): { status: RequestStatus; applied: boolean } => ({
+  status: decision,
+  applied: decision === 'Approved'
+});
+
 const ensureTable = async (): Promise<void> => {
   await query(`
     CREATE TABLE IF NOT EXISTS public.worksync_hr_requests (
@@ -116,10 +128,12 @@ const ensureTable = async (): Promise<void> => {
       PRIMARY KEY (user_id, work_date)
     )
   `);
-  // Existing databases predate Half Day; provision it idempotently without changing reports.
+  // Existing databases predate Half Day / Short Hours; provision them idempotently
+  // without changing reports.
   await query(`
     INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
-    VALUES ('Half Day', 'Half Day', TRUE)
+    VALUES ('Half Day', 'Half Day', TRUE),
+           ('Short Hours', 'Short Hours', TRUE)
     ON CONFLICT (statuscode) DO NOTHING
   `);
 };
@@ -183,6 +197,46 @@ const loadAttendanceSnapshot = async (
     checkIn: result.rows[0]?.checkin || '',
     checkOut: result.rows[0]?.checkout || ''
   };
+};
+
+// Active default working schedule for a user + work date. Used to validate correction
+// submissions and to apply approved corrections against the same PKT shift boundaries the
+// normal attendance path uses, so the penalty of an ever-8-hour overnight shift is always
+// the configured one.
+const loadCorrectionSchedule = async (
+  runQuery: typeof query,
+  userId: string,
+  date: string
+): Promise<{
+  scheduledstarttime: string | null;
+  scheduledendtime: string | null;
+  graceminutes: number;
+  breakminutes: number;
+  timezoneid: string;
+} | null> => {
+  const result = await runQuery<{
+    scheduledstarttime: string | null;
+    scheduledendtime: string | null;
+    graceminutes: number;
+    breakminutes: number;
+    timezoneid: string;
+  }>(
+    `SELECT wsd.starttime::text AS scheduledstarttime,
+            wsd.endtime::text AS scheduledendtime,
+            COALESCE(ws.graceminutes, 0)::int AS graceminutes,
+            COALESCE(wsd.breakminutes, 0)::int AS breakminutes,
+            COALESCE(profile.timezoneid, o.timezoneid, $3) AS timezoneid
+       FROM hr.attendancerecords ar
+       JOIN iam.users u ON u.userid = ar.userid
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
+       LEFT JOIN hr.workschedules ws ON ws.workscheduleid = ar.workscheduleid
+       LEFT JOIN hr.workscheduledays wsd ON wsd.workscheduleid = ws.workscheduleid
+        AND wsd.isoweekday = EXTRACT(ISODOW FROM ar.workdate)
+      WHERE ar.userid = $1 AND ar.workdate = $2::date`,
+    [toUserPk(userId), date, DEFAULT_BUSINESS_TIME_ZONE]
+  );
+  return result.rows[0] || null;
 };
 
 // Reviewers receive only their stage. Requesters retain read access to their own history.
@@ -329,11 +383,16 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
         });
         return;
       }
+      const correctionSchedule = await loadCorrectionSchedule(query, req.user.id, requestDate);
       const correctionError = validateCorrectionValues({
         checkIn: cleanDetails.requestedCheckIn,
         checkOut: cleanDetails.requestedCheckOut,
         breaks: cleanDetails.requestedBreaks || [],
-        completed: true
+        completed: true,
+        shift: {
+          startTime: correctionSchedule?.scheduledstarttime ?? null,
+          endTime: correctionSchedule?.scheduledendtime ?? null
+        }
       });
       if (correctionError) {
         res.status(400).json({ success: false, message: correctionError });
@@ -455,46 +514,37 @@ const applyCorrection = async (
   row: HRRequestRow
 ): Promise<void> => {
   const details = parseDetails(row.details);
+  const date = formatDate(row.request_date);
+  const schedule = await loadCorrectionSchedule(runQuery, row.user_id, date);
+  const scheduleShift = {
+    startTime: schedule?.scheduledstarttime ?? null,
+    endTime: schedule?.scheduledendtime ?? null
+  };
   const validationError = validateCorrectionValues({
     checkIn: details.requestedCheckIn,
     checkOut: details.requestedCheckOut,
     breaks: details.requestedBreaks || [],
-    completed: true
+    completed: true,
+    shift: scheduleShift
   });
   if (validationError) throw Object.assign(new Error(validationError), { statusCode: 400 });
   const breakMinutes = totalCorrectionBreakMinutes(
-    (details.requestedBreaks || []) as Array<{ startTime?: unknown; endTime?: unknown }>
+    (details.requestedBreaks || []) as Array<{ startTime?: unknown; endTime?: unknown }>,
+    scheduleShift
   );
-  const date = formatDate(row.request_date);
-  const scheduleResult = await runQuery<{
-    scheduledstarttime: string | null;
-    scheduledendtime: string | null;
-    graceminutes: number;
-    breakminutes: number;
-    timezoneid: string;
-  }>(
-    `SELECT wsd.starttime::text AS scheduledstarttime,
-            wsd.endtime::text AS scheduledendtime,
-            COALESCE(ws.graceminutes, 0)::int AS graceminutes,
-            COALESCE(wsd.breakminutes, 0)::int AS breakminutes,
-            COALESCE(profile.timezoneid, o.timezoneid, $3) AS timezoneid
-       FROM hr.attendancerecords ar
-       JOIN iam.users u ON u.userid = ar.userid
-       JOIN org.organizations o ON o.organizationid = u.organizationid
-       LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
-       LEFT JOIN hr.workschedules ws ON ws.workscheduleid = ar.workscheduleid
-       LEFT JOIN hr.workscheduledays wsd ON wsd.workscheduleid = ws.workscheduleid
-        AND wsd.isoweekday = EXTRACT(ISODOW FROM ar.workdate)
-      WHERE ar.userid = $1 AND ar.workdate = $2::date`,
-    [toUserPk(row.user_id), date, DEFAULT_BUSINESS_TIME_ZONE]
-  );
-  const schedule = scheduleResult.rows[0];
+
+  // Overnight shifts: a wall-clock value earlier than the shift start belongs to the day
+  // after the work date (16:00 -> 00:00 checkout 00:00, 18:00 -> 02:00 checkout 01:30).
+  const timeZone = schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE;
+  const shiftStartTime = schedule?.scheduledstarttime ?? '';
+  const checkInOffsetDays = shiftStartTime !== '' && details.requestedCheckIn! < shiftStartTime ? 1 : 0;
+  const checkOutOffsetDays = shiftStartTime !== '' && details.requestedCheckOut! < shiftStartTime ? 1 : 0;
   const instants = await runQuery<{ checkinutc: Date; checkoututc: Date; scheduledstartutc: Date | null }>(
-    `SELECT (($1::date + $2::time) AT TIME ZONE $5) AS checkinutc,
-            (($1::date + $3::time) AT TIME ZONE $5) AS checkoututc,
+    `SELECT (($1::date + $6 * interval '1 day' + $2::time) AT TIME ZONE $5) AS checkinutc,
+            (($1::date + $7 * interval '1 day' + $3::time) AT TIME ZONE $5) AS checkoututc,
             CASE WHEN NULLIF($4, '') IS NULL THEN NULL
                  ELSE (($1::date + $4::time) AT TIME ZONE $5) END AS scheduledstartutc`,
-    [date, details.requestedCheckIn, details.requestedCheckOut, schedule?.scheduledstarttime || '', schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE]
+    [date, details.requestedCheckIn, details.requestedCheckOut, shiftStartTime, timeZone, checkInOffsetDays, checkOutOffsetDays]
   );
   const checkInUtc = new Date(instants.rows[0].checkinutc);
   const checkOutUtc = new Date(instants.rows[0].checkoututc);
@@ -516,13 +566,13 @@ const applyCorrection = async (
   });
   const result = await runQuery<{ attendancerecordid: number }>(
     `UPDATE hr.attendancerecords
-        SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE $8,
-            actualcheckoutatutc = ($2::date + $4::time) AT TIME ZONE $8,
+        SET actualcheckinatutc = (($2::date + $8 * interval '1 day' + $3::time) AT TIME ZONE $7),
+            actualcheckoutatutc = (($2::date + $9 * interval '1 day' + $4::time) AT TIME ZONE $7),
             workingminutes = $5,
             lateminutes = $6,
             attendancestatusid = (
               SELECT attendancestatusid FROM hr.attendancestatuses
-               WHERE statuscode = $7
+               WHERE statuscode = $10
             ),
             sourcecode = 'HRCorrection',
             updatedatutc = CURRENT_TIMESTAMP
@@ -531,13 +581,15 @@ const applyCorrection = async (
       RETURNING attendancerecordid`,
     [
       toUserPk(row.user_id),
-      formatDate(row.request_date),
+      date,
       details.requestedCheckIn,
       details.requestedCheckOut,
       outcome.workingMinutes,
       outcome.lateMinutes,
-      outcome.status,
-      schedule?.timezoneid || DEFAULT_BUSINESS_TIME_ZONE
+      timeZone,
+      checkInOffsetDays,
+      checkOutOffsetDays,
+      outcome.status
     ]
   );
   if (!result.rows[0]) {
@@ -611,8 +663,7 @@ const decideRequest = async (
         throw Object.assign(new Error(`Only ${row.approval_stage} can decide this request.`), { statusCode: 403 });
       }
 
-      const forwardLeaveToAdmin =
-        decision === 'Approved' && row.request_type === 'Leave' && row.approval_stage === 'HR';
+      const decisionFinal = resolveApprovalDecision(row.request_type, decision);
       if (decision === 'Approved' && row.request_type === 'Leave') {
         const details = parseDetails(row.details);
         const approvedRows = await runQuery<{ request_date: string | Date; details: HRRequestDetails | string }>(
@@ -637,7 +688,7 @@ const decideRequest = async (
         }));
         if (overlapError) throw Object.assign(new Error(overlapError), { statusCode: 409 });
       }
-      if (decision === 'Approved' && !forwardLeaveToAdmin) {
+      if (decisionFinal.applied) {
         if (row.request_type === 'Correction') await applyCorrection(runQuery, row);
         if (row.request_type === 'Leave') await applyLeave(runQuery, row);
       }
@@ -652,8 +703,8 @@ const decideRequest = async (
           RETURNING *`,
         [
           row.id,
-          forwardLeaveToAdmin ? 'Pending' : decision,
-          forwardLeaveToAdmin ? 'Admin' : row.approval_stage,
+          decisionFinal.status,
+          row.approval_stage,
           req.user!.id,
           decisionReason || null
         ]
@@ -662,10 +713,8 @@ const decideRequest = async (
     });
     res.json({
       success: true,
-      forwarded: updated.status === 'Pending' && updated.approval_stage === 'Admin',
-      message: updated.status === 'Pending'
-        ? 'Leave request approved by HR and forwarded to Admin.'
-        : `Request ${decision.toLowerCase()} successfully.`,
+      forwarded: false,
+      message: `Request ${decision.toLowerCase()} successfully.`,
       request: mapHRRequestRow(updated)
     });
 

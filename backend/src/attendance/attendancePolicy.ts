@@ -15,7 +15,7 @@ export interface AttendancePolicyInput {
 }
 
 export interface AttendancePolicyResult {
-  status: 'Present' | 'Late' | 'Half Day' | 'Absent' | 'On Leave';
+  status: 'Present' | 'Late' | 'Short Hours' | 'Half Day' | 'Absent' | 'On Leave';
   workingSeconds: number;
   workingMinutes: number;
   lateMinutes: number;
@@ -74,7 +74,7 @@ export const calculateAttendanceOutcome = (input: AttendancePolicyInput): Attend
   }
 
   if (workingMinutes < minimumFullDayMinutes) {
-    return { status: 'Half Day', workingSeconds, workingMinutes, lateMinutes };
+    return { status: 'Short Hours', workingSeconds, workingMinutes, lateMinutes };
   }
   return {
     status: lateMinutes > 0 ? 'Late' : 'Present',
