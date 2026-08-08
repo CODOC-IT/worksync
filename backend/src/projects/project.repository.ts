@@ -89,6 +89,26 @@ export const findMilestonesForProject = async (projectId: number): Promise<Miles
   return result.rows;
 };
 
+export interface ProjectTaskDateRow {
+  tasknumber: string;
+  title: string;
+  startdate: string;
+  duedate: string;
+}
+
+// Date-scope checks deliberately include subtasks: they live in the same work.Tasks table and
+// are just as much part of the project's schedule as their parent task.
+export const findActiveTaskDatesForProject = async (projectId: number): Promise<ProjectTaskDateRow[]> => {
+  const result = await query<ProjectTaskDateRow>(
+    `SELECT tasknumber, title, startdate::text, duedate::text
+       FROM work.tasks
+      WHERE projectid = $1 AND archivedatutc IS NULL
+      ORDER BY taskid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
 // Batched sibling of findMilestonesForProject, mirroring findMembersForProjects above -- lets
 // the project list endpoint include real milestone data (the Calendar's source for Milestone
 // entries, see frontend/.../calendarRules.ts#buildCalendarEntries) without an N+1 query per
