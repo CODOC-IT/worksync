@@ -51,6 +51,16 @@ const priorityStyle = (priority?: TaskPriority): string => {
   }
 };
 
+const statusPillStyle = (status: ProjectStatus): string => {
+  switch (status) {
+    case 'Pending Approval': return 'bg-amber-400/15 text-amber-200 ring-1 ring-inset ring-amber-300/20';
+    case 'Active': return 'bg-emerald-400/15 text-emerald-200 ring-1 ring-inset ring-emerald-300/20';
+    case 'Completed': return 'bg-cyan-400/15 text-cyan-200 ring-1 ring-inset ring-cyan-300/20';
+    case 'Archived': return 'bg-slate-400/15 text-slate-300 ring-1 ring-inset ring-slate-300/15';
+    default: return 'bg-amber-400/15 text-amber-200 ring-1 ring-inset ring-amber-300/20';
+  }
+};
+
 const formatFullDate = (iso: string): string => {
   const date = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(date.getTime())) return iso;
@@ -162,7 +172,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', stiffness: 320, damping: 34 }}
-            className="ml-auto flex h-full w-full max-w-md flex-col border-l border-white/10 bg-slate-950 shadow-2xl sm:max-w-lg"
+            className="ml-auto flex h-full w-full max-w-md flex-col overflow-hidden border-l border-white/10 bg-slate-950 shadow-2xl sm:max-w-lg"
           >
             {/* Header */}
             <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-slate-900/60 p-5">
@@ -171,10 +181,10 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                   {project.code}
                 </span>
                 <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                  <h2 className="min-w-0 text-xl font-semibold leading-snug tracking-tight text-white">
+                  <h2 className="min-w-0 break-words text-xl font-semibold leading-snug tracking-tight text-white [overflow-wrap:anywhere]">
                     {project.title}
                   </h2>
-                  <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusColor(project.status)}`}>
+                  <span className={`inline-flex max-w-full items-center gap-1.5 break-words rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide [overflow-wrap:anywhere] ${statusPillStyle(project.status)}`}>
                     <span className={`h-1.5 w-1.5 rounded-full ${statusColor(project.status).replace('text-', 'bg-')}`} />
                     {project.status}
                   </span>
@@ -190,7 +200,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
             </div>
 
             {/* Scrollable body */}
-            <div className="flex-1 space-y-5 overflow-y-auto p-5 text-sm">
+            <div className="flex-1 space-y-5 overflow-x-hidden overflow-y-auto p-5 text-sm">
               {project.priority && (
                 <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${priorityStyle(project.priority)}`}>
                   <Flag size={12} /> {project.priority} Priority
@@ -200,7 +210,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
               {/* Full description */}
               <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
                 <SectionLabel>Description</SectionLabel>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">{project.description}</p>
+                <p className="break-words whitespace-pre-wrap text-sm leading-relaxed text-slate-300 [overflow-wrap:anywhere]">{project.description}</p>
               </div>
 
               {/* Start / deadline */}
@@ -238,11 +248,11 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                         key={m.id}
                         className="flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2"
                       >
-                        <span className="flex items-center gap-1.5 text-slate-200">
+                        <span className="flex min-w-0 items-center gap-1.5 break-words text-slate-200 [overflow-wrap:anywhere]">
                           {m.name}
                           {project?.pendingRemovalMemberIds?.includes(m.id) && (
                             <span
-                              className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded px-1 py-0.5"
+                              className="inline-flex shrink-0 items-center justify-center rounded-full bg-amber-400/15 px-2 py-1 text-center text-[9px] font-bold uppercase tracking-wide text-amber-200 ring-1 ring-inset ring-amber-300/20"
                               title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
                             >
                               Pending Removal
@@ -339,7 +349,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
               {/* Notes */}
               <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
                 <SectionLabel icon={<StickyNote size={12} />}>Creation Reason / Notes</SectionLabel>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">
+                <p className="break-words whitespace-pre-wrap text-sm leading-relaxed text-slate-300 [overflow-wrap:anywhere]">
                   {project.creationReason || 'No notes provided.'}
                 </p>
               </div>
