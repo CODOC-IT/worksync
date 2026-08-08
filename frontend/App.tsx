@@ -36,6 +36,7 @@ const AppContent: React.FC = () => {
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
   const [reportsInitialTab, setReportsInitialTab] = useState<string | undefined>(undefined);
   const [tasksInitialId, setTasksInitialId] = useState<string | undefined>(undefined);
+  const [tasksInitialProjectId, setTasksInitialProjectId] = useState<string | undefined>(undefined);
   const [calendarInitialEntryId, setCalendarInitialEntryId] = useState<string | undefined>(undefined);
 
   const {
@@ -241,11 +242,18 @@ const AppContent: React.FC = () => {
         {/* Main Scrollable View Area */}
         <main className={`min-h-0 flex-1 min-w-0 overflow-y-auto p-4 md:p-6 ${currentTab === 'project-chats' ? '' : 'space-y-6'}`}>
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-          {currentTab === 'projects' && <ProjectsView />}
+          {currentTab === 'projects' && (
+            <ProjectsView onViewProjectTasks={(projectId) => {
+              setTasksInitialProjectId(projectId);
+              setCurrentTab('tasks');
+            }} />
+          )}
           {currentTab === 'tasks' && (
             <TasksView
               initialTaskId={tasksInitialId}
               onInitialTaskConsumed={() => setTasksInitialId(undefined)}
+              initialProjectId={tasksInitialProjectId}
+              onInitialProjectConsumed={() => setTasksInitialProjectId(undefined)}
             />
           )}
           {currentTab === 'attendance' && <AttendanceView />}
