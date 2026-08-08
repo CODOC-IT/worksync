@@ -14,7 +14,7 @@ import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
 import { validateLeaveOverlap, type LeaveWindow } from '../attendance/leaveOverlap.js';
 import { DEFAULT_SHIFT_NET_MINUTES, scheduleNetMinutes } from '../attendance/workingSchedule.js';
 
-type RequestType = 'Correction' | 'Leave' | 'Break_Exception';
+type RequestType = 'Correction' | 'Leave';
 type RequestStatus = 'Pending' | 'Approved' | 'Rejected';
 type ApprovalStage = 'HR' | 'Admin';
 
@@ -29,7 +29,6 @@ interface HRRequestDetails {
   leaveType?: 'Full Day Leave' | 'Half Day Leave';
   leavePeriod?: 'First Half' | 'Second Half';
   leaveDays?: number;
-  extraBreakMinutes?: number;
 }
 
 interface HRRequestRow {
@@ -49,7 +48,7 @@ interface HRRequestRow {
 }
 
 const router = Router();
-const allowedTypes: RequestType[] = ['Correction', 'Leave', 'Break_Exception'];
+const allowedTypes: RequestType[] = ['Correction', 'Leave'];
 const normalizeRole = (role: unknown): string =>
   String(role || '').replace(/[\s_-]/g, '').toLowerCase();
 const isAdmin = (role: unknown): boolean =>
@@ -68,16 +67,8 @@ export const canReviewRequestStage = (
   stage: ApprovalStage,
   reviewerRole: string
 ): boolean =>
-  (stage === 'HR' && ['Correction', 'Leave', 'Break_Exception'].includes(requestType) && isHR(reviewerRole)) ||
+  (stage === 'HR' && ['Correction', 'Leave'].includes(requestType) && isHR(reviewerRole)) ||
   (stage === 'Admin' && isAdmin(reviewerRole));
-
-export const canSubmitOwnCorrection = (
-  actorId: string,
-  recordUserId: string,
-  actorRole: string,
-  recordIsActive: boolean
-): boolean =>
-  actorId === recordUserId && !isAdmin(actorRole) && !recordIsActive;
 
 // There is exactly one approval stage per request type: Member/Lead corrections and leave are
 // decided by HR; HR corrections and leave are decided by Admin. A reviewer's decision is final —
@@ -98,7 +89,7 @@ const ensureTable = async (): Promise<void> => {
       user_id TEXT NOT NULL,
       user_name TEXT,
       requester_role TEXT,
-      request_type TEXT NOT NULL CHECK (request_type IN ('Correction', 'Leave', 'Break_Exception')),
+      request_type TEXT NOT NULL CHECK (request_type IN ('Correction', 'Leave')),
       request_date DATE NOT NULL,
       reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Approved', 'Rejected')),
@@ -478,24 +469,6 @@ router.post('/', authenticateJWT, async (req: AuthenticatedRequest, res: Respons
           requestedBreakCount: (cleanDetails.requestedBreaks || []).length,
         },
       });
-    } else if (type === 'Break_Exception') {
-      const actorName = typeof userName === 'string' ? userName.trim() : req.user.email;
-      recordActivitySafe({
-        actorId: req.user.id,
-        actorName,
-        actorEmail: req.user.email,
-        actorRole: req.user.role,
-        action: 'Break Exception Requested',
-        module: 'Attendance',
-        entityType: 'Attendance',
-        entityId: id,
-        entityName: `Attendance ${requestDate}`,
-        description: `${actorName} requested a break exception for ${requestDate}.`,
-        source: 'Web',
-        important: true,
-        linkRoute: 'approvals',
-        metadata: { requestId: id, reason: cleanReason },
-      });
     }
 
     res.status(201).json({
@@ -763,26 +736,6 @@ const decideRequest = async (
           description: decision === 'Approved'
             ? `${deciderName} approved attendance correction for ${requesterName} on ${requestDateStr}.`
             : `${deciderName} rejected attendance correction for ${requesterName} on ${requestDateStr}.`,
-          source: 'Web',
-          important: true,
-          reason: decisionReason || undefined,
-        });
-      } else if (updated.request_type === 'Break_Exception') {
-        recordActivitySafe({
-          actorId: req.user.id,
-          actorName: deciderName,
-          actorEmail: req.user.email,
-          actorRole: req.user.role,
-          affectedUserId: updated.user_id,
-          affectedUserName: requesterName,
-          action: decision === 'Approved' ? 'Break Exception Approved' : 'Break Exception Rejected',
-          module: 'Attendance',
-          entityType: 'Attendance',
-          entityId: updated.id,
-          entityName: `Attendance ${requestDateStr}`,
-          description: decision === 'Approved'
-            ? `${deciderName} approved break exception request for ${requesterName} on ${requestDateStr}.`
-            : `${deciderName} rejected break exception request for ${requesterName} on ${requestDateStr}.`,
           source: 'Web',
           important: true,
           reason: decisionReason || undefined,

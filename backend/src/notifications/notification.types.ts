@@ -31,7 +31,6 @@ export type NotificationType =
   | 'attendance_absent' | 'attendance_correction_submitted' | 'attendance_correction_approved'
   | 'attendance_correction_rejected'
   | 'break_started' | 'break_ended' | 'break_exceeded' | 'break_reminder'
-  | 'break_approved' | 'break_rejected'
   | 'report_weekly_generated' | 'report_monthly_generated' | 'report_sprint_ready'
   | 'report_productivity_ready' | 'report_project_completion'
   | 'chat_reply' | 'chat_new_message' | 'chat_file_shared' | 'chat_thread_reply'

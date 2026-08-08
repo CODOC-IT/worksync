@@ -256,8 +256,7 @@ Categories, matching PRD §7 / Step 6:
 - **Attendance**: `attendance_check_in`, `attendance_check_out`, `attendance_late_check_in`,
   `attendance_absent`, `attendance_correction_submitted`, `attendance_correction_approved`,
   `attendance_correction_rejected`
-- **Break Management**: `break_started`, `break_ended`, `break_exceeded`, `break_reminder`,
-  `break_approved`, `break_rejected`
+- **Break Management**: `break_started`, `break_ended`, `break_exceeded`, `break_reminder`
 - **Reports**: `report_weekly_generated`, `report_monthly_generated`, `report_sprint_ready`,
   `report_productivity_ready`, `report_project_completion`
 - **Project Chat**: `chat_reply`, `chat_new_message`, `chat_file_shared`, `chat_thread_reply`,
@@ -340,8 +339,8 @@ regardless of role.
 | Check-in / late check-in | `AppContext.checkIn` | Recipients: HR-role users (`resolveHRRecipients`, mirrors the pre-existing "Notify HR" pattern in `submitHRRequest`). "Late" = check-in time after `settings.workingHours.start` |
 | Check-out | `AppContext.checkOut` | Recipients: HR |
 | Break started / ended / exceeded | `AppContext.startBreak` / `endBreak` | "Exceeded" = duration over `settings.breakLimitMinutes`; recipients: HR |
-| Attendance correction / leave / break-exception requested | `AppContext.submitHRRequest` | `type === 'Correction'` → `attendance_correction_submitted`; `'Leave'` → `leave_requested`, whose copy names the leave ("Full Day Leave" / "Half Day Leave (Morning)") and its date — see §15.6; `'Break_Exception'` → the generic `attendance` type |
-| Attendance correction / leave / break-exception approved or rejected | `AppContext.approveHRRequest` / `rejectHRRequest` | Notifies the original requester; `'Leave'` → `leave_approved`/`leave_rejected` (leave named, reviewer's reason in the expanded body — §15.6), `'Correction'` → `attendance_correction_approved`/`_rejected`, `'Break_Exception'` → `break_approved`/`break_rejected`. HR approving a leave forwards it to Admin and notifies both the Admins and the requester |
+| Attendance correction / leave requested | `AppContext.submitHRRequest` | `type === 'Correction'` → `attendance_correction_submitted`; `'Leave'` → `leave_requested`, whose copy names the leave ("Full Day Leave" / "Half Day Leave (Morning)") and its date — see §15.6 |
+| Attendance correction / leave approved or rejected | `AppContext.approveHRRequest` / `rejectHRRequest` | Notifies the original requester; `'Leave'` → `leave_approved`/`leave_rejected` (leave named, reviewer's reason in the expanded body — §15.6), `'Correction'` → `attendance_correction_approved`/`_rejected`. HR approving a leave forwards it to Admin and notifies both the Admins and the requester |
 | New chat message | `AppContext.sendChatMessage` | `chat_new_message` to the rest of the project (`resolveProjectRecipients`), excluding anyone who already got the more specific `mention` notification for the same message |
 | AI prompt generated | `backend/src/routes/assistantRoutes.ts`'s `POST /prompts` | Self-notification to the author confirming generation completed (AI Assistant has no team-visibility concept — saved prompts are private per user); `category === 'ProjectBreakdown'` → `ai_tasks_generated`, everything else → `ai_recommendation_available` |
 

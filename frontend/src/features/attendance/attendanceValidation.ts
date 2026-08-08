@@ -1,4 +1,5 @@
 import { HRRequest, WorkBreak } from '../../types';
+import { DEFAULT_SHIFT_BREAK_MINUTES } from './attendanceTime';
 
 export const canShowAttendanceCorrection = (
   checkIn: string | undefined,
@@ -12,8 +13,6 @@ const minutes = (value?: string): number | null => {
   const [hour, minute] = value.split(':').map(Number);
   return hour * 60 + minute;
 };
-
-const SHIFT_BREAK_MINUTES = 60;
 
 export interface CorrectionShift {
   startTime?: string;
@@ -96,8 +95,8 @@ export const validateAttendanceCorrection = (
     }
   }
   const totalBreak = intervals.reduce((total, item) => total + item.end - item.start, 0);
-  if (totalBreak > SHIFT_BREAK_MINUTES) {
-    return `Total break duration cannot exceed ${SHIFT_BREAK_MINUTES} minutes per shift.`;
+  if (totalBreak > DEFAULT_SHIFT_BREAK_MINUTES) {
+    return `Total break duration cannot exceed ${DEFAULT_SHIFT_BREAK_MINUTES} minutes per shift.`;
   }
   return null;
 };

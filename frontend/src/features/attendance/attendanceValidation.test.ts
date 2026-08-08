@@ -50,6 +50,26 @@ test('frontend against a 18:00 -> 02:00 overnight shift accepts next-day checkou
     'Check-in must be within the selected shift window.');
 });
 
+test('overnight 18:10 -> 01:55 correction is accepted on an 18:00 -> 02:00 shift', () => {
+  const evening = { startTime: '18:00', endTime: '02:00' };
+  assert.equal(validateAttendanceCorrection('18:10', '01:55', [
+    { id: '1', type: 'Other', startTime: '23:00', endTime: '23:20', durationMinutes: 20 }
+  ], evening), null);
+  assert.equal(validateAttendanceCorrection('18:10', '01:55', [], evening), null);
+});
+
+test('frontend accepts breaks totalling exactly 60 minutes and rejects 61', () => {
+  const overnight = { startTime: '16:00', endTime: '00:00' };
+  assert.equal(validateAttendanceCorrection('16:10', '23:50', [
+    { id: '1', type: 'Other', startTime: '18:00', endTime: '18:20', durationMinutes: 20 },
+    { id: '2', type: 'Other', startTime: '19:30', endTime: '20:10', durationMinutes: 40 }
+  ], overnight), null);
+  assert.equal(validateAttendanceCorrection('16:10', '23:55', [
+    { id: '1', type: 'Other', startTime: '18:00', endTime: '18:20', durationMinutes: 20 },
+    { id: '2', type: 'Other', startTime: '20:00', endTime: '20:41', durationMinutes: 41 }
+  ], overnight), 'Total break duration cannot exceed 60 minutes per shift.');
+});
+
 test('correction controls are hidden in-session and retained for completed or absent records', () => {
   assert.equal(canShowAttendanceCorrection('05:00', undefined, 'In Session'), false);
   assert.equal(canShowAttendanceCorrection('05:00', '13:00', 'Present'), true);

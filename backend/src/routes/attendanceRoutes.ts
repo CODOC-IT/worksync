@@ -9,7 +9,7 @@ import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
 import { materializeAbsences } from '../attendance/absenceMaterialization.js';
-import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
+import { DEFAULT_BUSINESS_TIME_ZONE, formatBusinessTime } from '../attendance/businessTime.js';
 import { resolveAttendanceViewerRole, visibleAttendanceUserIds } from '../attendance/attendanceAccess.js';
 import {
   DEFAULT_SHIFT_BREAK_MINUTES,
@@ -172,99 +172,7 @@ router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, 
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
-    res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
-    return;
-    /*
-    const effectiveRoles = await getEffectiveRoles(req.user.id);
-    if (!effectiveRoles.isAdmin) {
-      res.status(403).json({ success: false, message: 'Only Admin can directly edit attendance.' });
-      return;
-    }
-    const { checkIn, checkOut, breaks, reason } = req.body as {
-      checkIn?: string;
-      checkOut?: string;
-      breaks?: unknown[];
-      reason?: string;
-    };
-    const cleanReason = typeof reason === 'string' ? reason.trim() : '';
-    if (!cleanReason) {
-      res.status(400).json({ success: false, message: 'A correction reason is required.' });
-      return;
-    }
-    if (req.params.userId === req.user.id) {
-      res.status(403).json({ success: false, message: 'Admins do not have personal attendance records.' });
-      return;
-    }
-    const targetAdmin = await query(
-      `SELECT 1
-         FROM iam.userroles ur
-         JOIN iam.roles r ON r.roleid = ur.roleid
-        WHERE ur.userid = $1 AND r.rolecode = 'Administrator'
-          AND ur.revokedatutc IS NULL AND ur.startsatutc <= now()
-          AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-        LIMIT 1`,
-      [toUserPk(req.params.userId)]
-    );
-    if (targetAdmin.rowCount) {
-      res.status(403).json({ success: false, message: 'Administrators do not have attendance records.' });
-      return;
-    }
-    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (!checkIn || !timePattern.test(checkIn) || (checkOut && !timePattern.test(checkOut))) {
-      res.status(400).json({ success: false, message: 'Attendance times must use HH:mm format.' });
-      return;
-    }
-    if (checkOut && checkOut <= checkIn) {
-      res.status(400).json({ success: false, message: 'Check-out must be later than check-in.' });
-      return;
-    }
-    const updated = await query(
-      `UPDATE hr.attendancerecords
-          SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
-              actualcheckoutatutc = CASE WHEN NULLIF($4, '') IS NULL THEN NULL
-                ELSE ($2::date + $4::time) AT TIME ZONE 'UTC' END,
-              workingminutes = CASE WHEN NULLIF($4, '') IS NULL THEN 0
-                ELSE GREATEST(0, EXTRACT(EPOCH FROM (
-                  (($2::date + $4::time) AT TIME ZONE 'UTC') -
-                  (($2::date + $3::time) AT TIME ZONE 'UTC')
-                )) / 60)::int END,
-              sourcecode = 'HRCorrection',
-              updatedatutc = CURRENT_TIMESTAMP
-        WHERE userid = $1 AND workdate = $2::date`,
-      [toUserPk(req.params.userId), req.params.date, checkIn, checkOut || '']
-    );
-    if (!updated.rowCount) {
-      res.status(404).json({ success: false, message: 'Attendance record not found.' });
-      return;
-    }
-    await ensureBreakStorage();
-    await query(
-      `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
-       VALUES ($1, $2::date, $3::jsonb, NOW())
-       ON CONFLICT (user_id, work_date) DO UPDATE SET breaks = EXCLUDED.breaks, updated_at = NOW()`,
-      [req.params.userId, req.params.date, JSON.stringify(Array.isArray(breaks) ? breaks : [])]
-    );
-    await recordActivity({
-      actorId: req.user.id,
-      actorEmail: req.user.email,
-      actorRole: 'Admin',
-      affectedUserId: req.params.userId,
-      action: 'Corrected',
-      module: 'Attendance',
-      entityType: 'Attendance',
-      entityId: `${req.params.userId}:${req.params.date}`,
-      entityName: `Attendance ${req.params.date}`,
-      description: `Administrator corrected attendance for ${req.params.userId}.`,
-      reason: cleanReason,
-      source: 'API',
-      important: true,
-      linkRoute: 'attendance',
-      changes: [
-        { field: 'checkIn', previousValue: null, newValue: checkIn },
-        { field: 'checkOut', previousValue: null, newValue: checkOut || null },
-      ],
-    });
-    res.json({ success: true, message: 'Attendance record updated.' }); */
+res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
   } catch (err: any) {
     console.error('[Attendance Update Error]', err);
     res.status(500).json({ success: false, message: 'Failed to update attendance record.' });
@@ -394,10 +302,7 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
               CASE WHEN wsd.starttime IS NULL THEN NULL
                    ELSE (ar.workdate + wsd.starttime) AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $4)
                    END AS scheduledstartatutc,
-              GREATEST(1, COALESCE(
-                hr.schedule_window_minutes(wsd.starttime, wsd.endtime) - wsd.breakminutes,
-                420
-              ))::int AS scheduledminutes,
+              GREATEST(1, COALESCE(hr.schedule_net_minutes(wsd.starttime, wsd.endtime, wsd.breakminutes), 1))::int AS scheduledminutes,
               COALESCE(ws.graceminutes, 0)::int AS graceminutes,
               COALESCE((
                 SELECT SUM(GREATEST(0, (item->>'durationSeconds')::numeric))
@@ -581,8 +486,8 @@ router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: R
     }
     const savedBreak = {
       id, type: type || 'Other',
-      startTime: started.toISOString().slice(11, 16),
-      endTime: ended.toISOString().slice(11, 16),
+      startTime: formatBusinessTime(started),
+      endTime: formatBusinessTime(ended),
       startedAtUtc: started.toISOString(), endedAtUtc: ended.toISOString(),
       durationSeconds, durationMinutes: durationSeconds / 60
     };

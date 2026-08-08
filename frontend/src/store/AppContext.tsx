@@ -35,7 +35,13 @@ import {
 } from '../types';
 import {
   businessDateKey,
-  formatAttendanceTime
+  formatAttendanceTime,
+  DEFAULT_BUSINESS_TIME_ZONE,
+  DEFAULT_SHIFT_START_TIME,
+  DEFAULT_SHIFT_END_TIME,
+  DEFAULT_SHIFT_WINDOW_MINUTES,
+  DEFAULT_SHIFT_BREAK_MINUTES,
+  DEFAULT_SHIFT_NET_MINUTES
 } from '../features/attendance/attendanceTime';
 
 import {
@@ -89,7 +95,11 @@ import {
   HolidayInput
 } from '../features/calendar/calendarRepository';
 import { todayDateKey, toDateKey } from '../features/calendar/calendarRules';
-import { isPastDate, validateAttendanceCorrection } from '../features/attendance/attendanceValidation';
+import {
+  isPastDate,
+  validateAttendanceCorrection,
+  CorrectionShift
+} from '../features/attendance/attendanceValidation';
 import { mapAttendanceApiRecords, restoreActiveBreak } from '../features/attendance/attendanceHydration';
 import {
   fetchPendingProjectApprovals,
@@ -285,26 +295,27 @@ const AppContext = createContext<AppState | undefined>(undefined);
 
 // Matches the database/migrations/20260809_01_attendance_working_schedule.sql default seed
 // (16:00 -> 00:00 PKT, 60-minute break, 8h window / 7h net). Shown as a safe default until the
-// server schedule is loaded (or when the org has no schedule configured yet).
+// server schedule is loaded (or when the org has no schedule configured yet). The fixed
+// figures are imported from attendanceTime.ts, the frontend's single source of truth.
 const DEFAULT_WORKING_SCHEDULE: WorkingSchedule = {
   workScheduleId: 0,
   scheduleName: 'Default Attendance Working Schedule',
   graceMinutes: 0,
-  timeZone: 'Asia/Karachi',
-  startTime: '16:00',
-  endTime: '00:00',
-  breakMinutes: 60,
-  windowMinutes: 480,
-  netMinutes: 420,
+  timeZone: DEFAULT_BUSINESS_TIME_ZONE,
+  startTime: DEFAULT_SHIFT_START_TIME,
+  endTime: DEFAULT_SHIFT_END_TIME,
+  breakMinutes: DEFAULT_SHIFT_BREAK_MINUTES,
+  windowMinutes: DEFAULT_SHIFT_WINDOW_MINUTES,
+  netMinutes: DEFAULT_SHIFT_NET_MINUTES,
   days: Array.from({ length: 7 }, (_, index): WorkingScheduleDay => {
     const isoWeekday = index + 1;
     const isWorkingDay = isoWeekday <= 5;
     return {
       isoWeekday,
       isWorkingDay,
-      startTime: isWorkingDay ? '16:00' : null,
-      endTime: isWorkingDay ? '00:00' : null,
-      breakMinutes: isWorkingDay ? 60 : 0
+      startTime: isWorkingDay ? DEFAULT_SHIFT_START_TIME : null,
+      endTime: isWorkingDay ? DEFAULT_SHIFT_END_TIME : null,
+      breakMinutes: isWorkingDay ? DEFAULT_SHIFT_BREAK_MINUTES : 0
     };
   })
 };
@@ -2365,7 +2376,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       const todayStr = businessDateKey();
       const nowTime = formatAttendanceTime(new Date().toISOString());
-      const shiftStart = workingSchedule?.startTime || '16:00';
+      const shiftStart = workingSchedule?.startTime || DEFAULT_SHIFT_START_TIME;
       const isLate = nowTime > shiftStart;
 
       // Persist check-in to backend
@@ -2527,14 +2538,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (currentRole === 'Admin') return;
       if (!activeBreak || activeBreak.userId !== currentUser.id) return;
       const todayStr = businessDateKey();
-      const endTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const endTimeStr = formatAttendanceTime(new Date().toISOString());
       const endedAtUtc = new Date().toISOString();
       const durationSeconds = Math.max(
         0,
         Math.floor((new Date(endedAtUtc).getTime() - new Date(activeBreak.startedAtUtc).getTime()) / 1000)
       );
       const durationMin = durationSeconds / 60;
-      const breakLimitMinutes = workingSchedule?.breakMinutes || 60;
+      const breakLimitMinutes = workingSchedule?.breakMinutes || DEFAULT_SHIFT_BREAK_MINUTES;
       const exceeded = durationMin > breakLimitMinutes;
 
       const newBreak: WorkBreak = {
@@ -2630,10 +2641,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           durationSeconds: Number.isFinite(duration) ? duration * 60 : 0
         };
       });
+      const validationShift: CorrectionShift = workingSchedule?.startTime && workingSchedule?.endTime
+        ? { startTime: workingSchedule.startTime, endTime: workingSchedule.endTime }
+        : {};
       const validationError = validateAttendanceCorrection(
         updates.checkIn,
         updates.checkOut || '',
-        normalizedBreaks
+        normalizedBreaks,
+        validationShift
       );
       if (validationError) return { success: false, message: validationError };
 
@@ -2658,7 +2673,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // HR Requests
-    // 'Correction' has its own dedicated notification type; 'Leave' and 'Break_Exception' reuse
+    // 'Correction' has its own dedicated notification type; 'Leave' reuses
     // the generic 'approval' type already used elsewhere in this file for every other
     // pending-decision flow (project creation, controlled edits) — see approveApprovalItem/
     // rejectApprovalItem above for the same convention.
@@ -2870,17 +2885,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const notifType =
           updatedRequest.type === 'Correction'
             ? 'attendance_correction_approved'
-            : updatedRequest.type === 'Break_Exception'
-              ? 'break_approved'
-              : 'attendance';
+            : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
           title: updatedRequest.type === 'Leave'
             ? 'Leave Approved'
-            : updatedRequest.type === 'Correction'
-              ? 'Attendance Approved'
-              : `${updatedRequest.type.replace('_', ' ')} Request Approved`,
+            : 'Attendance Approved',
           message: `${currentUser.name} approved your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.`,
           actorId: currentUser.id,
           actorName: currentUser.name,
@@ -2922,17 +2933,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const notifType =
           updatedRequest.type === 'Correction'
             ? 'attendance_correction_rejected'
-            : updatedRequest.type === 'Break_Exception'
-              ? 'break_rejected'
-              : 'attendance';
+            : 'attendance';
         dispatchNotifications({
           recipientIds: resolveSingleRecipient(updatedRequest.userId, currentUser.id),
           type: notifType,
           title: updatedRequest.type === 'Leave'
             ? 'Leave Rejected'
-            : updatedRequest.type === 'Correction'
-              ? 'Attendance Rejected'
-              : `${updatedRequest.type.replace('_', ' ')} Request Rejected`,
+            : 'Attendance Rejected',
           message: `${currentUser.name} rejected your ${updatedRequest.type.toLowerCase().replace('_', ' ')}${leavePeriodLabel} request.${decisionReason ? ` Reason: ${decisionReason}` : ''}`,
           actorId: currentUser.id,
           actorName: currentUser.name,

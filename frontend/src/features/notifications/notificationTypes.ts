@@ -109,8 +109,6 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   break_ended: { label: 'Break Ended', icon: Coffee, tone: 'info', priority: 'Low' },
   break_exceeded: { label: 'Break Exceeded', icon: AlertTriangle, tone: 'warning', priority: 'High' },
   break_reminder: { label: 'Break Reminder', icon: Clock, tone: 'info', priority: 'Medium' },
-  break_approved: { label: 'Break Request Approved', icon: CheckCircle2, tone: 'success', priority: 'Medium' },
-  break_rejected: { label: 'Break Request Rejected', icon: XCircle, tone: 'error', priority: 'Medium' },
   report_weekly_generated: { label: 'Weekly Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },
   report_monthly_generated: { label: 'Monthly Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },
   report_sprint_ready: { label: 'Sprint Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },

@@ -673,6 +673,8 @@ export interface AttendanceStatsResult {
   absent: number;
   onLeave: number;
   halfDay: number;
+  shortHours: number;
+  inSession: number;
   totalHours: number;
   totalRecords: number;
 }
@@ -698,6 +700,8 @@ export const getAttendanceStats = async (
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Absent' THEN 1 ELSE 0 END), 0)::int AS absent,
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeave",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Half Day' THEN 1 ELSE 0 END), 0)::int AS "halfDay",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Short Hours' THEN 1 ELSE 0 END), 0)::int AS "shortHours",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'In Session' THEN 1 ELSE 0 END), 0)::int AS "inSession",
        COALESCE(SUM(ar.workingminutes), 0)::int AS totalMinutes,
        COUNT(*)::int AS totalRecords
      FROM hr.attendancerecords ar
@@ -711,17 +715,21 @@ export const getAttendanceStats = async (
     absent: number;
     onLeave: number;
     halfDay: number;
+    shortHours: number;
+    inSession: number;
     totalMinutes: number;
     totalRecords: number;
   }>(queryText, params);
 
-  const row = result.rows[0] || { present: 0, late: 0, absent: 0, onLeave: 0, halfDay: 0, totalMinutes: 0, totalRecords: 0 };
+  const row = result.rows[0] || { present: 0, late: 0, absent: 0, onLeave: 0, halfDay: 0, shortHours: 0, inSession: 0, totalMinutes: 0, totalRecords: 0 };
   return {
     present: row.present,
     late: row.late,
     absent: row.absent,
     onLeave: row.onLeave,
     halfDay: row.halfDay,
+    shortHours: row.shortHours,
+    inSession: row.inSession,
     totalHours: Math.round((row.totalMinutes / 60) * 10) / 10,
     totalRecords: row.totalRecords,
   };
@@ -795,10 +803,14 @@ export interface PendingRequestsResult {
 export const getPendingRequests = async (): Promise<PendingRequestsResult> => {
   const [leaves, corrections] = await Promise.all([
     query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM hr.leaverequests WHERE requeststatus = 'Pending'`
+      `SELECT COUNT(*)::int AS count
+         FROM public.worksync_hr_requests
+        WHERE request_type = 'Leave' AND status = 'Pending'`
     ),
     query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM hr.attendancecorrectionrequests WHERE requeststatus = 'Pending'`
+      `SELECT COUNT(*)::int AS count
+         FROM public.worksync_hr_requests
+        WHERE request_type = 'Correction' AND status = 'Pending'`
     ),
   ]);
 
@@ -836,6 +848,8 @@ export interface TodayAttendanceResult {
   onLeaveToday: number;
   lateToday: number;
   halfDayToday: number;
+  shortHoursToday: number;
+  inSessionToday: number;
   totalMinutesToday: number;
   totalRecordsToday: number;
 }
@@ -853,13 +867,15 @@ export const getTodayAttendance = async (userPks?: number[]): Promise<TodayAtten
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Leave' THEN 1 ELSE 0 END), 0)::int AS "onLeaveToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Late' THEN 1 ELSE 0 END), 0)::int AS "lateToday",
        COALESCE(SUM(CASE WHEN astatus.statuscode = 'Half Day' THEN 1 ELSE 0 END), 0)::int AS "halfDayToday",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'Short Hours' THEN 1 ELSE 0 END), 0)::int AS "shortHoursToday",
+       COALESCE(SUM(CASE WHEN astatus.statuscode = 'In Session' THEN 1 ELSE 0 END), 0)::int AS "inSessionToday",
        COALESCE(SUM(ar.workingminutes), 0)::int AS "totalMinutesToday",
        COUNT(*)::int AS "totalRecordsToday"
      FROM hr.attendancerecords ar
      JOIN hr.attendancestatuses astatus ON astatus.attendancestatusid = ar.attendancestatusid
-     WHERE ar.workdate = ${todaySql}${userFilter}`,
+     WHERE ar.workdate = ${todaySql} ${userFilter}`,
     userPks && userPks.length > 0 ? [userPks] : []
   );
-  const row = result.rows[0] || { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, totalMinutesToday: 0, totalRecordsToday: 0 };
+  const row = result.rows[0] || { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, shortHoursToday: 0, inSessionToday: 0, totalMinutesToday: 0, totalRecordsToday: 0 };
   return row;
 };
