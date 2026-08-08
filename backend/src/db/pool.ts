@@ -149,7 +149,6 @@ export const bootstrapDatabase = async (): Promise<void> => {
       // Break
       ['break_started', 'Break', 'Low'], ['break_ended', 'Break', 'Low'],
       ['break_exceeded', 'Break', 'High'], ['break_reminder', 'Break', 'Normal'],
-      ['break_approved', 'Break', 'Normal'], ['break_rejected', 'Break', 'Normal'],
       // Reports
       ['report_weekly_generated', 'Report', 'Normal'], ['report_monthly_generated', 'Report', 'Normal'],
       ['report_sprint_ready', 'Report', 'Normal'], ['report_productivity_ready', 'Report', 'Normal'],

@@ -1024,12 +1024,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
         onLeaveToday: h.onLeaveToday ?? 0,
         lateToday: h.lateToday ?? 0,
         halfDayToday: h.halfDayToday ?? 0,
+        shortHoursToday: h.shortHoursToday ?? 0,
+        inSessionToday: h.inSessionToday ?? 0,
         avgHours: h.avgHours ?? '0',
         pendingLeaveReqs: h.pendingLeaveReqs ?? 0,
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, shortHoursToday: 0, inSessionToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────

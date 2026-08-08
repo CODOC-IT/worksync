@@ -219,7 +219,7 @@ export interface AttendanceRecord {
   breaks: WorkBreak[];
 }
 
-export type HRRequestType = 'Correction' | 'Leave' | 'Break_Exception';
+export type HRRequestType = 'Correction' | 'Leave';
 
 export interface WorkingScheduleDay {
   isoWeekday: number;
@@ -263,7 +263,6 @@ export interface HRRequest {
     leaveType?: 'Full Day Leave' | 'Half Day Leave';
     leavePeriod?: 'First Half' | 'Second Half';
     leaveDays?: number;
-    extraBreakMinutes?: number;
   };
   submittedAt: string;
   decidedBy?: string;
@@ -534,8 +533,6 @@ export type NotificationType =
   | 'break_ended'
   | 'break_exceeded'
   | 'break_reminder'
-  | 'break_approved'
-  | 'break_rejected'
   | 'report_weekly_generated'
   | 'report_monthly_generated'
   | 'report_sprint_ready'

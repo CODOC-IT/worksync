@@ -13,6 +13,7 @@ import {
 } from './attendanceValidation';
 import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
 import { AttendanceTimeInput } from './Time24Input';
+import { DEFAULT_SHIFT_WINDOW_MINUTES, DEFAULT_SHIFT_NET_MINUTES } from './attendanceTime';
 import {
   CheckCircle2,
   Clock,
@@ -943,9 +944,9 @@ export const AttendanceView: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
             {[
-              { label: 'Shift Window', value: `${workingSchedule?.windowMinutes ?? 480} min (8h)` },
+              { label: 'Shift Window', value: `${workingSchedule?.windowMinutes ?? DEFAULT_SHIFT_WINDOW_MINUTES} min (8h)` },
               { label: 'Break Allowance', value: `${workingSchedule?.breakMinutes ?? 60} min` },
-              { label: 'Expected Net Work', value: `${workingSchedule?.netMinutes ?? 420} min (7h)` },
+              { label: 'Expected Net Work', value: `${workingSchedule?.netMinutes ?? DEFAULT_SHIFT_NET_MINUTES} min (7h)` },
               { label: 'Working Days', value: 'Monday - Friday' }
             ].map((stat) => (
               <div key={stat.label} className="rounded-lg bg-slate-950/60 border border-white/10 px-3 py-2">

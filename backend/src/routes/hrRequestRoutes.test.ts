@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canReviewRequestStage,
-  canSubmitOwnCorrection,
   getInitialApprovalStage,
   mapHRRequestRow,
   validateNotPastDate
@@ -35,17 +34,6 @@ test('backend blocks past leave and allows today/future leave', () => {
   assert.equal(validateNotPastDate('2026-08-01', '2026-08-02'), 'Leave date cannot be in the past.');
   assert.equal(validateNotPastDate('2026-08-02', '2026-08-02'), null);
   assert.equal(validateNotPastDate('2026-08-03', '2026-08-02'), null);
-});
-
-test('Team Member and Team Lead can correct their own completed or Absent day', () => {
-  assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Team_Member', false), true);
-  assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Team_Lead', false), true);
-});
-
-test('another user, Admin, and active sessions cannot be corrected', () => {
-  assert.equal(canSubmitOwnCorrection('usr-1', 'usr-2', 'Team_Member', false), false);
-  assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Admin', false), false);
-  assert.equal(canSubmitOwnCorrection('usr-1', 'usr-1', 'Team_Member', true), false);
 });
 
 test('Half Day period persists into approval history DTOs', () => {

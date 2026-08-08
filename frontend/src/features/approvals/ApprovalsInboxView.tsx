@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock,
-  Coffee,
   FolderKanban,
   LogOut,
   Pencil,
@@ -667,10 +666,7 @@ export const ApprovalsInboxView: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
                           {request.type ===
-                          'Break_Exception' ? (
-                            <Coffee size={13} />
-                          ) : request.type ===
-                            'Leave' ? (
+                          'Leave' ? (
                             <LogOut size={13} />
                           ) : (
                             <Clock size={13} />
@@ -767,19 +763,6 @@ export const ApprovalsInboxView: React.FC = () => {
                             'Not provided'}
                         </span>
                       </div>
-                    </div>
-                  )}
-
-                  {request.type === 'Break_Exception' && (
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">
-                        Extra break minutes
-                      </span>
-
-                      <span className="mt-1 block text-slate-200">
-                        {request.details.extraBreakMinutes ??
-                          'Not provided'}
-                      </span>
                     </div>
                   )}
 

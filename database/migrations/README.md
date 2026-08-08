@@ -67,6 +67,11 @@ schedule math, and seeds one default 8-hour (16:00 -> 00:00, 60-minute break, 7-
 Mon-Fri) `IsDefault` `hr.WorkSchedules` per active organization. Idempotent: an existing
 default schedule is left untouched.
 
+`20260810_01_attendance_net_fallback.sql` aligns `hr.schedule_net_minutes` with the TypeScript
+`workingSchedule.ts` fallback so a missing window yields the fixed 7-hour (420-minute) net
+expectation instead of 0 (which would otherwise classify un-scheduled days as Short Hours).
+`CREATE OR REPLACE` only; safe to run more than once.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

@@ -190,8 +190,6 @@ VALUES
     ('break_ended',       'Break', 'Low',    FALSE, TRUE),
     ('break_exceeded',    'Break', 'High',   FALSE, TRUE),
     ('break_reminder',    'Break', 'Normal', FALSE, TRUE),
-    ('break_approved',    'Break', 'Normal', FALSE, TRUE),
-    ('break_rejected',    'Break', 'Normal', FALSE, TRUE),
     -- Reports
     ('report_weekly_generated',      'Report', 'Normal', FALSE, TRUE),
     ('report_monthly_generated',     'Report', 'Normal', FALSE, TRUE),
