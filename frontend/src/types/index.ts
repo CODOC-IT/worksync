@@ -221,6 +221,27 @@ export interface AttendanceRecord {
 
 export type HRRequestType = 'Correction' | 'Leave' | 'Break_Exception';
 
+export interface WorkingScheduleDay {
+  isoWeekday: number;
+  isWorkingDay: boolean;
+  startTime: string | null;
+  endTime: string | null;
+  breakMinutes: number;
+}
+
+export interface WorkingSchedule {
+  workScheduleId: number;
+  scheduleName: string;
+  graceMinutes: number;
+  timeZone: string;
+  startTime: string | null;
+  endTime: string | null;
+  breakMinutes: number;
+  windowMinutes: number;
+  netMinutes: number;
+  days: WorkingScheduleDay[];
+}
+
 export interface HRRequest {
   id: string;
   userId: string;

@@ -9,6 +9,8 @@ import {
   TaskStatus,
   AttendanceRecord,
   HRRequest,
+  WorkingSchedule,
+  WorkingScheduleDay,
   AccountChangeRequest,
   SystemApproval,
   ChatMessage,
@@ -175,11 +177,15 @@ interface AppState {
     startedAtUtc: string;
   } | null;
   settings: {
-    workingHours: { start: string; end: string };
-    breakLimitMinutes: number;
     maskedAiKey: string;
     maxChatPins: number;
   };
+  workingSchedule: WorkingSchedule | null;
+  refreshWorkingSchedule: () => Promise<void>;
+  updateWorkingSchedule: (
+    startTime: string,
+    endTime: string
+  ) => Promise<{ success: boolean; message: string }>;
   // Actions
   refreshUsers: () => Promise<void>;
   onUserRegistered: (user: User) => void;
@@ -276,6 +282,32 @@ interface AppState {
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
+
+// Matches the database/migrations/20260809_01_attendance_working_schedule.sql default seed
+// (16:00 -> 00:00 PKT, 60-minute break, 8h window / 7h net). Shown as a safe default until the
+// server schedule is loaded (or when the org has no schedule configured yet).
+const DEFAULT_WORKING_SCHEDULE: WorkingSchedule = {
+  workScheduleId: 0,
+  scheduleName: 'Default Attendance Working Schedule',
+  graceMinutes: 0,
+  timeZone: 'Asia/Karachi',
+  startTime: '16:00',
+  endTime: '00:00',
+  breakMinutes: 60,
+  windowMinutes: 480,
+  netMinutes: 420,
+  days: Array.from({ length: 7 }, (_, index): WorkingScheduleDay => {
+    const isoWeekday = index + 1;
+    const isWorkingDay = isoWeekday <= 5;
+    return {
+      isoWeekday,
+      isWorkingDay,
+      startTime: isWorkingDay ? '16:00' : null,
+      endTime: isWorkingDay ? '00:00' : null,
+      breakMinutes: isWorkingDay ? 60 : 0
+    };
+  })
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<User[]>([]);
@@ -396,11 +428,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser.id]);
 
   const [settings] = useState({
-    workingHours: { start: '09:00', end: '18:00' },
-    breakLimitMinutes: 60,
     maskedAiKey: 'sk-proj-••••••••••••••••38FA',
     maxChatPins: 10
   });
+  const [workingSchedule, setWorkingSchedule] = useState<WorkingSchedule | null>(null);
 
   // Theme Toggle Handler
   const toggleTheme = () => {
@@ -640,6 +671,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void hydrateHolidays();
     void hydrateProjectApprovalRequests();
     void hydrateAttendance();
+    void refreshWorkingSchedule();
     void hydrateActivityLogs();
 
     return () => {
@@ -2285,6 +2317,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const resolveHRRecipients = () =>
       users.filter((user) => user.role === 'HR' && user.id !== currentUser.id).map((user) => user.id);
 
+    const refreshWorkingSchedule = async (): Promise<void> => {
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) return;
+      try {
+        const response = await fetch('/api/attendance/schedule', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json().catch(() => null);
+        setWorkingSchedule(
+          response.ok && data?.success && data?.data
+            ? (data.data as WorkingSchedule)
+            : DEFAULT_WORKING_SCHEDULE
+        );
+      } catch {
+        setWorkingSchedule(DEFAULT_WORKING_SCHEDULE);
+      }
+    };
+
+    const updateWorkingSchedule = async (
+      startTime: string,
+      endTime: string
+    ): Promise<{ success: boolean; message: string }> => {
+      const token = localStorage.getItem('worksync_auth_token');
+      if (!token) return { success: false, message: 'Your session has expired. Please sign in again.' };
+      try {
+        const response = await fetch('/api/attendance/schedule', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ startTime, endTime })
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          return { success: false, message: data?.message || 'Failed to update the working schedule.' };
+        }
+        if (data?.data) setWorkingSchedule(data.data as WorkingSchedule);
+        return { success: true, message: 'Working schedule updated.' };
+      } catch {
+        return { success: false, message: 'Failed to update the working schedule.' };
+      }
+    };
+
     const checkIn = async () => {
       if (currentRole === 'Admin') {
         pushToast('error', 'Attendance Unavailable', 'Administrators do not have personal attendance.');
@@ -2292,7 +2365,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       const todayStr = businessDateKey();
       const nowTime = formatAttendanceTime(new Date().toISOString());
-      const isLate = nowTime > settings.workingHours.start;
+      const shiftStart = workingSchedule?.startTime || '16:00';
+      const isLate = nowTime > shiftStart;
 
       // Persist check-in to backend
       const checkInUtc = new Date().toISOString();
@@ -2330,7 +2404,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: isLate ? 'attendance_late_check_in' : 'attendance_check_in',
         title: isLate ? 'Late Check-In' : 'Employee Checked In',
         message: isLate
-          ? `${currentUser.name} checked in late at ${nowTime} (shift starts ${settings.workingHours.start}).`
+          ? `${currentUser.name} checked in late at ${nowTime} (shift starts ${shiftStart}).`
           : `${currentUser.name} checked in at ${nowTime}.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
@@ -2460,7 +2534,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         Math.floor((new Date(endedAtUtc).getTime() - new Date(activeBreak.startedAtUtc).getTime()) / 1000)
       );
       const durationMin = durationSeconds / 60;
-      const exceeded = durationMin > settings.breakLimitMinutes;
+      const breakLimitMinutes = workingSchedule?.breakMinutes || 60;
+      const exceeded = durationMin > breakLimitMinutes;
 
       const newBreak: WorkBreak = {
         id: `brk-${Date.now()}`,
@@ -2509,7 +2584,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: exceeded ? 'break_exceeded' : 'break_ended',
         title: exceeded ? 'Break Time Exceeded' : 'Break Ended',
         message: exceeded
-          ? `${currentUser.name}'s ${activeBreak.breakType} lasted ${durationMin} minutes, over the ${settings.breakLimitMinutes}-minute limit.`
+          ? `${currentUser.name}'s ${activeBreak.breakType} lasted ${durationMin} minutes, over the ${breakLimitMinutes}-minute limit.`
           : `${currentUser.name} ended their ${activeBreak.breakType} after ${durationMin} minutes.`,
         actorId: currentUser.id,
         actorName: currentUser.name,
@@ -3247,6 +3322,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         savedPrompts,
         activeBreak,
         settings,
+        workingSchedule,
+        refreshWorkingSchedule,
+        updateWorkingSchedule,
         refreshUsers,
         onUserRegistered,
         loginUser,
