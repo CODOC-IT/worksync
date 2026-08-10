@@ -314,7 +314,7 @@ WorkSync leverages a modern, reliable full stack TypeScript architecture:
 | **Backend Runtime** | Node.js + Express 4 | RESTful API routes, authentication middleware & business rules |
 | **Database** | PostgreSQL 16+ / Supabase | Relational data persistence & 3NF database model |
 | **Document Generation**| PDFKit | Server-side PDF export generation for reports |
-| **Deployment** | Vercel | Production web hosting & automated CI/CD deployment |
+| **Deployment** | Vercel | Production web hosting & automated CI/CD |
 
 </div>
 
