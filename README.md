@@ -95,7 +95,7 @@ Our project was built through a dedicated modular distribution where each team m
 | 06 | **Bilal Mughal** | [@Bilalmughal-07](https://github.com/Bilalmughal-07) | 📋 Notifications + Kanban | ✅ Completed |
 | 07 | **Hassaan Ahmed** | [@hassaanahmed-dev](https://github.com/hassaanahmed-dev) | 👥 Members + AI Assistant | ✅ Completed |
 | 08 | **Abiha Jibran** | [@abihajibbran1-lang](https://github.com/abihajibbran1-lang) | ✅ Tasks + Chatbox | ✅ Completed |
-| 09 | **Abdul Azeem Hashmi** | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | 📖 Readme.md Documentation | ✅ Completed |
+| 09 | **Abdul Azeem Hashmi** | [@AbdulAzeemHashmi](https://github.com/AbdulAzeemHashmi) | 📖 Readme.md | ✅ Completed |
 
 </div>
 
