@@ -79,7 +79,11 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export const ProjectsView: React.FC<{ onViewProjectTasks: (projectId: string) => void }> = ({ onViewProjectTasks }) => {
+export const ProjectsView: React.FC<{
+  onViewProjectTasks: (projectId: string) => void;
+  initialProjectId?: string;
+  onInitialProjectConsumed?: () => void;
+}> = ({ onViewProjectTasks, initialProjectId, onInitialProjectConsumed }) => {
   const {
     projects, tasks, users, currentRole, currentUser,
     createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
@@ -143,6 +147,12 @@ export const ProjectsView: React.FC<{ onViewProjectTasks: (projectId: string) =>
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!initialProjectId) return;
+    setSelectedProjectId(initialProjectId);
+    onInitialProjectConsumed?.();
+  }, [initialProjectId, onInitialProjectConsumed]);
 
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.

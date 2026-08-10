@@ -37,6 +37,7 @@ const AppContent: React.FC = () => {
   const [reportsInitialTab, setReportsInitialTab] = useState<string | undefined>(undefined);
   const [tasksInitialId, setTasksInitialId] = useState<string | undefined>(undefined);
   const [tasksInitialProjectId, setTasksInitialProjectId] = useState<string | undefined>(undefined);
+  const [projectsInitialId, setProjectsInitialId] = useState<string | undefined>(undefined);
   const [calendarInitialEntryId, setCalendarInitialEntryId] = useState<string | undefined>(undefined);
 
   const {
@@ -243,10 +244,14 @@ const AppContent: React.FC = () => {
         <main className={`min-h-0 flex-1 min-w-0 overflow-y-auto p-4 md:p-6 ${currentTab === 'project-chats' ? '' : 'space-y-6'}`}>
           {currentTab === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
           {currentTab === 'projects' && (
-            <ProjectsView onViewProjectTasks={(projectId) => {
+            <ProjectsView
+              initialProjectId={projectsInitialId}
+              onInitialProjectConsumed={() => setProjectsInitialId(undefined)}
+              onViewProjectTasks={(projectId) => {
               setTasksInitialProjectId(projectId);
               setCurrentTab('tasks');
-            }} />
+              }}
+            />
           )}
           {currentTab === 'tasks' && (
             <TasksView
@@ -260,7 +265,14 @@ const AppContent: React.FC = () => {
           {currentTab === 'profile' && <ProfileView onNavigate={handleNavigate} />}
           {currentTab === 'ai-assistant' && <AIAssistantView />}
           {currentTab === 'kanban' && <KanbanView />}
-          {currentTab === 'approvals' && <ApprovalsInboxView />}
+          {currentTab === 'approvals' && (
+            <ApprovalsInboxView
+              onViewProject={(projectId) => {
+                setProjectsInitialId(projectId);
+                setCurrentTab('projects');
+              }}
+            />
+          )}
           {currentTab === 'notifications' && <NotificationsView onNavigate={handleNavigate} />}
           {currentTab === 'reports' && (
             <ReportsView
