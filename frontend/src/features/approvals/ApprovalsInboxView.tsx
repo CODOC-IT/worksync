@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock,
+  Eye,
   FolderKanban,
   LogOut,
   Pencil,
@@ -78,18 +79,19 @@ const ReasonBlock: React.FC<{ children: React.ReactNode; label?: string }> = ({ 
 // backend/src/projects/projectApproval.*.
 const PROJECT_REQUEST_TYPE_META: Record<
   ProjectApprovalRequestType,
-  { label: string; icon: React.ReactNode; description?: string }
+  { label: string; icon: React.ReactNode; description?: string; className: string }
 > = {
-  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
-  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
-  PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
-  PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
+  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} />, className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' },
+  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} />, className: 'border-sky-500/30 bg-sky-500/10 text-sky-300' },
+  PROJECT_ARCHIVE: { label: 'Archive Project', icon: <Archive size={13} />, className: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
+  PROJECT_RESTORE: { label: 'Restore Project', icon: <ArchiveRestore size={13} />, className: 'border-teal-500/30 bg-teal-500/10 text-teal-300' },
   PROJECT_DELETE: {
     label: 'Project Delete',
     icon: <Trash2 size={13} />,
-    description: 'Remove this project from active work while keeping it recoverable.'
+    description: 'Remove this project from active work while keeping it recoverable.',
+    className: 'border-rose-500/30 bg-rose-500/10 text-rose-300'
   },
-  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
+  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} />, className: 'border-rose-500/40 bg-rose-500/15 text-rose-200' }
 };
 
 type StatusFilter = 'Pending' | 'Approved' | 'Rejected' | 'All';
@@ -195,7 +197,7 @@ const canDecide = (
   return false;
 };
 
-export const ApprovalsInboxView: React.FC = () => {
+export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) => void }> = ({ onViewProject }) => {
   const {
     currentRole,
     currentUser,
@@ -987,21 +989,24 @@ export const ApprovalsInboxView: React.FC = () => {
 
       {orderedProjectApprovalRequests.length > 0 && (
         <div className="space-y-3">
-          {orderedProjectApprovalRequests.map((request) => (
-            <div key={request.id} className="glass-panel space-y-3 p-4">
+          {orderedProjectApprovalRequests.map((request) => {
+            const project = projects.find((item) => item.id === request.projectId);
+            const requestMeta = PROJECT_REQUEST_TYPE_META[request.requestType];
+            return (
+            <div key={request.id} className="glass-panel space-y-4 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    {categoryFilter === 'All' && <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].icon}
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].label}
-                    </span>}
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${requestMeta.className}`}>
+                      {requestMeta.icon}
+                      {requestMeta.label}
+                    </span>
                     {statusFilter !== 'Pending' && <StatusBadge status={request.status} size="sm" />}
                   </div>
                   <h3 className="break-words text-lg font-semibold text-slate-100">{request.projectTitle}</h3>
-                  {PROJECT_REQUEST_TYPE_META[request.requestType].description && (
+                  {requestMeta.description && (
                     <p className="text-xs text-slate-500">
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].description}
+                      {requestMeta.description}
                     </p>
                   )}
                   <RequesterMeta
@@ -1013,6 +1018,28 @@ export const ApprovalsInboxView: React.FC = () => {
               </div>
 
               <ReasonBlock>{request.reason}</ReasonBlock>
+
+              {request.requestType === 'PROJECT_CREATE' && (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.045] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-300/80">Proposed project</span>
+                      <p className="mt-1 break-words text-sm font-semibold text-slate-100">{project?.title || request.projectTitle}</p>
+                      <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-slate-300">{project?.description || 'Project description is unavailable.'}</p>
+                    </div>
+                    {project && onViewProject && (
+                      <button
+                        type="button"
+                        onClick={() => onViewProject(request.projectId)}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                      >
+                        <Eye size={14} />
+                        View project
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {request.requestType === 'PROJECT_EDIT' && projectEditChanges(request).length > 0 && (
                 <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
@@ -1066,7 +1093,8 @@ export const ApprovalsInboxView: React.FC = () => {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
