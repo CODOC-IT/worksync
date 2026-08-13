@@ -125,12 +125,6 @@ const notifyRecipients = (
 };
 
 export const listProjectsForUser = async (userId: string, role: string): Promise<ProjectDTO[]> => {
-  // Every role sees every project -- read-only visibility only; nothing else in this file
-  // (assertCanCreate/assertCanManage) grants HR or a non-lead Team_Member any write/manage
-  // capability, so this alone can't let anyone do more than view. Team Lead is not a separate
-  // account role here (see isProjectLead/resolveTeamLeadUserId): whether a Team_Member happens to
-  // lead any given project only changes how the frontend categorizes/labels it for display
-  // (Led/Assigned/Unassigned in ProjectsView.tsx), never whether it's returned here.
   const rows = await repo.findAllProjects();
   if (rows.length === 0) return [];
   const projectIds = rows.map((row) => row.projectid);
@@ -138,8 +132,16 @@ export const listProjectsForUser = async (userId: string, role: string): Promise
     repo.findMembersForProjects(projectIds),
     repo.findMilestonesForProjects(projectIds)
   ]);
+  // Admin and HR have organization-wide visibility. Every other user may only receive projects
+  // they lead, own, or belong to; this is enforced at the API boundary rather than relying on a
+  // client-side card filter that could be bypassed by inspecting the response.
+  const visibleRows = (role === 'Admin' || role === 'HR')
+    ? rows
+    : rows.filter((row) => membersByProject.some(
+      (member) => member.projectid === row.projectid && fromUserPk(member.userid) === userId
+    ) || fromUserPk(row.owneruserid) === userId);
   return Promise.all(
-    rows.map((row) =>
+    visibleRows.map((row) =>
       buildDTO(
         row,
         membersByProject.filter((member) => member.projectid === row.projectid),
@@ -395,22 +397,39 @@ export const updateProject = async (
   if (row.statuscode === 'Archived' && input.status && input.status !== 'Archived') {
     throw new ProjectValidationError('Use the project restore action to restore this project and its tasks.');
   }
-  // Start date is fixed at creation and never editable again, matching the edit form's disabled
-  // Start Date field (frontend/.../ProjectsView.tsx) -- enforced here too since a client could
-  // otherwise call this endpoint directly and bypass the disabled UI field.
-  if (input.startDate !== undefined && input.startDate !== row.startdate) {
-    throw new ProjectValidationError('Start date cannot be changed after project creation.');
+  const nextStartDate = input.startDate ?? row.startdate;
+  const nextTargetDate = input.targetDate ?? row.enddate;
+  if (nextTargetDate < nextStartDate) {
+    throw new ProjectValidationError('Due date cannot be earlier than the start date.');
   }
-  // An end-date change that would strand an existing milestone past the new deadline is rejected
-  // outright, reusing repo.findMilestonesForProject (already used by buildDetailDTO) rather than
-  // adding a new query.
-  if (input.targetDate !== undefined && input.targetDate !== row.enddate) {
-    const milestones = await repo.findMilestonesForProject(row.projectid);
-    const strandedMilestones = milestones.filter((milestone) => milestone.duedate > input.targetDate!);
-    if (strandedMilestones.length > 0) {
+  // Historical dates are valid when left untouched. A newly selected date, however, must not be
+  // in the past; this prevents accidentally backdating a project while preserving old records.
+  const today = new Date().toISOString().slice(0, 10);
+  if (input.startDate !== undefined && input.startDate !== row.startdate && input.startDate < today) {
+    throw new ProjectValidationError('A changed start date cannot be in the past.');
+  }
+  if (input.targetDate !== undefined && input.targetDate !== row.enddate && input.targetDate < today) {
+    throw new ProjectValidationError('A changed due date cannot be in the past.');
+  }
+  if (nextStartDate !== row.startdate || nextTargetDate !== row.enddate) {
+    const [milestones, tasks] = await Promise.all([
+      repo.findMilestonesForProject(row.projectid),
+      repo.findActiveTaskDatesForProject(row.projectid)
+    ]);
+    const outsideMilestones = milestones.filter(
+      (milestone) => milestone.duedate < nextStartDate || milestone.duedate > nextTargetDate
+    );
+    if (outsideMilestones.length > 0) {
       throw new ProjectValidationError(
-        `Cannot change the end date to ${input.targetDate}: ${strandedMilestones.length} existing milestone(s) ` +
-        `(${strandedMilestones.map((milestone) => milestone.milestonename).join(', ')}) fall after that date.`
+        `Cannot change project dates: milestone(s) fall outside the new range (${outsideMilestones.map((m) => m.milestonename).join(', ')}).`
+      );
+    }
+    const outsideTasks = tasks.filter(
+      (task) => task.startdate < nextStartDate || task.duedate > nextTargetDate
+    );
+    if (outsideTasks.length > 0) {
+      throw new ProjectValidationError(
+        `Cannot change project dates: task(s) fall outside the new range (${outsideTasks.map((t) => t.tasknumber || t.title).join(', ')}).`
       );
     }
   }
@@ -419,6 +438,7 @@ export const updateProject = async (
     title: input.title?.trim(),
     description: input.description?.trim(),
     targetDate: input.targetDate,
+    startDate: input.startDate,
     creationReason: input.creationReason?.trim()
   };
   if (input.priority) updates.priorityId = await repo.getPriorityId(API_TO_DB_PRIORITY[input.priority]);
