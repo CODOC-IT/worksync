@@ -3,7 +3,7 @@ import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
-import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
+import { Project, ProjectStatus, Task, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
 import {
   FolderKanban,
@@ -17,7 +17,8 @@ import {
   StickyNote,
   Check,
   AlertCircle,
-  ArchiveRestore
+  ArchiveRestore,
+  UserRound
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
@@ -68,19 +69,30 @@ interface BlockedMemberInfo {
   activeItems: ActiveWorkItem[];
 }
 
+interface ImmediateRemovalMember {
+  memberId: string;
+  memberName: string;
+}
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export const ProjectsView: React.FC = () => {
+export const ProjectsView: React.FC<{
+  onViewProjectTasks: (projectId: string) => void;
+  initialProjectId?: string;
+  onInitialProjectConsumed?: () => void;
+}> = ({ onViewProjectTasks, initialProjectId, onInitialProjectConsumed }) => {
   const {
     projects, tasks, users, currentRole, currentUser,
     createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -115,14 +127,12 @@ export const ProjectsView: React.FC = () => {
   const [editApprovalReasonError, setEditApprovalReasonError] = useState('');
   const [editApprovalSubmitting, setEditApprovalSubmitting] = useState(false);
 
-  // Issue #6 -- shown when an Admin's direct save would remove a member who still has active
-  // task/subtask work in this project. Cancel discards the entire save attempt (per spec, not
-  // just the removal) -- the Admin must reopen Edit and start over; there is no "save everything
-  // except this member" partial path. `data` is the exact payload handleSubmit had already built
-  // before pausing, so confirming just resumes the save unchanged.
+  // Shown before an Admin save when any selected removal still has active work. The dialog lets
+  // the Admin restore individual members to the project before confirming the final member list.
   const [pendingRemovalWarning, setPendingRemovalWarning] = useState<{
     data: Partial<Project>;
     blocked: BlockedMemberInfo[];
+    immediate: ImmediateRemovalMember[];
   } | null>(null);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -137,6 +147,12 @@ export const ProjectsView: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!initialProjectId) return;
+    setSelectedProjectId(initialProjectId);
+    onInitialProjectConsumed?.();
+  }, [initialProjectId, onInitialProjectConsumed]);
 
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
@@ -162,22 +178,33 @@ export const ProjectsView: React.FC = () => {
   // currentRole !== 'Admin' -- that's true for a normal Team_Member too.
   const isProjectLead = (project: Project) => isCurrentProjectLead(project, currentUser.id);
 
-  // The backend (listProjectsForUser) returns every project to every role -- visibility is
-  // narrowed here instead. Admin/HR keep full org-wide visibility; everyone else (Team Lead isn't
-  // a separate account role -- see isProjectLead above) only sees projects they lead or are a
-  // member of.
+  // This mirrors the API's access check and keeps the card list defensive if stale client data is
+  // ever present. Admin/HR have organization-wide visibility; other users see assigned/led work.
   const visibleProjects = projects;
 
   const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
+    const leadQuery = leadSearchQuery.trim().toLowerCase();
+    const lead = users.find((user) => user.id === p.teamLeadId);
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    const matchesLead = !leadQuery || Boolean(
+      lead && (lead.name.toLowerCase().includes(leadQuery) || lead.username?.toLowerCase().includes(leadQuery))
+    );
+    const matchesArchiveView = showArchivedProjects ? p.status === 'Archived' : p.status !== 'Archived';
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
     const matchesVisibility =
       currentRole === 'Admin' ||
       currentRole === 'HR' ||
       isProjectLead(p) ||
       p.memberIds.includes(currentUser.id);
-    return matchesSearch && matchesStatus && matchesVisibility;
+    return matchesSearch && matchesLead && matchesArchiveView && matchesStatus && matchesVisibility;
+  }).sort((left, right) => {
+    const order: Partial<Record<ProjectStatus, number>> = {
+      Active: 0,
+      'Pending Approval': 1,
+      Completed: 2
+    };
+    return (order[left.status] ?? 3) - (order[right.status] ?? 3) || left.title.localeCompare(right.title);
   });
 
   const openCreateForm = () => {
@@ -248,6 +275,7 @@ export const ProjectsView: React.FC = () => {
   };
 
   const toggleMember = (userId: string) => {
+    if (editingProject?.pendingRemovalMemberIds?.includes(userId)) return;
     if (userId === form.teamLeadId) {
       setFormErrors((previous) => ({
         ...previous,
@@ -255,33 +283,27 @@ export const ProjectsView: React.FC = () => {
       }));
       return;
     }
-    setForm((prev) => ({
-      ...prev,
-      memberIds: prev.memberIds.includes(userId)
-        ? prev.memberIds.filter((id) => id !== userId)
-        : [...prev.memberIds, userId]
-    }));
+    const memberIds = form.memberIds.includes(userId)
+      ? form.memberIds.filter((id) => id !== userId)
+      : [...form.memberIds, userId];
+    updateForm({ memberIds });
   };
 
   const addMilestone = () => {
-    setForm((prev) => ({
-      ...prev,
+    updateForm({
       milestones: [
-        ...prev.milestones,
-        { id: `m-${Date.now()}-${prev.milestones.length}`, title: '', dueDate: prev.startDate || '', completed: false }
+        ...form.milestones,
+        { id: `m-${Date.now()}-${form.milestones.length}`, title: '', dueDate: form.startDate || '', completed: false }
       ]
-    }));
+    });
   };
 
   const updateMilestone = (id: string, field: 'title' | 'dueDate', value: string) => {
-    setForm((prev) => ({
-      ...prev,
-      milestones: prev.milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m))
-    }));
+    updateForm({ milestones: form.milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m)) });
   };
 
   const removeMilestone = (id: string) => {
-    setForm((prev) => ({ ...prev, milestones: prev.milestones.filter((m) => m.id !== id) }));
+    updateForm({ milestones: form.milestones.filter((m) => m.id !== id) });
   };
 
   // Reads real content as a base64 data URL (same convention already used for Project Chat
@@ -372,13 +394,19 @@ export const ProjectsView: React.FC = () => {
     }
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
-    } else if (formMode === 'create' && data.startDate < todayStr) {
+    } else if (
+      data.startDate < todayStr &&
+      (formMode === 'create' || data.startDate !== projects.find((project) => project.id === editingProjectId)?.startDate)
+    ) {
       errors.startDate = "Start date cannot be before today's date.";
     }
 
     if (!data.targetDate) {
       errors.targetDate = 'Deadline is required.';
-    } else if (data.targetDate < todayStr) {
+    } else if (
+      data.targetDate < todayStr &&
+      (formMode === 'create' || data.targetDate !== projects.find((project) => project.id === editingProjectId)?.targetDate)
+    ) {
       errors.targetDate = "Deadline cannot be before today's date.";
     } else if (data.startDate && data.targetDate < data.startDate) {
       errors.targetDate = 'Deadline cannot be before the start date.';
@@ -401,6 +429,29 @@ export const ProjectsView: React.FC = () => {
       if (violations.length > 0) {
         errors.milestones = `Milestone dates must fall within the project's start/end dates: ${violations.join('; ')}.`;
       }
+
+      // Existing tasks and subtasks are project scope too. This mirrors the server's final check
+      // so date changes receive useful feedback before the user attempts to save.
+      if (formMode === 'edit' && editingProjectId) {
+        const taskDates = tasks
+          .filter((task) => task.projectId === editingProjectId)
+          .flatMap((task) => [
+            { label: task.taskNumber || task.title, startDate: (task as Task & { startDate?: string }).startDate, dueDate: task.dueDate },
+            ...task.subtasks.map((subtask) => ({
+              label: `${task.taskNumber || task.title} → ${subtask.title}`,
+              startDate: subtask.startDate,
+              dueDate: subtask.dueDate
+            }))
+          ]);
+        const taskStartingTooEarly = taskDates.find((task) => task.startDate && task.startDate < data.startDate);
+        const taskEndingTooLate = taskDates.find((task) => task.dueDate && task.dueDate > data.targetDate);
+        if (taskStartingTooEarly) {
+          errors.startDate = `Start date cannot be after existing task "${taskStartingTooEarly.label}" starts (${taskStartingTooEarly.startDate}).`;
+        }
+        if (taskEndingTooLate) {
+          errors.targetDate = `Deadline cannot be before existing task "${taskEndingTooLate.label}" ends (${taskEndingTooLate.dueDate}).`;
+        }
+      }
     }
 
     // Every non-Admin create becomes a PROJECT_CREATE approval request (see project.service.ts's
@@ -412,6 +463,14 @@ export const ProjectsView: React.FC = () => {
     }
 
     return errors;
+  };
+
+  // Surface field errors while the user is editing, without waiting for a failed save. This uses
+  // the same complete rule set as submit so inline guidance and server-side expectations agree.
+  const updateForm = (changes: Partial<ProjectFormState>) => {
+    const next = { ...form, ...changes };
+    setForm(next);
+    setFormErrors(validate(next));
   };
 
   // Actually performs the save -- factored out of handleSubmit so the Issue #6 Pending Removal
@@ -492,17 +551,20 @@ export const ProjectsView: React.FC = () => {
       if (editingProject) {
         const projectId = editingProjectId;
         const removedMemberIds = editingProject.memberIds.filter((id) => !form.memberIds.includes(id));
-        const blocked: BlockedMemberInfo[] = removedMemberIds
-          .map((memberId) => {
-            const activeItems = getActiveWorkForMember(projectId, memberId);
-            return activeItems.length > 0
-              ? { memberId, memberName: users.find((u) => u.id === memberId)?.name || memberId, activeItems }
-              : null;
-          })
-          .filter((entry): entry is BlockedMemberInfo => entry !== null);
+        const removalCandidates = removedMemberIds.map((memberId) => ({
+          memberId,
+          memberName: users.find((u) => u.id === memberId)?.name || memberId,
+          activeItems: getActiveWorkForMember(projectId, memberId)
+        }));
+        const blocked: BlockedMemberInfo[] = removalCandidates
+          .filter((entry) => entry.activeItems.length > 0)
+          .map(({ memberId, memberName, activeItems }) => ({ memberId, memberName, activeItems }));
+        const immediate: ImmediateRemovalMember[] = removalCandidates
+          .filter((entry) => entry.activeItems.length === 0)
+          .map(({ memberId, memberName }) => ({ memberId, memberName }));
 
         if (blocked.length > 0) {
-          setPendingRemovalWarning({ data, blocked });
+          setPendingRemovalWarning({ data, blocked, immediate });
           return;
         }
       }
@@ -511,11 +573,22 @@ export const ProjectsView: React.FC = () => {
     await submitProjectSave(data);
   };
 
-  // Per the approved plan: Cancel discards the entire save attempt, not just the blocked
-  // members' removal -- the Admin must reopen Edit and resubmit from scratch.
+  // Cancel keeps the edit modal open, preserving the Admin's in-progress changes so they can
+  // adjust the membership list instead of starting over.
   const cancelPendingRemovalWarning = () => {
     setPendingRemovalWarning(null);
-    closeForm();
+  };
+
+  const keepMemberFromRemoval = (memberId: string) => {
+    if (!pendingRemovalWarning) return;
+    const memberIds = Array.from(new Set([...(pendingRemovalWarning.data.memberIds || []), memberId]));
+    const data = { ...pendingRemovalWarning.data, memberIds };
+    setForm((current) => ({ ...current, memberIds }));
+    setPendingRemovalWarning({
+      data,
+      blocked: pendingRemovalWarning.blocked.filter((member) => member.memberId !== memberId),
+      immediate: pendingRemovalWarning.immediate.filter((member) => member.memberId !== memberId)
+    });
   };
 
   const confirmPendingRemovalWarning = () => {
@@ -707,8 +780,9 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
-      {/* Search + Status Filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Project search and filters */}
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
         <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900/50 border border-white/10 flex-1">
           <Search size={15} className="text-cyan-400 shrink-0" />
           <input
@@ -716,24 +790,51 @@ export const ProjectsView: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by title or code..."
+            aria-label="Search projects by title or code"
             className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          aria-label="Filter projects by status"
           className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
         >
           <option value="All">All Statuses</option>
           <option value="Active">Active</option>
           <option value="Pending Approval">Pending Approval</option>
           <option value="Completed">Completed</option>
-          <option value="Archived">Archived</option>
         </select>
+        </div>
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+          <div className="flex w-full max-w-sm items-center gap-2 rounded-xl border border-white/10 bg-slate-900/50 px-4 py-2">
+            <UserRound size={15} className="shrink-0 text-slate-500" />
+            <input
+              type="text"
+              value={leadSearchQuery}
+              onChange={(e) => setLeadSearchQuery(e.target.value)}
+              placeholder="Search by project lead..."
+              aria-label="Search projects by assigned lead name or username"
+              className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowArchivedProjects((current) => !current);
+              setStatusFilter('All');
+            }}
+            className={`px-3 py-2 rounded-xl border text-sm transition-colors ${showArchivedProjects
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+              : 'bg-slate-900/50 border-white/10 text-slate-200 hover:border-amber-400/40'}`}
+          >
+            {showArchivedProjects ? 'Show Current Projects' : 'Archived Projects'}
+          </button>
+        </div>
       </div>
 
       {/* Project Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         {filteredProjects.map((project) => {
           const isOverdue = project.status === 'Active' && project.targetDate < todayStr;
           const teamLead = users.find((u) => u.id === project.teamLeadId);
@@ -746,8 +847,6 @@ export const ProjectsView: React.FC = () => {
               teamLead={teamLead}
               isOverdue={isOverdue}
               actions={actions}
-              currentUserId={currentUser.id}
-              currentRole={currentRole}
               onEdit={() => openEditForm(project)}
               onDelete={() => openDeleteConfirm(project.id)}
               onRestore={() => openRestoreConfirm(project.id)}
@@ -758,7 +857,7 @@ export const ProjectsView: React.FC = () => {
 
         {filteredProjects.length === 0 && (
           <div className="col-span-full text-center text-sm text-slate-400 py-12">
-            No projects match your search/filter.
+            {showArchivedProjects ? 'No archived projects match your search.' : 'No projects match your search/filter.'}
           </div>
         )}
       </div>
@@ -782,7 +881,7 @@ export const ProjectsView: React.FC = () => {
                 <input
                   type="text"
                   value={form.title}
-                  onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
+                  onChange={(e) => updateForm({ title: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="e.g. Nexus AI Copilot Integration"
                 />
@@ -793,7 +892,7 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Description</label>
                 <textarea
                   value={form.description}
-                  onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                  onChange={(e) => updateForm({ description: e.target.value })}
                   rows={3}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="What is this project about?"
@@ -807,13 +906,9 @@ export const ProjectsView: React.FC = () => {
                   <input
                     type="date"
                     value={form.startDate}
-                    onChange={(e) => setForm((prev) => ({ ...prev, startDate: e.target.value }))}
-                    min={todayStr}
-                    // The original creation start date is fixed once a project exists -- only
-                    // Deadline/other fields remain editable, matching Team Lead's own
-                    // create-only-editable pattern just below.
-                    disabled={formMode === 'edit'}
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onChange={(e) => updateForm({ startDate: e.target.value })}
+                    min={formMode === 'create' ? todayStr : undefined}
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.startDate && <p className="text-rose-400 mt-1">{formErrors.startDate}</p>}
                 </div>
@@ -822,8 +917,8 @@ export const ProjectsView: React.FC = () => {
                   <input
                     type="date"
                     value={form.targetDate}
-                    onChange={(e) => setForm((prev) => ({ ...prev, targetDate: e.target.value }))}
-                    min={form.startDate || todayStr}
+                    onChange={(e) => updateForm({ targetDate: e.target.value })}
+                    min={form.startDate || undefined}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.targetDate && <p className="text-rose-400 mt-1">{formErrors.targetDate}</p>}
@@ -834,7 +929,7 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Priority</label>
                 <select
                   value={form.priority}
-                  onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value as TaskPriority }))}
+                  onChange={(e) => updateForm({ priority: e.target.value as TaskPriority })}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                 >
                   <option value="Low">Low</option>
@@ -849,16 +944,15 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Team Lead</label>
                 <select
                   value={form.teamLeadId}
-                  onChange={(e) => setForm((prev) => {
+                  onChange={(e) => {
                     const teamLeadId = e.target.value;
-                    return {
-                      ...prev,
+                    updateForm({
                       teamLeadId,
-                      memberIds: teamLeadId && !prev.memberIds.includes(teamLeadId)
-                        ? [...prev.memberIds, teamLeadId]
-                        : prev.memberIds
-                    };
-                  })}
+                      memberIds: teamLeadId && !form.memberIds.includes(teamLeadId)
+                        ? [...form.memberIds, teamLeadId]
+                        : form.memberIds
+                    });
+                  }}
                   // A project's lead can edit their own project but must not reassign its Team
                   // Lead; only Admins are allowed to change this field once a project exists.
                   disabled={
@@ -877,8 +971,10 @@ export const ProjectsView: React.FC = () => {
               </div>
               )}
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Project Members</label>
+              <div className={formMode === 'edit' && currentRole !== 'Admin' ? 'opacity-50' : ''}>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Project Members {formMode === 'edit' && currentRole !== 'Admin' && <span className="text-slate-500 font-normal">(locked for Team Leads)</span>}
+                </label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-2 rounded-lg bg-black/30 border border-white/10">
                   {assignableMembers.map((u) => (
                     <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer">
@@ -892,6 +988,7 @@ export const ProjectsView: React.FC = () => {
                         // Team Lead <select>.
                         disabled={
                           u.id === form.teamLeadId ||
+                          editingProject?.pendingRemovalMemberIds?.includes(u.id) ||
                           (formMode === 'edit' &&
                             currentRole !== 'Admin' &&
                             (!editingProject || isProjectLead(editingProject)))
@@ -901,7 +998,7 @@ export const ProjectsView: React.FC = () => {
                       {u.name}
                       {editingProject?.pendingRemovalMemberIds?.includes(u.id) && (
                         <span
-                          className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded px-1 py-0.5"
+                          className="inline-flex min-w-24 items-center justify-center rounded-full bg-amber-300 px-2 py-1 text-center text-[9px] font-bold uppercase tracking-wide text-amber-900"
                           title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
                         >
                           Pending Removal
@@ -918,7 +1015,7 @@ export const ProjectsView: React.FC = () => {
                   <label className="block text-slate-300 font-semibold mb-1">Status</label>
                   <select
                     value={form.status}
-                    onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as ProjectStatus }))}
+                    onChange={(e) => updateForm({ status: e.target.value as ProjectStatus })}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   >
                     <option value="Active">Active</option>
@@ -1038,7 +1135,7 @@ export const ProjectsView: React.FC = () => {
                   </label>
                   <textarea
                     value={form.creationReason}
-                    onChange={(e) => setForm((prev) => ({ ...prev, creationReason: e.target.value }))}
+                    onChange={(e) => updateForm({ creationReason: e.target.value })}
                     rows={2}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                     placeholder="Why is this project being created? Any context for the reviewer?"
@@ -1138,9 +1235,7 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
-      {/* Pending Removal warning (Issue #6) -- blocks an Admin's save when it would remove a
-          member who still has active task/subtask work in this project. Cancel discards the
-          entire save attempt (closeForm), not just the blocked removal. */}
+      {/* Pending-removal confirmation for an Admin's member changes. */}
       {pendingRemovalWarning && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
           <div className="w-full max-w-md glass-panel-glow border border-amber-500/40 shadow-2xl p-5 space-y-4">
@@ -1150,18 +1245,24 @@ export const ProjectsView: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400">
-              The following member{pendingRemovalWarning.blocked.length !== 1 ? 's' : ''} cannot be removed yet --
-              they still have active tasks or subtasks assigned in this project. Continuing will notify the Team
-              Lead and mark {pendingRemovalWarning.blocked.length !== 1 ? 'them' : 'this member'} "Pending Removal";
-              {pendingRemovalWarning.blocked.length !== 1 ? ' they' : ' the member'} will stay in the project until
-              all of their assigned work is reassigned or completed. This save attempt will be discarded if you
-              cancel.
+              Members with active tasks will be removed automatically when their active work is completed or removed.
             </p>
 
             <div className="space-y-2 max-h-52 overflow-y-auto">
               {pendingRemovalWarning.blocked.map((b) => (
                 <div key={b.memberId} className="rounded-lg border border-white/10 bg-black/30 p-3">
-                  <p className="text-slate-200 font-semibold mb-1.5">{b.memberName}</p>
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <p className="text-slate-200 font-semibold">{b.memberName}</p>
+                    <button
+                      type="button"
+                      onClick={() => keepMemberFromRemoval(b.memberId)}
+                      className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                      title={`Keep ${b.memberName} in this project`}
+                      aria-label={`Keep ${b.memberName} in this project`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                   <ul className="space-y-1">
                     {b.activeItems.map((item) => (
                       <li key={item.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
@@ -1172,6 +1273,29 @@ export const ProjectsView: React.FC = () => {
                   </ul>
                 </div>
               ))}
+              {pendingRemovalWarning.immediate.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-300">
+                    Removed immediately
+                  </p>
+                  <div className="space-y-1.5">
+                    {pendingRemovalWarning.immediate.map((member) => (
+                      <div key={member.memberId} className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                        <span>{member.memberName}</span>
+                        <button
+                          type="button"
+                          onClick={() => keepMemberFromRemoval(member.memberId)}
+                          className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                          title={`Keep ${member.memberName} in this project`}
+                          aria-label={`Keep ${member.memberName} in this project`}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
@@ -1356,7 +1480,9 @@ export const ProjectsView: React.FC = () => {
       <ProjectDetailsDrawer
         project={selectedProject}
         users={users}
+        tasks={tasks}
         onClose={() => setSelectedProjectId(null)}
+        onViewTasks={onViewProjectTasks}
       />
     </div>
   );
