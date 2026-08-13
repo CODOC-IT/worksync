@@ -8,9 +8,12 @@ import {
   ClipboardCheck,
   Clock,
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
   Eye,
 >>>>>>> add280d8c85efd26f618e4e17cf2b510bbe4ef83
+=======
+>>>>>>> 610dec3a12c57d719ad61c7f55ef9251dc31b74a
   FolderKanban,
   LogOut,
   Pencil,
