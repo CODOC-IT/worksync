@@ -88,6 +88,15 @@ const PROJECT_REQUEST_LABELS: Record<string, string> = {
   PROJECT_PERMANENT_DELETE: 'Permanent Delete',
 };
 
+// Each dashboard activity row keeps the tab + id of the real object it belongs to (task,
+// project, attendance, approval) so a click deep-links to that entity instead of reopening
+// the Activity Log module. Derived from the activity's own entityType/entityId and, when the
+// backend attached them, its related task/project references.
+interface DashboardActivityLogItem extends ActivityLogItem {
+  navigateTab?: 'tasks' | 'projects' | 'attendance' | 'approvals';
+  navigateId?: string;
+}
+
 interface MiniCalendarProps {
   entries: CalendarEntry[];
 }
@@ -171,7 +180,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   // ── Activity Log Filter State ──
   type ActivityFilterOption = 'Today' | 'Last Day' | 'Last 3 Days';
   const [activityFilter, setActivityFilter] = useState<ActivityFilterOption>('Today');
-  const [filteredActivityLogs, setFilteredActivityLogs] = useState<ActivityLogItem[]>([]);
+  const [filteredActivityLogs, setFilteredActivityLogs] = useState<DashboardActivityLogItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
 
   useEffect(() => {
@@ -213,17 +222,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         }
         if (cancelled) return;
 
-        const mapped: ActivityLogItem[] = collected.map((item) => ({
-          id: item.id,
-          userId: item.actor.id || '',
-          userName: item.actor.name,
-          action: `${item.action} ${item.entityType}`,
-          targetType: (item.entityType === 'Task' ? 'Task' : item.entityType === 'Project' ? 'Project' : item.entityType === 'Attendance' ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
-          targetId: item.entityId,
-          targetTitle: item.entityName || item.description,
-          timestamp: new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-          diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
-        }));
+        const mapped: DashboardActivityLogItem[] = collected.map((item) => {
+          const isTask = item.entityType === 'Task';
+          const isProject = item.entityType === 'Project';
+          const isAttendance = item.entityType === 'Attendance';
+          let navigateTab: DashboardActivityLogItem['navigateTab'];
+          let navigateId: string | undefined;
+          if (item.task || isTask) {
+            navigateTab = 'tasks';
+            navigateId = item.task?.id || item.entityId;
+          } else if (item.project || isProject) {
+            navigateTab = 'projects';
+            navigateId = item.project?.id || item.entityId;
+          } else if (isAttendance) {
+            navigateTab = 'attendance';
+          } else {
+            navigateTab = 'approvals';
+          }
+          return {
+            id: item.id,
+            userId: item.actor.id || '',
+            userName: item.actor.name,
+            action: `${item.action} ${item.entityType}`,
+            targetType: (isTask ? 'Task' : isProject ? 'Project' : isAttendance ? 'Attendance' : 'Approval') as ActivityLogItem['targetType'],
+            targetId: item.entityId,
+            targetTitle: item.entityName || item.description,
+            timestamp: new Date(item.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            diff: item.changes.length > 0 ? { field: item.changes[0].field, oldVal: item.changes[0].previousValue || '', newVal: item.changes[0].newValue || '' } : undefined,
+            navigateTab,
+            navigateId,
+          };
+        });
         if (!cancelled) setFilteredActivityLogs(mapped);
       } catch (err) {
         if (!cancelled) {
@@ -416,6 +445,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const todayAttendance = attendanceRecords.find((r) => r.userId === currentUser.id && r.date === todayKey);
   const isCheckedIn = Boolean(todayAttendance?.checkIn);
   const isCheckedOut = Boolean(todayAttendance?.checkOut);
+
+  // Activity rows deep-link to the real object the event belongs to (task/project details,
+  // the Attendance or Approvals module) via the existing navigation system.
+  const handleActivityClick = (log: DashboardActivityLogItem) => {
+    if (log.navigateTab === 'tasks') { onNavigate('tasks', log.navigateId); return; }
+    if (log.navigateTab === 'projects') { onNavigate('projects', log.navigateId); return; }
+    onNavigate(log.navigateTab === 'attendance' ? 'attendance' : 'approvals');
+  };
+
   const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
   return (
@@ -484,8 +522,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                   {upcomingCalendarEntries.slice(0, 5).map((d) => (
                     <button
                       key={d.id}
-                      onClick={() => onNavigate('calendar', d.id)}
-                      title={`Open "${d.title}" in Calendar`}
+                      onClick={() => {
+                        if (d.navigateTab === 'tasks') onNavigate('tasks', d.navigateId || d.taskId);
+                        else if (d.navigateTab === 'projects') onNavigate('projects', d.navigateId || d.projectId);
+                        else onNavigate('calendar', d.id);
+                      }}
+                      title={d.navigateTab === 'tasks' ? `Open task "${d.title}"` : d.navigateTab === 'projects' ? `Open project "${d.title}"` : `Open "${d.title}" in Calendar`}
                       className="flex items-center gap-2 text-[10px] p-1 rounded hover:bg-cyan-500/10 hover:ring-1 hover:ring-cyan-500/30 transition-all w-full text-left group"
                     >
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${entryToneClasses(d.kind).dotClass}`} />
@@ -533,7 +575,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 <p className="text-[11px] text-slate-500 text-center py-12">No activity found for the selected period.</p>
               ) : (
                 filteredActivityLogs.map((log) => (
-                  <div key={log.id} className="p-2.5 rounded-xl bg-slate-900/50 border border-white/5 flex items-start gap-3 text-[10px]">
+                  <div
+                    key={log.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleActivityClick(log)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleActivityClick(log); } }}
+                    title={`Open "${log.targetTitle}"`}
+                    className="p-2.5 rounded-xl bg-slate-900/50 border border-white/5 flex items-start gap-3 text-[10px] cursor-pointer"
+                  >
                     <span className="w-6 h-6 rounded-lg bg-cyan-500/15 text-[8px] font-bold text-cyan-300 flex items-center justify-center ring-1 ring-white/10 shrink-0 mt-0.5">{log.userName.split(/\s+/).filter(Boolean).slice(0, 2).map((s: string) => s[0]?.toUpperCase()).join('') || 'U'}</span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap mb-0.5"><span className="font-bold text-white text-[10px]">{log.userName}</span><span className="text-slate-400 text-[10px]">{log.action}</span></div>
