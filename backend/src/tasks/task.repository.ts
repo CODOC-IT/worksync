@@ -186,6 +186,10 @@ export interface InsertTaskRow {
   dueDate: string;
   createdByUserId: number;
   assigneeUserIds: number[];
+  // Multi-team architecture: the owning team and, for an Admin-created task awaiting the team
+  // lead to assign it, 'NeedsTeamAssignment' (vs 'Assigned' for a normally-created task).
+  teamId?: number;
+  assignmentStatus?: 'NeedsTeamAssignment' | 'Assigned';
 }
 
 const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow): Promise<number> => {
@@ -194,8 +198,8 @@ const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow)
     const inserted = await runQuery<{ taskid: number }>(
       `INSERT INTO work.tasks
          (projectid, parenttaskid, tasknumber, title, description, taskstatusid, priorityid, startdate,
-          duedate, createdbyuserid)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          duedate, createdbyuserid, teamid, assignmentstatus)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING taskid`,
       [
         input.projectId,
@@ -207,7 +211,9 @@ const insertTaskWithQuery = async (runQuery: typeof query, input: InsertTaskRow)
         input.priorityId,
         input.startDate,
         input.dueDate,
-        input.createdByUserId
+        input.createdByUserId,
+        input.teamId || null,
+        input.assignmentStatus || null
       ]
     );
     const taskId = inserted.rows[0].taskid;
@@ -363,6 +369,117 @@ export const decideTaskEditApproval = async (
   );
   return locked.rows[0].taskid;
 });
+
+// --- Cross-team subtask transfer (multi-team architecture) --------------------------------
+// A Team Lead hands one of their team's subtasks to another team; an Admin decides. The subtask
+// row is untouched until approval, at which point its TeamId flips to the target team (see
+// database/migrations/20260816_01_project_teams.sql).
+
+export interface SubtaskTransferRequestRow {
+  requestid: number;
+  subtaskid: number;
+  projectid: number;
+  fromteamid: number | null;
+  toteamid: number;
+  requestedbyuserid: number;
+  requestreason: string | null;
+  requeststatus: 'Pending' | 'Approved' | 'Rejected';
+  requestedatutc: Date;
+  decidedatutc: Date | null;
+  decidedbyuserid: number | null;
+  decisionreason: string | null;
+}
+
+const TRANSFER_REQUEST_COLUMNS = `
+  requestid, subtaskid, projectid, fromteamid, toteamid, requestedbyuserid, requestreason,
+  requeststatus, requestedatutc, decidedatutc, decidedbyuserid, decisionreason
+`;
+
+export const insertSubtaskTransferRequest = async (input: {
+  subtaskId: number;
+  projectId: number;
+  fromTeamId: number | null;
+  toTeamId: number;
+  requestedByUserId: number;
+  reason: string;
+}): Promise<number> => {
+  const inserted = await query<{ requestid: number }>(
+    `INSERT INTO work.subtasktransferrequests
+       (subtaskid, projectid, fromteamid, toteamid, requestedbyuserid, requestreason)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING requestid`,
+    [input.subtaskId, input.projectId, input.fromTeamId, input.toTeamId, input.requestedByUserId, input.reason.trim()]
+  );
+  return Number(inserted.rows[0].requestid);
+};
+
+export const findSubtaskTransferRequestById = async (
+  requestId: number
+): Promise<SubtaskTransferRequestRow | null> => {
+  const result = await query<SubtaskTransferRequestRow>(
+    `SELECT ${TRANSFER_REQUEST_COLUMNS} FROM work.subtasktransferrequests WHERE requestid = $1`,
+    [requestId]
+  );
+  return result.rows[0] || null;
+};
+
+export const findPendingSubtaskTransferRequests = async (): Promise<SubtaskTransferRequestRow[]> => {
+  const result = await query<SubtaskTransferRequestRow>(
+    `SELECT ${TRANSFER_REQUEST_COLUMNS}
+     FROM work.subtasktransferrequests
+     WHERE requeststatus = 'Pending'
+     ORDER BY requestedatutc`,
+    []
+  );
+  return result.rows;
+};
+
+export const findSubtaskTransferRequestsForUser = async (userId: number): Promise<SubtaskTransferRequestRow[]> => {
+  const result = await query<SubtaskTransferRequestRow>(
+    `SELECT ${TRANSFER_REQUEST_COLUMNS}
+     FROM work.subtasktransferrequests
+     WHERE requestedbyuserid = $1
+     ORDER BY requestedatutc DESC`,
+    [userId]
+  );
+  return result.rows;
+};
+
+// Decides a transfer request. On approval the subtask's TeamId moves to the target team (the
+// assignees are untouched -- the receiving team lead reassigns as needed). Returns null when the
+// request is already decided, so the caller can surface "already decided".
+export const decideSubtaskTransferRequest = async (
+  requestId: number,
+  decision: 'Approved' | 'Rejected',
+  decidedByUserId: number,
+  decisionReason: string | null
+): Promise<SubtaskTransferRequestRow | null> =>
+  withTransaction(async (runQuery) => {
+    const locked = await runQuery<SubtaskTransferRequestRow>(
+      `SELECT ${TRANSFER_REQUEST_COLUMNS}
+       FROM work.subtasktransferrequests WHERE requestid = $1 AND requeststatus = 'Pending' FOR UPDATE`,
+      [requestId]
+    );
+    if (!locked.rows[0]) return null;
+
+    if (decision === 'Approved') {
+      await runQuery(
+        `UPDATE work.tasks SET teamid = $1, assignmentstatus = 'Assigned' WHERE taskid = $2`,
+        [locked.rows[0].toteamid, locked.rows[0].subtaskid]
+      );
+    }
+    await runQuery(
+      `UPDATE work.subtasktransferrequests
+       SET requeststatus = $1, decidedatutc = CURRENT_TIMESTAMP, decidedbyuserid = $2,
+           decisionreason = $3
+       WHERE requestid = $4`,
+      [decision, decidedByUserId, decisionReason?.trim() || null, requestId]
+    );
+    const updated = await runQuery<SubtaskTransferRequestRow>(
+      `SELECT ${TRANSFER_REQUEST_COLUMNS} FROM work.subtasktransferrequests WHERE requestid = $1`,
+      [requestId]
+    );
+    return updated.rows[0];
+  });
 
 // Parent and children are persisted in one transaction, so a failed child validation/write
 // cannot leave an orphaned parent task behind.

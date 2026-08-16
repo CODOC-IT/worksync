@@ -1,12 +1,12 @@
 ﻿import * as repo from './project.repository.js';
 import { resolveTeamLeadUserId, rowToMilestoneDTO, rowToProjectDTO, rowToProjectFileDTO } from './project.mapper.js';
-import { fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
+import { fromTeamPk, fromUserPk, toProjectPk, toTeamPk, toUserPk } from '../utils/idMapping.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { findActiveTaskAssignmentsForUserInProject, getProjectTaskCompletion } from '../tasks/task.repository.js';
-import { resolveCreateParticipants, resolveUpdatedParticipants } from './projectWorkflow.rules.js';
+import { resolveCreateParticipants, resolveTeamSetup, resolveUpdatedParticipants } from './projectWorkflow.rules.js';
 import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
@@ -21,6 +21,8 @@ import {
   ProjectMemberRoleCode,
   ProjectMemberRow,
   ProjectRow,
+  ProjectTeamRow,
+  TeamMemberRow,
   UpdateMilestoneInput,
   UpdateProjectInput
 } from './project.types.js';
@@ -42,19 +44,30 @@ export class ProjectValidationError extends Error {}
 const buildDTO = async (
   row: ProjectRow,
   members: ProjectMemberRow[],
-  milestones: MilestoneRow[] = []
+  milestones: MilestoneRow[] = [],
+  teams?: ProjectTeamRow[],
+  teamMembers?: TeamMemberRow[]
 ): Promise<ProjectDTO> => {
   const progress = await repo.getProjectProgress(row.projectid);
-  return rowToProjectDTO(row, members, progress, milestones);
+  if (!teams || !teamMembers) {
+    const [fetchedTeams, fetchedTeamMembers] = await Promise.all([
+      repo.findTeamsForProject(row.projectid),
+      repo.findTeamMembersForProject(row.projectid)
+    ]);
+    return rowToProjectDTO(row, members, progress, milestones, undefined, fetchedTeams, fetchedTeamMembers);
+  }
+  return rowToProjectDTO(row, members, progress, milestones, undefined, teams, teamMembers);
 };
 
 const buildDetailDTO = async (row: ProjectRow, members: ProjectMemberRow[]): Promise<ProjectDTO> => {
-  const [progress, milestones, files] = await Promise.all([
+  const [progress, milestones, files, teams, teamMembers] = await Promise.all([
     repo.getProjectProgress(row.projectid),
     repo.findMilestonesForProject(row.projectid),
-    repo.findProjectFiles(row.projectid)
+    repo.findProjectFiles(row.projectid),
+    repo.findTeamsForProject(row.projectid),
+    repo.findTeamMembersForProject(row.projectid)
   ]);
-  return rowToProjectDTO(row, members, progress, milestones, files);
+  return rowToProjectDTO(row, members, progress, milestones, files, teams, teamMembers);
 };
 
 const assertCanCreate = (role: string) => {
@@ -128,9 +141,11 @@ export const listProjectsForUser = async (userId: string, role: string): Promise
   const rows = await repo.findAllProjects();
   if (rows.length === 0) return [];
   const projectIds = rows.map((row) => row.projectid);
-  const [membersByProject, milestonesByProject] = await Promise.all([
+  const [membersByProject, milestonesByProject, teamsByProject, teamMembersByProject] = await Promise.all([
     repo.findMembersForProjects(projectIds),
-    repo.findMilestonesForProjects(projectIds)
+    repo.findMilestonesForProjects(projectIds),
+    repo.findTeamsForProjects(projectIds),
+    repo.findTeamMembersForProjects(projectIds)
   ]);
   // Admin and HR have organization-wide visibility. Every other user may only receive projects
   // they lead, own, or belong to; this is enforced at the API boundary rather than relying on a
@@ -145,7 +160,9 @@ export const listProjectsForUser = async (userId: string, role: string): Promise
       buildDTO(
         row,
         membersByProject.filter((member) => member.projectid === row.projectid),
-        milestonesByProject.filter((milestone) => milestone.projectid === row.projectid)
+        milestonesByProject.filter((milestone) => milestone.projectid === row.projectid),
+        teamsByProject.filter((team) => team.projectid === row.projectid),
+        teamMembersByProject.filter((member) => member.projectid === row.projectid)
       )
     )
   );
@@ -249,15 +266,49 @@ export const createProject = async (
     throw new ProjectValidationError('Creation notes are required when submitting a project for Admin approval.');
   }
 
-  const participants = resolveCreateParticipants(actorId, actorRole, input.teamLeadId, input.memberIds);
-  if (participants.error) throw new ProjectValidationError(participants.error);
-  const effectiveTeamLeadId = participants.teamLeadId;
+  // Multi-team create/proposal: when the client supplies a full team setup, it becomes the
+  // source of truth for the project's structure (and, for a non-Admin submitter, is what an Admin
+  // later materializes verbatim on approval). Otherwise we fall back to the legacy single-lead
+  // participants flow so nothing already working changes.
+  let teamSetup;
+  let teamLeadUserIds: string[] | undefined;
+  let memberIdsToInsert = input.memberIds;
+  let teamsForInsert: repo.InsertTeamRow[] | undefined;
+  if (input.teams && input.teams.length > 0) {
+    teamSetup = resolveTeamSetup(input.teams);
+    if (teamSetup.error) throw new ProjectValidationError(teamSetup.error);
+    // A non-Admin submitter must be leading the project they propose (mirrors the single-lead
+    // rule below); an Admin has no such constraint because they may build teams for others.
+    if (actorRole !== 'Admin' && !teamSetup.teamLeadUserIds.includes(actorId)) {
+      throw new ProjectValidationError('The person submitting a project must be a Team Lead of one of its teams.');
+    }
+    teamLeadUserIds = teamSetup.teamLeadUserIds;
+    memberIdsToInsert = teamSetup.memberUserIds;
+    teamsForInsert = teamSetup.teams.map((team) => ({
+      name: team.name,
+      description: team.description,
+      leadId: toUserPk(team.leadId),
+      memberIds: team.memberIds.map(toUserPk)
+    }));
+  } else {
+    const participants = resolveCreateParticipants(actorId, actorRole, input.teamLeadId, input.memberIds);
+    if (participants.error) throw new ProjectValidationError(participants.error);
+    teamLeadUserIds = participants.teamLeadId ? [participants.teamLeadId] : [];
+    memberIdsToInsert = participants.memberIds;
+  }
+
+  const effectiveTeamLeadId = teamLeadUserIds[0];
   if (effectiveTeamLeadId) {
     await assertEligibleAssignee(effectiveTeamLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
   }
-  const effectiveMemberIds = participants.memberIds;
+  if (teamLeadUserIds.length > 1) {
+    for (const leadId of teamLeadUserIds.slice(1)) {
+      await assertEligibleAssignee(leadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+    }
+  }
+  const effectiveMemberIds = memberIdsToInsert;
   for (const memberId of effectiveMemberIds) {
-    if (memberId === effectiveTeamLeadId) continue;
+    if (teamLeadUserIds.includes(memberId)) continue;
     await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
   }
 
@@ -271,6 +322,7 @@ export const createProject = async (
 
   const ownerPk = toUserPk(actorId);
   const teamLeadPk = effectiveTeamLeadId ? toUserPk(effectiveTeamLeadId) : undefined;
+  const teamLeadPks = teamLeadUserIds.length > 0 ? teamLeadUserIds.map(toUserPk) : undefined;
   const memberPks = effectiveMemberIds.map(toUserPk);
 
   const projectId = await repo.insertProject({
@@ -284,7 +336,9 @@ export const createProject = async (
     createdByUserId: ownerPk,
     creationReason: input.creationReason?.trim() || null,
     teamLeadUserId: teamLeadPk,
+    teamLeadUserIds: teamLeadPks,
     memberUserIds: memberPks,
+    teams: teamsForInsert,
     // An Admin who creates a project is its creator, not a team member -- they get no 'Owner'
     // membership row (Admins already have org-wide project access), so they don't show up in the
     // project's own member list. A Team Member/Lead creator, by contrast, always becomes the
@@ -816,6 +870,120 @@ export const removeMember = async (
     entityName: removedMemberName, projectId: dto.id, projectName: dto.title,
     description: `${actorName} removed ${removedMemberName} from “${dto.title}”.`,
     reason, linkRoute: 'projects', important: true
+  });
+
+  return dto;
+};
+
+export const moveMember = async (
+  projectId: string,
+  memberUserId: string,
+  toTeamId: string,
+  actorId: string,
+  actorRole: string
+): Promise<ProjectDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  assertCanManageMembers(actorRole);
+
+  const targetTeam = await repo.findTeamById(toTeamPk(toTeamId));
+  if (!targetTeam || targetTeam.projectid !== row.projectid) {
+    throw new ProjectValidationError('Target team not found in this project.');
+  }
+
+  const moved = await repo.moveTeamMember(row.projectid, toUserPk(memberUserId), targetTeam.teamid, toUserPk(actorId));
+  if (!moved) {
+    throw new ProjectValidationError('That user is not currently in a team of this project.');
+  }
+
+  const members = await repo.findMembersForProject(row.projectid);
+  const dto = await buildDTO(row, members);
+  const actorName = actorDisplayName(actorId);
+  const memberName = actorDisplayName(memberUserId);
+
+  notificationService
+    .publishEvent({
+      type: 'team_member_moved',
+      title: 'Moved to a New Team',
+      message: `${actorName} moved you to team "${targetTeam.teamname}" in "${dto.title}".`,
+      actorId,
+      projectId: dto.id,
+      recipientIds: [memberUserId]
+    })
+    .catch((error) => console.error('[project.service] Failed to publish member-moved event.', error));
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: memberUserId, affectedUserName: memberName,
+    action: 'Reassigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
+    entityName: memberName, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} moved ${memberName} to team “${targetTeam.teamname}” in “${dto.title}”.`,
+    linkRoute: 'projects', important: true
+  });
+
+  return dto;
+};
+
+export const replaceTeamLead = async (
+  projectId: string,
+  teamId: string,
+  newLeadId: string,
+  actorId: string,
+  actorRole: string
+): Promise<ProjectDTO> => {
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  assertCanManageMembers(actorRole);
+
+  const team = await repo.findTeamById(toTeamPk(teamId));
+  if (!team || team.projectid !== row.projectid) {
+    throw new ProjectValidationError('Team not found in this project.');
+  }
+
+  const teamMembers = await repo.findTeamMembersForTeam(team.teamid);
+  const currentLead = teamMembers.find((m) => m.islead);
+  if (!currentLead) throw new ProjectValidationError('This team has no Team Lead to replace.');
+  if (fromUserPk(currentLead.userid) === newLeadId) {
+    throw new ProjectValidationError('That user is already the Team Lead of this team.');
+  }
+
+  const projectMembers = await repo.findMembersForProject(row.projectid);
+  if (!projectMembers.some((m) => fromUserPk(m.userid) === newLeadId)) {
+    throw new ProjectValidationError('The new Team Lead must already be a member of this project.');
+  }
+  await assertEligibleAssignee(newLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+
+  await repo.replaceTeamLead(row.projectid, team.teamid, currentLead.userid, toUserPk(newLeadId), toUserPk(actorId));
+
+  const members = await repo.findMembersForProject(row.projectid);
+  const dto = await buildDTO(row, members);
+  const actorName = actorDisplayName(actorId);
+  const newLeadName = actorDisplayName(newLeadId);
+  const oldLeadName = actorDisplayName(fromUserPk(currentLead.userid));
+
+  notificationService
+    .publishEvent({
+      type: 'team_lead_changed',
+      title: 'Team Lead Changed',
+      message: `${actorName} made you the Team Lead of team "${team.teamname}" in "${dto.title}".`,
+      recipientMessages: {
+        [fromUserPk(currentLead.userid)]: `${actorName} replaced you as the Team Lead of team ` +
+          `"${team.teamname}" in "${dto.title}".`
+      },
+      actorId,
+      projectId: dto.id,
+      recipientIds: [newLeadId, fromUserPk(currentLead.userid)]
+    })
+    .catch((error) => console.error('[project.service] Failed to publish team-lead-changed event.', error));
+
+  recordActivitySafe({
+    actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
+    affectedUserId: newLeadId, affectedUserName: newLeadName,
+    action: 'Assigned', module: 'Projects', entityType: 'User', entityId: newLeadId,
+    entityName: newLeadName, projectId: dto.id, projectName: dto.title,
+    description: `${actorName} made ${newLeadName} the Team Lead of “${team.teamname}” in “${dto.title}”, ` +
+      `replacing ${oldLeadName}.`,
+    linkRoute: 'projects', important: true
   });
 
   return dto;

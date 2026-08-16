@@ -9,6 +9,10 @@ router.use(authenticateJWT);
 router.get('/edit-approvals', controller.listTaskEditApprovals);
 router.patch('/edit-approvals/:approvalId', controller.decideTaskEditApproval);
 
+// Cross-team subtask transfer (multi-team architecture): request, Admin inbox, decide.
+router.get('/subtask-transfers', controller.listSubtaskTransfers);
+router.patch('/subtask-transfers/:requestId', controller.decideSubtaskTransfer);
+
 // GET /api/tasks?projectId=prj-1&archived=true
 router.get('/', controller.listTasks);
 
@@ -21,6 +25,9 @@ router.post('/', controller.createTask);
 // PUT /api/tasks/:id
 router.put('/:id', controller.updateTask);
 router.post('/:id/edit-approvals', controller.createTaskEditApproval);
+
+// POST /api/tasks/:id/transfer — body: { toTeamId, reason } (subtask's Team Lead -> Admin)
+router.post('/:id/transfer', controller.requestSubtaskTransfer);
 
 // DELETE /api/tasks/:id — archives (soft-delete), never a hard DELETE
 router.delete('/:id', controller.deleteTask);

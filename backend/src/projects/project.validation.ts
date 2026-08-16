@@ -44,6 +44,30 @@ export const validateCreateProjectBody = (body: unknown): ValidationResult => {
   if (input.memberIds && (!Array.isArray(input.memberIds) || input.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id)))) {
     return { valid: false, message: 'memberIds must be an array of "usr-<n>" ids.' };
   }
+  if (input.teams !== undefined) {
+    if (!Array.isArray(input.teams)) return { valid: false, message: 'teams must be an array.' };
+    for (const rawTeam of input.teams) {
+      if (!rawTeam || typeof rawTeam !== 'object') return { valid: false, message: 'Each team must be an object.' };
+      const team = rawTeam as {
+        name?: unknown;
+        description?: unknown;
+        leadId?: unknown;
+        memberIds?: unknown;
+      };
+      if (!team.name || typeof team.name !== 'string' || !team.name.trim()) {
+        return { valid: false, message: 'Each team must have a name.' };
+      }
+      if (!team.description || typeof team.description !== 'string' || !team.description.trim()) {
+        return { valid: false, message: `Team "${String(team.name)}" must have a description.` };
+      }
+      if (!team.leadId || typeof team.leadId !== 'string' || !FRONTEND_ID_PATTERN.test(team.leadId)) {
+        return { valid: false, message: `Team "${String(team.name)}" must have a valid "usr-<n>" Team Lead.` };
+      }
+      if (!Array.isArray(team.memberIds) || team.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id))) {
+        return { valid: false, message: `Team "${String(team.name)}" memberIds must be an array of "usr-<n>" ids.` };
+      }
+    }
+  }
   return { valid: true };
 };
 
@@ -87,6 +111,27 @@ export const validateMemberBody = (body: unknown): ValidationResult => {
   }
   if (role !== undefined && !['Owner', 'TeamLead', 'Member', 'Reviewer', 'Observer'].includes(role as string)) {
     return { valid: false, message: 'role is not a recognized project member role.' };
+  }
+  return { valid: true };
+};
+
+export const validateMoveMemberBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const { userId, toTeamId } = body as { userId?: unknown; toTeamId?: unknown };
+  if (!userId || typeof userId !== 'string' || !FRONTEND_ID_PATTERN.test(userId)) {
+    return { valid: false, message: 'userId must look like "usr-<n>".' };
+  }
+  if (!toTeamId || typeof toTeamId !== 'string' || !/^tm-\d+$/.test(toTeamId)) {
+    return { valid: false, message: 'toTeamId must look like "tm-<n>".' };
+  }
+  return { valid: true };
+};
+
+export const validateReplaceTeamLeadBody = (body: unknown): ValidationResult => {
+  if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
+  const { userId } = body as { userId?: unknown };
+  if (!userId || typeof userId !== 'string' || !FRONTEND_ID_PATTERN.test(userId)) {
+    return { valid: false, message: 'userId must look like "usr-<n>".' };
   }
   return { valid: true };
 };

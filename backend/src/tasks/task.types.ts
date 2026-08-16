@@ -56,6 +56,10 @@ export interface TaskRow {
   subtaskcount?: number;
   completedsubtaskcount?: number;
   haspendingeditapproval?: boolean;
+  // Multi-team architecture (database/migrations/20260816_01_project_teams.sql): the owning team
+  // and, for an Admin-created task awaiting the team lead's assignment, 'NeedsTeamAssignment'.
+  teamid?: number | null;
+  assignmentstatus?: string | null;
 }
 
 export interface TaskAssigneeRow {
@@ -144,6 +148,10 @@ export interface CreateTaskInput {
   startDate: string;
   dueDate: string;
   assigneeIds: string[];
+  // The team this task belongs to (multi-team architecture). A Team Lead sets this to their own
+  // team; an Admin targeting a whole team sets it and leaves assigneeIds empty so the team lead
+  // assigns it later (AssignmentStatus = 'NeedsTeamAssignment').
+  teamId?: string;
   status?: ApiTaskStatus;
   parentTaskId?: string;
   subtasks?: CreateSubtaskInput[];

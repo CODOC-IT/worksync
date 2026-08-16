@@ -39,6 +39,7 @@ export const toUserPk = (frontendId: string): number => {
   return parsePrefixedId('usr', frontendId);
 };
 export const toProjectPk = (frontendId: string): number => parsePrefixedId('prj', frontendId);
+export const toTeamPk = (frontendId: string): number => parsePrefixedId('tm', frontendId);
 export const toTaskPk = (frontendId: string): number => parsePrefixedId('tsk', frontendId);
 export const toThreadPk = (frontendId: string): number => parsePrefixedId('dsc', frontendId);
 export const toCommentPk = (frontendId: string): number => parsePrefixedId('cmt', frontendId);
@@ -47,6 +48,7 @@ export const toPromptVersionPk = (frontendId: string): number => parsePrefixedId
 
 export const fromUserPk = (id: number): string => `usr-${id}`;
 export const fromProjectPk = (id: number): string => `prj-${id}`;
+export const fromTeamPk = (id: number): string => `tm-${id}`;
 export const fromTaskPk = (id: number): string => `tsk-${id}`;
 export const fromThreadPk = (id: number): string => `dsc-${id}`;
 export const fromCommentPk = (id: number): string => `cmt-${id}`;

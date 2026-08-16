@@ -35,6 +35,20 @@ interface ProjectFormState {
   creationReason: string;
   milestones: Milestone[];
   files: ProjectFile[];
+  // Multi-team architecture (Admin, create mode). When useTeams is on, the project is built
+  // from the team rows below instead of the single teamLeadId/memberIds fields, which are
+  // ignored for the payload.
+  useTeams: boolean;
+  teams: DraftTeam[];
+}
+
+// An in-progress team row in the create form's team builder (before it's sent to the backend).
+interface DraftTeam {
+  id: string;
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
 }
 
 const EMPTY_FORM: ProjectFormState = {
@@ -48,7 +62,9 @@ const EMPTY_FORM: ProjectFormState = {
   status: 'Active',
   creationReason: '',
   milestones: [],
-  files: []
+  files: [],
+  useTeams: false,
+  teams: []
 };
 
 const ALLOWED_FILE_EXTENSIONS = ['pdf', 'doc', 'docx', 'xlsx', 'json', 'fig', 'png', 'jpg', 'jpeg', 'zip'];
@@ -241,7 +257,9 @@ export const ProjectsView: React.FC<{
       status: source.status === 'Pending Approval' ? 'Active' : source.status,
       creationReason: source.creationReason || '',
       milestones: source.milestones,
-      files: source.files
+      files: source.files,
+      useTeams: false,
+      teams: []
     });
     setFormOpen(true);
   };
@@ -287,6 +305,44 @@ export const ProjectsView: React.FC<{
       ? form.memberIds.filter((id) => id !== userId)
       : [...form.memberIds, userId];
     updateForm({ memberIds });
+  };
+
+  // --- Multi-team builder (Admin, create mode) ----------------------------------------------
+  const addTeam = () => {
+    const id = `draft-${Date.now()}-${form.teams.length}`;
+    updateForm({ teams: [...form.teams, { id, name: '', description: '', leadId: '', memberIds: [] }] });
+  };
+
+  const removeTeam = (teamId: string) => {
+    updateForm({ teams: form.teams.filter((team) => team.id !== teamId) });
+  };
+
+  const updateTeamField = (teamId: string, field: keyof DraftTeam, value: string) => {
+    updateForm({
+      teams: form.teams.map((team) => (team.id === teamId ? { ...team, [field]: value } : team))
+    });
+  };
+
+  const toggleTeamMember = (teamId: string, userId: string) => {
+    const teams = form.teams.map((team) => {
+      if (team.id !== teamId) return team;
+      const memberIds = team.memberIds.includes(userId)
+        ? team.memberIds.filter((id) => id !== userId)
+        : [...team.memberIds, userId];
+      return { ...team, memberIds };
+    });
+    updateForm({ teams });
+  };
+
+  const setTeamLead = (teamId: string, userId: string) => {
+    const teams = form.teams.map((team) => {
+      if (team.id !== teamId) return team;
+      const memberIds = userId && !team.memberIds.includes(userId)
+        ? [...team.memberIds, userId]
+        : team.memberIds;
+      return { ...team, leadId: userId, memberIds };
+    });
+    updateForm({ teams });
   };
 
   const addMilestone = () => {
@@ -391,6 +447,42 @@ export const ProjectsView: React.FC<{
     const nonLeadMemberCount = data.memberIds.filter((id) => id !== data.teamLeadId).length;
     if (nonLeadMemberCount === 0) {
       errors.memberIds = 'A project must have at least one member besides the Team Lead.';
+    }
+
+    // Multi-team validation (Admin create only): when the team builder is active, it replaces the
+    // single-lead checks above with per-team rules, mirroring projectWorkflow.rules.ts's
+    // resolveTeamSetup -- every team needs a name, description, one lead, and >= 2 people, team
+    // names are unique, and no one may appear in more than one team.
+    if (data.useTeams) {
+      delete errors.teamLeadId;
+      delete errors.memberIds;
+      if (data.teams.length === 0) {
+        errors.teams = 'Add at least one team, or turn off team mode.';
+      } else {
+        const teamNames = new Set<string>();
+        const seenMembers = new Set<string>();
+        let crossTeamDuplicate = false;
+        for (const team of data.teams) {
+          if (!team.name.trim()) { errors.teams = 'Every team must have a name.'; break; }
+          if (teamNames.has(team.name.trim().toLowerCase())) {
+            errors.teams = `Duplicate team name "${team.name.trim()}". Team names must be unique.`;
+            break;
+          }
+          teamNames.add(team.name.trim().toLowerCase());
+          if (!team.description.trim()) { errors.teams = `Team "${team.name.trim()}" needs a description.`; break; }
+          if (!team.leadId) { errors.teams = `Team "${team.name.trim()}" needs a Team Lead.`; break; }
+          const members = Array.from(new Set([...team.memberIds, team.leadId]));
+          if (members.length < 2) {
+            errors.teams = `Team "${team.name.trim()}" needs at least one member besides its Team Lead.`;
+            break;
+          }
+          for (const userId of members) {
+            if (seenMembers.has(userId)) crossTeamDuplicate = true;
+            seenMembers.add(userId);
+          }
+          if (crossTeamDuplicate) { errors.teams = 'A person cannot be in more than one team in the same project.'; break; }
+        }
+      }
     }
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
@@ -519,6 +611,20 @@ export const ProjectsView: React.FC<{
       files: form.files,
       creationReason: form.creationReason.trim() || undefined
     };
+
+    // Multi-team create: pass the full team setup (the backend materializes it as-is on save /
+    // approval). The single-lead fields above are left out of the payload so they can't conflict.
+    if (form.useTeams) {
+      (data as unknown as { teams: Array<{ name: string; description: string; leadId: string; memberIds: string[] }> }).teams =
+        form.teams.map((team) => ({
+          name: team.name.trim(),
+          description: team.description.trim(),
+          leadId: team.leadId,
+          memberIds: team.memberIds.filter((id) => id !== team.leadId)
+        }));
+      delete data.teamLeadId;
+      delete data.memberIds;
+    }
 
     // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
     // request. Instead of saving straight away, hand off to the "Admin Approval Required"
@@ -1009,6 +1115,90 @@ export const ProjectsView: React.FC<{
                 </div>
                 {formErrors.memberIds && <p className="text-rose-400 mt-1">{formErrors.memberIds}</p>}
               </div>
+
+              {/* Multi-team builder (Admin, create mode only) */}
+              {formMode === 'create' && currentRole === 'Admin' && (
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <label className="flex items-center gap-2 text-slate-300 font-semibold mb-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.useTeams}
+                      onChange={(e) => updateForm({ useTeams: e.target.checked })}
+                      className="accent-cyan-500"
+                    />
+                    Build project teams
+                    <span className="text-slate-500 font-normal text-[11px]">(multiple teams, each with its own lead)</span>
+                  </label>
+
+                  {form.useTeams && (
+                    <div className="space-y-3">
+                      {form.teams.map((team) => (
+                        <div key={team.id} className="rounded-lg border border-cyan-500/20 bg-black/30 p-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <input
+                              placeholder="Team name"
+                              value={team.name}
+                              onChange={(e) => updateTeamField(team.id, 'name', e.target.value)}
+                              className="flex-1 px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeTeam(team.id)}
+                              className="text-rose-400 hover:text-rose-300 text-[11px] font-semibold"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <textarea
+                            placeholder="Team description (purpose / scope)"
+                            value={team.description}
+                            onChange={(e) => updateTeamField(team.id, 'description', e.target.value)}
+                            rows={2}
+                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
+                          />
+                          <select
+                            value={team.leadId}
+                            onChange={(e) => setTeamLead(team.id, e.target.value)}
+                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
+                          >
+                            <option value="">Select Team Lead...</option>
+                            {teamLeads.map((u) => (
+                              <option key={u.id} value={u.id} disabled={form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))}>
+                                {u.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto p-1.5 rounded-lg bg-black/20 border border-white/10">
+                            {assignableMembers.map((u) => (
+                              <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={team.memberIds.includes(u.id)}
+                                  onChange={() => toggleTeamMember(team.id, u.id)}
+                                  disabled={
+                                    u.id === team.leadId ||
+                                    form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))
+                                  }
+                                  className="accent-cyan-500"
+                                />
+                                {u.name}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={addTeam}
+                        className="w-full rounded-lg border border-dashed border-cyan-500/40 py-2 text-cyan-300 hover:text-cyan-200 text-sm font-semibold flex items-center justify-center gap-1"
+                      >
+                        <Plus size={14} /> Add team
+                      </button>
+                      {formErrors.teams && <p className="text-rose-400 mt-1 text-sm">{formErrors.teams}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {formMode === 'edit' && (
                 <div>

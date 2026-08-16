@@ -6,7 +6,7 @@ import { isCurrentProjectLead, projectCardActions } from './projectActionRules.j
 const project = (overrides: Partial<Project> = {}): Project => ({
   id: 'prj-1', code: 'PRJ-1', title: 'ERP', description: 'ERP project', status: 'Active',
   approvalStatus: 'Approved', createdBy: 'usr-1', teamLeadId: 'usr-2',
-  memberIds: ['usr-2', 'usr-3'], pendingRemovalMemberIds: [], startDate: '2026-08-01',
+  memberIds: ['usr-2', 'usr-3'], pendingRemovalMemberIds: [], teams: [], startDate: '2026-08-01',
   targetDate: '2026-08-31', priority: 'Medium', progress: 0, tags: [], createdAt: '2026-08-01',
   milestones: [], files: [], ...overrides
 });

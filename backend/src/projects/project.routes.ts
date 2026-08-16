@@ -44,6 +44,12 @@ router.post('/:id/members', controller.addMember);
 // DELETE /api/projects/:id/members/:userId
 router.delete('/:id/members/:userId', controller.removeMember);
 
+// POST /api/projects/:id/members/move — body: { userId, toTeamId } (Admin moves a member to a team)
+router.post('/:id/members/move', controller.moveMember);
+
+// POST /api/projects/:id/teams/:teamId/lead — body: { userId } (Admin replaces a team's lead)
+router.post('/:id/teams/:teamId/lead', controller.replaceTeamLead);
+
 // POST /api/projects/:id/milestones — body: { title, dueDate, description? }
 router.post('/:id/milestones', controller.addMilestone);
 

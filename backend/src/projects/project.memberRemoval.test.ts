@@ -152,6 +152,29 @@ before(async () => {
       PendingRemovalReason VARCHAR(500) NULL
     );
 
+    CREATE TABLE work.ProjectTeams (
+      TeamId BIGSERIAL PRIMARY KEY,
+      ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+      TeamName VARCHAR(150) NOT NULL,
+      Description VARCHAR(2000) NOT NULL,
+      CreatedByUserId INT NOT NULL,
+      CreatedAtUtc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UpdatedAtUtc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      RowVersion BIGINT NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE work.TeamMembers (
+      TeamMemberId BIGSERIAL PRIMARY KEY,
+      TeamId BIGINT NOT NULL REFERENCES work.ProjectTeams(TeamId),
+      ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+      UserId INT NOT NULL REFERENCES iam.Users(UserId),
+      IsLead BOOLEAN NOT NULL DEFAULT FALSE,
+      AddedByUserId INT NOT NULL,
+      JoinedAtUtc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      LeftAtUtc TIMESTAMPTZ NULL,
+      RemovedByUserId INT NULL
+    );
+
     CREATE TABLE work.TaskStatuses (
       TaskStatusId SERIAL PRIMARY KEY,
       StatusCode VARCHAR(30) NOT NULL UNIQUE,

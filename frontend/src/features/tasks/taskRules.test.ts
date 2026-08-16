@@ -66,6 +66,7 @@ const project: Project = {
   createdBy: 'admin',
   teamLeadId: 'lead',
   memberIds: ['lead', 'member'],
+  teams: [],
   startDate: '2026-07-01',
   targetDate: '2026-07-31',
   progress: 0,
