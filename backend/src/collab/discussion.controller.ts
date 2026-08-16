@@ -69,14 +69,14 @@ export const createThread = async (req: AuthenticatedRequest, res: Response): Pr
     return;
   }
 
-  const { projectId, taskId, title, type, body, mentionIds, attachments } = req.body as {
-    projectId: string; taskId?: string; title: string; type: DiscussionType; body: string;
+  const { projectId, taskId, teamId, title, type, body, mentionIds, attachments } = req.body as {
+    projectId: string; taskId?: string; teamId?: string; title: string; type: DiscussionType; body: string;
     mentionIds?: string[]; attachments?: ChatAttachmentInput[];
   };
 
   try {
     const { thread, notifiedUserIds } = await service.createThread(
-      { projectId, taskId, title, type, body, mentionIds: mentionIds || [], attachments: attachments || [] },
+      { projectId, taskId, teamId, title, type, body, mentionIds: mentionIds || [], attachments: attachments || [] },
       user.id,
       user.role
     );

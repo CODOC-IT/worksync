@@ -2,7 +2,7 @@
 // frontend on purpose — same convention as project.types.ts/notification.types.ts (separate
 // TypeScript projects, no shared package).
 
-export type ThreadTypeCode = 'Project' | 'Task';
+export type ThreadTypeCode = 'Project' | 'Task' | 'Team';
 export type CommentKindCode =
   | 'General' | 'Progress' | 'Blocker' | 'Review' | 'CorrectionRequest' | 'ClarificationRequest' | 'Decision';
 
@@ -43,6 +43,8 @@ export interface DiscussionThreadRow {
   projectname: string;
   taskid: number | null;
   tasktitle: string | null;
+  teamid: number | null;
+  teamname: string | null;
   createdbyuserid: number;
   createdatutc: Date;
 }
@@ -115,6 +117,8 @@ export interface DiscussionThreadDTO {
   projectName: string;
   taskId?: string;
   taskName?: string;
+  teamId?: string;
+  teamName?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;
@@ -127,6 +131,7 @@ export interface DiscussionThreadDTO {
 export interface CreateThreadInput {
   projectId: string;
   taskId?: string;
+  teamId?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;

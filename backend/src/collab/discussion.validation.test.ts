@@ -27,3 +27,16 @@ test('rejects initial messages, replies, and edits over 250 characters', () => {
   assert.equal(validateAddCommentBody({ body }).valid, false);
   assert.equal(validateEditCommentBody({ body }).valid, false);
 });
+
+test('accepts a team-scoped thread alongside its project', () => {
+  assert.deepEqual(validateCreateThreadBody({ ...validThread, teamId: 'tm-1' }), { valid: true });
+  assert.deepEqual(validateCreateThreadBody({ ...validThread, taskId: 'tsk-1' }), { valid: true });
+});
+
+test('rejects malformed team ids and a thread scoped to both a task and a team', () => {
+  assert.equal(validateCreateThreadBody({ ...validThread, teamId: 'not-a-team' }).valid, false);
+  assert.equal(validateCreateThreadBody({ ...validThread, teamId: 'usr-1' }).valid, false);
+  const both = validateCreateThreadBody({ ...validThread, taskId: 'tsk-1', teamId: 'tm-1' });
+  assert.equal(both.valid, false);
+  assert.match(both.message || '', /task or a team/);
+});
