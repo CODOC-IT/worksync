@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
-import { isCurrentProjectLead, projectCardActions } from './projectActionRules';
+import { canCreateProject, isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
 import { Project, ProjectStatus, Task, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
@@ -186,7 +186,7 @@ export const ProjectsView: React.FC<{
   // positive-offset timezone. See calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
 
-  const canCreate = currentRole === 'Team_Member' || currentRole === 'Team_Lead' || currentRole === 'Admin';
+  const canCreate = canCreateProject(currentRole);
   // Matches the backend's per-project lead check (project.service.ts's isProjectLead /
   // resolveTeamLeadUserId) -- Team Lead is not a separate account role; a Team_Member becomes a
   // project's lead only via this project-specific assignment. Every permission decision below
@@ -481,6 +481,16 @@ export const ProjectsView: React.FC<{
             seenMembers.add(userId);
           }
           if (crossTeamDuplicate) { errors.teams = 'A person cannot be in more than one team in the same project.'; break; }
+        }
+        // Mirrors backend/src/projects/project.service.ts's createProject: a non-Admin submitter
+        // must be the Team Lead of one of their proposed teams. Client-side only for a faster,
+        // friendlier message -- the backend enforces this regardless of what the UI sends.
+        if (
+          !errors.teams &&
+          currentRole !== 'Admin' &&
+          !data.teams.some((team) => team.leadId === currentUser.id)
+        ) {
+          errors.teams = 'You must be the Team Lead of one of the teams you propose.';
         }
       }
     }
@@ -1116,8 +1126,12 @@ export const ProjectsView: React.FC<{
                 {formErrors.memberIds && <p className="text-rose-400 mt-1">{formErrors.memberIds}</p>}
               </div>
 
-              {/* Multi-team builder (Admin, create mode only) */}
-              {formMode === 'create' && currentRole === 'Admin' && (
+              {/* Multi-team builder (create mode only). Available to every role that can create a
+                  project (canCreate), not just Admin -- the backend already accepts a complete
+                  multi-team proposal from a Team Lead/Team Member (project.service.ts's createProject
+                  teams-branch), it only additionally requires the submitter lead one of the
+                  proposed teams (mirrored client-side in validate() below). */}
+              {formMode === 'create' && canCreate && (
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                   <label className="flex items-center gap-2 text-slate-300 font-semibold mb-2 cursor-pointer">
                     <input

@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { Project, ProjectFile, ProjectStatus, Task, TaskPriority, User } from '../../types';
 import { fetchProjectFileBlob } from './projectRepository';
+import { canManageProjectTeams } from './projectActionRules';
+import { useApp } from '../../store/AppContext';
 
 interface ProjectDetailsDrawerProps {
   project: Project | null;
@@ -89,6 +91,13 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
 );
 
 export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ project, users, tasks, onClose, onViewTasks }) => {
+  const { currentRole, moveProjectMember, replaceProjectTeamLead } = useApp();
+  // Moving a member between teams / replacing a team's lead are Admin-only actions -- the backend
+  // rejects anyone else (project.service.ts's assertCanManageMembers), so the controls are simply
+  // never rendered for a Team Lead or a plain member, matching how the rest of this app hides
+  // actions a role can't perform rather than showing them disabled.
+  const isAdmin = canManageProjectTeams(currentRole);
+
   useEffect(() => {
     if (!project) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -104,6 +113,58 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
 
   const [pendingFileId, setPendingFileId] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+
+  // Admin team-management controls (move member / replace Team Lead). Reset whenever the drawer
+  // is pointed at a different project so stale in-progress state from a previous project's teams
+  // can't leak into this one.
+  const [movingMemberId, setMovingMemberId] = useState<string | null>(null);
+  const [teamActionError, setTeamActionError] = useState<string | null>(null);
+  const [replacingLeadTeamId, setReplacingLeadTeamId] = useState<string | null>(null);
+  const [replacementLeadId, setReplacementLeadId] = useState('');
+  const [replaceLeadSubmitting, setReplaceLeadSubmitting] = useState(false);
+
+  useEffect(() => {
+    setMovingMemberId(null);
+    setTeamActionError(null);
+    setReplacingLeadTeamId(null);
+    setReplacementLeadId('');
+    setReplaceLeadSubmitting(false);
+  }, [project?.id]);
+
+  const handleMoveMember = async (memberId: string, toTeamId: string) => {
+    if (!project || !toTeamId) return;
+    setMovingMemberId(memberId);
+    setTeamActionError(null);
+    const result = await moveProjectMember(project.id, memberId, toTeamId);
+    if (!result.success) setTeamActionError(result.message);
+    setMovingMemberId(null);
+  };
+
+  const openReplaceLead = (teamId: string) => {
+    setReplacingLeadTeamId(teamId);
+    setReplacementLeadId('');
+    setTeamActionError(null);
+  };
+
+  const closeReplaceLead = () => {
+    if (replaceLeadSubmitting) return;
+    setReplacingLeadTeamId(null);
+    setReplacementLeadId('');
+  };
+
+  const confirmReplaceLead = async () => {
+    if (!project || !replacingLeadTeamId || !replacementLeadId) return;
+    setReplaceLeadSubmitting(true);
+    setTeamActionError(null);
+    const result = await replaceProjectTeamLead(project.id, replacingLeadTeamId, replacementLeadId);
+    setReplaceLeadSubmitting(false);
+    if (!result.success) {
+      setTeamActionError(result.message);
+      return;
+    }
+    setReplacingLeadTeamId(null);
+    setReplacementLeadId('');
+  };
 
   // How long to keep the object URL alive after opening it in a new tab. Unlike the download flow
   // (where the browser starts consuming the blob synchronously on anchor.click(), so it's safe to
@@ -277,20 +338,104 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                   <div className="flex flex-col gap-2">
                     {project.teams.map((team) => {
                       const lead = users.find((u) => u.id === team.leadId);
+                      // Replacement candidates: any other active project member, per the backend's
+                      // own rule (project.service.ts's replaceTeamLead) -- not limited to this
+                      // team, and not the team's current lead (replacing a lead with themselves is
+                      // rejected server-side anyway, so it's left out of the picker entirely).
+                      const replacementCandidates = project.memberIds
+                        .filter((id) => id !== team.leadId)
+                        .map((id) => users.find((u) => u.id === id))
+                        .filter((u): u is User => Boolean(u));
+                      const otherTeams = project.teams.filter((t) => t.id !== team.id);
+
                       return (
                         <div key={team.id} className="rounded-lg border border-white/10 bg-black/30 p-3">
                           <p className="text-sm font-semibold text-slate-100">{team.name}</p>
                           <p className="mt-0.5 text-xs text-slate-500">{team.description}</p>
-                          <p className="mt-1.5 text-xs text-slate-300">
-                            <span className="text-cyan-300">Lead:</span> {lead?.name || 'Unassigned'}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-400">
-                            Members: {team.memberIds.map((id) => users.find((u) => u.id === id)?.name || id).join(', ')}
-                          </p>
+
+                          <div className="mt-1.5 flex items-center justify-between gap-2">
+                            <p className="text-xs text-slate-300">
+                              <span className="text-cyan-300">Lead:</span> {lead?.name || 'Unassigned'}
+                            </p>
+                            {isAdmin && replacingLeadTeamId !== team.id && (
+                              <button
+                                type="button"
+                                onClick={() => openReplaceLead(team.id)}
+                                className="shrink-0 text-[11px] font-semibold text-cyan-300 hover:text-cyan-200"
+                              >
+                                Replace
+                              </button>
+                            )}
+                          </div>
+
+                          {isAdmin && replacingLeadTeamId === team.id && (
+                            <div className="mt-2 flex items-center gap-1.5">
+                              <select
+                                value={replacementLeadId}
+                                onChange={(e) => setReplacementLeadId(e.target.value)}
+                                aria-label={`Select a replacement Team Lead for ${team.name}`}
+                                disabled={replaceLeadSubmitting}
+                                className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50 disabled:opacity-60"
+                              >
+                                <option value="">Select replacement...</option>
+                                {replacementCandidates.map((candidate) => (
+                                  <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={confirmReplaceLead}
+                                disabled={!replacementLeadId || replaceLeadSubmitting}
+                                className="shrink-0 rounded-md bg-cyan-500/20 px-2 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {replaceLeadSubmitting ? 'Saving...' : 'Confirm'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={closeReplaceLead}
+                                disabled={replaceLeadSubmitting}
+                                className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-50"
+                                aria-label="Cancel replacing the Team Lead"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="mt-1.5 flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Members</span>
+                            {team.memberIds.map((id) => {
+                              const member = users.find((u) => u.id === id);
+                              return (
+                                <div key={id} className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                                  <span className="min-w-0 truncate">{member?.name || id}</span>
+                                  {isAdmin && otherTeams.length > 0 && (
+                                    <select
+                                      value=""
+                                      onChange={(e) => void handleMoveMember(id, e.target.value)}
+                                      aria-label={`Move ${member?.name || id} to another team`}
+                                      disabled={movingMemberId === id}
+                                      className="shrink-0 rounded-md border border-white/10 bg-black/40 px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-cyan-500/50 disabled:opacity-60"
+                                    >
+                                      <option value="">
+                                        {movingMemberId === id ? 'Moving...' : 'Move to...'}
+                                      </option>
+                                      {otherTeams.map((target) => (
+                                        <option key={target.id} value={target.id}>{target.name}</option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
+                  {teamActionError && (
+                    <p className="mt-2 text-xs text-rose-400">{teamActionError}</p>
+                  )}
                 </div>
               )}
 

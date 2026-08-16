@@ -97,6 +97,29 @@ before(async () => {
       PendingRemovalReason VARCHAR(500) NULL
     );
 
+    -- Needed only so removeMember's isTeamLeadOfProject/findTeamMembersForProject reads resolve --
+    -- stays empty, no scenario in this file uses the multi-team architecture (that's covered by
+    -- projectTeamLeadAuthorization.test.ts instead), so the legacy ProjectMembers-only fallback in
+    -- isTeamLeadOfProject applies throughout.
+    CREATE TABLE work.ProjectTeams (
+      TeamId BIGSERIAL PRIMARY KEY,
+      ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+      TeamName VARCHAR(150) NOT NULL,
+      Description VARCHAR(2000) NOT NULL,
+      CreatedByUserId INT NOT NULL
+    );
+
+    CREATE TABLE work.TeamMembers (
+      TeamMemberId BIGSERIAL PRIMARY KEY,
+      TeamId BIGINT NOT NULL REFERENCES work.ProjectTeams(TeamId),
+      ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+      UserId INT NOT NULL REFERENCES iam.Users(UserId),
+      IsLead BOOLEAN NOT NULL DEFAULT FALSE,
+      AddedByUserId INT NOT NULL,
+      LeftAtUtc TIMESTAMPTZ NULL,
+      RemovedByUserId INT NULL
+    );
+
     -- Needed only so removeMember's findActiveTaskAssignmentsForUserInProject JOIN resolves --
     -- stays empty, nobody in this file's scenarios has any task assignments.
     CREATE TABLE work.TaskStatuses (
