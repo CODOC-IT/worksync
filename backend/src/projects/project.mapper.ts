@@ -1,4 +1,4 @@
-import { fromProjectPk, fromUserPk } from '../utils/idMapping.js';
+import { fromProjectPk, fromTeamPk, fromUserPk } from '../utils/idMapping.js';
 import {
   MilestoneDTO,
   MilestoneRow,
@@ -6,6 +6,9 @@ import {
   ProjectFileRow,
   ProjectMemberRow,
   ProjectRow,
+  ProjectTeamRow,
+  TeamDTO,
+  TeamMemberRow,
   DB_TO_API_PRIORITY,
   DB_TO_API_PROJECT_STATUS,
   ProjectDTO
@@ -60,7 +63,9 @@ export const rowToProjectDTO = (
   members: ProjectMemberRow[],
   progress: number,
   milestones?: MilestoneRow[],
-  files?: ProjectFileRow[]
+  files?: ProjectFileRow[],
+  teams?: ProjectTeamRow[],
+  teamMembers?: TeamMemberRow[]
 ): ProjectDTO => {
   const isPendingActivation = row.statuscode === 'PendingActivation';
 
@@ -90,6 +95,7 @@ export const rowToProjectDTO = (
     pendingRemovalMemberIds: members
       .filter((member) => member.pendingremovalatutc !== null)
       .map((member) => fromUserPk(member.userid)),
+    teams: teams && teamMembers ? buildTeamDTOs(teams, teamMembers) : [],
     startDate: formatDate(row.startdate),
     targetDate: formatDate(row.enddate),
     priority: DB_TO_API_PRIORITY[row.prioritycode],
@@ -100,4 +106,25 @@ export const rowToProjectDTO = (
     milestones: (milestones || []).map(rowToMilestoneDTO),
     files: (files || []).map(rowToProjectFileDTO)
   };
+};
+
+// Groups the active team-member rows under their teams into a TeamDTO list. Only members with a
+// matching team row (and whose ProjectMembers row is still active) are included; an orphaned
+// TeamMembers row is skipped rather than crashing the map.
+export const buildTeamDTOs = (teams: ProjectTeamRow[], teamMembers: TeamMemberRow[]): TeamDTO[] => {
+  const memberUserIds = new Set(teamMembers.map((m) => m.userid));
+  return teams.map((team) => {
+    const members = teamMembers
+      .filter((m) => m.teamid === team.teamid && memberUserIds.has(m.userid))
+      .sort((a, b) => (a.islead === b.islead ? a.userid - b.userid : a.islead ? -1 : 1));
+    const lead = members.find((m) => m.islead);
+    return {
+      id: fromTeamPk(team.teamid),
+      projectId: fromProjectPk(team.projectid),
+      name: team.teamname,
+      description: team.description,
+      leadId: lead ? fromUserPk(lead.userid) : '',
+      memberIds: members.map((m) => fromUserPk(m.userid))
+    };
+  });
 };

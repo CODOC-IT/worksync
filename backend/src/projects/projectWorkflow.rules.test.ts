@@ -4,6 +4,7 @@ import {
   buildProjectDecisionMessage,
   projectDecisionEffect,
   resolveCreateParticipants,
+  resolveTeamSetup,
   resolveUpdatedParticipants,
   validateProjectDecision
 } from './projectWorkflow.rules.js';
@@ -79,4 +80,55 @@ test('Project Edit approval applies proposed values', () => {
 
 test('Project Edit rejection preserves original values', () => {
   assert.equal(projectDecisionEffect('PROJECT_EDIT', 'Rejected'), 'discard-proposed-edit');
+});
+
+// --- Multi-team setup (resolveTeamSetup) ---------------------------------------------------
+
+test('empty team input signals the legacy single-lead path', () => {
+  const result = resolveTeamSetup(undefined);
+  assert.deepEqual(result, { teams: [], teamLeadUserIds: [], memberUserIds: [] });
+  assert.equal(result.error, undefined);
+});
+
+test('a valid multi-team setup flattens leads and members across teams', () => {
+  const result = resolveTeamSetup([
+    { name: 'Core', description: 'Platform work', leadId: 'usr-1', memberIds: ['usr-2'] },
+    { name: 'UI', description: 'Interface work', leadId: 'usr-3', memberIds: ['usr-4', 'usr-5'] }
+  ]);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.teamLeadUserIds, ['usr-1', 'usr-3']);
+  assert.deepEqual(result.memberUserIds, ['usr-2', 'usr-1', 'usr-4', 'usr-5', 'usr-3']);
+  assert.equal(result.teams.length, 2);
+  assert.deepEqual(result.teams[0], { name: 'Core', description: 'Platform work', leadId: 'usr-1', memberIds: ['usr-2', 'usr-1'] });
+});
+
+test('a team without at least one member besides its lead is rejected', () => {
+  const result = resolveTeamSetup([
+    { name: 'Core', description: 'Platform work', leadId: 'usr-1', memberIds: [] }
+  ]);
+  assert.match(result.error || '', /at least one member besides its Team Lead/i);
+  assert.deepEqual(result.teams, []);
+});
+
+test('a person cannot belong to more than one team in the same project', () => {
+  const result = resolveTeamSetup([
+    { name: 'Core', description: 'Platform work', leadId: 'usr-1', memberIds: ['usr-2'] },
+    { name: 'Ops', description: 'Ops work', leadId: 'usr-3', memberIds: ['usr-2'] }
+  ]);
+  assert.match(result.error || '', /more than one team/i);
+});
+
+test('duplicate team names are rejected case-insensitively', () => {
+  const result = resolveTeamSetup([
+    { name: 'Core', description: 'Platform work', leadId: 'usr-1', memberIds: ['usr-2'] },
+    { name: 'core', description: 'Duplicate', leadId: 'usr-3', memberIds: ['usr-4'] }
+  ]);
+  assert.match(result.error || '', /duplicate team name/i);
+});
+
+test('a team with a missing lead is rejected', () => {
+  const result = resolveTeamSetup([
+    { name: 'Core', description: 'Platform work', leadId: '', memberIds: ['usr-2'] }
+  ]);
+  assert.match(result.error || '', /must have a Team Lead/i);
 });

@@ -246,3 +246,54 @@ export const decideTaskEditApproval = async (req: AuthenticatedRequest, res: Res
     handleServiceError(error, res, 'Failed to decide task update request.');
   }
 };
+
+export const requestSubtaskTransfer = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const toTeamId = req.body?.toTeamId;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!toTeamId || typeof toTeamId !== 'string' || !/^tm-\d+$/.test(toTeamId)) {
+    res.status(400).json({ success: false, message: 'toTeamId must look like "tm-<n>".' });
+    return;
+  }
+  try {
+    const data = await service.requestSubtaskTransfer(req.params.id, toTeamId, reason, user.id, user.role);
+    res.status(201).json({ success: true, message: 'Subtask transfer requested for Admin approval.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to request subtask transfer.');
+  }
+};
+
+export const listSubtaskTransfers = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.listPendingSubtaskTransfers(user.role);
+    res.json({ success: true, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to load subtask transfer requests.');
+  }
+};
+
+export const decideSubtaskTransfer = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const decision = req.body?.decision;
+  if (decision !== 'Approved' && decision !== 'Rejected') {
+    res.status(400).json({ success: false, message: 'Decision must be Approved or Rejected.' });
+    return;
+  }
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (decision === 'Rejected' && !reason) {
+    res.status(400).json({ success: false, message: 'A rejection reason is required.' });
+    return;
+  }
+  try {
+    const data = await service.decideSubtaskTransfer(
+      req.params.requestId, decision, reason || null, user.id, user.role
+    );
+    res.json({ success: true, message: `Subtask transfer ${decision.toLowerCase()}.`, data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to decide subtask transfer request.');
+  }
+};

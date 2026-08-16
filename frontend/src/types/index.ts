@@ -46,6 +46,17 @@ export interface ProjectFile {
   dataUrl?: string;
 }
 
+// A team within a project (multi-team architecture). Exactly one member (leadId) leads the team;
+// every project member belongs to exactly one team. See backend/src/projects/project.types.ts.
+export interface Team {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
+}
+
 export interface Project {
   id: string;
   code: string;
@@ -60,6 +71,10 @@ export interface Project {
   // assignments when an Admin tried to remove them -- see ProjectsView.tsx's pending-removal
   // confirmation dialog and backend/src/projects/project.service.ts's removeMember.
   pendingRemovalMemberIds?: string[];
+  // The project's team breakdown (multi-team architecture). Every project member belongs to
+  // exactly one team; team leads are also team members. Empty for projects created before this
+  // feature -- those keep working through the single project-lead model.
+  teams: Team[];
   startDate: string;
   targetDate: string;
   priority?: TaskPriority;

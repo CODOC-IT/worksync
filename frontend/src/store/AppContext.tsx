@@ -1067,7 +1067,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetDate: data.targetDate || toDateKey(defaultTargetDate),
         teamLeadId: data.teamLeadId,
         memberIds: eligibleProjectMemberIds(data.memberIds || []),
-        creationReason: data.creationReason
+        creationReason: data.creationReason,
+        teams: data.teams
       });
 
       // Milestones have their own dedicated endpoints (no bulk field on POST /api/projects,

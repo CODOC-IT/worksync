@@ -86,7 +86,17 @@ const TYPE_LINK_ROUTES: Record<string, string> = {
   holiday_created: 'calendar',
   user_registered: 'members',
   user_role_changed: 'members',
-  user_deactivated: 'members'
+  user_deactivated: 'members',
+  // Multi-team architecture: team reassignments are read on the project screen; an Admin-created
+  // task awaiting a team lead's assignment is acted on in Tasks; subtask transfers are decided in
+  // the Approvals inbox and read on Tasks afterward.
+  team_member_moved: 'projects',
+  team_member_removed_needs_reassignment: 'projects',
+  team_lead_changed: 'projects',
+  admin_task_needs_team_assignment: 'tasks',
+  subtask_transfer_requested: 'approvals',
+  subtask_transfer_approved: 'tasks',
+  subtask_transfer_rejected: 'tasks'
 };
 
 export const deriveLinkRoute = (categoryCode: string, typeCode: string): string =>

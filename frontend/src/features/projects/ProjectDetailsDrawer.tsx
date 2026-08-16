@@ -268,6 +268,32 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                 )}
               </div>
 
+              {/* Teams (multi-team architecture) */}
+              {project.teams.length > 0 && (
+                <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
+                  <SectionLabel icon={<Users size={12} />}>
+                    Teams <span className="normal-case text-slate-600">({project.teams.length})</span>
+                  </SectionLabel>
+                  <div className="flex flex-col gap-2">
+                    {project.teams.map((team) => {
+                      const lead = users.find((u) => u.id === team.leadId);
+                      return (
+                        <div key={team.id} className="rounded-lg border border-white/10 bg-black/30 p-3">
+                          <p className="text-sm font-semibold text-slate-100">{team.name}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{team.description}</p>
+                          <p className="mt-1.5 text-xs text-slate-300">
+                            <span className="text-cyan-300">Lead:</span> {lead?.name || 'Unassigned'}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            Members: {team.memberIds.map((id) => users.find((u) => u.id === id)?.name || id).join(', ')}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Milestones */}
               <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
                 <SectionLabel icon={<Target size={12} />}>

@@ -9,6 +9,8 @@ import {
   validateCreateProjectBody,
   validateCreateProjectFileBody,
   validateMemberBody,
+  validateMoveMemberBody,
+  validateReplaceTeamLeadBody,
   validateUpdateMilestoneBody,
   validateUpdateProjectBody
 } from './project.validation.js';
@@ -265,6 +267,44 @@ export const removeMember = async (req: AuthenticatedRequest, res: Response): Pr
     res.json({ success: true, message: 'Member removed successfully.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to remove project member.');
+  }
+};
+
+export const moveMember = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateMoveMemberBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { userId, toTeamId } = req.body as { userId: string; toTeamId: string };
+    const data = await service.moveMember(req.params.id, userId, toTeamId, user.id, user.role);
+    res.json({ success: true, message: 'Member moved successfully.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to move project member.');
+  }
+};
+
+export const replaceTeamLead = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateReplaceTeamLeadBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { userId } = req.body as { userId: string };
+    const data = await service.replaceTeamLead(req.params.id, req.params.teamId, userId, user.id, user.role);
+    res.json({ success: true, message: 'Team Lead replaced successfully.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to replace the Team Lead.');
   }
 };
 

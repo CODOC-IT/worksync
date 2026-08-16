@@ -72,6 +72,17 @@ default schedule is left untouched.
 expectation instead of 0 (which would otherwise classify un-scheduled days as Short Hours).
 `CREATE OR REPLACE` only; safe to run more than once.
 
+`20260816_01_project_teams.sql` installs the multi-team project architecture: `work.ProjectTeams`
+(a team within a project, with a unique-per-project name and a required description),
+`work.TeamMembers` (a person's membership in one team of a project, with a `UNIQUE(ProjectId,
+UserId)` enforcing the "one person, one team per project" invariant, `IsLead` marking the team's
+lead, and a partial unique index guaranteeing at most one lead per team), and a nullable
+`work.Tasks.TeamId` plus `AssignmentStatus` (`NeedsTeamAssignment` for an Admin-created task the
+team lead has yet to assign, `Assigned` otherwise). Also seeds the `team_member_moved`,
+`team_lead_changed`, `team_member_removed_needs_reassignment`, `admin_task_needs_team_assignment`,
+and `subtask_transfer_*` notification types. Additive and safe to run more than once; existing
+projects simply have no team rows and keep working through the single project-lead model.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
