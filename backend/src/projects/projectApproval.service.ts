@@ -182,14 +182,18 @@ export const createApprovalRequest = async (
 export const createTaskApprovalRequest = async (
   proposed: CreateTaskInput, requesterId: string, requesterRole: string
 ): Promise<ProjectApprovalRequestDTO> => {
-  if (requesterRole !== 'Team_Lead' && requesterRole !== 'Team_Member') throw new ProjectAuthorizationError('Only Team Leads can submit task creation requests.');
+  if (requesterRole !== 'Team_Lead') throw new ProjectAuthorizationError('Only Team Leads can submit task creation requests.');
   const projectPk = toProjectPk(proposed.projectId);
   const project = await projectRepo.findProjectById(projectPk);
   if (!project || project.statuscode !== 'Active') throw new ProjectNotFoundError('Active project not found.');
-  const members = await projectRepo.findMembersForProject(projectPk);
-  if (resolveTeamLeadUserId(project, members) !== requesterId) throw new ProjectAuthorizationError('You can only create tasks for a project you lead.');
-  const teams = await projectRepo.findTeamsForProject(projectPk);
-  const teamMembers = await projectRepo.findTeamMembersForProject(projectPk);
+  const [members, teams, teamMembers] = await Promise.all([
+    projectRepo.findMembersForProject(projectPk),
+    projectRepo.findTeamsForProject(projectPk),
+    projectRepo.findTeamMembersForProject(projectPk)
+  ]);
+  if (!isTeamLeadOfProject(project, members, teamMembers, requesterId)) {
+    throw new ProjectAuthorizationError('You can only create tasks for a project you lead.');
+  }
   if (teams.length > 0) {
     const actorTeam = teamMembers.find((member) => member.userid === toUserPk(requesterId) && member.islead);
     if (!actorTeam) throw new ProjectAuthorizationError('You can only create tasks for your own team.');
