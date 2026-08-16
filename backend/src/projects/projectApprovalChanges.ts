@@ -44,7 +44,7 @@ const FIELD_LABELS: Partial<Record<keyof UpdateProjectInput, string>> = {
   startDate: 'Start Date',
   targetDate: 'Due Date',
   status: 'Status',
-  teamLeadId: 'Project Lead',
+  teamLeadId: 'Team Lead',
   memberIds: 'Members',
   creationReason: 'Project Context'
 };

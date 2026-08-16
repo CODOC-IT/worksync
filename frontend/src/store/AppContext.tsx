@@ -77,6 +77,8 @@ import {
   permanentlyDeleteProjectApi,
   restoreProjectApi,
   addProjectMemberApi,
+  moveProjectMemberApi,
+  replaceTeamLeadApi,
   addMilestoneApi,
   updateMilestoneApi,
   deleteMilestoneApi,
@@ -209,6 +211,11 @@ interface AppState {
   deleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   permanentlyDeleteProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   restoreProject: (projectId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  // Admin-only (backend/src/projects/project.service.ts's assertCanManageMembers rejects anyone
+  // else): moves an existing project member into a different team of the same project.
+  moveProjectMember: (projectId: string, userId: string, toTeamId: string) => Promise<{ success: boolean; message: string }>;
+  // Admin-only, same gate: replaces a team's Team Lead with another existing project member.
+  replaceProjectTeamLead: (projectId: string, teamId: string, userId: string) => Promise<{ success: boolean; message: string }>;
   // Fetches this project's full server detail (includes real, persisted milestones -- the list
   // endpoint backing `projects` deliberately doesn't, to avoid an N+1 query on every project list
   // load), merges it in, and returns it -- called when the Project Details popup or the Edit form
@@ -1497,6 +1504,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to restore project.', error);
       return { success: false, message: error?.message || 'Failed to restore the project. Please try again.' };
+    }
+  };
+
+  // Admin moves an existing project member into a different team of the same project
+  // (backend/src/projects/project.routes.ts's POST /:id/members/move). Milestones/files are
+  // preserved from the current client state, same reasoning as updateProject above -- the
+  // returned ProjectDTO never carries them.
+  const moveProjectMember = async (
+    projectId: string,
+    userId: string,
+    toTeamId: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      const updated = await moveProjectMemberApi(projectId, userId, toTeamId);
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, ...updated, milestones: p.milestones, files: p.files } : p))
+      );
+      pushActivity('Moved project member', 'Project', projectId, updated.title);
+      const message = 'Member moved to the new team successfully.';
+      confirmActionSuccess('Member Moved', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to move project member.', error);
+      return { success: false, message: error?.message || 'Failed to move the member. Please try again.' };
+    }
+  };
+
+  // Admin replaces a team's Team Lead with another existing project member
+  // (backend/src/projects/project.routes.ts's POST /:id/teams/:teamId/lead).
+  const replaceProjectTeamLead = async (
+    projectId: string,
+    teamId: string,
+    userId: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return { success: false, message: 'Project not found.' };
+
+    try {
+      const updated = await replaceTeamLeadApi(projectId, teamId, userId);
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, ...updated, milestones: p.milestones, files: p.files } : p))
+      );
+      pushActivity('Replaced Team Lead', 'Project', projectId, updated.title);
+      const message = 'Team Lead replaced successfully.';
+      confirmActionSuccess('Team Lead Replaced', message);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('Failed to replace the Team Lead.', error);
+      return { success: false, message: error?.message || 'Failed to replace the Team Lead. Please try again.' };
     }
   };
 
@@ -3321,6 +3380,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteProject,
         permanentlyDeleteProject,
         restoreProject,
+        moveProjectMember,
+        replaceProjectTeamLead,
         refreshProjectDetails,
         projectApprovalRequests,
         approveProjectApprovalRequest,

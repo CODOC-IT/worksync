@@ -1,5 +1,11 @@
 ﻿import * as repo from './project.repository.js';
-import { resolveTeamLeadUserId, rowToMilestoneDTO, rowToProjectDTO, rowToProjectFileDTO } from './project.mapper.js';
+import {
+  isTeamLeadOfProject,
+  resolveTeamLeadUserId,
+  rowToMilestoneDTO,
+  rowToProjectDTO,
+  rowToProjectFileDTO
+} from './project.mapper.js';
 import { fromTeamPk, fromUserPk, toProjectPk, toTeamPk, toUserPk } from '../utils/idMapping.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
@@ -81,8 +87,13 @@ const assertCanManage = async (projectRow: ProjectRow, userId: string, role: str
   if (role === 'HR') {
     throw new ProjectAuthorizationError('HR users cannot manage projects.');
   }
-  const members = await repo.findMembersForProject(projectRow.projectid);
-  if (resolveTeamLeadUserId(projectRow, members) !== userId) {
+  const [members, teamMembers] = await Promise.all([
+    repo.findMembersForProject(projectRow.projectid),
+    repo.findTeamMembersForProject(projectRow.projectid)
+  ]);
+  // isTeamLeadOfProject (not resolveTeamLeadUserId's single representative value) so every team's
+  // lead on a multi-team project passes this, not just the first 'TeamLead' row found.
+  if (!isTeamLeadOfProject(projectRow, members, teamMembers, userId)) {
     throw new ProjectAuthorizationError('You can only manage projects you lead.');
   }
 };
@@ -202,8 +213,13 @@ export const isProjectLead = async (
   if (role === 'HR') return false;
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) return false;
-  const members = await repo.findMembersForProject(row.projectid);
-  return resolveTeamLeadUserId(row, members) === userId;
+  const [members, teamMembers] = await Promise.all([
+    repo.findMembersForProject(row.projectid),
+    repo.findTeamMembersForProject(row.projectid)
+  ]);
+  // isTeamLeadOfProject, not a single resolved lead -- a multi-team project has one 'TeamLead'
+  // row per team, and every one of them must be recognized here, not just the first found.
+  return isTeamLeadOfProject(row, members, teamMembers, userId);
 };
 
 export const getProjectForUser = async (projectId: string, userId: string, role: string): Promise<ProjectDTO> => {
@@ -351,10 +367,11 @@ export const createProject = async (
   const dto = await buildDTO(row!, members);
   const actorName = actorDisplayName(actorId);
 
-  // The project's Team Lead reads a distinct "...as the Project Lead" message; every other
-  // recipient gets the plain "added you to it" wording — never the reverse (see
-  // docs/Notification_Module_Guide.md's Project Lead assignment section). `recipientMessages`
-  // is per-recipient, so this is one publishEvent call, not two.
+  // The project's Team Lead reads a distinct "...as the Team Lead" message; every other
+  // recipient gets the plain "added you to it" wording — never the reverse. `recipientMessages`
+  // is per-recipient, so this is one publishEvent call, not two. There is no separate "Project
+  // Lead" concept -- this is the same per-project Team Lead designation resolveTeamLeadUserId
+  // resolves, just worded for whoever that happens to be on a single-lead/legacy project.
   const leadFrontendId = teamLeadPk ? fromUserPk(teamLeadPk) : undefined;
 
   if (statusCode === 'Active') {
@@ -363,7 +380,7 @@ export const createProject = async (
       title: 'Project Created',
       message: `${actorName} created "${dto.title}" and added you to it.`,
       recipientMessages: leadFrontendId
-        ? { [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead.` }
+        ? { [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Team Lead.` }
         : undefined,
       actorId,
       projectId: dto.id
@@ -377,7 +394,7 @@ export const createProject = async (
       message: `${actorName} created "${dto.title}" and added you to it (pending Admin activation).`,
       recipientMessages: leadFrontendId
         ? {
-            [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Project Lead ` +
+            [leadFrontendId]: `${actorName} created "${dto.title}" and added you to it as the Team Lead ` +
               '(pending Admin activation).'
           }
         : undefined,
@@ -577,8 +594,8 @@ export const updateProject = async (
     notificationService
       .publishEvent({
         type: 'project_member_added',
-        title: 'Assigned as Project Lead',
-        message: `${actorName} assigned you as the Project Lead of "${dto.title}".`,
+        title: 'Assigned as Team Lead',
+        message: `${actorName} assigned you as the Team Lead of "${dto.title}".`,
         actorId,
         projectId: dto.id,
         recipientIds: [input.teamLeadId]
@@ -746,7 +763,7 @@ export const addMember = async (
   const dto = await buildDTO(row, members);
   const actorName = actorDisplayName(actorId);
 
-  // Only a member added specifically as the project's Team Lead reads "...as the Project Lead" —
+  // Only a member added specifically as the project's Team Lead reads "...as the Team Lead" —
   // every other member role (plain Member, Reviewer, Observer) gets the plain wording.
   const isLead = roleCode === 'TeamLead';
   notificationService
@@ -754,7 +771,7 @@ export const addMember = async (
       type: 'project_member_added',
       title: 'Added to Project',
       message: isLead
-        ? `${actorName} added you to "${dto.title}" as the Project Lead.`
+        ? `${actorName} added you to "${dto.title}" as the Team Lead.`
         : `${actorName} added you to "${dto.title}".`,
       actorId,
       projectId: dto.id,
@@ -785,8 +802,14 @@ export const removeMember = async (
   const row = await repo.findProjectById(toProjectPk(projectId));
   if (!row) throw new ProjectNotFoundError('Project not found.');
   assertCanManageMembers(actorRole);
-  const currentMembers = await repo.findMembersForProject(row.projectid);
-  if (resolveTeamLeadUserId(row, currentMembers) === memberUserId) {
+  const [currentMembers, currentTeamMembers] = await Promise.all([
+    repo.findMembersForProject(row.projectid),
+    repo.findTeamMembersForProject(row.projectid)
+  ]);
+  // isTeamLeadOfProject so removing any one of a multi-team project's several team leads is
+  // blocked the same way removing the sole lead of a single-team project already was -- not just
+  // whichever one resolveTeamLeadUserId happens to resolve first.
+  if (isTeamLeadOfProject(row, currentMembers, currentTeamMembers, memberUserId)) {
     throw new ProjectValidationError(
       'The current Team Lead cannot be removed. Assign another Team Lead before removing this member.'
     );
@@ -950,6 +973,18 @@ export const replaceTeamLead = async (
   const projectMembers = await repo.findMembersForProject(row.projectid);
   if (!projectMembers.some((m) => fromUserPk(m.userid) === newLeadId)) {
     throw new ProjectValidationError('The new Team Lead must already be a member of this project.');
+  }
+  // Reject up front, before the repository attempts a write: if the replacement is already an
+  // active member of a *different* team in this project, repo.replaceTeamLead would try to insert
+  // a second work.TeamMembers row for the same (ProjectId, UserId), which collides with
+  // UQ_TeamMembers_Project_User (the one-team-per-project invariant) and previously surfaced as a
+  // raw Postgres 23505 unique-violation instead of a clean validation error.
+  const projectTeamMembers = await repo.findTeamMembersForProject(row.projectid);
+  const newLeadCurrentTeam = projectTeamMembers.find((m) => fromUserPk(m.userid) === newLeadId);
+  if (newLeadCurrentTeam && newLeadCurrentTeam.teamid !== team.teamid) {
+    throw new ProjectValidationError(
+      'That person is already on a different team in this project. Move them to this team first, or choose someone else.'
+    );
   }
   await assertEligibleAssignee(newLeadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
 

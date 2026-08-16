@@ -20,14 +20,43 @@ const formatDate = (value: string | Date): string =>
 // The project's functional lead: whoever has the explicit 'TeamLead' membership row, or — when
 // nobody does, which is the common case for a project a Team Lead created for themselves (see
 // project.repository.ts's insertProject: the creator only gets an 'Owner' row when they're also
-// the team lead, never a redundant second 'TeamLead' row) — the project's Owner. This is the
-// single source of truth for "who leads this project"; both the DTO (display) and
-// project.service.ts's isProjectLead/assertCanManage (authorization) must agree on it, or a
-// self-led project's own creator ends up locked out of managing it despite the UI correctly
-// showing them as the lead.
+// the team lead, never a redundant second 'TeamLead' row) — the project's Owner. This is a single
+// *representative* lead for display purposes (the DTO's `teamLeadId`, "who to notify" defaults,
+// etc.) — a multi-team project can have several people holding a 'TeamLead' row, and this only
+// ever returns the first one found. Do NOT use this for an authorization decision ("is this
+// person allowed to...") — use isTeamLeadOfProject below for that, which recognizes every one of
+// them, not just the first.
 export const resolveTeamLeadUserId = (row: ProjectRow, members: ProjectMemberRow[]): string => {
   const teamLead = members.find((member) => member.memberrolecode === 'TeamLead');
   return teamLead ? fromUserPk(teamLead.userid) : fromUserPk(row.owneruserid);
+};
+
+// Whether `userId` is recognized as *a* Team Lead of this project.
+//
+// For a multi-team project (teamMembers non-empty), work.TeamMembers.IsLead is the authoritative
+// source, not ProjectMembers.MemberRoleCode='TeamLead' -- project.repository.ts's insertProject/
+// insertTeam deliberately never writes a redundant 'TeamLead' ProjectMembers row for a team lead
+// who is also the project's Owner (they already have an 'Owner' row), so a project where the
+// Owner leads one team and someone else leads another only has ONE explicit 'TeamLead'
+// ProjectMembers row even though there are two real team leads. Reading IsLead directly avoids
+// that gap and correctly recognizes every team's lead, including an Owner who leads a team.
+//
+// For a single-lead/legacy/no-team project (teamMembers empty), this falls back to the original
+// ProjectMembers-only rule -- resolveTeamLeadUserId's exact logic, generalized from "the first
+// 'TeamLead' row" to "any 'TeamLead' row" (a no-op for 0 or 1 such rows, which is every legacy
+// project), so existing single-lead behavior is unchanged.
+export const isTeamLeadOfProject = (
+  row: ProjectRow,
+  members: ProjectMemberRow[],
+  teamMembers: TeamMemberRow[],
+  userId: string
+): boolean => {
+  if (teamMembers.length > 0) {
+    return teamMembers.some((member) => member.islead && fromUserPk(member.userid) === userId);
+  }
+  const teamLeads = members.filter((member) => member.memberrolecode === 'TeamLead');
+  if (teamLeads.length === 0) return fromUserPk(row.owneruserid) === userId;
+  return teamLeads.some((member) => fromUserPk(member.userid) === userId);
 };
 
 // Shared by rowToProjectDTO below (list/detail fetches) and project.service.ts's
