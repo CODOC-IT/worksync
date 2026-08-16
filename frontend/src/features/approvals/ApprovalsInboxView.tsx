@@ -472,23 +472,28 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
       return;
     }
     setReviewLoading(true);
-    let result: { success: boolean; message: string };
-    if (reviewTarget.kind === 'system') {
-      result = reviewTarget.action === 'approve'
-        ? await approveApprovalItem(reviewTarget.item.id)
-        : await rejectApprovalItem(reviewTarget.item.id);
-    } else if (reviewTarget.kind === 'hr') {
-      result = reviewTarget.action === 'approve'
-        ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
-        : await rejectHRRequest(reviewTarget.item.id, reason);
-    } else {
-      result = reviewTarget.action === 'approve'
-        ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
-        : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+    try {
+      let result: { success: boolean; message: string };
+      if (reviewTarget.kind === 'system') {
+        result = reviewTarget.action === 'approve'
+          ? await approveApprovalItem(reviewTarget.item.id)
+          : await rejectApprovalItem(reviewTarget.item.id);
+      } else if (reviewTarget.kind === 'hr') {
+        result = reviewTarget.action === 'approve'
+          ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
+          : await rejectHRRequest(reviewTarget.item.id, reason);
+      } else {
+        result = reviewTarget.action === 'approve'
+          ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
+          : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+      }
+      setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.success) setReviewTarget(null);
+    } catch (error: any) {
+      setReviewError(error?.message || 'The approval decision could not be completed.');
+    } finally {
+      setReviewLoading(false);
     }
-    setReviewLoading(false);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    if (result.success) setReviewTarget(null);
   };
 
   const renderReviewModal = () => reviewTarget && (

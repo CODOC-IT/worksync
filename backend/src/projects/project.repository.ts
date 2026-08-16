@@ -658,6 +658,21 @@ export const updateProject = async (projectId: number, updates: UpdateProjectRow
   return (result.rowCount ?? 0) > 0;
 };
 
+// PROJECT_CREATE approval has one legal transition: PendingActivation -> Active. Keeping this
+// conditional and separate from the broad edit update prevents a stale create-approval request
+// from reactivating an already-decided or otherwise transitioned project.
+export const activatePendingProject = async (projectId: number): Promise<boolean> => {
+  const activeStatusId = await getProjectStatusId('Active');
+  const pendingStatusId = await getProjectStatusId('PendingActivation');
+  const result = await query(
+    `UPDATE work.projects
+        SET projectstatusid = $1, updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
+      WHERE projectid = $2 AND projectstatusid = $3`,
+    [activeStatusId, projectId, pendingStatusId]
+  );
+  return (result.rowCount ?? 0) === 1;
+};
+
 // Soft-delete (archive), matching the schema's CK_Projects_Archive constraint shape (all three
 // archive fields set together or not at all) — never a hard DELETE, same "preserve the audit
 // trail" pattern the Notification Module already uses for clearing a notification.

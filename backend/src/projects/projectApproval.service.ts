@@ -263,7 +263,7 @@ export const decideApprovalRequest = async (
   if (decision === 'Approved') {
     switch (row.requesttype) {
       case 'PROJECT_CREATE':
-        await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
+        await projectService.activatePendingProject(projectIdStr, 'Admin');
         break;
       case 'TASK_CREATE': {
         const proposal = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) as CreateTaskInput : null;
