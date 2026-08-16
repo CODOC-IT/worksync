@@ -96,3 +96,5 @@ Before applying an IAM migration in production:
 2. Apply through a privileged migration connection, never a browser client.
 3. Run the protected reconciliation process from the provisioning rollout before enabling the
    Supabase-only authentication middleware.
+`20260816_02_task_create_approvals.sql` extends the existing persisted project-management approval
+store with `TASK_CREATE`; no parallel approval table is introduced.

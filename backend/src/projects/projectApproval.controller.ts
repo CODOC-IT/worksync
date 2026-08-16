@@ -31,10 +31,23 @@ export const listPending = async (req: AuthenticatedRequest, res: Response): Pro
   const user = requireUser(req, res);
   if (!user) return;
   try {
-    const data = await service.listPendingApprovalsForAdmin(user.role);
+    const rawStatus = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const status = rawStatus === 'Pending' || rawStatus === 'Approved' || rawStatus === 'Rejected' ? rawStatus : undefined;
+    const data = await service.listApprovalsForAdmin(user.role, status);
     res.json({ success: true, data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to load pending approval requests.');
+  }
+};
+
+export const changeSetup = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  try {
+    const data = await service.changePendingSetup(req.params.id, req.body || {}, user.id, user.role);
+    res.json({ success: true, message: 'Setup saved. The request remains pending.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to save setup.');
   }
 };
 

@@ -11,6 +11,7 @@ router.get('/', controller.listPending);
 
 // GET /api/projects/approval-requests/mine -- the calling Team Lead's own submitted requests.
 router.get('/mine', controller.listMine);
+router.patch('/:id/setup', controller.changeSetup);
 
 // PATCH /api/projects/approval-requests/:id/approve -- body: { reason? }
 router.patch('/:id/approve', controller.approve);

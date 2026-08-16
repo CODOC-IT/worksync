@@ -312,7 +312,6 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
 
   const projectMembers = await projectRepo.findMembersForProject(projectRow.projectid);
   const projectMemberIds = new Set(projectMembers.map((member) => fromUserPk(member.userid)));
-  const projectLeadId = resolveTeamLeadUserId(projectRow, projectMembers);
 
   // --- Multi-team scoping ----------------------------------------------------------------
   // When a project uses teams, a task belongs to exactly one team. A Team Lead may only build
@@ -353,9 +352,8 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
     }
-    if (taskInput.assigneeIds.includes(projectLeadId)) {
-      throw new TaskValidationError('The active project Team Lead cannot be assigned development tasks in this project.');
-    }
+    // A Team Lead may assign work to themselves within their own team. Team/project scoping
+    // above still prevents them from assigning anyone outside that team.
     const hrAssignee = taskInput.assigneeIds.find((assigneeId) => userStore.findById(assigneeId)?.role === 'HR');
     if (hrAssignee) {
       throw new TaskValidationError('HR users cannot be assigned tasks.');

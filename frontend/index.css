@@ -272,6 +272,19 @@
   transform: none;
 }
 
+/* Approval-type pills need explicit light-theme hover contrast; generic translucent hover
+   utilities otherwise inherit a purple foreground over a purple-tinted surface. */
+.light [data-approval-type-filters] button:hover {
+  color: #312e81;
+  background: rgba(139, 92, 246, 0.14);
+  border-color: rgba(109, 40, 217, 0.38);
+}
+
+.light [data-approval-type-filters] button:disabled {
+  color: #64748b;
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .light .text-gradient-neon {
   background: none;
   -webkit-text-fill-color: currentColor;
