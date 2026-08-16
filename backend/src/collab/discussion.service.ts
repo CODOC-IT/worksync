@@ -1,7 +1,7 @@
 import * as repo from './discussion.repository.js';
 import { buildCommentDTO, buildThreadDTO } from './discussion.mapper.js';
 import { parseAttachmentDataUrl } from './fileStorage.js';
-import { fromProjectPk, fromTaskPk, fromUserPk, toCommentPk, toProjectPk, toTaskPk, toThreadPk, toUserPk } from '../utils/idMapping.js';
+import { fromProjectPk, fromTaskPk, fromTeamPk, fromUserPk, toCommentPk, toProjectPk, toTaskPk, toTeamPk, toThreadPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 import * as projectRepo from '../projects/project.repository.js';
@@ -76,12 +76,14 @@ const assertProjectDiscussionOpen = (statusCode: string): void => {
   }
 };
 
-const assertValidMentions = async (mentionIds: string[], projectId: number, taskId?: number): Promise<number[]> => {
+const assertValidMentions = async (mentionIds: string[], projectId: number, taskId?: number, teamId?: number): Promise<number[]> => {
   const mentionPks = Array.from(new Set(mentionIds.map(toUserPk)));
   if (mentionPks.length === 0) return [];
   const mentionableUserIds = new Set(
     (taskId
       ? await repo.findMentionableUsersForTask(taskId, projectId)
+      : teamId
+      ? await repo.findMentionableUsersForTeam(teamId, projectId)
       : await repo.findMentionableUsersForProjects([projectId])
     ).map((row) => row.userid)
   );
@@ -90,6 +92,8 @@ const assertValidMentions = async (mentionIds: string[], projectId: number, task
       throw new DiscussionValidationError(
         taskId
           ? 'You can only mention task assignees, this project\'s Team Lead, HR, or Admin users.'
+          : teamId
+          ? 'You can only mention this team\'s members, this project\'s Team Lead, HR, or Admin users.'
           : 'You can only mention active project members, HR, or Admin users.',
         'mentionIds'
       );
@@ -133,6 +137,8 @@ const hydrateThreads = async (
       const opening = rowsForThread.find((c) => !c.parentcommentid) || rowsForThread[0];
       const scopedRows = row.taskid
         ? await repo.findMentionableUsersForTask(row.taskid, row.effectiveprojectid)
+        : row.teamid
+        ? await repo.findMentionableUsersForTeam(row.teamid, row.effectiveprojectid)
         : mentionableRows.filter((candidate) => candidate.projectid === row.effectiveprojectid);
       const mentionableUserIds = scopedRows.map((candidate) => fromUserPk(candidate.userid));
       return buildThreadDTO(row, comments, opening?.commentkind || 'General', mentionableUserIds);
@@ -151,6 +157,8 @@ const assertThreadAccessible = async (row: DiscussionThreadRow, userId: string, 
   const accessible = hasGlobalDiscussionAccess(role)
     || (row.taskid
       ? (await repo.findMentionableUsersForTask(row.taskid, row.effectiveprojectid)).some((candidate) => fromUserPk(candidate.userid) === userId)
+      : row.teamid
+      ? (await repo.findMentionableUsersForTeam(row.teamid, row.effectiveprojectid)).some((candidate) => fromUserPk(candidate.userid) === userId)
       : await isProjectAccessible(fromProjectPk(row.effectiveprojectid), userId, role));
   if (!accessible) throw new DiscussionNotFoundError('Discussion not found.');
   const project = await projectRepo.findProjectById(row.effectiveprojectid);
@@ -183,6 +191,7 @@ export const getThreadForUser = async (threadId: string, userId: string, role: s
 export interface CreateThreadServiceInput {
   projectId: string;
   taskId?: string;
+  teamId?: string;
   title: string;
   type: DiscussionType;
   body: string;
@@ -208,6 +217,8 @@ export const createThread = async (
 
   let taskPk: number | undefined;
   let taskTitle: string | undefined;
+  let teamPk: number | undefined;
+  let teamName: string | undefined;
   if (input.taskId) {
     const taskRow = await taskRepo.findTaskById(toTaskPk(input.taskId));
     if (!taskRow || taskRow.projectid !== projectRow.projectid) {
@@ -219,17 +230,29 @@ export const createThread = async (
     if (!hasGlobalDiscussionAccess(actorRole) && !taskAudience.some((candidate) => fromUserPk(candidate.userid) === actorId)) {
       throw new DiscussionAuthorizationError('Only an active task assignee or this project\'s current Team Lead can start a task discussion.');
     }
+  } else if (input.teamId) {
+    const teamRow = await projectRepo.findTeamById(toTeamPk(input.teamId));
+    if (!teamRow || teamRow.projectid !== projectRow.projectid) {
+      throw new DiscussionValidationError('The selected team must belong to the selected project.', 'teamId');
+    }
+    teamPk = teamRow.teamid;
+    teamName = teamRow.teamname;
+    const teamAudience = await repo.findMentionableUsersForTeam(teamPk, projectRow.projectid);
+    if (!hasGlobalDiscussionAccess(actorRole) && !teamAudience.some((candidate) => fromUserPk(candidate.userid) === actorId)) {
+      throw new DiscussionAuthorizationError('Only a member of this team or this project\'s current Team Lead can start a team discussion.');
+    }
   }
 
   const title = input.title.trim();
   const body = input.body.trim();
-  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid, taskPk);
+  const mentionPks = await assertValidMentions(input.mentionIds, projectRow.projectid, taskPk, teamPk);
   assertAttachmentsHaveContent(input.attachments);
   const commentKind: CommentKindCode = API_TO_DB_DISCUSSION_TYPE[input.type];
 
   const { threadId } = await repo.insertThread({
     projectId: projectRow.projectid,
     taskId: taskPk,
+    teamId: teamPk,
     title,
     commentKind,
     creatorUserId: toUserPk(actorId),
@@ -243,6 +266,8 @@ export const createThread = async (
 
   const members = taskPk
     ? await repo.findMentionableUsersForTask(taskPk, projectRow.projectid)
+    : teamPk
+    ? await repo.findMentionableUsersForTeam(teamPk, projectRow.projectid)
     : await projectRepo.findMembersForProject(projectRow.projectid);
   await ensureUserCacheWarmed();
   // actorDisplayName resolves Display Name -> Username -> Email -> Role -> "Unknown User" and
@@ -251,13 +276,18 @@ export const createThread = async (
   // ensureUserCacheWarmed() above (a transient sync failure, or the actor genuinely not existing).
   const actorName = actorDisplayName(actorId);
   const mentionedIds = new Set(mentionPks.map(fromUserPk).filter((id) => id !== actorId));
+  const scopeLabel = taskPk
+    ? `on "${taskTitle}"`
+    : teamPk
+    ? `in the ${teamName} team`
+    : '';
 
   notify(
     members.map((m) => fromUserPk(m.userid)).filter((id) => id !== actorId && !mentionedIds.has(id)),
     {
       type: 'chat_new_message',
       title: 'New Discussion Started',
-      message: `${actorName} started a discussion "${title}" in ${projectRow.projectname}.`,
+      message: `${actorName} started a discussion "${title}" ${scopeLabel} in ${projectRow.projectname}.`,
       actorId,
       projectId: input.projectId,
       taskId: input.taskId
@@ -266,7 +296,7 @@ export const createThread = async (
   notify([...mentionedIds], {
     type: 'mention',
     title: 'You Were Mentioned',
-    message: `${actorName} mentioned you in a new discussion "${title}" in ${projectRow.projectname}.`,
+    message: `${actorName} mentioned you in a new discussion "${title}" ${scopeLabel} in ${projectRow.projectname}.`,
     actorId,
     projectId: input.projectId,
     taskId: input.taskId
@@ -278,13 +308,15 @@ export const createThread = async (
     entityType: 'Comment', entityId: thread.id, entityName: title,
     projectId: input.projectId, projectName: projectRow.projectname,
     taskId: input.taskId, taskName: taskTitle,
-    description: `${actorName} started discussion "${title}" in "${projectRow.projectname}".`,
+    description: `${actorName} started discussion "${title}" in "${projectRow.projectname}"${scopeLabel ? ` ${scopeLabel.trim()}` : ''}.`,
     reason: body, linkRoute: 'project-chats', important: input.type === 'Blocker' || input.type === 'Decision',
     metadata: {
       discussionType: input.type,
       hasMentions: mentionPks.length > 0,
       hasAttachments: input.attachments.length > 0,
       mentionCount: mentionPks.length,
+      teamId: teamPk ? fromTeamPk(teamPk) : undefined,
+      teamName,
       attachments: input.attachments.map((file) => ({ name: file.name, mimeType: file.mimeType, size: file.size }))
     }
   });
