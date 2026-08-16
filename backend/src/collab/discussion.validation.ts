@@ -26,6 +26,7 @@ export const DISCUSSION_TYPES = new Set<DiscussionType>([
 const FRONTEND_USER_ID_PATTERN = /^usr-\d+$/;
 const FRONTEND_PROJECT_ID_PATTERN = /^prj-\d+$/;
 const FRONTEND_TASK_ID_PATTERN = /^tsk-\d+$/;
+const FRONTEND_TEAM_ID_PATTERN = /^tm-\d+$/;
 const SAFE_FILE_NAME = /^[\w. -]+$/;
 
 export const isValidAttachmentShape = (value: unknown): value is { id?: string; name: string; mimeType: string; size: number; url?: string } => {
@@ -53,6 +54,12 @@ export const validateCreateThreadBody = (body: unknown): ValidationResult => {
   }
   if (input.taskId !== undefined && (typeof input.taskId !== 'string' || !FRONTEND_TASK_ID_PATTERN.test(input.taskId))) {
     return { valid: false, message: 'Select a valid task.' };
+  }
+  if (input.teamId !== undefined && (typeof input.teamId !== 'string' || !FRONTEND_TEAM_ID_PATTERN.test(input.teamId))) {
+    return { valid: false, message: 'Select a valid team.' };
+  }
+  if (input.taskId !== undefined && input.teamId !== undefined) {
+    return { valid: false, message: 'A discussion can be scoped to a task or a team, not both.' };
   }
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 200) {
     return { valid: false, message: 'Enter a discussion title of up to 200 characters.' };

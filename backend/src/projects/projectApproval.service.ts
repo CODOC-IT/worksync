@@ -1,7 +1,7 @@
 import * as repo from './projectApproval.repository.js';
 import * as projectRepo from './project.repository.js';
 import * as projectService from './project.service.js';
-import { resolveTeamLeadUserId, rowToProjectDTO } from './project.mapper.js';
+import { isTeamLeadOfProject, rowToProjectDTO } from './project.mapper.js';
 import { fromProjectPk, fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -126,8 +126,13 @@ export const createApprovalRequest = async (
   const row = await projectRepo.findProjectById(projectPk);
   if (!row) throw new ProjectNotFoundError('Project not found.');
 
-  const members = await projectRepo.findMembersForProject(projectPk);
-  if (resolveTeamLeadUserId(row, members) !== requesterId) {
+  const [members, teamMembers] = await Promise.all([
+    projectRepo.findMembersForProject(projectPk),
+    projectRepo.findTeamMembersForProject(projectPk)
+  ]);
+  // isTeamLeadOfProject so any of a multi-team project's several team leads may submit a request
+  // for it, not just whichever one resolveTeamLeadUserId happens to resolve first.
+  if (!isTeamLeadOfProject(row, members, teamMembers, requesterId)) {
     throw new ProjectAuthorizationError('You can only request changes for projects you lead.');
   }
 

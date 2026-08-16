@@ -911,20 +911,38 @@ export const getProjectProgress = async (projectId: number): Promise<number> => 
   return total > 0 ? Math.round((completed / total) * 100) : 0;
 };
 
+// This is the single place a member's project membership is ever actually ended -- both an
+// immediate removal (no active work) and a deferred one (project.service.ts's
+// recheckPendingRemovalForMember, once a Pending Removal member's active work clears) call this
+// same function. Closing their active work.TeamMembers row (if any) in the same transaction keeps
+// the two lifecycles in lockstep: a member who's genuinely gone from the project must not keep
+// appearing as an active team member in ProjectDTO.teams (project.mapper.ts's buildTeamDTOs only
+// filters on TeamMembers.LeftAtUtc). A member merely flagged Pending Removal never reaches this
+// function at all (see flagMemberPendingRemoval below), so their team membership correctly stays
+// untouched while their work is still outstanding.
 export const removeProjectMember = async (
   projectId: number,
   userId: number,
   removedByUserId: number,
   removalReason: string
-): Promise<boolean> => {
-  const result = await query(
-    `UPDATE work.projectmembers
-     SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1, removalreason = $2
-     WHERE projectid = $3 AND userid = $4 AND leftatutc IS NULL`,
-    [removedByUserId, removalReason, projectId, userId]
-  );
-  return (result.rowCount ?? 0) > 0;
-};
+): Promise<boolean> =>
+  withTransaction(async (runQuery) => {
+    const result = await runQuery(
+      `UPDATE work.projectmembers
+       SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1, removalreason = $2
+       WHERE projectid = $3 AND userid = $4 AND leftatutc IS NULL`,
+      [removedByUserId, removalReason, projectId, userId]
+    );
+    if ((result.rowCount ?? 0) === 0) return false;
+
+    await runQuery(
+      `UPDATE work.teammembers
+       SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1
+       WHERE projectid = $2 AND userid = $3 AND leftatutc IS NULL`,
+      [removedByUserId, projectId, userId]
+    );
+    return true;
+  });
 
 // A member with active task/subtask work is kept (never LeftAtUtc) rather than removed -- these
 // three columns record who flagged it and why, so project.service.ts's recheckPendingRemoval can

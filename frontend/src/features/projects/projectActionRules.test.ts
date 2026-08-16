@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Project } from '../../types';
-import { isCurrentProjectLead, projectCardActions } from './projectActionRules.js';
+import { canCreateProject, canManageProjectTeams, isCurrentProjectLead, projectCardActions } from './projectActionRules.js';
 
 const project = (overrides: Partial<Project> = {}): Project => ({
   id: 'prj-1', code: 'PRJ-1', title: 'ERP', description: 'ERP project', status: 'Active',
@@ -28,4 +28,22 @@ test('non-lead members and HR receive no project actions', () => {
   assert.deepEqual(projectCardActions('Team_Member', 'usr-3', project()), []);
   assert.deepEqual(projectCardActions('Team_Lead', 'usr-3', project()), []);
   assert.deepEqual(projectCardActions('HR', 'usr-2', project()), []);
+});
+
+// ProjectDetailsDrawer.tsx's Admin-only move-member / replace-Team-Lead controls both gate on
+// this single helper.
+test('only Admin can manage project teams (move member / replace Team Lead)', () => {
+  assert.equal(canManageProjectTeams('Admin'), true);
+  assert.equal(canManageProjectTeams('Team_Lead'), false);
+  assert.equal(canManageProjectTeams('Team_Member'), false);
+  assert.equal(canManageProjectTeams('HR'), false);
+});
+
+// ProjectsView.tsx's multi-team builder (create mode) is gated on this same helper, so a
+// Team_Lead/Team_Member -- not just Admin -- can propose a complete multi-team project.
+test('every project-creating role (not just Admin) can access the multi-team builder', () => {
+  assert.equal(canCreateProject('Admin'), true);
+  assert.equal(canCreateProject('Team_Lead'), true);
+  assert.equal(canCreateProject('Team_Member'), true);
+  assert.equal(canCreateProject('HR'), false);
 });
