@@ -102,10 +102,11 @@ import {
 } from '../features/attendance/attendanceValidation';
 import { mapAttendanceApiRecords, restoreActiveBreak } from '../features/attendance/attendanceHydration';
 import {
-  fetchPendingProjectApprovals,
+  fetchProjectApprovals,
   fetchMyProjectApprovalRequests,
   approveProjectApprovalRequestApi,
-  rejectProjectApprovalRequestApi
+  rejectProjectApprovalRequestApi,
+  updateApprovalSetupApi
 } from '../features/projects/projectApprovalRepository';
 import {
   ActivityItem,
@@ -217,6 +218,7 @@ interface AppState {
   projectApprovalRequests: ProjectApprovalRequest[];
   approveProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
   rejectProjectApprovalRequest: (approvalRequestId: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  updateApprovalSetup: (approvalRequestId: string, setup: Record<string, unknown>) => Promise<{ success: boolean; message: string }>;
   createTask: (data: TaskMutationData) => Promise<TaskMutationResult>;
   updateTask: (taskId: string, data: TaskMutationData, sourceTask?: Task) => Promise<TaskMutationResult>;
   deleteTask: (taskId: string) => Promise<TaskMutationResult>;
@@ -615,7 +617,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (currentRole !== 'Admin' && currentRole !== 'Team_Lead' && currentRole !== 'Team_Member') return;
       try {
         const remote = currentRole === 'Admin'
-          ? await fetchPendingProjectApprovals()
+          ? await fetchProjectApprovals()
           : await fetchMyProjectApprovalRequests();
         if (isActive) setProjectApprovalRequests(remote);
       } catch (error) {
@@ -1542,7 +1544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const decided = await approveProjectApprovalRequestApi(approvalRequestId, reason);
-      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      setProjectApprovalRequests((prev) => prev.map((r) => r.id === approvalRequestId ? decided : r));
       try {
         const remoteProjects = await fetchProjectsApi();
         // remoteProjects is a fresh server list -- milestones/files/pinnedMessagesCount have no
@@ -1592,7 +1594,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const decided = await rejectProjectApprovalRequestApi(approvalRequestId, reason);
-      setProjectApprovalRequests((prev) => prev.filter((r) => r.id !== approvalRequestId));
+      setProjectApprovalRequests((prev) => prev.map((r) => r.id === approvalRequestId ? decided : r));
       pushActivity('Rejected project request', 'Project', decided.projectId, decided.projectTitle);
 
       const message = `Request for "${decided.projectTitle}" was rejected.`;
@@ -1601,6 +1603,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       console.error('Failed to reject project request.', error);
       return { success: false, message: error?.message || 'Failed to reject the request. Please try again.' };
+    }
+  };
+
+  const updateApprovalSetup = async (approvalRequestId: string, setup: Record<string, unknown>) => {
+    if (currentRole !== 'Admin') return { success: false, message: 'Only Admins can change approval setup.' };
+    try {
+      const updated = await updateApprovalSetupApi(approvalRequestId, setup);
+      setProjectApprovalRequests((prev) => prev.map((request) => request.id === updated.id ? updated : request));
+      return { success: true, message: 'Setup saved. The request remains pending.' };
+    } catch (error: any) {
+      return { success: false, message: error?.message || 'Failed to save setup.' };
     }
   };
 
@@ -1690,68 +1703,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, now);
     if (!validationResult.success) return validationResult;
 
-    // Team Members submit task creation requests to the selected project's Team Lead.
-    // The task is only created in the backend after that Team Lead approves the request.
+    // Ordinary team members cannot create tasks. A project-level lead may still have the
+    // Team_Member account role; that lead continues below to the persisted Admin approval API.
     if (currentRole === 'Team_Member' && projects.find((item) => item.id === input.projectId)?.teamLeadId !== currentUser.id) {
-      const project = projects.find((item) => item.id === input.projectId);
-
-      if (!project) {
-        return { success: false, message: 'The selected project was not found.' };
-      }
-
-      if (!project.teamLeadId) {
-        return { success: false, message: 'This project does not have a Team Lead.' };
-      }
-
-      const requestId = `app-${Date.now()}`;
-      const approval: SystemApproval = {
-        id: requestId,
-        type: 'Task_Creation',
-        targetId: `pending-task-${Date.now()}`,
-        targetTitle: input.title,
-        requestedBy: currentUser.id,
-        requestedRole: currentRole,
-        projectId: project.id,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        details: `${currentUser.name} requested creation of task "${input.title}" in project "${project.title}".`,
-        status: 'Pending',
-        proposedTask: {
-          projectId: input.projectId,
-          title: input.title,
-          description: input.description,
-          priority: input.priority || 'Medium',
-          startDate: input.startDate,
-          dueDate: input.dueDate,
-          assigneeIds: input.assigneeIds,
-          status: input.status,
-          parentTaskId: data.parentTaskId
-        }
-      };
-
-      recentTaskSubmission.current = { signature, submittedAt: now };
-      setSystemApprovals((prev) => [approval, ...prev]);
-
-      dispatchNotifications({
-        recipientIds: resolveSingleRecipient(project.teamLeadId, currentUser.id),
-        type: 'approval',
-        title: 'Task Creation Requested',
-        message: `${currentUser.name} requested creation of "${input.title}" in ${project.title}.`,
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        linkRoute: 'approvals',
-        projectId: project.id
-      });
-
-      pushActivity('Requested task creation', 'Approval', requestId, input.title);
-      confirmActionSuccess(
-        'Task Request Submitted',
-        `"${input.title}" was sent to ${project.title}'s Team Lead for approval.`
-      );
-
-      return {
-        success: true,
-        message: 'Task creation request submitted for Team Lead approval.'
-      };
+      return { success: false, message: 'Only the Team Lead can create tasks for this project.' };
     }
 
     const result = await createTaskViaApi(data);
@@ -3325,6 +3280,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projectApprovalRequests,
         approveProjectApprovalRequest,
         rejectProjectApprovalRequest,
+        updateApprovalSetup,
         createTask,
         updateTask,
         deleteTask,

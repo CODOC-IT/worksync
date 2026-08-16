@@ -120,6 +120,9 @@ export const createTaskViaApi = async (
       body: JSON.stringify(body)
     });
     const payload = await parseResponse(response);
+    if (response.ok && payload.success && (payload as TaskApiResponse & { pendingApproval?: boolean }).pendingApproval) {
+      return { success: true, message: payload.message || 'Task submitted for Admin approval.' };
+    }
     const task = !Array.isArray(payload.data) ? payload.data : undefined;
 
     if (!response.ok || !payload.success || !task) {

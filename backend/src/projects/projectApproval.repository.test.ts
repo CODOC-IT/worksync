@@ -7,8 +7,10 @@ import {
   decideApprovalRequest,
   findApprovalRequestById,
   findApprovalRequestsForUser,
+  findApprovalRequests,
   findPendingApprovalRequests,
-  insertApprovalRequest
+  insertApprovalRequest,
+  updatePendingApprovalSetup
 } from './projectApproval.repository.js';
 
 const db = newDb();
@@ -120,4 +122,27 @@ test('rejection persists the required reason for request history and notificatio
   assert.equal(decided?.requeststatus, 'Rejected');
   assert.equal(decided?.decisionreason, 'The approved scope must remain unchanged.');
   assert.equal((await findApprovalRequestsForUser(7))[0].decisionreason, 'The approved scope must remain unchanged.');
+});
+
+test('approved and rejected project requests survive reload and status filtering', async () => {
+  const createId = await insertApprovalRequest({ projectId: 42, projectTitle: 'Created', requestType: 'PROJECT_CREATE', requestedByUserId: 7, requestedChangesJson: null, reason: 'Create it' });
+  const editId = await insertApprovalRequest({ projectId: 42, projectTitle: 'Edited', requestType: 'PROJECT_EDIT', requestedByUserId: 7, requestedChangesJson: '{}', reason: 'Edit it' });
+  await decideApprovalRequest(createId, 'Approved', 1, null);
+  await decideApprovalRequest(editId, 'Rejected', 1, 'Keep the baseline.');
+  assert.deepEqual((await findApprovalRequests('Approved')).map((row) => row.approvalrequestid), [createId]);
+  assert.deepEqual((await findApprovalRequests('Rejected')).map((row) => row.approvalrequestid), [editId]);
+  assert.equal((await findApprovalRequests('Pending')).length, 0);
+});
+
+test('TASK_CREATE setup updates persist while pending and duplicate decisions are blocked', async () => {
+  const id = await insertApprovalRequest({
+    projectId: 42, projectTitle: 'Project 42', requestType: 'TASK_CREATE', requestedByUserId: 7,
+    requestedChangesJson: JSON.stringify({ title: 'Original', assigneeIds: ['usr-8'] }), reason: 'Needed work'
+  });
+  const updated = await updatePendingApprovalSetup(id, JSON.stringify({ title: 'Admin adjusted', assigneeIds: ['usr-9'] }));
+  assert.equal(JSON.parse(updated?.requestedchangesjson || '{}').title, 'Admin adjusted');
+  assert.equal((await findApprovalRequests('Pending'))[0].requesttype, 'TASK_CREATE');
+  assert.equal((await decideApprovalRequest(id, 'Rejected', 1, 'Not in scope.'))?.decisionreason, 'Not in scope.');
+  assert.equal(await decideApprovalRequest(id, 'Approved', 1, null), null);
+  assert.equal(await updatePendingApprovalSetup(id, '{}'), null);
 });

@@ -18,6 +18,7 @@ import {
   User as UserIcon,
   X,
   XCircle
+  ,Settings2
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -82,6 +83,7 @@ const PROJECT_REQUEST_TYPE_META: Record<
   { label: string; icon: React.ReactNode; description?: string; className: string }
 > = {
   PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} />, className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' },
+  TASK_CREATE: { label: 'Task Creation', icon: <Plus size={13} />, className: 'border-violet-500/30 bg-violet-500/10 text-violet-200' },
   PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} />, className: 'border-sky-500/30 bg-sky-500/10 text-sky-300' },
   PROJECT_ARCHIVE: { label: 'Archive Project', icon: <Archive size={13} />, className: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
   PROJECT_RESTORE: { label: 'Restore Project', icon: <ArchiveRestore size={13} />, className: 'border-teal-500/30 bg-teal-500/10 text-teal-300' },
@@ -214,6 +216,7 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
     rejectHRRequest,
     approveProjectApprovalRequest,
     rejectProjectApprovalRequest,
+    updateApprovalSetup,
     approveAccountChangeRequest,
     rejectAccountChangeRequest
   } = useApp();
@@ -237,6 +240,9 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
   const [reviewReason, setReviewReason] = useState('');
   const [reviewError, setReviewError] = useState('');
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [setupTarget, setSetupTarget] = useState<ProjectApprovalRequest | null>(null);
+  const [setupDraft, setSetupDraft] = useState<Record<string, any>>({});
+  const [setupLoading, setSetupLoading] = useState(false);
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
@@ -413,6 +419,50 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
     setReviewReason('');
     setReviewError('');
   };
+
+  const openSetup = (request: ProjectApprovalRequest) => {
+    const project = projects.find((item) => item.id === request.projectId);
+    setSetupTarget(request);
+    setSetupDraft(request.requestType === 'PROJECT_CREATE' ? {
+      title: project?.title || request.projectTitle,
+      description: project?.description || '',
+      priority: project?.priority || 'Medium',
+      startDate: project?.startDate || '',
+      targetDate: project?.targetDate || ''
+    } : { ...(request.requestedChanges || {}) });
+  };
+
+  const saveSetup = async () => {
+    if (!setupTarget) return;
+    setSetupLoading(true);
+    const result = await updateApprovalSetup(setupTarget.id, setupDraft);
+    setSetupLoading(false);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) setSetupTarget(null);
+  };
+
+  const renderSetupModal = () => setupTarget && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div className="glass-panel max-h-[85vh] w-full max-w-2xl overflow-y-auto p-5">
+        <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold text-slate-100">Change Setup</h2><p className="mt-1 text-xs text-slate-400">Save updates now; approval remains a separate decision.</p></div><button type="button" onClick={() => setSetupTarget(null)} className="text-slate-400 hover:text-white"><X size={18}/></button></div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          {([['title','Title','text'],['priority','Priority','text'],['startDate','Start date','date'],[setupTarget.requestType === 'PROJECT_CREATE' ? 'targetDate' : 'dueDate', setupTarget.requestType === 'PROJECT_CREATE' ? 'Target date' : 'Due date','date']] as const).map(([key,label,type]) => (
+            <label key={key} className="text-xs text-slate-300">{label}<input type={type} value={setupDraft[key] || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,[key]:event.target.value}))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
+          ))}
+          <label className="text-xs text-slate-300 sm:col-span-2">Description<textarea rows={5} value={setupDraft.description || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,description:event.target.value}))} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
+          {setupTarget.requestType === 'TASK_CREATE' && <fieldset className="sm:col-span-2"><legend className="text-xs text-slate-300">Proposed assignees</legend><div className="mt-2 grid max-h-40 gap-2 overflow-y-auto rounded-lg border border-white/10 bg-slate-950/40 p-3 sm:grid-cols-2">{(() => {
+            const project = projects.find((item) => item.id === setupTarget.projectId);
+            const team = project?.teams.find((item) => item.id === setupDraft.teamId || item.leadId === setupTarget.requestedByUserId);
+            return (team?.memberIds || project?.memberIds || []).map((id) => {
+              const selected = Array.isArray(setupDraft.assigneeIds) && setupDraft.assigneeIds.includes(id);
+              return <label key={id} className="flex items-center gap-2 text-xs text-slate-200"><input type="checkbox" checked={selected} onChange={() => setSetupDraft((draft) => ({...draft,assigneeIds:selected ? (draft.assigneeIds || []).filter((item:string) => item !== id) : [...(draft.assigneeIds || []),id]}))}/><span className="break-words">{users.find((user) => user.id === id)?.name || id}</span></label>;
+            });
+          })()}</div></fieldset>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSetupTarget(null)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300">Cancel</button><button type="button" disabled={setupLoading} onClick={saveSetup} className="glass-button-neon rounded-lg px-3 py-2 text-xs font-bold disabled:opacity-50">{setupLoading ? 'Saving…' : 'Save Setup'}</button></div>
+      </div>
+    </div>
+  );
 
   const confirmReview = async () => {
     if (!reviewTarget) return;
@@ -667,7 +717,7 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
         </button>
       ))}
       </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+      <div data-approval-type-filters className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
         <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Approval type</span>
         {(
           currentRole === 'HR'
@@ -955,7 +1005,7 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
   }
 
   return (
-    <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
+    <section className="mx-auto h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto overscroll-contain pr-1">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -1041,6 +1091,18 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
                 </div>
               )}
 
+              {request.requestType === 'TASK_CREATE' && (() => {
+                const setup = request.requestedChanges || {};
+                const assigneeIds = Array.isArray(setup.assigneeIds) ? setup.assigneeIds as string[] : [];
+                return <div className="grid gap-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.045] p-3 text-xs sm:grid-cols-2">
+                  <div><span className="block text-[10px] uppercase text-slate-500">Task title</span><span className="break-words text-slate-100">{String(setup.title || 'Not provided')}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Project</span><span className="text-slate-100">{request.projectTitle}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Priority / due date</span><span className="text-slate-100">{String(setup.priority || 'Not provided')} · {String(setup.dueDate || 'Not provided')}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Proposed assignees</span><span className="break-words text-slate-100">{assigneeIds.map((id) => users.find((user) => user.id === id)?.name || id).join(', ') || 'None'}</span></div>
+                  <div className="sm:col-span-2"><span className="block text-[10px] uppercase text-slate-500">Description</span><span className="whitespace-pre-wrap break-words text-slate-100">{String(setup.description || 'Not provided')}</span></div>
+                </div>;
+              })()}
+
               {request.requestType === 'PROJECT_EDIT' && projectEditChanges(request).length > 0 && (
                 <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
                   <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Changes Requested</span>
@@ -1082,6 +1144,7 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
                     <XCircle size={14} />
                     Reject
                   </button>
+                  {(request.requestType === 'PROJECT_CREATE' || request.requestType === 'TASK_CREATE') && <button type="button" onClick={() => openSetup(request)} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20 hover:text-white"><Settings2 size={14}/>Change Setup</button>}
                   <button
                     type="button"
                     onClick={() => handleProjectRequestApprove(request)}
@@ -1363,6 +1426,7 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
       )}
       {renderAccountRejectModal()}
       {renderReviewModal()}
+      {renderSetupModal()}
     </section>
   );
 };

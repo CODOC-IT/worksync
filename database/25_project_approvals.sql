@@ -27,7 +27,7 @@ CREATE TABLE work.ProjectApprovalRequests
     CreatedAtUtc          timestamptz(0) NOT NULL CONSTRAINT DF_ProjectApprovalRequests_Created DEFAULT (CURRENT_TIMESTAMP),
     DecidedAtUtc          timestamptz(0) NULL,
     CONSTRAINT CK_ProjectApprovalRequests_Type CHECK
-            (RequestType IN ('PROJECT_CREATE','PROJECT_EDIT','PROJECT_ARCHIVE','PROJECT_RESTORE','PROJECT_DELETE','PROJECT_PERMANENT_DELETE')),
+            (RequestType IN ('PROJECT_CREATE','TASK_CREATE','PROJECT_EDIT','PROJECT_ARCHIVE','PROJECT_RESTORE','PROJECT_DELETE','PROJECT_PERMANENT_DELETE')),
     CONSTRAINT CK_ProjectApprovalRequests_Status CHECK
             (RequestStatus IN ('Pending','Approved','Rejected')),
     CONSTRAINT CK_ProjectApprovalRequests_Reason CHECK (char_length(btrim(Reason)) > 0),

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './task.service.js';
+import { createTaskApprovalRequest } from '../projects/projectApproval.service.js';
 import {
   validateChangeStatusBody,
   validateCreateTaskBody,
@@ -76,6 +77,11 @@ export const createTask = async (req: AuthenticatedRequest, res: Response): Prom
   }
 
   try {
+    if (user.role !== 'Admin') {
+      const data = await createTaskApprovalRequest(req.body as CreateTaskInput, user.id, user.role);
+      res.status(202).json({ success: true, message: 'Task submitted for Admin approval.', data, pendingApproval: true });
+      return;
+    }
     const data = await service.createTask(req.body as CreateTaskInput, user.id, user.role);
     res.status(201).json({ success: true, message: 'Task created successfully.', data });
   } catch (error) {
