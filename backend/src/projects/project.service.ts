@@ -622,6 +622,22 @@ export const updateProject = async (
   return dto;
 };
 
+export const activatePendingProject = async (
+  projectId: string,
+  actorRole: string
+): Promise<void> => {
+  if (actorRole !== 'Admin') throw new ProjectAuthorizationError('Only Admins can activate project proposals.');
+  const projectPk = toProjectPk(projectId);
+  const row = await repo.findProjectById(projectPk);
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  if (row.statuscode !== 'PendingActivation') {
+    throw new ProjectValidationError('This project proposal is no longer pending activation.');
+  }
+  if (!await repo.activatePendingProject(projectPk)) {
+    throw new ProjectValidationError('This project proposal is no longer pending activation.');
+  }
+};
+
 export const archiveProject = async (
   projectId: string,
   reason: string,
