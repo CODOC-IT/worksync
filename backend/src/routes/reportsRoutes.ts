@@ -64,20 +64,33 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     const effectiveAttendanceRole = attendanceRole(await getEffectiveRoles(user.id));
 
     // ── Resolve visible projects based on role ──────────────
-    const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to);
+    const teamScope = await repo.resolveTeamLeadScope(userPk);
+    const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to, teamScope);
     const projectIds = visibleProjects.map((p) => p.projectid);
 
+    // Team-scoped lead (multi-team architecture): all report data is restricted to the team(s) the
+    // user leads, except legacy projects they still lead project-wide (full project scope). Admin,
+    // HR and plain members are unaffected (teamIds empty for them).
+    const isTeamScopedLead = role !== 'Admin' && role !== 'HR' && teamScope.teamIds.length > 0;
+    const taskScope: repo.TeamTaskScope | null = isTeamScopedLead
+      ? {
+          teamIds: teamScope.teamIds,
+          legacyProjectIds: await repo.findLegacyLeadProjectIds(userPk, false, from, to),
+        }
+      : null;
+    const memberUserIds = isTeamScopedLead ? teamScope.memberUserIds : null;
+
     // ── Archived projects (visible to role) ─────────────────
-    const archivedProjects = await repo.getArchivedProjects(userPk, role, from, to);
+    const archivedProjects = await repo.getArchivedProjects(userPk, role, from, to, teamScope);
     const archivedCount = archivedProjects.length;
 
     // ── Overview stats ──────────────────────────────────────
-    const overview = await repo.getOverviewStats(projectIds, from, to);
-    const members = await repo.getProjectMembers(projectIds);
+    const overview = await repo.getOverviewStats(projectIds, from, to, taskScope);
+    const members = await repo.getProjectMembers(projectIds, memberUserIds);
     const uniqueMemberIds = new Set(members.map((m) => m.userid));
 
     // ── Project details with progress ───────────────────────
-    const projectStats = await repo.getProjectStats(projectIds, from, to);
+    const projectStats = await repo.getProjectStats(projectIds, from, to, taskScope);
     const activeProjectDetails = projectStats.map((ps) => {
       const progress = ps.totalTasks > 0 ? Math.round((ps.completedTasks / ps.totalTasks) * 100) : 0;
       const projectMembers = members.filter((m) => m.projectid === ps.projectid);
@@ -122,11 +135,11 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     ];
 
     // ── Task distributions ──────────────────────────────────
-    const statusDistribution = await repo.getTaskStatusDistribution(projectIds, from, to);
-    const priorityDistribution = await repo.getTaskPriorityDistribution(projectIds, from, to);
+    const statusDistribution = await repo.getTaskStatusDistribution(projectIds, from, to, taskScope);
+    const priorityDistribution = await repo.getTaskPriorityDistribution(projectIds, from, to, taskScope);
 
     // ── Completion trend ────────────────────────────────────
-    const completionTrendRaw = await repo.getCompletionTrend(projectIds, from, to);
+    const completionTrendRaw = await repo.getCompletionTrend(projectIds, from, to, taskScope);
     const completionTrend = completionTrendRaw.map((t) => ({
       date: t.date.slice(5),
       Completed: t.completed,
@@ -134,7 +147,7 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     }));
 
     // ── Workload ────────────────────────────────────────────
-    const workloadRows = await repo.getWorkload(projectIds, from, to);
+    const workloadRows = await repo.getWorkload(projectIds, from, to, taskScope);
     const assigneePks = [...new Set(workloadRows.map((w) => w.userid))];
     const userNames = assigneePks.length > 0 ? await repo.getUserNames(assigneePks) : [];
     const userNameMap = new Map(userNames.map((u) => [u.userid, u.displayname]));
@@ -153,16 +166,16 @@ router.get('/data', authenticateJWT, async (req: AuthenticatedRequest, res: Resp
     // member it's "projects I'm a member of" and for a lead it's "projects I lead" plus any
     // additional projects I only belong to — each project flagged with the user's lead status so
     // the task population can differ per project (led -> all tasks; member-only -> own tasks).
-    const deadlineProjects = await repo.getDeadlineProjectsForRole(userPk, role);
+    const deadlineProjects = await repo.getDeadlineProjectsForRole(userPk, role, teamScope);
     const [dueToday, dueTomorrow, upcoming, overdue] = await Promise.all([
-      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'today'),
-      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'tomorrow'),
-      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'upcoming'),
-      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'overdue'),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'today', teamScope),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'tomorrow', teamScope),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'upcoming', teamScope),
+      repo.getDeadlineBucketTasks(deadlineProjects, userPk, 'overdue', teamScope),
     ]);
 
     // ── Team stats ──────────────────────────────────────────
-    const teamStatsRaw = await repo.getTeamStats(projectIds, from, to);
+    const teamStatsRaw = await repo.getTeamStats(projectIds, from, to, taskScope, memberUserIds);
     const teamStats = teamStatsRaw.map((t) => ({
       department: t.department,
       members: t.members,
@@ -288,16 +301,27 @@ router.get('/export', authenticateJWT, async (req: AuthenticatedRequest, res: Re
 
     const userPk = toUserPk(user.id);
     const role = user.role;
-    const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to);
+    const teamScope = await repo.resolveTeamLeadScope(userPk);
+    const visibleProjects = await repo.findProjectsForRole(userPk, role, from, to, teamScope);
     const projectIds = visibleProjects.map((p) => p.projectid);
+
+    // Same team-scoped boundary as GET /data, so an export can never leak another team's data.
+    const isTeamScopedLead = role !== 'Admin' && role !== 'HR' && teamScope.teamIds.length > 0;
+    const taskScope: repo.TeamTaskScope | null = isTeamScopedLead
+      ? {
+          teamIds: teamScope.teamIds,
+          legacyProjectIds: await repo.findLegacyLeadProjectIds(userPk, false, from, to),
+        }
+      : null;
+    const memberUserIds = isTeamScopedLead ? teamScope.memberUserIds : null;
 
     const escapeCsv = (value: string): string => `"${value.replace(/"/g, '""')}"`;
 
     let csvContent = '';
 
     if (type === 'projects') {
-      const stats = await repo.getProjectStats(projectIds, from, to);
-      const members = await repo.getProjectMembers(projectIds);
+      const stats = await repo.getProjectStats(projectIds, from, to, taskScope);
+      const members = await repo.getProjectMembers(projectIds, memberUserIds);
       const header = ['Project', 'Code', 'Status', 'Progress %', 'Start Date', 'End Date'].map(escapeCsv).join(',');
       const rows = stats.map((ps) => {
         const progress = ps.totalTasks > 0 ? Math.round((ps.completedTasks / ps.totalTasks) * 100) : 0;
@@ -309,8 +333,8 @@ router.get('/export', authenticateJWT, async (req: AuthenticatedRequest, res: Re
       });
       csvContent = [header, ...rows].join('\n');
     } else if (type === 'tasks') {
-      const statusDist = await repo.getTaskStatusDistribution(projectIds, from, to);
-      const priorityDist = await repo.getTaskPriorityDistribution(projectIds, from, to);
+      const statusDist = await repo.getTaskStatusDistribution(projectIds, from, to, taskScope);
+      const priorityDist = await repo.getTaskPriorityDistribution(projectIds, from, to, taskScope);
       csvContent = [
         ['Metric', 'Value'].map(escapeCsv).join(','),
         ['Total Tasks', String(statusDist.reduce((s, d) => s + d.value, 0))].map(escapeCsv).join(','),
@@ -319,7 +343,7 @@ router.get('/export', authenticateJWT, async (req: AuthenticatedRequest, res: Re
         ...priorityDist.map((d) => [d.name, String(d.value)].map(escapeCsv).join(',')),
       ].join('\n');
     } else {
-      const overviewStats = await repo.getOverviewStats(projectIds, from, to);
+      const overviewStats = await repo.getOverviewStats(projectIds, from, to, taskScope);
       csvContent = [
         ['Metric', 'Value'].map(escapeCsv).join(','),
         ['Total Projects', String(overviewStats.totalProjects)].map(escapeCsv).join(','),
