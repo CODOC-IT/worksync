@@ -605,18 +605,6 @@ export const updateTask = async (
           [taskId, userId, actorUserId]
         );
       }
-      // Completes the Admin -> Team handoff: a task an Admin created for a whole team carries
-      // AssignmentStatus 'NeedsTeamAssignment' until its Team Lead gives it to someone. Nothing
-      // cleared that flag before, so a handed-off task stayed marked as awaiting assignment for the
-      // rest of its life even once a member owned it. Scoped to the NeedsTeamAssignment state, so an
-      // ordinary reassignment of an ordinary task writes nothing here.
-      if (assigneeUserIds.length > 0) {
-        await runQuery(
-          `UPDATE work.tasks SET assignmentstatus = 'Assigned'
-            WHERE taskid = $1 AND assignmentstatus = 'NeedsTeamAssignment'`,
-          [taskId]
-        );
-      }
     }
   });
 };
