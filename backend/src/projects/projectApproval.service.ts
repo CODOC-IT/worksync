@@ -15,7 +15,14 @@ import {
   validateProjectDecision
 } from './projectWorkflow.rules.js';
 import { buildProjectApprovalRejectionCopy } from './projectApprovalRejectionCopy.js';
-import { UpdateProjectInput } from './project.types.js';
+import {
+  ProposedTaskSummary,
+  buildTaskAssigneeApprovedCopy,
+  buildTaskCreateApprovedCopy,
+  buildTaskCreateRejectedCopy,
+  buildTaskCreateRequestCopy
+} from './taskCreateApprovalCopy.js';
+import { ProjectTeamRow, TeamMemberRow, UpdateProjectInput } from './project.types.js';
 import * as taskService from '../tasks/task.service.js';
 import { CreateTaskInput } from '../tasks/task.types.js';
 import {
@@ -92,6 +99,114 @@ const notifyRequester = (
   notificationService
     .publishEvent({ ...event, recipientIds: [requesterId] })
     .catch((error) => console.error('[projectApproval.service] Failed to notify requester.', error));
+};
+
+// Turns a persisted TASK_CREATE proposal into the display-ready summary the copy module takes.
+// Every user id becomes a real display name here — the copy templates never see an id, which is
+// what keeps "usr-40" out of a notification body by construction rather than by review.
+const summarizeProposedTask = async (
+  proposed: CreateTaskInput,
+  projectName: string,
+  requesterId: string,
+  teams: ProjectTeamRow[],
+  teamMembers: TeamMemberRow[]
+): Promise<ProposedTaskSummary> => {
+  // The proposing lead's own team, resolved from work.TeamMembers.IsLead rather than from the
+  // request payload, so a stale or absent teamId in an older persisted proposal still names the
+  // right team.
+  const leadMembership = teamMembers.find(
+    (member) => member.userid === toUserPk(requesterId) && member.islead
+  );
+  const teamName = teams.find((team) => team.teamid === leadMembership?.teamid)?.teamname;
+  return {
+    title: proposed.title?.trim() || '',
+    projectName,
+    teamName,
+    description: proposed.description?.trim() || undefined,
+    priority: proposed.priority,
+    dueDate: proposed.dueDate,
+    assigneeNames: (proposed.assigneeIds || []).map((id) => actorName(id)),
+    requesterName: actorName(requesterId)
+  };
+};
+
+/**
+ * §7's decision fan-out. The requesting Team Lead always hears the outcome, named by the task they
+ * proposed; on approval its assignees additionally hear that the task is now live and theirs.
+ *
+ * On rejection nobody but the requester is written to: the task was never created, so a proposed
+ * assignee has nothing to act on and no context for a decision they were not part of.
+ */
+const notifyTaskCreateDecision = async (
+  row: ProjectApprovalRequestRow,
+  decision: 'Approved' | 'Rejected',
+  actorId: string,
+  decisionReason: string | null,
+  projectName: string,
+  requesterId: string
+): Promise<void> => {
+  let proposed: CreateTaskInput | null = null;
+  try {
+    proposed = row.requestedchangesjson ? (JSON.parse(row.requestedchangesjson) as CreateTaskInput) : null;
+  } catch {
+    proposed = null; // A malformed payload must not cost the requester their decision notification.
+  }
+  const reviewerName = actorName(actorId);
+  if (!proposed) {
+    notifyRequester(requesterId, {
+      type: 'approval',
+      title: `Task ${decision}`,
+      message: `${reviewerName} ${decision === 'Approved' ? 'approved' : 'rejected'} your task request for ` +
+        `"${projectName}".`,
+      detail: decision === 'Rejected'
+        ? `Reason: ${decisionReason?.trim() || 'No reason was recorded.'}`
+        : undefined,
+      actorId,
+      projectId: row.projectid != null ? fromProjectPk(row.projectid) : undefined
+    });
+    return;
+  }
+
+  const [teams, teamMembers] = row.projectid != null
+    ? await Promise.all([
+        projectRepo.findTeamsForProject(row.projectid),
+        projectRepo.findTeamMembersForProject(row.projectid)
+      ])
+    : [[], []];
+  const summary = await summarizeProposedTask(proposed, projectName, requesterId, teams, teamMembers);
+  const projectIdStr = row.projectid != null ? fromProjectPk(row.projectid) : undefined;
+
+  const leadCopy = decision === 'Approved'
+    ? buildTaskCreateApprovedCopy(summary, reviewerName)
+    : buildTaskCreateRejectedCopy(summary, reviewerName, decisionReason || '');
+  notifyRequester(requesterId, {
+    type: 'approval',
+    title: leadCopy.title,
+    message: leadCopy.message,
+    detail: leadCopy.detail,
+    metadata: leadCopy.metadata,
+    actorId,
+    projectId: projectIdStr
+  });
+
+  if (decision !== 'Approved') return;
+  const assigneeIds = Array.from(new Set(proposed.assigneeIds || [])).filter(
+    (id) => id !== requesterId && id !== actorId
+  );
+  if (assigneeIds.length === 0) return;
+  const assigneeCopy = buildTaskAssigneeApprovedCopy(summary, reviewerName);
+  notificationService
+    .publishEvent({
+      type: 'task_assigned',
+      title: assigneeCopy.title,
+      message: assigneeCopy.message,
+      detail: assigneeCopy.detail,
+      metadata: assigneeCopy.metadata,
+      actorId,
+      projectId: projectIdStr,
+      recipientIds: assigneeIds
+    })
+    .catch((error) => console.error('[projectApproval.service] Failed to notify task assignees.', error));
 };
 
 const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
@@ -211,7 +326,20 @@ export const createTaskApprovalRequest = async (
     projectId: projectPk, projectTitle: project.projectname, requestType: 'TASK_CREATE',
     requestedByUserId: toUserPk(requesterId), requestedChangesJson: JSON.stringify(proposed), reason
   });
-  notifyAdmins({ type: 'approval', title: 'Task Creation Requested', message: `${actorName(requesterId)} requested creation of "${proposed.title}" in "${project.projectname}".`, actorId: requesterId, projectId: proposed.projectId });
+  // Everything §7 requires an Admin to have in order to decide — project, team, task, assignee,
+  // description, priority, deadline and the requesting Team Lead — in the expanded body, leaving the
+  // preview to the one line that says what happened.
+  const summary = await summarizeProposedTask(proposed, project.projectname, requesterId, teams, teamMembers);
+  const requestCopy = buildTaskCreateRequestCopy(summary);
+  notifyAdmins({
+    type: 'approval',
+    title: requestCopy.title,
+    message: requestCopy.message,
+    detail: requestCopy.detail,
+    metadata: requestCopy.metadata,
+    actorId: requesterId,
+    projectId: proposed.projectId
+  });
   return toDTO((await repo.findApprovalRequestById(approvalRequestId))!);
 };
 
@@ -266,7 +394,10 @@ export const decideApprovalRequest = async (
   if (decision === 'Approved') {
     switch (row.requesttype) {
       case 'PROJECT_CREATE':
-        await projectService.activatePendingProject(projectIdStr, 'Admin');
+        // The deciding Admin is passed as the actor so the team assignments this materializes are
+        // attributed to them, not to the member who proposed the setup (§3 -- the Admin may have
+        // edited it via changePendingSetup first).
+        await projectService.activatePendingProject(projectIdStr, 'Admin', actorId);
         break;
       case 'TASK_CREATE': {
         const proposal = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) as CreateTaskInput : null;
@@ -357,32 +488,54 @@ export const decideApprovalRequest = async (
   const requesterDisplayName = actorName(requesterId);
   const reviewerDisplayName = actorName(actorId);
   const outcomeVerb = decision === 'Approved' ? 'approved' : 'rejected';
-  const rejectionCopy = decision === 'Rejected' ? buildProjectApprovalRejectionCopy({
-    reviewerName: reviewerDisplayName,
-    projectName,
-    requestTypeLabel: REQUEST_TYPE_LABEL[row.requesttype],
-    reason: decisionReason || '',
-    decidedAt: decidedDto.decidedAt ? new Date(decidedDto.decidedAt) : new Date()
-  }) : null;
-  notifyRequester(requesterId, {
-    type: 'approval',
-    title: rejectionCopy?.title || `Project Request ${decision}`,
-    message: rejectionCopy?.message || buildProjectDecisionMessage(
-      reviewerDisplayName,
-      decision,
-      REQUEST_TYPE_LABEL[row.requesttype],
+
+  if (row.requesttype === 'TASK_CREATE') {
+    // TASK_CREATE has its own copy because the project templates below narrate everything by
+    // project name — which for a task request is the wrong subject entirely, and produced
+    // "rejected your request to create task "ERP Management System"": the project's name where the
+    // proposed task's title belongs (§7).
+    await notifyTaskCreateDecision(row, decision, actorId, decisionReason, projectName, requesterId);
+  } else {
+    const rejectionCopy = decision === 'Rejected' ? buildProjectApprovalRejectionCopy({
+      reviewerName: reviewerDisplayName,
       projectName,
-      decisionReason
-    ),
-    detail: rejectionCopy?.detail,
-    metadata: rejectionCopy?.metadata,
-    actorId,
-    projectId:
-      row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
-      (row.requesttype === 'PROJECT_CREATE' && decision === 'Rejected')
-        ? undefined
-        : projectIdStr
-  });
+      requestTypeLabel: REQUEST_TYPE_LABEL[row.requesttype],
+      reason: decisionReason || '',
+      decidedAt: decidedDto.decidedAt ? new Date(decidedDto.decidedAt) : new Date()
+    }) : null;
+    notifyRequester(requesterId, {
+      type: 'approval',
+      title: rejectionCopy?.title || `Project Request ${decision}`,
+      message: rejectionCopy?.message || buildProjectDecisionMessage(
+        reviewerDisplayName,
+        decision,
+        REQUEST_TYPE_LABEL[row.requesttype],
+        projectName,
+        decisionReason
+      ),
+      detail: rejectionCopy?.detail || (
+        // §3: an approved proposal is the moment its author becomes a Team Lead, and the plain
+        // decision line does not say so. Which team they lead is in their own team-assignment
+        // notification, published by activatePendingProject from the final approved configuration.
+        row.requesttype === 'PROJECT_CREATE' && decision === 'Approved'
+          ? `${reviewerDisplayName} approved your project "${projectName}". You are now the Team Lead of ` +
+            'the team you proposed — see your team assignment notification for which team, and for its ' +
+            'final membership as approved.'
+          : undefined
+      ),
+      metadata: rejectionCopy?.metadata || (
+        row.requesttype === 'PROJECT_CREATE' && decision === 'Approved'
+          ? { project: projectName, approvedBy: `${reviewerDisplayName} (Admin)`, role: 'Team Lead', status: 'Approved' }
+          : undefined
+      ),
+      actorId,
+      projectId:
+        row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
+        (row.requesttype === 'PROJECT_CREATE' && decision === 'Rejected')
+          ? undefined
+          : projectIdStr
+    });
+  }
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: row.requesttype === 'PROJECT_EDIT' ? `Project Edit ${decision}` : decision,

@@ -34,5 +34,6 @@ SET TIME ZONE 'UTC';
 \ir 27_audit_task_fk_relax.sql
 \ir 28_holiday_audience.sql
 \ir 29_notify_detail_metadata.sql
+\ir 30_notify_team_seed.sql
 
 COMMIT;
