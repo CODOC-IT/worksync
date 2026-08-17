@@ -97,10 +97,17 @@ const toEditableSubtask = (parent: Task, subtask: Subtask, index: number): Task 
 
 interface TasksViewProps {
   initialTaskId?: string;
+  initialProjectId?: string;
   onInitialTaskConsumed?: () => void;
+  onInitialProjectConsumed?: () => void;
 }
 
-export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTaskConsumed }) => {
+export const TasksView: React.FC<TasksViewProps> = ({
+  initialTaskId,
+  initialProjectId,
+  onInitialTaskConsumed,
+  onInitialProjectConsumed
+}) => {
   const {
     currentRole,
     currentUser,
@@ -169,6 +176,14 @@ export const TasksView: React.FC<TasksViewProps> = ({ initialTaskId, onInitialTa
     onInitialTaskConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTaskId]);
+
+  // Project details can hand off to this view with its parent project already selected, so the
+  // task board opens directly to the relevant work instead of requiring the user to filter again.
+  useEffect(() => {
+    if (!initialProjectId) return;
+    setProjectFilter(initialProjectId);
+    onInitialProjectConsumed?.();
+  }, [initialProjectId, onInitialProjectConsumed]);
 
   // A project lead still has a Team_Member account.  Never leave an invisible
   // assigned-to-me predicate behind when the signed-in role changes.

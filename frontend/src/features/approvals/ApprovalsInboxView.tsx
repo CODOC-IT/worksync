@@ -7,21 +7,24 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock,
-  Coffee,
+  Eye,
   FolderKanban,
   LogOut,
   Pencil,
   Plus,
   Trash2,
-  Shield,
+  Search,
+  CalendarDays,
   User as UserIcon,
   X,
   XCircle
+  ,Settings2
 } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { StatusBadge } from '../../components/common/StatusBadge';
-import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task } from '../../types';
+import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task, User } from '../../types';
 import { newestProjectRequestsFirst } from '../projects/projectApprovalRules';
+import { formatProjectChangeValue, projectEditChanges } from '../projects/projectApprovalDisplay';
 
 // Account Change Requests -- HR/Lead/Member request a single-field change to their own account
 // (name, email, username, password). Rendered with friendly labels; requested passwords are never
@@ -45,28 +48,56 @@ function getAccountRequestedChanges(request: AccountChangeRequest): { field: str
   return list;
 }
 
+const accountCurrentValue = (user: User | undefined, field: string): string => {
+  if (field === 'password') return 'Hidden for security';
+  if (!user) return 'Not available';
+  if (field === 'name') return user.name || 'Not set';
+  if (field === 'email') return user.email || 'Not set';
+  if (field === 'username') return user.username || 'Not set';
+  return 'Not available';
+};
+
+const RequesterMeta: React.FC<{ name: string; id: string; submittedAt: string }> = ({ name, id, submittedAt }) => (
+  <div className="min-w-0">
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+      <p className="break-words text-base font-semibold text-slate-100">{name}</p>
+      <span className="font-mono text-[10px] text-slate-500">{id}</span>
+    </div>
+    <p className="mt-1 text-xs text-slate-500">Submitted {submittedAt}</p>
+  </div>
+);
+
+const ReasonBlock: React.FC<{ children: React.ReactNode; label?: string }> = ({ children, label = 'Request reason' }) => (
+  <div className="rounded-lg border border-white/5 bg-black/15 p-3">
+    <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{label}</span>
+    <div className="mt-1.5 break-words whitespace-pre-wrap text-xs leading-5 text-slate-300">{children}</div>
+  </div>
+);
+
 // Project Management Approval Workflow (Team Lead -> Admin) -- rendered as its own section
 // below, separate from the legacy SystemApproval cards. See AppContext's projectApprovalRequests
 // / approveProjectApprovalRequest / rejectProjectApprovalRequest, backed by
 // backend/src/projects/projectApproval.*.
 const PROJECT_REQUEST_TYPE_META: Record<
   ProjectApprovalRequestType,
-  { label: string; icon: React.ReactNode; description?: string }
+  { label: string; icon: React.ReactNode; description?: string; className: string }
 > = {
-  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} /> },
-  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} /> },
-  PROJECT_ARCHIVE: { label: 'Project Archive', icon: <Archive size={13} /> },
-  PROJECT_RESTORE: { label: 'Project Restore', icon: <ArchiveRestore size={13} /> },
+  PROJECT_CREATE: { label: 'Project Creation', icon: <FolderKanban size={13} />, className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' },
+  TASK_CREATE: { label: 'Task Creation', icon: <Plus size={13} />, className: 'border-violet-500/30 bg-violet-500/10 text-violet-200' },
+  PROJECT_EDIT: { label: 'Project Edit', icon: <Pencil size={13} />, className: 'border-sky-500/30 bg-sky-500/10 text-sky-300' },
+  PROJECT_ARCHIVE: { label: 'Archive Project', icon: <Archive size={13} />, className: 'border-amber-500/30 bg-amber-500/10 text-amber-300' },
+  PROJECT_RESTORE: { label: 'Restore Project', icon: <ArchiveRestore size={13} />, className: 'border-teal-500/30 bg-teal-500/10 text-teal-300' },
   PROJECT_DELETE: {
     label: 'Project Delete',
     icon: <Trash2 size={13} />,
-    description: 'Remove this project from active work while keeping it recoverable.'
+    description: 'Remove this project from active work while keeping it recoverable.',
+    className: 'border-rose-500/30 bg-rose-500/10 text-rose-300'
   },
-  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} /> }
+  PROJECT_PERMANENT_DELETE: { label: 'Permanent Delete', icon: <Trash2 size={13} />, className: 'border-rose-500/40 bg-rose-500/15 text-rose-200' }
 };
 
 type StatusFilter = 'Pending' | 'Approved' | 'Rejected' | 'All';
-type TypeFilter = 'All' | SystemApproval['type'];
+type ApprovalCategory = 'All' | 'Attendance' | 'Projects' | 'Account';
 type ReviewTarget =
   | { kind: 'system'; action: 'approve' | 'reject'; item: SystemApproval }
   | { kind: 'hr'; action: 'approve' | 'reject'; item: HRRequest }
@@ -168,7 +199,7 @@ const canDecide = (
   return false;
 };
 
-export const ApprovalsInboxView: React.FC = () => {
+export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) => void }> = ({ onViewProject }) => {
   const {
     currentRole,
     currentUser,
@@ -185,15 +216,17 @@ export const ApprovalsInboxView: React.FC = () => {
     rejectHRRequest,
     approveProjectApprovalRequest,
     rejectProjectApprovalRequest,
+    updateApprovalSetup,
     approveAccountChangeRequest,
     rejectAccountChangeRequest
   } = useApp();
 
   const [statusFilter, setStatusFilter] =
     useState<StatusFilter>('Pending');
+  const [categoryFilter, setCategoryFilter] = useState<ApprovalCategory>('All');
+  const [requesterSearch, setRequesterSearch] = useState('');
+  const [submittedDate, setSubmittedDate] = useState('');
 
-  const [typeFilter, setTypeFilter] =
-    useState<TypeFilter>('All');
 
   const [notice, setNotice] = useState<{
     type: 'success' | 'error';
@@ -207,11 +240,31 @@ export const ApprovalsInboxView: React.FC = () => {
   const [reviewReason, setReviewReason] = useState('');
   const [reviewError, setReviewError] = useState('');
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [setupTarget, setSetupTarget] = useState<ProjectApprovalRequest | null>(null);
+  const [setupDraft, setSetupDraft] = useState<Record<string, any>>({});
+  const [setupLoading, setSetupLoading] = useState(false);
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
 
   const isHR = currentRole === 'HR';
+
+  const matchesRequesterAndDate = (requesterId: string | undefined, submittedAt: string | undefined) => {
+    const requester = users.find((user) => user.id === requesterId);
+    const query = requesterSearch.trim().toLowerCase();
+    const matchesRequester = !query || Boolean(requester && (
+      requester.name.toLowerCase().includes(query) ||
+      requester.username?.toLowerCase().includes(query) ||
+      requester.email.toLowerCase().includes(query)
+    ));
+    return matchesRequester && (!submittedDate || submittedAt?.slice(0, 10) === submittedDate);
+  };
+
+  const newestFirst = <T extends { submittedAt?: string; createdAt?: string }>(items: T[]): T[] =>
+    [...items].sort((left, right) =>
+      new Date(right.submittedAt || right.createdAt || 0).getTime() -
+      new Date(left.submittedAt || left.createdAt || 0).getTime()
+    );
 
   const visibleApprovals = useMemo(() => {
     if (!isSystemApprovalRole) {
@@ -250,19 +303,17 @@ export const ApprovalsInboxView: React.FC = () => {
     isSystemApprovalRole
   ]);
 
-  const filteredApprovals = visibleApprovals.filter(
+  const filteredApprovals = newestFirst(visibleApprovals.filter(
     (approval) => {
       const matchesStatus =
         statusFilter === 'All' ||
         approval.status === statusFilter;
 
-      const matchesType =
-        typeFilter === 'All' ||
-        approval.type === typeFilter;
-
-      return matchesStatus && matchesType;
+      return matchesStatus &&
+        (categoryFilter === 'All' || categoryFilter === 'Projects') &&
+        matchesRequesterAndDate(approval.requestedBy, approval.createdAt);
     }
-  );
+  ));
 
   const reviewableHRRequests = hrRequests.filter((request) => {
     if (request.userId === currentUser.id) return false;
@@ -275,11 +326,12 @@ export const ApprovalsInboxView: React.FC = () => {
     return false;
   });
 
-  const filteredHRRequests = reviewableHRRequests.filter(
+  const filteredHRRequests = newestFirst(reviewableHRRequests.filter(
     (request) =>
-      typeFilter === 'All' &&
-      (statusFilter === 'All' || request.status === statusFilter)
-  );
+      (categoryFilter === 'All' || categoryFilter === 'Attendance') &&
+      (statusFilter === 'All' || request.status === statusFilter) &&
+      matchesRequesterAndDate(request.userId, request.submittedAt)
+  ));
 
   const pendingSystemCount = visibleApprovals.filter(
     (approval) => approval.status === 'Pending'
@@ -294,14 +346,13 @@ export const ApprovalsInboxView: React.FC = () => {
   // client-side visibility filtering is needed here, unlike systemApprovals above.
   const filteredProjectApprovalRequests = projectApprovalRequests.filter(
     (request) =>
-      (statusFilter === 'All' || request.status === statusFilter) &&
-      (typeFilter === 'All' ||
-        (typeFilter === 'Project_Creation' && request.requestType === 'PROJECT_CREATE') ||
-        (typeFilter === 'Project_Deletion' &&
-          (request.requestType === 'PROJECT_DELETE' ||
-            request.requestType === 'PROJECT_PERMANENT_DELETE')))
+      statusFilter === 'All' || request.status === statusFilter
   );
-  const orderedProjectApprovalRequests = newestProjectRequestsFirst(filteredProjectApprovalRequests);
+  const orderedProjectApprovalRequests = newestProjectRequestsFirst(
+    filteredProjectApprovalRequests.filter((request) =>
+      (categoryFilter === 'All' || categoryFilter === 'Projects') && matchesRequesterAndDate(request.requestedByUserId, request.createdAt)
+    )
+  );
   const pendingProjectApprovalCount = projectApprovalRequests.filter(
     (request) => request.status === 'Pending'
   ).length;
@@ -317,9 +368,11 @@ export const ApprovalsInboxView: React.FC = () => {
     return false;
   });
 
-  const filteredAccountChangeRequests = reviewableAccountChangeRequests.filter(
-    (request) => typeFilter === 'All' && (statusFilter === 'All' || request.status === statusFilter)
-  );
+  const filteredAccountChangeRequests = newestFirst(reviewableAccountChangeRequests.filter(
+    (request) => (categoryFilter === 'All' || categoryFilter === 'Account') &&
+      (statusFilter === 'All' || request.status === statusFilter) &&
+      matchesRequesterAndDate(request.userId, request.submittedAt)
+  ));
 
   const pendingAccountChangeCount = reviewableAccountChangeRequests.filter(
     (request) => request.status === 'Pending'
@@ -367,6 +420,50 @@ export const ApprovalsInboxView: React.FC = () => {
     setReviewError('');
   };
 
+  const openSetup = (request: ProjectApprovalRequest) => {
+    const project = projects.find((item) => item.id === request.projectId);
+    setSetupTarget(request);
+    setSetupDraft(request.requestType === 'PROJECT_CREATE' ? {
+      title: project?.title || request.projectTitle,
+      description: project?.description || '',
+      priority: project?.priority || 'Medium',
+      startDate: project?.startDate || '',
+      targetDate: project?.targetDate || ''
+    } : { ...(request.requestedChanges || {}) });
+  };
+
+  const saveSetup = async () => {
+    if (!setupTarget) return;
+    setSetupLoading(true);
+    const result = await updateApprovalSetup(setupTarget.id, setupDraft);
+    setSetupLoading(false);
+    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+    if (result.success) setSetupTarget(null);
+  };
+
+  const renderSetupModal = () => setupTarget && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div className="glass-panel max-h-[85vh] w-full max-w-2xl overflow-y-auto p-5">
+        <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold text-slate-100">Change Setup</h2><p className="mt-1 text-xs text-slate-400">Save updates now; approval remains a separate decision.</p></div><button type="button" onClick={() => setSetupTarget(null)} className="text-slate-400 hover:text-white"><X size={18}/></button></div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          {([['title','Title','text'],['priority','Priority','text'],['startDate','Start date','date'],[setupTarget.requestType === 'PROJECT_CREATE' ? 'targetDate' : 'dueDate', setupTarget.requestType === 'PROJECT_CREATE' ? 'Target date' : 'Due date','date']] as const).map(([key,label,type]) => (
+            <label key={key} className="text-xs text-slate-300">{label}<input type={type} value={setupDraft[key] || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,[key]:event.target.value}))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
+          ))}
+          <label className="text-xs text-slate-300 sm:col-span-2">Description<textarea rows={5} value={setupDraft.description || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,description:event.target.value}))} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
+          {setupTarget.requestType === 'TASK_CREATE' && <fieldset className="sm:col-span-2"><legend className="text-xs text-slate-300">Proposed assignees</legend><div className="mt-2 grid max-h-40 gap-2 overflow-y-auto rounded-lg border border-white/10 bg-slate-950/40 p-3 sm:grid-cols-2">{(() => {
+            const project = projects.find((item) => item.id === setupTarget.projectId);
+            const team = project?.teams.find((item) => item.id === setupDraft.teamId || item.leadId === setupTarget.requestedByUserId);
+            return (team?.memberIds || project?.memberIds || []).map((id) => {
+              const selected = Array.isArray(setupDraft.assigneeIds) && setupDraft.assigneeIds.includes(id);
+              return <label key={id} className="flex items-center gap-2 text-xs text-slate-200"><input type="checkbox" checked={selected} onChange={() => setSetupDraft((draft) => ({...draft,assigneeIds:selected ? (draft.assigneeIds || []).filter((item:string) => item !== id) : [...(draft.assigneeIds || []),id]}))}/><span className="break-words">{users.find((user) => user.id === id)?.name || id}</span></label>;
+            });
+          })()}</div></fieldset>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setSetupTarget(null)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300">Cancel</button><button type="button" disabled={setupLoading} onClick={saveSetup} className="glass-button-neon rounded-lg px-3 py-2 text-xs font-bold disabled:opacity-50">{setupLoading ? 'Saving…' : 'Save Setup'}</button></div>
+      </div>
+    </div>
+  );
+
   const confirmReview = async () => {
     if (!reviewTarget) return;
     const reason = reviewReason.trim();
@@ -375,23 +472,28 @@ export const ApprovalsInboxView: React.FC = () => {
       return;
     }
     setReviewLoading(true);
-    let result: { success: boolean; message: string };
-    if (reviewTarget.kind === 'system') {
-      result = reviewTarget.action === 'approve'
-        ? await approveApprovalItem(reviewTarget.item.id)
-        : await rejectApprovalItem(reviewTarget.item.id);
-    } else if (reviewTarget.kind === 'hr') {
-      result = reviewTarget.action === 'approve'
-        ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
-        : await rejectHRRequest(reviewTarget.item.id, reason);
-    } else {
-      result = reviewTarget.action === 'approve'
-        ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
-        : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+    try {
+      let result: { success: boolean; message: string };
+      if (reviewTarget.kind === 'system') {
+        result = reviewTarget.action === 'approve'
+          ? await approveApprovalItem(reviewTarget.item.id)
+          : await rejectApprovalItem(reviewTarget.item.id);
+      } else if (reviewTarget.kind === 'hr') {
+        result = reviewTarget.action === 'approve'
+          ? await approveHRRequest(reviewTarget.item.id, reason || undefined)
+          : await rejectHRRequest(reviewTarget.item.id, reason);
+      } else {
+        result = reviewTarget.action === 'approve'
+          ? await approveProjectApprovalRequest(reviewTarget.item.id, reason || undefined)
+          : await rejectProjectApprovalRequest(reviewTarget.item.id, reason);
+      }
+      setNotice({ type: result.success ? 'success' : 'error', message: result.message });
+      if (result.success) setReviewTarget(null);
+    } catch (error: any) {
+      setReviewError(error?.message || 'The approval decision could not be completed.');
+    } finally {
+      setReviewLoading(false);
     }
-    setReviewLoading(false);
-    setNotice({ type: result.success ? 'success' : 'error', message: result.message });
-    if (result.success) setReviewTarget(null);
   };
 
   const renderReviewModal = () => reviewTarget && (
@@ -481,6 +583,24 @@ export const ApprovalsInboxView: React.FC = () => {
         >
           {submitting ? 'Submitting…' : 'Approve'}
         </button>
+      </div>
+    );
+  };
+
+  const renderAccountChangeDetails = (request: AccountChangeRequest, employee?: User) => {
+    const changes = getAccountRequestedChanges(request);
+    if (changes.length === 0) return null;
+    return (
+      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
+        <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Requested changes</span>
+        <div className="mt-3 space-y-3">
+          {changes.map(({ field, value }) => (
+            <div key={field} className="grid gap-2 rounded-lg border border-white/5 bg-white/[0.025] p-3 sm:grid-cols-2">
+              <p className="min-w-0 break-words"><span className="block text-[10px] uppercase tracking-wide text-slate-500">Current {ACCOUNT_FIELD_LABELS[field] || field}</span><span className="mt-1 block text-slate-300">{accountCurrentValue(employee, field)}</span></p>
+              <p className="min-w-0 break-words"><span className="block text-[10px] uppercase tracking-wide text-slate-500">Requested {ACCOUNT_FIELD_LABELS[field] || field}</span><span className={field === 'password' ? 'mt-1 block text-amber-300' : 'mt-1 block text-emerald-300'}>{field === 'password' ? 'Password change requested' : value || 'Not provided'}</span></p>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -576,8 +696,10 @@ export const ApprovalsInboxView: React.FC = () => {
     );
   };
 
-  const renderStatusFilters = () => (
-    <div className="glass-panel flex flex-wrap items-center gap-2 p-4">
+  const renderInboxFilters = () => (
+    <div className="glass-panel space-y-4 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Status</span>
       {(
         [
           'Pending',
@@ -599,6 +721,38 @@ export const ApprovalsInboxView: React.FC = () => {
           {status}
         </button>
       ))}
+      </div>
+      <div data-approval-type-filters className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+        <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Approval type</span>
+        {(
+          currentRole === 'HR'
+            ? ['All', 'Attendance', 'Account']
+            : currentRole === 'Admin'
+              ? ['All', 'Attendance', 'Projects', 'Account']
+              : ['All', 'Projects']
+        ).map((category: ApprovalCategory) => (
+          <button
+            key={category}
+            type="button"
+            onClick={() => setCategoryFilter(category)}
+            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${categoryFilter === category
+              ? 'border-violet-400/50 bg-violet-500/15 text-violet-200'
+              : 'border-white/10 text-slate-300 hover:bg-white/5'}`}
+          >
+            {category === 'All' ? 'All approvals' : category}
+          </button>
+        ))}
+      </div>
+      <div className="grid gap-3 border-t border-white/5 pt-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+        <label className="flex min-w-0 items-center gap-2 rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+          <Search size={14} className="shrink-0 text-slate-500" />
+          <input value={requesterSearch} onChange={(event) => setRequesterSearch(event.target.value)} aria-label="Search by requester username" placeholder="Search requester name, username, or email" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-500" />
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+          <CalendarDays size={14} className="shrink-0 text-slate-500" />
+          <input type="date" value={submittedDate} onChange={(event) => setSubmittedDate(event.target.value)} aria-label="Filter by submitted date" className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none" />
+        </label>
+      </div>
     </div>
   );
 
@@ -617,8 +771,7 @@ export const ApprovalsInboxView: React.FC = () => {
             </h1>
 
             <p className="mt-1 max-w-2xl text-sm text-slate-400">
-              Review Team Member leave requests before they are forwarded
-              to Admin for final approval.
+              Review and finalize Team Member attendance, leave, and correction requests.
             </p>
           </div>
 
@@ -633,9 +786,9 @@ export const ApprovalsInboxView: React.FC = () => {
 
         {renderNotice()}
 
-        {renderStatusFilters()}
+        {renderInboxFilters()}
 
-        {filteredHRRequests.length === 0 ? (
+        {filteredHRRequests.length === 0 && filteredAccountChangeRequests.length === 0 ? (
           <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
             <CheckCircle2
               className="text-slate-500"
@@ -665,69 +818,52 @@ export const ApprovalsInboxView: React.FC = () => {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                        {categoryFilter === 'All' && <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
                           {request.type ===
-                          'Break_Exception' ? (
-                            <Coffee size={13} />
-                          ) : request.type ===
-                            'Leave' ? (
+                          'Leave' ? (
                             <LogOut size={13} />
                           ) : (
                             <Clock size={13} />
                           )}
 
                           {request.type.replace('_', ' ')}
-                        </span>
+                        </span>}
 
-                        <StatusBadge
+                        {statusFilter !== 'Pending' && <StatusBadge
                           status={request.status}
                           size="sm"
-                        />
+                        />}
                       </div>
 
-                      <h3 className="font-semibold text-slate-100">
-                        {employee?.name || (request as any).userName || 'Unknown Employee'}
-                      </h3>
-
-                      <p className="text-xs text-slate-400">
-                        Request date: {request.date} · Submitted:{' '}
-                        {request.submittedAt}
-                      </p>
+                      <RequesterMeta
+                        name={employee?.name || (request as any).userName || 'Unknown Employee'}
+                        id={request.userId}
+                        submittedAt={request.submittedAt}
+                      />
+                      <p className="text-xs text-slate-500">Attendance date: {request.date}</p>
                     </div>
                   </div>
 
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                      Reason
-                    </p>
-
-                    <p className="mt-1 text-xs leading-5 text-slate-300">
-                      {request.reason}
-                    </p>
-                  </div>
+                  <ReasonBlock>{request.reason}</ReasonBlock>
 
                   {request.type === 'Correction' && (
                     <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs sm:grid-cols-2">
                       <div>
                         <span className="block text-[10px] uppercase tracking-wider text-slate-500">
-                          Requested check-in
+                          Current time
                         </span>
-
-                        <span className="mt-1 block text-slate-200">
-                          {request.details.requestedCheckIn ||
-                            'Not provided'}
-                        </span>
+                        <p className="mt-1 text-slate-300">Clock-in: {request.details.currentCheckIn || 'Not recorded'}</p>
+                        <p className="text-slate-300">Clock-out: {request.details.currentCheckOut || 'Not recorded'}</p>
+                        <p className="text-slate-300">Breaks: {request.details.currentBreaks?.length ?? 0}</p>
                       </div>
 
                       <div>
                         <span className="block text-[10px] uppercase tracking-wider text-slate-500">
-                          Requested check-out
+                          Requested time
                         </span>
-
-                        <span className="mt-1 block text-slate-200">
-                          {request.details.requestedCheckOut ||
-                            'Not provided'}
-                        </span>
+                        <p className="mt-1 text-emerald-300">Clock-in: {request.details.requestedCheckIn || 'Not provided'}</p>
+                        <p className="text-emerald-300">Clock-out: {request.details.requestedCheckOut || 'Not provided'}</p>
+                        <p className="text-emerald-300">Breaks: {request.details.requestedBreaks?.length ?? 0}</p>
                       </div>
                     </div>
                   )}
@@ -747,6 +883,18 @@ export const ApprovalsInboxView: React.FC = () => {
 
                       <div>
                         <span className="block text-[10px] uppercase tracking-wider text-slate-500">
+                          Period
+                        </span>
+
+                        <span className="mt-1 block text-slate-200">
+                          {request.details.leaveType === 'Half Day Leave'
+                            ? request.details.leavePeriod || 'Second Half'
+                            : 'Full Day'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="block text-[10px] uppercase tracking-wider text-slate-500">
                           Leave days
                         </span>
 
@@ -755,19 +903,6 @@ export const ApprovalsInboxView: React.FC = () => {
                             'Not provided'}
                         </span>
                       </div>
-                    </div>
-                  )}
-
-                  {request.type === 'Break_Exception' && (
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-500">
-                        Extra break minutes
-                      </span>
-
-                      <span className="mt-1 block text-slate-200">
-                        {request.details.extraBreakMinutes ??
-                          'Not provided'}
-                      </span>
                     </div>
                   )}
 
@@ -816,10 +951,6 @@ export const ApprovalsInboxView: React.FC = () => {
 
         {currentRole === 'HR' && filteredAccountChangeRequests.length > 0 && (
           <div className="space-y-3">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-              <UserIcon size={16} className="text-cyan-400" />
-              Account Change Requests
-            </h2>
             {filteredAccountChangeRequests.map((request) => {
               const employee = users.find((user) => user.id === request.userId);
               return (
@@ -827,41 +958,23 @@ export const ApprovalsInboxView: React.FC = () => {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                        {categoryFilter === 'All' && <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
                           <UserIcon size={13} />
                           Account Change
-                        </span>
-                        <StatusBadge status={request.status} size="sm" />
+                        </span>}
+                        {statusFilter !== 'Pending' && <StatusBadge status={request.status} size="sm" />}
                       </div>
-                      <h3 className="font-semibold text-slate-100">
-                        {employee?.name || request.userName || 'Unknown Employee'}
-                      </h3>
-                      <p className="text-xs text-slate-400">
-                        {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
-                      </p>
+                      <RequesterMeta
+                        name={employee?.name || request.userName || 'Unknown Employee'}
+                        id={request.userId}
+                        submittedAt={request.submittedAt}
+                      />
                     </div>
                   </div>
 
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
-                  </div>
+                  <ReasonBlock>{request.reason}</ReasonBlock>
 
-                  {getAccountRequestedChanges(request).length > 0 && (
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
-                      <div className="space-y-1">
-                        {getAccountRequestedChanges(request).map(({ field, value }) => (
-                          <div key={field} className="flex items-baseline gap-2">
-                            <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
-                            <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
-                              {field === 'password' ? 'Password change requested' : value}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {renderAccountChangeDetails(request, employee)}
                   {renderAccountActions(request)}
                 </div>
               );
@@ -897,7 +1010,7 @@ export const ApprovalsInboxView: React.FC = () => {
   }
 
   return (
-    <section className="mx-auto max-h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto pr-1">
+    <section className="mx-auto h-[calc(100vh-7rem)] max-w-[1200px] space-y-5 overflow-y-auto overscroll-contain pr-1">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-400">
@@ -927,101 +1040,94 @@ export const ApprovalsInboxView: React.FC = () => {
 
       {renderNotice()}
 
-      <div className="glass-panel flex flex-wrap items-center gap-2 p-4">
-        {(
-          [
-            'Pending',
-            'Approved',
-            'Rejected',
-            'All'
-          ] as StatusFilter[]
-        ).map((status) => (
-          <button
-            key={status}
-            type="button"
-            onClick={() => setStatusFilter(status)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-              statusFilter === status
-                ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300'
-                : 'border-white/10 text-slate-300 hover:bg-white/5'
-            }`}
-          >
-            {status}
-          </button>
-        ))}
-
-        <span className="mx-1 h-4 w-px bg-white/10" />
-
-        {(
-          [
-            'All',
-            'Project_Creation',
-            'Project_Deletion'
-          ] as TypeFilter[]
-        ).map((type) => (
-          <button
-            key={type}
-            type="button"
-            onClick={() => setTypeFilter(type)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-              typeFilter === type
-                ? 'border-violet-400/50 bg-violet-500/15 text-violet-300'
-                : 'border-white/10 text-slate-300 hover:bg-white/5'
-            }`}
-          >
-            {type === 'All'
-              ? 'All types'
-              : TYPE_META[type].label}
-          </button>
-        ))}
-      </div>
+      {renderInboxFilters()}
 
       {orderedProjectApprovalRequests.length > 0 && (
         <div className="space-y-3">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-            <FolderKanban size={16} className="text-cyan-400" />
-            Project Management Requests
-          </h2>
-          {orderedProjectApprovalRequests.map((request) => (
-            <div key={request.id} className="glass-panel space-y-3 p-4">
+          {orderedProjectApprovalRequests.map((request) => {
+            const project = projects.find((item) => item.id === request.projectId);
+            const requestMeta = PROJECT_REQUEST_TYPE_META[request.requestType];
+            return (
+            <div key={request.id} className="glass-panel space-y-4 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].icon}
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].label}
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${requestMeta.className}`}>
+                      {requestMeta.icon}
+                      {requestMeta.label}
                     </span>
-                    <StatusBadge status={request.status} size="sm" />
+                    {statusFilter !== 'Pending' && <StatusBadge status={request.status} size="sm" />}
                   </div>
-                  <h3 className="truncate font-semibold text-slate-100">{request.projectTitle}</h3>
-                  {PROJECT_REQUEST_TYPE_META[request.requestType].description && (
+                  <h3 className="break-words text-lg font-semibold text-slate-100">{request.projectTitle}</h3>
+                  {requestMeta.description && (
                     <p className="text-xs text-slate-500">
-                      {PROJECT_REQUEST_TYPE_META[request.requestType].description}
+                      {requestMeta.description}
                     </p>
                   )}
-                  <p className="text-xs text-slate-400">
-                    Requested by {request.requestedByName} · {new Date(request.createdAt).toLocaleString()}
-                  </p>
+                  <RequesterMeta
+                    name={request.requestedByName}
+                    id={request.requestedByUserId}
+                    submittedAt={new Date(request.createdAt).toLocaleString()}
+                  />
                 </div>
               </div>
 
-              <div>
-                <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</span>
-                <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
-              </div>
+              <ReasonBlock>{request.reason}</ReasonBlock>
 
-              {request.requestType === 'PROJECT_EDIT' && request.requestedChanges && (
+              {request.requestType === 'PROJECT_CREATE' && (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.045] p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-300/80">Proposed project</span>
+                      <p className="mt-1 break-words text-sm font-semibold text-slate-100">{project?.title || request.projectTitle}</p>
+                      <p className="mt-2 break-words whitespace-pre-wrap text-xs leading-5 text-slate-300">{project?.description || 'Project description is unavailable.'}</p>
+                    </div>
+                    {project && onViewProject && (
+                      <button
+                        type="button"
+                        onClick={() => onViewProject(request.projectId)}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/20"
+                      >
+                        <Eye size={14} />
+                        View project
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {request.requestType === 'TASK_CREATE' && (() => {
+                const setup = request.requestedChanges || {};
+                const assigneeIds = Array.isArray(setup.assigneeIds) ? setup.assigneeIds as string[] : [];
+                return <div className="grid gap-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.045] p-3 text-xs sm:grid-cols-2">
+                  <div><span className="block text-[10px] uppercase text-slate-500">Task title</span><span className="break-words text-slate-100">{String(setup.title || 'Not provided')}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Project</span><span className="text-slate-100">{request.projectTitle}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Priority / due date</span><span className="text-slate-100">{String(setup.priority || 'Not provided')} · {String(setup.dueDate || 'Not provided')}</span></div>
+                  <div><span className="block text-[10px] uppercase text-slate-500">Proposed assignees</span><span className="break-words text-slate-100">{assigneeIds.map((id) => users.find((user) => user.id === id)?.name || id).join(', ') || 'None'}</span></div>
+                  <div className="sm:col-span-2"><span className="block text-[10px] uppercase text-slate-500">Description</span><span className="whitespace-pre-wrap break-words text-slate-100">{String(setup.description || 'Not provided')}</span></div>
+                </div>;
+              })()}
+
+              {request.requestType === 'PROJECT_EDIT' && projectEditChanges(request).length > 0 && (
                 <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested changes</span>
-                  <div className="mt-1 space-y-1">
-                    {Object.entries(request.requestedChanges)
-                      .filter(([, value]) => value !== undefined)
-                      .map(([field, value]) => (
-                        <div key={field} className="flex items-center gap-2">
-                          <span className="text-slate-500">{field}:</span>
-                          <span className="text-emerald-300">{String(value)}</span>
-                        </div>
-                      ))}
+                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">Changes Requested</span>
+                  <div className="mt-3 space-y-3">
+                    {projectEditChanges(request).map((change) => (
+                      <div key={change.fieldKey} className="min-w-0 rounded-lg border border-white/5 bg-white/[0.025] p-3">
+                        <p className="font-semibold text-slate-100">{change.fieldLabel}</p>
+                        {change.fieldKey === 'memberIds' ? (
+                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            <p className="break-words"><span className="block text-[10px] uppercase text-slate-500">Removed</span><span className="text-rose-300">{formatProjectChangeValue(change.fieldKey, change.removed)}</span></p>
+                            <p className="break-words"><span className="block text-[10px] uppercase text-slate-500">Added</span><span className="text-emerald-300">{formatProjectChangeValue(change.fieldKey, change.added)}</span></p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            <p className="min-w-0 whitespace-pre-wrap break-words"><span className="block text-[10px] uppercase text-slate-500">Before</span><span className="text-slate-300">{formatProjectChangeValue(change.fieldKey, change.oldDisplayValue)}</span></p>
+                            <p className="min-w-0 whitespace-pre-wrap break-words"><span className="block text-[10px] uppercase text-cyan-500">After</span><span className="text-cyan-100">{formatProjectChangeValue(change.fieldKey, change.newDisplayValue)}</span></p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1043,6 +1149,7 @@ export const ApprovalsInboxView: React.FC = () => {
                     <XCircle size={14} />
                     Reject
                   </button>
+                  {(request.requestType === 'PROJECT_CREATE' || request.requestType === 'TASK_CREATE') && <button type="button" onClick={() => openSetup(request)} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20 hover:text-white"><Settings2 size={14}/>Change Setup</button>}
                   <button
                     type="button"
                     onClick={() => handleProjectRequestApprove(request)}
@@ -1054,16 +1161,13 @@ export const ApprovalsInboxView: React.FC = () => {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {currentRole === 'Admin' && filteredHRRequests.length > 0 && (
         <div className="space-y-3">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-            <Clock size={16} className="text-cyan-400" />
-            Attendance and Leave Requests
-          </h2>
           {filteredHRRequests.map((request) => {
             const employee = users.find((user) => user.id === request.userId);
             return (
@@ -1071,17 +1175,19 @@ export const ApprovalsInboxView: React.FC = () => {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-300">
+                      {categoryFilter === 'All' && <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-300">
                         {request.type === 'Leave' ? 'Leave Request' : 'Attendance Edit'}
-                      </span>
-                      <StatusBadge status={request.status} size="sm" />
+                      </span>}
+                      {statusFilter !== 'Pending' && <StatusBadge status={request.status} size="sm" />}
                     </div>
-                    <h3 className="mt-2 font-semibold text-white">
-                      {employee?.name || request.userName || 'Unknown Employee'}
-                    </h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Attendance date: {request.date} · Requested by {request.userName || employee?.name || 'Unknown'} · {request.submittedAt}
-                    </p>
+                    <div className="mt-2">
+                      <RequesterMeta
+                        name={employee?.name || request.userName || 'Unknown Employee'}
+                        id={request.userId}
+                        submittedAt={request.submittedAt}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">Attendance date: {request.date}</p>
                   </div>
                 </div>
 
@@ -1091,11 +1197,13 @@ export const ApprovalsInboxView: React.FC = () => {
                       <span className="block text-[10px] uppercase tracking-wider text-slate-500">Current values</span>
                       <p className="mt-1 text-slate-300">Check-in: {request.details.currentCheckIn === '' ? 'Not recorded' : request.details.currentCheckIn}</p>
                       <p className="text-slate-300">Check-out: {request.details.currentCheckOut === '' ? 'Not recorded' : request.details.currentCheckOut}</p>
+                      <p className="text-slate-300">Breaks: {request.details.currentBreaks?.length ?? 0}</p>
                     </div>
                     <div>
                       <span className="block text-[10px] uppercase tracking-wider text-slate-500">Requested values</span>
                       <p className="mt-1 text-emerald-300">Check-in: {request.details.requestedCheckIn === '' ? 'Not recorded' : request.details.requestedCheckIn}</p>
                       <p className="text-emerald-300">Check-out: {request.details.requestedCheckOut === '' ? 'Not recorded' : request.details.requestedCheckOut}</p>
+                      <p className="text-emerald-300">Breaks: {request.details.requestedBreaks?.length ?? 0}</p>
                     </div>
                   </div>
                 ) : (
@@ -1106,10 +1214,7 @@ export const ApprovalsInboxView: React.FC = () => {
                   </div>
                 )}
 
-                <div>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-500">Reason</span>
-                  <p className="mt-1 text-xs text-slate-300">{request.reason}</p>
-                </div>
+                <ReasonBlock>{request.reason}</ReasonBlock>
 
                 {request.status === 'Pending' && (
                   <div className="flex justify-end gap-2 border-t border-white/5 pt-3">
@@ -1129,10 +1234,6 @@ export const ApprovalsInboxView: React.FC = () => {
 
       {currentRole === 'Admin' && filteredAccountChangeRequests.length > 0 && (
         <div className="space-y-3">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-            <Shield size={16} className="text-cyan-400" />
-            Account Change Requests
-          </h2>
           {filteredAccountChangeRequests.map((request) => {
             const employee = users.find((user) => user.id === request.userId);
             return (
@@ -1140,41 +1241,23 @@ export const ApprovalsInboxView: React.FC = () => {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                      {categoryFilter === 'All' && <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
                         <UserIcon size={13} />
                         Account Change
-                      </span>
-                      <StatusBadge status={request.status} size="sm" />
+                      </span>}
+                      {statusFilter !== 'Pending' && <StatusBadge status={request.status} size="sm" />}
                     </div>
-                    <h3 className="font-semibold text-slate-100">
-                      {employee?.name || request.userName || 'Unknown Employee'}
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      {request.requesterRole ? request.requesterRole.replace('_', ' ') : 'Unknown Role'} · Submitted: {request.submittedAt}
-                    </p>
+                    <RequesterMeta
+                      name={employee?.name || request.userName || 'Unknown Employee'}
+                      id={request.userId}
+                      submittedAt={request.submittedAt}
+                    />
                   </div>
                 </div>
 
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Reason</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-300">{request.reason}</p>
-                </div>
+                <ReasonBlock>{request.reason}</ReasonBlock>
 
-                {getAccountRequestedChanges(request).length > 0 && (
-                  <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs">
-                    <span className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2">Requested Change</span>
-                    <div className="space-y-1">
-                      {getAccountRequestedChanges(request).map(({ field, value }) => (
-                        <div key={field} className="flex items-baseline gap-2">
-                          <span className="text-slate-500 w-24 shrink-0">{ACCOUNT_FIELD_LABELS[field] || field}:</span>
-                          <span className={field === 'password' ? 'text-amber-400' : 'text-emerald-300'}>
-                            {field === 'password' ? 'Password change requested' : value}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {renderAccountChangeDetails(request, employee)}
                 {renderAccountActions(request)}
               </div>
             );
@@ -1230,40 +1313,31 @@ export const ApprovalsInboxView: React.FC = () => {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
+                      {categoryFilter === 'All' && <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold text-violet-300">
                         {TYPE_META[approval.type].icon}
                         {TYPE_META[approval.type].label}
-                      </span>
+                      </span>}
 
-                      <StatusBadge
+                      {statusFilter !== 'Pending' && <StatusBadge
                         status={approval.status}
                         size="sm"
-                      />
+                      />}
                     </div>
 
-                    <h3 className="truncate font-semibold text-slate-100">
+                    <h3 className="break-words font-semibold text-slate-100">
                       {approval.targetTitle}
                     </h3>
 
-                    <p className="text-xs text-slate-400">
-                      Requested by{' '}
-                      {requester?.name || 'Unknown'} (
-                      {approval.requestedRole.replace(
-                        '_',
-                        ' '
-                      )}
-                      )
-                      {project
-                        ? ` · ${project.title}`
-                        : ''}{' '}
-                      · {approval.createdAt}
-                    </p>
+                    <RequesterMeta
+                      name={requester?.name || 'Unknown'}
+                      id={approval.requestedBy}
+                      submittedAt={approval.createdAt}
+                    />
+                    {project && <p className="break-words text-xs text-slate-500">Project: {project.title}</p>}
                   </div>
                 </div>
 
-                <p className="text-xs leading-5 text-slate-300">
-                  {approval.details}
-                </p>
+                <ReasonBlock label="Request details">{approval.details}</ReasonBlock>
 
                 {approval.proposedTaskUpdate && approval.previousTaskSnapshot && (
                   <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/40 text-xs">
@@ -1357,6 +1431,7 @@ export const ApprovalsInboxView: React.FC = () => {
       )}
       {renderAccountRejectModal()}
       {renderReviewModal()}
+      {renderSetupModal()}
     </section>
   );
 };

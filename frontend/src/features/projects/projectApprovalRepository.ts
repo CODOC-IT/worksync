@@ -38,8 +38,15 @@ async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T
 }
 
 // Admin's Approval Inbox — every Pending project approval request.
-export const fetchPendingProjectApprovals = async (): Promise<ProjectApprovalRequest[]> => {
+export const fetchProjectApprovals = async (): Promise<ProjectApprovalRequest[]> => {
   const { data } = await apiFetch<{ data: ProjectApprovalRequest[] }>('');
+  return data;
+};
+
+export const updateApprovalSetupApi = async (id: string, setup: Record<string, unknown>): Promise<ProjectApprovalRequest> => {
+  const { data } = await apiFetch<{ data: ProjectApprovalRequest }>(`/${encodeURIComponent(id)}/setup`, {
+    method: 'PATCH', body: JSON.stringify(setup)
+  });
   return data;
 };
 

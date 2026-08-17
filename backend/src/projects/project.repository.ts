@@ -1,5 +1,13 @@
 import { query, withTransaction } from '../db/pool.js';
-import { MilestoneRow, ProjectFileRow, ProjectMemberRoleCode, ProjectMemberRow, ProjectRow } from './project.types.js';
+import {
+  MilestoneRow,
+  ProjectFileRow,
+  ProjectMemberRoleCode,
+  ProjectMemberRow,
+  ProjectRow,
+  ProjectTeamRow,
+  TeamMemberRow
+} from './project.types.js';
 import { parseAttachmentDataUrl, writeAttachmentToDisk } from '../collab/fileStorage.js';
 
 // Repository = data access only (Repository Pattern, matching backend/src/notifications'
@@ -58,9 +66,13 @@ export const findProjectById = async (projectId: number): Promise<ProjectRow | n
   return result.rows[0] || null;
 };
 
+const MEMBER_COLUMNS = `
+  projectid, userid, memberrolecode, pendingremovalatutc, pendingremovalbyuserid, pendingremovalreason
+`;
+
 export const findMembersForProject = async (projectId: number): Promise<ProjectMemberRow[]> => {
   const result = await query<ProjectMemberRow>(
-    `SELECT projectid, userid, memberrolecode
+    `SELECT ${MEMBER_COLUMNS}
      FROM work.projectmembers
      WHERE projectid = $1 AND leftatutc IS NULL
      ORDER BY projectmemberid`,
@@ -68,6 +80,190 @@ export const findMembersForProject = async (projectId: number): Promise<ProjectM
   );
   return result.rows;
 };
+
+// --- Team layer (multi-team architecture) ------------------------------------------------
+
+const TEAM_COLUMNS = `teamid, projectid, teamname, description, createdbyuserid`;
+const TEAM_MEMBER_COLUMNS = `teamid, projectid, userid, islead`;
+
+export const findTeamsForProject = async (projectId: number): Promise<ProjectTeamRow[]> => {
+  const result = await query<ProjectTeamRow>(
+    `SELECT ${TEAM_COLUMNS} FROM work.projectteams WHERE projectid = $1 ORDER BY teamid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+// Only active (LeftAtUtc IS NULL) team memberships, mirroring findMembersForProject.
+export const findTeamMembersForProject = async (projectId: number): Promise<TeamMemberRow[]> => {
+  const result = await query<TeamMemberRow>(
+    `SELECT ${TEAM_MEMBER_COLUMNS}
+     FROM work.teammembers
+     WHERE projectid = $1 AND leftatutc IS NULL
+     ORDER BY teammemberid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+export const findTeamById = async (teamId: number): Promise<ProjectTeamRow | null> => {
+  const result = await query<ProjectTeamRow>(
+    `SELECT ${TEAM_COLUMNS} FROM work.projectteams WHERE teamid = $1`,
+    [teamId]
+  );
+  return result.rows[0] || null;
+};
+
+export const findTeamMembersForTeam = async (teamId: number): Promise<TeamMemberRow[]> => {
+  const result = await query<TeamMemberRow>(
+    `SELECT ${TEAM_MEMBER_COLUMNS}
+     FROM work.teammembers
+     WHERE teamid = $1 AND leftatutc IS NULL
+     ORDER BY teammemberid`,
+    [teamId]
+  );
+  return result.rows;
+};
+
+// Batched sibling of findTeamsForProject/findTeamMembersForProject for the project-list endpoint
+// (mirrors findMembersForProjects) so a list never N+1's per project.
+export const findTeamsForProjects = async (projectIds: number[]): Promise<ProjectTeamRow[]> => {
+  if (projectIds.length === 0) return [];
+  const result = await query<ProjectTeamRow>(
+    `SELECT ${TEAM_COLUMNS}
+     FROM work.projectteams
+     WHERE projectid = ANY($1::int[])
+     ORDER BY projectid, teamid`,
+    [projectIds]
+  );
+  return result.rows;
+};
+
+export const findTeamMembersForProjects = async (projectIds: number[]): Promise<TeamMemberRow[]> => {
+  if (projectIds.length === 0) return [];
+  const result = await query<TeamMemberRow>(
+    `SELECT ${TEAM_MEMBER_COLUMNS}
+     FROM work.teammembers
+     WHERE projectid = ANY($1::int[]) AND leftatutc IS NULL
+     ORDER BY projectid, teamid`,
+    [projectIds]
+  );
+  return result.rows;
+};
+
+export interface InsertTeamRow {
+  name: string;
+  description: string;
+  leadId: number;
+  memberIds: number[];
+}
+
+// Inserts one team plus its TeamMember rows (exactly one lead + the other members) inside the
+// caller's transaction. Callers must have already validated the team setup (>= 2 people, one lead,
+// no duplicate cross-team membership) -- this only writes.
+export const insertTeam = async (
+  runQuery: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>,
+  projectId: number,
+  team: InsertTeamRow,
+  addedByUserId: number
+): Promise<number> => {
+  const inserted = await runQuery(
+    `INSERT INTO work.projectteams (projectid, teamname, description, createdbyuserid)
+     VALUES ($1, $2, $3, $4) RETURNING teamid`,
+    [projectId, team.name, team.description, addedByUserId]
+  );
+  const teamId = Number(inserted.rows[0].teamid);
+
+  const uniqueMemberIds = Array.from(new Set([...team.memberIds, team.leadId]));
+  for (const userId of uniqueMemberIds) {
+    await runQuery(
+      `INSERT INTO work.teammembers (teamid, projectid, userid, islead, addedbyuserid)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [teamId, projectId, userId, userId === team.leadId, addedByUserId]
+    );
+  }
+  return teamId;
+};
+
+// Admin moving a project member from one team to another. The member keeps their ProjectMembers
+// row (they stay in the project); their TeamMembers row moves to the target team and loses any
+// lead flag (a moved lead becomes a regular member of their new team -- promoting them again is
+// replaceTeamLead's job). Returns false if the user isn't currently in any team of this project.
+export const moveTeamMember = async (
+  projectId: number,
+  userId: number,
+  toTeamId: number,
+  actorId: number
+): Promise<boolean> =>
+  withTransaction(async (runQuery) => {
+    const current = await runQuery<{ teammemberid: number; islead: boolean }>(
+      `SELECT teammemberid, islead
+       FROM work.teammembers
+       WHERE projectid = $1 AND userid = $2 AND leftatutc IS NULL`,
+      [projectId, userId]
+    );
+    if (current.rows.length === 0) return false;
+    const { teammemberid, islead } = current.rows[0];
+
+    await runQuery(
+      `UPDATE work.teammembers SET teamid = $1, islead = FALSE WHERE teammemberid = $2`,
+      [toTeamId, teammemberid]
+    );
+    if (islead) {
+      await runQuery(
+        `UPDATE work.projectmembers SET memberrolecode = 'Member'
+         WHERE projectid = $1 AND userid = $2 AND leftatutc IS NULL`,
+        [projectId, userId]
+      );
+    }
+    return true;
+  });
+
+// Admin replacing a team's lead. The outgoing lead stays in the team as a regular member; the new
+// lead must already be a project member (addMember handles joining the project) and becomes the
+// team's lead. ProjectMembers roles follow: new lead -> 'TeamLead', old lead -> 'Member'.
+export const replaceTeamLead = async (
+  projectId: number,
+  teamId: number,
+  oldLeadId: number,
+  newLeadId: number,
+  actorId: number
+): Promise<boolean> =>
+  withTransaction(async (runQuery) => {
+    await runQuery(
+      `UPDATE work.teammembers SET islead = FALSE
+       WHERE teamid = $1 AND userid = $2 AND leftatutc IS NULL`,
+      [teamId, oldLeadId]
+    );
+    const existing = await runQuery<{ teammemberid: number }>(
+      `SELECT teammemberid FROM work.teammembers
+       WHERE teamid = $1 AND userid = $2 AND leftatutc IS NULL`,
+      [teamId, newLeadId]
+    );
+    if (existing.rows.length === 0) {
+      await runQuery(
+        `INSERT INTO work.teammembers (teamid, projectid, userid, islead, addedbyuserid)
+         VALUES ($1, $2, $3, TRUE, $4)`,
+        [teamId, projectId, newLeadId, actorId]
+      );
+    } else {
+      await runQuery(
+        `UPDATE work.teammembers SET islead = TRUE WHERE teammemberid = $1`,
+        [existing.rows[0].teammemberid]
+      );
+    }
+    await runQuery(
+      `UPDATE work.projectmembers SET memberrolecode = 'TeamLead'
+       WHERE projectid = $1 AND userid = $2 AND leftatutc IS NULL`,
+      [projectId, newLeadId]
+    );
+    await runQuery(
+      `UPDATE work.projectmembers SET memberrolecode = 'Member'
+       WHERE projectid = $1 AND userid = $2 AND leftatutc IS NULL`,
+      [projectId, oldLeadId]
+    );
+    return true;
+  });
 
 const MILESTONE_COLUMNS = `
   milestoneid, projectid, milestonename, description, duedate::text, completedatutc,
@@ -80,6 +276,26 @@ export const findMilestonesForProject = async (projectId: number): Promise<Miles
      FROM work.projectmilestones
      WHERE projectid = $1
      ORDER BY duedate, milestoneid`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+export interface ProjectTaskDateRow {
+  tasknumber: string;
+  title: string;
+  startdate: string;
+  duedate: string;
+}
+
+// Date-scope checks deliberately include subtasks: they live in the same work.Tasks table and
+// are just as much part of the project's schedule as their parent task.
+export const findActiveTaskDatesForProject = async (projectId: number): Promise<ProjectTaskDateRow[]> => {
+  const result = await query<ProjectTaskDateRow>(
+    `SELECT tasknumber, title, startdate::text, duedate::text
+       FROM work.tasks
+      WHERE projectid = $1 AND archivedatutc IS NULL
+      ORDER BY taskid`,
     [projectId]
   );
   return result.rows;
@@ -219,7 +435,7 @@ export const insertProjectFile = async (input: InsertProjectFileInput): Promise<
     if (!parsed) {
       throw new Error(`Attachment "${input.originalFileName}" has no readable content to store.`);
     }
-    const written = await writeAttachmentToDisk(parsed.buffer);
+    const written = await writeAttachmentToDisk(parsed.buffer, parsed.mimeType);
     const extension = input.originalFileName.includes('.') ? input.originalFileName.split('.').pop()! : null;
 
     // ScanStatus stays 'Pending' -- this app has no virus-scanning pipeline (same rationale as
@@ -268,7 +484,7 @@ export const removeProjectFile = async (projectId: number, fileId: number): Prom
 export const findMembersForProjects = async (projectIds: number[]): Promise<ProjectMemberRow[]> => {
   if (projectIds.length === 0) return [];
   const result = await query<ProjectMemberRow>(
-    `SELECT projectid, userid, memberrolecode
+    `SELECT ${MEMBER_COLUMNS}
      FROM work.projectmembers
      WHERE projectid = ANY($1::int[]) AND leftatutc IS NULL
      ORDER BY projectmemberid`,
@@ -306,7 +522,14 @@ export interface CreateProjectRow {
   createdByUserId: number;
   creationReason: string | null;
   teamLeadUserId?: number;
+  // All team leads when the project uses the multi-team architecture (overrides teamLeadUserId
+  // when present). Each gets a 'TeamLead' ProjectMembers row.
+  teamLeadUserIds?: number[];
   memberUserIds: number[];
+  // Complete team setup (multi-team architecture). When present, each team's rows are written
+  // after the project members; teamLeadUserId/memberUserIds must already reflect the flattened
+  // union of all team leads and members so work.ProjectMembers stays the access-control source.
+  teams?: InsertTeamRow[];
   // False when the creator is an Admin: the project row still records them as OwnerUserId, but
   // no 'Owner' ProjectMembers row is written, so the Admin isn't listed as a project member
   // (Admins have org-wide access anyway). A Team Member/Lead creator always gets the row.
@@ -360,16 +583,23 @@ export const insertProject = async (input: CreateProjectRow): Promise<number> =>
       );
     }
 
-    if (input.teamLeadUserId && input.teamLeadUserId !== input.ownerUserId) {
-      await runQuery(
-        `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
-         VALUES ($1, $2, 'TeamLead', $3)`,
-        [projectId, input.teamLeadUserId, input.createdByUserId]
-      );
+    const leadIds = input.teamLeadUserIds
+      ? Array.from(new Set(input.teamLeadUserIds))
+      : input.teamLeadUserId
+        ? [input.teamLeadUserId]
+        : [];
+    for (const leadId of leadIds) {
+      if (leadId !== input.ownerUserId) {
+        await runQuery(
+          `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+           VALUES ($1, $2, 'TeamLead', $3)`,
+          [projectId, leadId, input.createdByUserId]
+        );
+      }
     }
 
     const uniqueMemberIds = Array.from(new Set(input.memberUserIds)).filter(
-      (id) => id !== input.ownerUserId && id !== input.teamLeadUserId
+      (id) => id !== input.ownerUserId && !leadIds.includes(id)
     );
     for (const memberId of uniqueMemberIds) {
       await runQuery(
@@ -377,6 +607,12 @@ export const insertProject = async (input: CreateProjectRow): Promise<number> =>
          VALUES ($1, $2, 'Member', $3)`,
         [projectId, memberId, input.createdByUserId]
       );
+    }
+
+    if (input.teams && input.teams.length > 0) {
+      for (const team of input.teams) {
+        await insertTeam(runQuery, projectId, team, input.createdByUserId);
+      }
     }
 
     return projectId;
@@ -420,6 +656,21 @@ export const updateProject = async (projectId: number, updates: UpdateProjectRow
     params
   );
   return (result.rowCount ?? 0) > 0;
+};
+
+// PROJECT_CREATE approval has one legal transition: PendingActivation -> Active. Keeping this
+// conditional and separate from the broad edit update prevents a stale create-approval request
+// from reactivating an already-decided or otherwise transitioned project.
+export const activatePendingProject = async (projectId: number): Promise<boolean> => {
+  const activeStatusId = await getProjectStatusId('Active');
+  const pendingStatusId = await getProjectStatusId('PendingActivation');
+  const result = await query(
+    `UPDATE work.projects
+        SET projectstatusid = $1, updatedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
+      WHERE projectid = $2 AND projectstatusid = $3`,
+    [activeStatusId, projectId, pendingStatusId]
+  );
+  return (result.rowCount ?? 0) === 1;
 };
 
 // Soft-delete (archive), matching the schema's CK_Projects_Archive constraint shape (all three
@@ -467,7 +718,10 @@ export const archiveProject = async (
 // not possible without violating audit immutability. Instead, FK_AuditEvents_Project was dropped
 // (database/24_audit_project_fk_relax.sql) -- a permanently-deleted project's audit history simply
 // keeps its now-historical ProjectId value forever, exactly as it was written.
-export const permanentlyDeleteProject = async (projectId: number): Promise<boolean> =>
+export const permanentlyDeleteProject = async (
+  projectId: number,
+  options: { allowUnarchived?: boolean } = {}
+): Promise<boolean> =>
   withTransaction(async (runQuery) => {
     await runQuery(
       `UPDATE notify.notifications
@@ -598,8 +852,10 @@ export const permanentlyDeleteProject = async (projectId: number): Promise<boole
     await runQuery('UPDATE notify.notifications SET projectid = NULL WHERE projectid = $1', [projectId]);
 
     const result = await runQuery(
-      'DELETE FROM work.projects WHERE projectid = $1 AND archivedatutc IS NOT NULL',
-      [projectId]
+      `DELETE FROM work.projects
+       WHERE projectid = $1
+         AND ($2::boolean OR archivedatutc IS NOT NULL)`,
+      [projectId, options.allowUnarchived === true]
     );
     return (result.rowCount ?? 0) > 0;
   });
@@ -670,19 +926,70 @@ export const getProjectProgress = async (projectId: number): Promise<number> => 
   return total > 0 ? Math.round((completed / total) * 100) : 0;
 };
 
+// This is the single place a member's project membership is ever actually ended -- both an
+// immediate removal (no active work) and a deferred one (project.service.ts's
+// recheckPendingRemovalForMember, once a Pending Removal member's active work clears) call this
+// same function. Closing their active work.TeamMembers row (if any) in the same transaction keeps
+// the two lifecycles in lockstep: a member who's genuinely gone from the project must not keep
+// appearing as an active team member in ProjectDTO.teams (project.mapper.ts's buildTeamDTOs only
+// filters on TeamMembers.LeftAtUtc). A member merely flagged Pending Removal never reaches this
+// function at all (see flagMemberPendingRemoval below), so their team membership correctly stays
+// untouched while their work is still outstanding.
 export const removeProjectMember = async (
   projectId: number,
   userId: number,
   removedByUserId: number,
   removalReason: string
+): Promise<boolean> =>
+  withTransaction(async (runQuery) => {
+    const result = await runQuery(
+      `UPDATE work.projectmembers
+       SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1, removalreason = $2
+       WHERE projectid = $3 AND userid = $4 AND leftatutc IS NULL`,
+      [removedByUserId, removalReason, projectId, userId]
+    );
+    if ((result.rowCount ?? 0) === 0) return false;
+
+    await runQuery(
+      `UPDATE work.teammembers
+       SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1
+       WHERE projectid = $2 AND userid = $3 AND leftatutc IS NULL`,
+      [removedByUserId, projectId, userId]
+    );
+    return true;
+  });
+
+// A member with active task/subtask work is kept (never LeftAtUtc) rather than removed -- these
+// three columns record who flagged it and why, so project.service.ts's recheckPendingRemoval can
+// later notify the flagging Admin once the real removal finally happens. Called again on an
+// already-flagged member simply refreshes the timestamp/reason to reflect the latest check.
+export const flagMemberPendingRemoval = async (
+  projectId: number,
+  userId: number,
+  flaggedByUserId: number,
+  reason: string
 ): Promise<boolean> => {
   const result = await query(
     `UPDATE work.projectmembers
-     SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1, removalreason = $2
+     SET pendingremovalatutc = CURRENT_TIMESTAMP, pendingremovalbyuserid = $1, pendingremovalreason = $2
      WHERE projectid = $3 AND userid = $4 AND leftatutc IS NULL`,
-    [removedByUserId, removalReason, projectId, userId]
+    [flaggedByUserId, reason, projectId, userId]
   );
   return (result.rowCount ?? 0) > 0;
+};
+
+// Every currently-flagged member across every project -- the completion-triggered recheck (called
+// from task.service.ts whenever a task/subtask reaches Done) uses this to find who might now be
+// clear to remove, without task.service.ts needing to know ProjectMembers' shape at all.
+export const findPendingRemovalMembersForProject = async (projectId: number): Promise<ProjectMemberRow[]> => {
+  const result = await query<ProjectMemberRow>(
+    `SELECT ${MEMBER_COLUMNS}
+     FROM work.projectmembers
+     WHERE projectid = $1 AND leftatutc IS NULL AND pendingremovalatutc IS NOT NULL
+     ORDER BY projectmemberid`,
+    [projectId]
+  );
+  return result.rows;
 };
 
 // Reassigns a project's Team Lead. TeamLead is a ProjectMembers role, not a projects-table

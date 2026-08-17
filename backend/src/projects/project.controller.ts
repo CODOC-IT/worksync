@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/authMiddleware.js';
 import * as service from './project.service.js';
-import * as approvalService from './projectApproval.service.js';
+import { createApprovalRequest } from './projectApproval.service.js';
 import { getAttachmentUrl, parseAttachmentDataUrl } from '../collab/fileStorage.js';
 import { getProjectUpdateApprovalType, PROJECT_ARCHIVE_APPROVAL_TYPE } from './projectApproval.routing.js';
 import {
@@ -9,6 +9,8 @@ import {
   validateCreateProjectBody,
   validateCreateProjectFileBody,
   validateMemberBody,
+  validateMoveMemberBody,
+  validateReplaceTeamLeadBody,
   validateUpdateMilestoneBody,
   validateUpdateProjectBody
 } from './project.validation.js';
@@ -90,7 +92,7 @@ export const createProject = async (req: AuthenticatedRequest, res: Response): P
     const data = await service.createProject(req.body as CreateProjectInput, user.id, user.role);
     if (user.role !== 'Admin') {
       const input = req.body as CreateProjectInput;
-      await approvalService.createApprovalRequest(
+      await createApprovalRequest(
         data.id,
         'PROJECT_CREATE',
         null,
@@ -129,9 +131,14 @@ export const updateProject = async (req: AuthenticatedRequest, res: Response): P
     // Team_Member's call through the approval-request path even when they weren't the project's
     // lead at all.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
-      const { reason, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
+      // Member management is Admin-only regardless of path (see project.service.ts's
+      // assertCanManageMembers) -- memberIds is dropped here, before it's ever persisted, so a
+      // Team Lead can't smuggle a membership change into a PROJECT_EDIT request via a direct API
+      // call that bypasses the edit form's disabled member checkboxes. teamLeadId (handing off
+      // their own leadership) is unaffected -- that's a distinct, still-approval-gated action.
+      const { reason, memberIds, ...changes } = (req.body || {}) as UpdateProjectInput & { reason?: string };
       const requestType = getProjectUpdateApprovalType(changes.status);
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, requestType, requestType === 'PROJECT_ARCHIVE' ? null : changes, reason || '', user.id, user.role
       );
       res.json({
@@ -156,7 +163,7 @@ export const archiveProject = async (req: AuthenticatedRequest, res: Response): 
   try {
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, PROJECT_ARCHIVE_APPROVAL_TYPE, null, reason || '', user.id, user.role
       );
       res.json({
@@ -180,7 +187,7 @@ export const permanentlyDeleteProject = async (req: AuthenticatedRequest, res: R
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, 'PROJECT_PERMANENT_DELETE', null, reason || '', user.id, user.role
       );
       res.json({
@@ -204,7 +211,7 @@ export const restoreProject = async (req: AuthenticatedRequest, res: Response): 
     // See updateProject's comment above -- the gate is per-project leadership, not account role.
     if (user.role !== 'Admin' && (await service.isProjectLead(req.params.id, user.id, user.role))) {
       const { reason } = (req.body || {}) as { reason?: string };
-      const data = await approvalService.createApprovalRequest(
+      const data = await createApprovalRequest(
         req.params.id, 'PROJECT_RESTORE', null, reason || '', user.id, user.role
       );
       res.json({
@@ -260,6 +267,44 @@ export const removeMember = async (req: AuthenticatedRequest, res: Response): Pr
     res.json({ success: true, message: 'Member removed successfully.', data });
   } catch (error) {
     handleServiceError(error, res, 'Failed to remove project member.');
+  }
+};
+
+export const moveMember = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateMoveMemberBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { userId, toTeamId } = req.body as { userId: string; toTeamId: string };
+    const data = await service.moveMember(req.params.id, userId, toTeamId, user.id, user.role);
+    res.json({ success: true, message: 'Member moved successfully.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to move project member.');
+  }
+};
+
+export const replaceTeamLead = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const validation = validateReplaceTeamLeadBody(req.body);
+  if (!validation.valid) {
+    res.status(400).json({ success: false, message: validation.message });
+    return;
+  }
+
+  try {
+    const { userId } = req.body as { userId: string };
+    const data = await service.replaceTeamLead(req.params.id, req.params.teamId, userId, user.id, user.role);
+    res.json({ success: true, message: 'Team Lead replaced successfully.', data });
+  } catch (error) {
+    handleServiceError(error, res, 'Failed to replace the Team Lead.');
   }
 };
 

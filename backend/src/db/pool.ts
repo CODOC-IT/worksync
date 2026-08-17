@@ -131,6 +131,7 @@ export const bootstrapDatabase = async (): Promise<void> => {
       ['project_archived', 'Project', 'Normal'], ['project_restored', 'Project', 'Normal'],
       ['project_deleted', 'Project', 'High'], ['project_member_added', 'Project', 'Normal'],
       ['project_member_removed', 'Project', 'Normal'],
+      ['project_member_pending_removal', 'Project', 'Normal'], ['project_member_auto_removed', 'Project', 'Normal'],
       // Approvals / system / admin
       ['approval', 'Approval', 'High'], ['user_registered', 'System', 'Normal'],
       ['user_role_changed', 'System', 'High'], ['user_deactivated', 'System', 'High'],
@@ -148,7 +149,6 @@ export const bootstrapDatabase = async (): Promise<void> => {
       // Break
       ['break_started', 'Break', 'Low'], ['break_ended', 'Break', 'Low'],
       ['break_exceeded', 'Break', 'High'], ['break_reminder', 'Break', 'Normal'],
-      ['break_approved', 'Break', 'Normal'], ['break_rejected', 'Break', 'Normal'],
       // Reports
       ['report_weekly_generated', 'Report', 'Normal'], ['report_monthly_generated', 'Report', 'Normal'],
       ['report_sprint_ready', 'Report', 'Normal'], ['report_productivity_ready', 'Report', 'Normal'],

@@ -156,8 +156,11 @@ VALUES
     ('project_archived',       'Project',    'Normal',   FALSE, TRUE),
     ('project_restored',       'Project',    'Normal',   FALSE, TRUE),
     ('project_deleted',        'Project',    'High',     FALSE, TRUE),
-    ('project_member_added',   'Project',    'Normal',   FALSE, TRUE),
-    ('project_member_removed', 'Project',    'Normal',   FALSE, TRUE),
+    ('project_member_added',            'Project', 'Normal', FALSE, TRUE),
+    ('project_member_removed',          'Project', 'Normal', FALSE, TRUE),
+    ('project_member_pending_removal',  'Project', 'Normal', FALSE, TRUE),
+    ('project_member_auto_removed',     'Project', 'Normal', FALSE, TRUE),
+    ('project_approval_rejected',       'Project', 'High',   FALSE, TRUE),
     -- Approvals / system / admin
     ('approval',                'Approval',  'High',     FALSE, TRUE),
     ('user_registered',         'System',    'Normal',   FALSE, TRUE),
@@ -187,8 +190,6 @@ VALUES
     ('break_ended',       'Break', 'Low',    FALSE, TRUE),
     ('break_exceeded',    'Break', 'High',   FALSE, TRUE),
     ('break_reminder',    'Break', 'Normal', FALSE, TRUE),
-    ('break_approved',    'Break', 'Normal', FALSE, TRUE),
-    ('break_rejected',    'Break', 'Normal', FALSE, TRUE),
     -- Reports
     ('report_weekly_generated',      'Report', 'Normal', FALSE, TRUE),
     ('report_monthly_generated',     'Report', 'Normal', FALSE, TRUE),

@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, AtSign, ChevronDown, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
+import { ArrowLeft, AtSign, ChevronDown, Download, FileText, LoaderCircle, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, Reply as ReplyIcon, Search, Send, Trash2, UsersRound, X } from 'lucide-react';
 import { useApp } from '../../store/AppContext';
 import { SearchableSelect } from '../../components/common/SearchableSelect';
 import { ProjectMemberSummary } from '../projects/projectRepository';
@@ -15,7 +15,7 @@ import {
 } from './projectChatRules';
 import { ChatAttachment, DISCUSSION_TYPES, DiscussionComment, DiscussionFilters, DiscussionThread, DiscussionType } from './projectChatTypes';
 
-const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', type: '', authorId: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
+const emptyFilters: DiscussionFilters = { search: '', projectId: '', taskId: '', teamId: '', type: '', authorId: '', mentionedOnly: false, mineOnly: false, from: '', to: '', sort: '' };
 const COMMENT_MAX_LENGTH = 250;
 const inputClass = 'project-chat-input w-full rounded-[10px] px-3 py-2 text-sm outline-none transition';
 const formatTime = (date: string) => new Date(date).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -57,7 +57,8 @@ export const ProjectChatsView: React.FC = () => {
     const query = new URLSearchParams(window.location.search);
     const projectId = query.get('projectId') || '';
     const taskId = query.get('taskId') || '';
-    if (projectId || taskId) setFilters((current) => ({ ...current, projectId, taskId }));
+    const teamId = query.get('teamId') || '';
+    if (projectId || taskId || teamId) setFilters((current) => ({ ...current, projectId, taskId, teamId }));
   }, []);
   useEffect(() => {
     const selectedThread = threads.find((thread) => thread.id === selectedId);
@@ -86,13 +87,30 @@ export const ProjectChatsView: React.FC = () => {
     ]),
     [tasks, threads]
   );
-  const visibleThreads = useMemo(() => filterDiscussions(threads.filter((thread) => projects.find((project) => project.id === thread.projectId)?.status !== 'Completed'), filters, currentUser.id, projectNames, taskNames), [threads, projects, filters, currentUser.id, projectNames, taskNames]);
+  const teamNames = useMemo(
+    () => Object.fromEntries([
+      ...threads.filter((thread) => thread.teamId).map((thread) => [thread.teamId!, thread.teamName || '']),
+      ...projects.flatMap((project) => project.teams.map((team) => [team.id, team.name]))
+    ]),
+    [projects, threads]
+  );
+  const visibleThreads = useMemo(() => filterDiscussions(threads.filter((thread) => projects.find((project) => project.id === thread.projectId)?.status !== 'Completed'), filters, currentUser.id, projectNames, taskNames, teamNames), [threads, projects, filters, currentUser.id, projectNames, taskNames, teamNames]);
   const selected = selectedId ? visibleThreads.find((thread) => thread.id === selectedId) : undefined;
   const chatUsers = useMemo(() => users.filter((user) => user.status === 'active') as ProjectMemberSummary[], [users]);
   const mentionUsers = useMemo(() => {
     if (!selected) return [];
     const task = selected.taskId ? tasks.find((item) => item.id === selected.taskId) : undefined;
     const project = projects.find((item) => item.id === selected.projectId);
+    const team = selected.teamId ? project?.teams.find((item) => item.id === selected.teamId) : undefined;
+    // A team discussion always takes its narrower audience from the team itself: its members
+    // (lead included) plus the project lead, HR, and Admin -- deliberately overriding any
+    // cached/server-provided project-wide mention directory.
+    if (team && project) {
+      return getProjectMentionCandidates(
+        chatUsers,
+        [...new Set([...team.memberIds, team.leadId, project.teamLeadId])]
+      );
+    }
     // A task discussion always takes its narrower audience from the task itself. This
     // intentionally wins over a cached/server-provided project-wide mention directory.
     if (task && project) {
@@ -141,6 +159,10 @@ export const ProjectChatsView: React.FC = () => {
     }
     return Array.from(options.values());
   }, [filters.projectId, tasks, threads]);
+  const projectTeams = useMemo(() => {
+    const project = projects.find((candidate) => candidate.id === filters.projectId);
+    return project?.teams || [];
+  }, [projects, filters.projectId]);
   const availableProjects = projects.filter((project) => project.status === 'Active');
 
   const addFiles = async (files: FileList | null) => {
@@ -261,8 +283,9 @@ export const ProjectChatsView: React.FC = () => {
       </header>
 
       <div className="project-chat-toolbar flex shrink-0 flex-wrap items-center gap-2 rounded-xl p-2.5">
-        <div className="min-w-36 flex-1"><Select value={filters.projectId} onChange={(projectId) => setFilters({ ...filters, projectId, taskId: '' })} label="All projects">{chatProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></div>
-        <div className="min-w-36 flex-1"><Select value={filters.taskId} onChange={(taskId) => setFilters({ ...filters, taskId })} label="All tasks" disabled={!filters.projectId}>{projectTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</Select></div>
+        <div className="min-w-36 flex-1"><Select value={filters.projectId} onChange={(projectId) => setFilters({ ...filters, projectId, taskId: '', teamId: '' })} label="All projects">{chatProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></div>
+        <div className="min-w-36 flex-1"><Select value={filters.taskId} onChange={(taskId) => setFilters({ ...filters, taskId, teamId: '' })} label="All tasks" disabled={!filters.projectId}>{projectTasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</Select></div>
+        <div className="min-w-36 flex-1"><Select value={filters.teamId} onChange={(teamId) => setFilters({ ...filters, teamId, taskId: '' })} label="All teams" disabled={!filters.projectId}>{projectTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</Select></div>
         <div className="min-w-32 flex-1"><Select value={filters.type} onChange={(type) => setFilters({ ...filters, type })} label="All types">{DISCUSSION_TYPES.map((type) => <option key={type}>{type}</option>)}</Select></div>
         <div className="min-w-36 flex-1"><Select value={filters.sort} onChange={(sort) => setFilters({ ...filters, sort: sort as DiscussionFilters['sort'] })} label="Recently active"><option value="newest">Newest created</option><option value="oldest">Oldest created</option><option value="replies">Most replies</option></Select></div>
         <button type="button" aria-pressed={filters.mineOnly} onClick={() => setFilters({ ...filters, mineOnly: !filters.mineOnly })} className={`project-chat-filter-chip h-9 rounded-full px-3 text-xs font-semibold ${filters.mineOnly ? 'is-active' : ''}`}>My Discussions</button>
@@ -277,10 +300,10 @@ export const ProjectChatsView: React.FC = () => {
             <span className="project-chat-heading text-sm font-bold">Discussions</span>
             <span className="project-chat-count rounded-full px-2 py-0.5 text-xs">{visibleThreads.length}</span>
           </div>
-          {loading ? <ListState label="Gathering your discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'Nothing matches those filters yet.' : 'No conversations yet. Start one when your team is ready.'} /> : <div className="project-chat-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => { setSelectedId(thread.id); setMobileConversationOpen(true); }} />)}</div>}
+          {loading ? <ListState label="Gathering your discussions…" /> : visibleThreads.length === 0 ? <ListState label={threads.length ? 'Nothing matches those filters yet.' : 'No conversations yet. Start one when your team is ready.'} /> : <div className="project-chat-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">{visibleThreads.map((thread) => <ThreadPreview key={thread.id} thread={thread} active={selected?.id === thread.id} projectName={projectNames[thread.projectId]} taskName={taskNames[thread.taskId || '']} teamName={teamNames[thread.teamId || '']} users={chatUsers} currentUserId={currentUser.id} onClick={() => { setSelectedId(thread.id); setMobileConversationOpen(true); }} />)}</div>}
         </aside>
         <main className={`${mobileConversationOpen ? 'grid' : 'hidden lg:grid'} project-chat-conversation min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden`}>
-          {loading ? <ListState label="Opening the conversation…" /> : selected ? <DiscussionPanel thread={selected} users={chatUsers} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} currentUserId={currentUser.id} currentRole={currentRole} onBack={() => setMobileConversationOpen(false)} onReply={(commentId) => { setReplyTo(commentId); replyRef.current?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Choose a discussion to join the conversation." />}
+          {loading ? <ListState label="Opening the conversation…" /> : selected ? <DiscussionPanel thread={selected} users={chatUsers} projectName={projectNames[selected.projectId]} taskName={taskNames[selected.taskId || '']} teamName={teamNames[selected.teamId || '']} currentUserId={currentUser.id} currentRole={currentRole} onBack={() => setMobileConversationOpen(false)} onReply={(commentId) => { setReplyTo(commentId); replyRef.current?.focus(); }} onEdit={startEdit} onDeleteRequest={startDelete} editingCommentId={editingCommentId} editText={editText} editError={editError} editSubmitting={editSubmitting} onEditTextChange={setEditText} onEditSubmit={submitEdit} onEditCancel={cancelEdit} /> : <ListState label="Choose a discussion to join the conversation." />}
           {selected && (
             <form onSubmit={submitReply} className="project-chat-composer project-chat-divider relative z-10 m-3 mt-0 shrink-0 rounded-xl border p-3">
               <div className="project-chat-secondary mb-2 flex items-center justify-between text-xs">
@@ -382,19 +405,20 @@ const MemberInitials: React.FC<{ user?: ProjectMemberSummary; size?: 'sm' | 'md'
   );
 };
 
-const ThreadPreview: React.FC<any> = ({ thread, active, projectName, taskName, users, currentUserId, onClick }) => {
+const ThreadPreview: React.FC<any> = ({ thread, active, projectName, taskName, teamName, users, currentUserId, onClick }) => {
   const last = thread.comments.at(-1);
   const mentioned = thread.comments.some((comment: DiscussionComment) => comment.mentionIds.includes(currentUserId));
   const participantIds = Array.from(new Set(thread.comments.map((comment: DiscussionComment) => comment.authorId)));
   const participants = participantIds.map((id) => users.find((user: ProjectMemberSummary) => user.id === id)).filter(Boolean);
   const replyCount = Math.max(0, thread.comments.length - 1);
+  const context = teamName || taskName || projectName;
 
   return (
     <button type="button" onClick={onClick} className={`project-chat-thread relative w-full rounded-xl p-3.5 text-left transition ${active ? 'is-active' : ''}`}>
       <div className="flex items-start justify-between gap-3">
         <p className="project-chat-heading line-clamp-2 min-w-0 font-semibold leading-5">{thread.title}</p>
       </div>
-      <p className="project-chat-context mt-1.5 truncate text-[11px] font-medium">{taskName || projectName}{taskName ? ` · ${projectName}` : ''}</p>
+      <p className="project-chat-context mt-1.5 truncate text-[11px] font-medium">{context}{teamName || taskName ? ` · ${projectName}` : ''}</p>
       <p className="project-chat-secondary mt-2 line-clamp-2 text-xs leading-5">{last?.deletedAt ? 'This message was deleted.' : last?.body || 'No messages yet.'}</p>
       <div className="project-chat-secondary mt-3 flex items-center justify-between gap-3 text-[10px]">
         <div className="flex min-w-0 items-center gap-2">
@@ -409,23 +433,36 @@ const ThreadPreview: React.FC<any> = ({ thread, active, projectName, taskName, u
 };
 const renderAttachment = (file: ChatAttachment) => {
   const isImage = file.mimeType.startsWith('image/') && file.url;
+  const downloadControl = file.url && (
+    <a
+      href={file.url}
+      download={file.name}
+      aria-label={`Download ${file.name}`}
+      title={`Download ${file.name}`}
+      className="project-chat-attachment-download inline-flex shrink-0 items-center justify-center rounded-md p-1"
+    >
+      <Download size={13} />
+    </a>
+  );
   if (isImage) {
     return (
       <div key={file.id} className="mt-2 mr-2 inline-block">
         <img src={file.url} alt={file.name} className="project-chat-divider max-h-48 max-w-64 rounded-lg border object-cover" />
-        <p className="project-chat-secondary mt-1 text-[10px]">{file.name}</p>
+        <p className="project-chat-secondary mt-1 flex max-w-64 items-center gap-1 text-[10px]">
+          <span className="truncate">{file.name}</span>{downloadControl}
+        </p>
       </div>
     );
   }
   return (
-    <span key={file.id} className="project-chat-meta-pill mt-2 mr-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs">
-      <FileText size={12} />{file.name}
+    <span key={file.id} className="project-chat-meta-pill mt-2 mr-2 inline-flex max-w-64 items-center gap-1 rounded-lg px-2 py-1 text-xs">
+      <FileText size={12} className="shrink-0" /><span className="truncate">{file.name}</span>{downloadControl}
     </span>
   );
 };
 
 const DiscussionPanel: React.FC<any> = ({
-  thread, users, projectName, taskName, currentUserId, currentRole, onBack,
+  thread, users, projectName, taskName, teamName, currentUserId, currentRole, onBack,
   onReply, onEdit, onDeleteRequest, editingCommentId, editText, editError, editSubmitting,
   onEditTextChange, onEditSubmit, onEditCancel,
 }) => {
@@ -454,6 +491,7 @@ const DiscussionPanel: React.FC<any> = ({
     wasNearBottom.current = true;
   }, [thread.id]);
   const participantCount = new Set(thread.comments.map((comment: DiscussionComment) => comment.authorId)).size;
+  const canReviewDeletedContent = currentRole === 'Admin' || currentRole === 'HR';
 
   return (
     <div className="relative grid h-full min-h-0 grid-rows-[auto_minmax(280px,1fr)] overflow-hidden">
@@ -464,6 +502,7 @@ const DiscussionPanel: React.FC<any> = ({
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <span className="project-chat-meta-pill rounded-full px-2 py-1 text-[10px] font-semibold">{thread.type}</span>
             <span className="project-chat-meta-pill max-w-56 truncate rounded-full px-2 py-1 text-[10px] font-semibold">{projectName}</span>
+            {teamName && <span className="project-chat-meta-pill max-w-56 truncate rounded-full px-2 py-1 text-[10px] font-semibold">Team · {teamName}</span>}
             {taskName && <span className="project-chat-meta-pill max-w-56 truncate rounded-full px-2 py-1 text-[10px] font-semibold">{taskName}</span>}
             <span className="project-chat-secondary inline-flex items-center gap-1 text-[10px]"><UsersRound size={12} />{participantCount} {participantCount === 1 ? 'participant' : 'participants'}</span>
             <span className="project-chat-secondary text-[10px]">Updated {formatTime(thread.updatedAt)}</span>
@@ -488,7 +527,7 @@ const DiscussionPanel: React.FC<any> = ({
           const parent = comment.parentCommentId ? thread.comments.find((candidate) => candidate.id === comment.parentCommentId) : undefined;
 
           return (
-            <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
+            <article key={comment.id} className={`project-chat-message group max-w-4xl rounded-xl p-3.5 transition ${isMine ? 'is-mine' : ''} ${comment.deletedAt ? 'is-deleted' : ''} ${grouped ? 'mt-1.5' : 'mt-3.5'} ${comment.parentCommentId ? 'ml-4 md:ml-8' : ''}`}>
               <div className="flex gap-3">
                 <MemberInitials user={author} />
                 <div className="min-w-0 flex-1">
@@ -525,7 +564,7 @@ const DiscussionPanel: React.FC<any> = ({
                       </div>
                     )}
                   </div>
-                  {comment.deletedAt ? (
+                  {comment.deletedAt && !canReviewDeletedContent ? (
                     <p className="project-chat-secondary mt-2 italic text-sm">This message was deleted.</p>
                   ) : isEditing ? (
                     <div className="mt-2 space-y-2">
@@ -549,12 +588,13 @@ const DiscussionPanel: React.FC<any> = ({
                     </div>
                   ) : (
                     <>
+                      {comment.deletedAt && <span className="project-chat-deleted-label mt-2 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide">Deleted</span>}
                       {parent && <p className="project-chat-secondary mt-2 truncate border-l-2 border-cyan-400/45 pl-2 text-xs">Replying to {users.find((user) => user.id === parent.authorId)?.name || 'message'}: {parent.body}</p>}
                       <p className="project-chat-body mt-2 max-w-3xl break-words whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
                       {comment.attachments.map((file) => renderAttachment(file))}
-                      <div className="mt-2 flex gap-3">
+                      {!comment.deletedAt && <div className="mt-2 flex gap-3">
                         <button type="button" onClick={() => onReply(comment.id)} className="project-chat-action inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold"><ReplyIcon size={13} />Reply</button>
-                      </div>
+                      </div>}
                     </>
                   )}
                 </div>
@@ -586,14 +626,16 @@ const MentionList: React.FC<{ users: ProjectMemberSummary[]; onPick: (user: Proj
 const NewDiscussionDialog: React.FC<any> = ({
   projects, tasks, users, currentUser, currentRole, onClose, onCreated,
 }) => {
-  const [form, setForm] = useState({ projectId: '', taskId: '', title: '', type: 'General' as DiscussionType, body: '' });
+  const [form, setForm] = useState({ projectId: '', taskId: '', teamId: '', title: '', type: 'General' as DiscussionType, body: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [trigger, setTrigger] = useState<MentionTrigger | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const eligibleTasks = tasks.filter((task: any) => task.projectId === form.projectId);
   const selectedProject = projects.find((project: any) => project.id === form.projectId);
+  const eligibleTeams = selectedProject?.teams || [];
   const selectedTask = eligibleTasks.find((task: any) => task.id === form.taskId);
+  const selectedTeam = eligibleTeams.find((team: any) => team.id === form.teamId);
   const canUseProject = !selectedProject || currentRole === 'Admin'
     || selectedProject.memberIds.includes(currentUser.id)
     || selectedProject.teamLeadId === currentUser.id
@@ -605,10 +647,17 @@ const NewDiscussionDialog: React.FC<any> = ({
     || currentRole === 'Admin'
     || selectedProject?.teamLeadId === currentUser.id
     || selectedTaskAssigneeIds.includes(currentUser.id);
+  const canUseTeam = !selectedTeam
+    || currentRole === 'Admin'
+    || selectedProject?.teamLeadId === currentUser.id
+    || selectedTeam.memberIds.includes(currentUser.id)
+    || selectedTeam.leadId === currentUser.id;
   const projectUsers: ProjectMemberSummary[] = getProjectMentionCandidates(
     users,
     selectedProject
-      ? selectedTask
+      ? selectedTeam
+        ? [...new Set([...selectedTeam.memberIds, selectedTeam.leadId, selectedProject.teamLeadId])]
+        : selectedTask
         ? [...(selectedTask.assigneeIds || [selectedTask.assigneeId]), selectedProject.teamLeadId]
         : [...selectedProject.memberIds, selectedProject.teamLeadId]
       : []
@@ -651,9 +700,15 @@ const NewDiscussionDialog: React.FC<any> = ({
       setError('You can only start a task discussion for a task assigned to you.');
       return;
     }
+    if (!canUseTeam) {
+      setError('You can only start a team discussion in a team you belong to or lead.');
+      return;
+    }
     const outOfScopeMention = findOutOfScopeMention(body, users, projectUsers);
     if (outOfScopeMention) {
-      setError(selectedTask
+      setError(selectedTeam
+        ? `@${outOfScopeMention.name} is not a member of this team. You can only mention team members, the Team Lead, HR, or Admin.`
+        : selectedTask
         ? `@${outOfScopeMention.name} is not assigned to this task. You can only mention task assignees, the Team Lead, HR, or Admin.`
         : `@${outOfScopeMention.name} is not a member of this project. You can only mention project members, HR, or Admin.`);
       return;
@@ -664,6 +719,7 @@ const NewDiscussionDialog: React.FC<any> = ({
       onCreated(await createDiscussion({
         ...form,
         taskId: form.taskId || undefined,
+        teamId: form.teamId || undefined,
         body,
         mentionIds: parseMentionIds(body, projectUsers),
         attachments: [],
@@ -679,7 +735,7 @@ const NewDiscussionDialog: React.FC<any> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <form onSubmit={submit} className="project-chat-dialog w-full max-w-2xl overflow-hidden rounded-2xl">
         <div className="project-chat-divider flex items-center justify-between border-b px-5 py-4">
-          <div><h2 className="project-chat-heading font-bold">Start discussion</h2><p className="project-chat-secondary mt-1 text-xs">Create a focused project or task conversation.</p></div>
+          <div><h2 className="project-chat-heading font-bold">Start discussion</h2><p className="project-chat-secondary mt-1 text-xs">Create a focused project, team, or task conversation.</p></div>
           <button type="button" onClick={onClose} aria-label="Close" className="project-chat-action rounded-lg p-2"><X size={18} /></button>
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-2">
@@ -687,7 +743,7 @@ const NewDiscussionDialog: React.FC<any> = ({
             <div className="mt-1">
               <SearchableSelect
                 value={form.projectId}
-                onChange={(projectId) => { setForm({ ...form, projectId, taskId: '' }); setTrigger(null); }}
+                onChange={(projectId) => { setForm({ ...form, projectId, taskId: '', teamId: '' }); setTrigger(null); }}
                 placeholder="Select project"
                 emptyMessage="No projects found"
                 options={projects.map((project: any) => ({
@@ -697,7 +753,7 @@ const NewDiscussionDialog: React.FC<any> = ({
                 }))}
               />
             </div>
-            <select aria-hidden tabIndex={-1} value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '' }); setTrigger(null); }} className="sr-only">
+            <select aria-hidden tabIndex={-1} value={form.projectId} onChange={(event) => { setForm({ ...form, projectId: event.target.value, taskId: '', teamId: '' }); setTrigger(null); }} className="sr-only">
               <option value="">Select project</option>
               {projects.map((project: any) => <option key={project.id} value={project.id}>{project.title}{currentRole !== 'Admin' && !project.memberIds.includes(currentUser.id) && project.teamLeadId !== currentUser.id && project.createdBy !== currentUser.id ? ' — not assigned' : ''}</option>)}
             </select>
@@ -707,7 +763,7 @@ const NewDiscussionDialog: React.FC<any> = ({
             <div className="mt-1">
               <SearchableSelect
                 value={form.taskId}
-                onChange={(taskId) => setForm({ ...form, taskId })}
+                onChange={(taskId) => setForm({ ...form, taskId, teamId: '' })}
                 disabled={!form.projectId}
                 placeholder="No specific task"
                 emptyMessage="No tasks found"
@@ -728,12 +784,44 @@ const NewDiscussionDialog: React.FC<any> = ({
                 ]}
               />
             </div>
-            <select aria-hidden tabIndex={-1} value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value })} className="sr-only">
+            <select aria-hidden tabIndex={-1} value={form.taskId} disabled={!form.projectId} onChange={(event) => setForm({ ...form, taskId: event.target.value, teamId: '' })} className="sr-only">
               <option value="">No specific task</option>
               {eligibleTasks.map((task: any) => <option key={task.id} value={task.id}>{task.title}</option>)}
             </select>
             {form.taskId && !canUseTask && <span className="mt-1 block font-normal text-rose-300">You are not assigned to this task, so you cannot start its discussion.</span>}
             <span className="project-chat-secondary mt-1 block font-normal">Choose a task only if this discussion is about a specific task.</span>
+          </label>
+          <label className="project-chat-body text-xs font-semibold">Team <span className="project-chat-secondary font-normal">(optional)</span>
+            <div className="mt-1">
+              <SearchableSelect
+                value={form.teamId}
+                onChange={(teamId) => setForm({ ...form, teamId, taskId: '' })}
+                disabled={!form.projectId || eligibleTeams.length === 0}
+                placeholder="No specific team"
+                emptyMessage="No teams in this project"
+                options={[
+                  { value: '', label: 'No specific team' },
+                  ...eligibleTeams.map((team: any) => {
+                    const canSelectTeam = currentRole === 'Admin'
+                      || selectedProject?.teamLeadId === currentUser.id
+                      || team.memberIds.includes(currentUser.id)
+                      || team.leadId === currentUser.id;
+                    return {
+                      value: team.id,
+                      label: team.name,
+                      sublabel: canSelectTeam ? undefined : 'Not on this team',
+                      disabled: !canSelectTeam
+                    };
+                  })
+                ]}
+              />
+            </div>
+            <select aria-hidden tabIndex={-1} value={form.teamId} disabled={!form.projectId || eligibleTeams.length === 0} onChange={(event) => setForm({ ...form, teamId: event.target.value, taskId: '' })} className="sr-only">
+              <option value="">No specific team</option>
+              {eligibleTeams.map((team: any) => <option key={team.id} value={team.id}>{team.name}</option>)}
+            </select>
+            {form.teamId && !canUseTeam && <span className="mt-1 block font-normal text-rose-300">You are not on this team, so you cannot start its discussion.</span>}
+            <span className="project-chat-secondary mt-1 block font-normal">Scope this discussion to a team so only its members see it.</span>
           </label>
           <label className="project-chat-body text-xs font-semibold">Subject *
             <input required maxLength={200} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} className={`${inputClass} mt-1`} />

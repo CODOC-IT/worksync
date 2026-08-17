@@ -67,9 +67,15 @@ export const readAttachmentFromDisk = async (storageObjectKey: string): Promise<
 // Chat DTOs use a short-lived signed URL on Supabase so every authorized account can download
 // the persisted original without exposing the bucket publicly. Local development retains the
 // previous data-URL behavior.
-export const getAttachmentUrl = async (storageObjectKey: string, mimeType: string): Promise<string | undefined> => {
+export const getAttachmentUrl = async (
+  storageObjectKey: string,
+  mimeType: string,
+  downloadFileName?: string
+): Promise<string | undefined> => {
   if (isSupabaseServiceConfigured()) {
-    const signed = await getSupabaseServiceClient().storage.from(STORAGE_BUCKET).createSignedUrl(storageObjectKey, 60 * 60);
+    const signed = await getSupabaseServiceClient().storage
+      .from(STORAGE_BUCKET)
+      .createSignedUrl(storageObjectKey, 60 * 60, downloadFileName ? { download: downloadFileName } : undefined);
     if (signed.error) throw new Error(`Unable to open attachment: ${signed.error.message}`);
     return signed.data.signedUrl;
   }

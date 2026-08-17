@@ -1,4 +1,4 @@
-import { Milestone, Project, ProjectApprovalRequest, ProjectFile, User } from '../../types';
+import { Milestone, Project, ProjectApprovalRequest, ProjectFile, Team, User } from '../../types';
 
 // ---------------------------------------------------------------------------------------
 // projectApiClient — thin fetch wrapper over /api/projects (backend/src/projects/project.routes.ts).
@@ -79,6 +79,16 @@ export interface CreateProjectPayload {
   teamLeadId?: string;
   memberIds?: string[];
   creationReason?: string;
+  // Full multi-team setup (Admin builds the whole structure up front; a member's project
+  // suggestion carries the same so an Admin approval materializes it verbatim).
+  teams?: CreateTeamPayload[];
+}
+
+export interface CreateTeamPayload {
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
 }
 
 export const createProjectApi = async (payload: CreateProjectPayload): Promise<Project> => {
@@ -167,6 +177,22 @@ export const removeProjectMemberApi = async (id: string, userId: string, reason?
   const { data } = await apiFetch<{ data: Project }>(
     `/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
     { method: 'DELETE', body: JSON.stringify({ reason }) }
+  );
+  return data;
+};
+
+export const moveProjectMemberApi = async (id: string, userId: string, toTeamId: string): Promise<Project> => {
+  const { data } = await apiFetch<{ data: Project }>(`/${encodeURIComponent(id)}/members/move`, {
+    method: 'POST',
+    body: JSON.stringify({ userId, toTeamId })
+  });
+  return data;
+};
+
+export const replaceTeamLeadApi = async (id: string, teamId: string, userId: string): Promise<Project> => {
+  const { data } = await apiFetch<{ data: Project }>(
+    `/${encodeURIComponent(id)}/teams/${encodeURIComponent(teamId)}/lead`,
+    { method: 'POST', body: JSON.stringify({ userId }) }
   );
   return data;
 };

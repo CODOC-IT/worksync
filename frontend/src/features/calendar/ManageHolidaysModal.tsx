@@ -7,9 +7,9 @@ import { isPastDate } from '../attendance/attendanceValidation';
 import { fetchDepartments } from './departmentsRepository';
 
 // Holiday CRUD UI, reached only from CalendarView's "Manage Holidays" button (itself rendered
-// only for currentRole === 'HR'). The `currentRole !== 'HR'` guard below is a harmless second
+// for currentRole === 'Admin' || 'HR'). The `currentRole` guard below is a harmless second
 // layer, not the real gate -- create/update/delete are enforced server-side via effectiveRoles.ts
-// (backend/src/calendar/calendar.service.ts's assertIsHR) regardless of what this component does.
+// (backend/src/calendar/calendar.service.ts's assertCanManageHolidays).
 interface ManageHolidaysModalProps {
   onClose: () => void;
 }
@@ -40,8 +40,8 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
   const [userSearch, setUserSearch] = useState('');
 
-  // Loaded once on mount -- this modal only ever renders for HR (see the early return below), and
-  // the Department audience picker needs the full, current department list regardless of which
+  // Loaded once on mount -- this modal only ever renders for Admin (see the early return below),
+  // and the Department audience picker needs the full, current department list regardless of which
   // audience type is initially selected.
   useEffect(() => {
     let active = true;
@@ -61,17 +61,19 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
     };
   }, []);
 
-  if (currentRole !== 'HR') return null;
+  if (currentRole !== 'Admin' && currentRole !== 'HR') return null;
 
   const sortedHolidays = [...holidays].sort((a, b) => a.date.localeCompare(b.date));
 
-  // Specific Users audience: Admin and HR must never appear (requirement), same eligibility shape
-  // as ProjectsView.tsx's assignableMembers -- active, non-Admin accounts only (here also
-  // excluding HR, which ProjectsView doesn't need to since it already excludes all non-assignable
-  // roles via nonAdminUsers for a different reason).
-  const eligibleUsers = users.filter(
-    (user) => user.role !== 'Admin' && user.role !== 'HR' && user.status !== 'inactive'
-  );
+  // Specific Users audience eligibility: HR may target any active employee (never Admin/HR),
+  // while Admin may additionally target HR staff (so Admin can give holidays to HR), never other
+  // Admins -- matches backend/src/calendar/calendar.service.ts's assertEligibleAudienceUsers.
+  const eligibleUsers = users.filter((user) => {
+    if (user.status === 'inactive') return false;
+    if (user.role === 'Admin') return false;
+    if (user.role === 'HR' && currentRole !== 'Admin') return false;
+    return true;
+  });
   const filteredEligibleUsers = userSearch.trim()
     ? eligibleUsers.filter((user) => user.name.toLowerCase().includes(userSearch.trim().toLowerCase()))
     : eligibleUsers;
@@ -223,10 +225,11 @@ export const ManageHolidaysModal: React.FC<ManageHolidaysModalProps> = ({ onClos
               <input
                 type="date"
                 value={form.date}
-                // Only enforced while adding a new holiday -- editing an existing (possibly
-                // already-past) holiday's name/recurrence must still work without forcing its
-                // date to change, matching updateHoliday's unchanged backend behavior.
-                min={editingId ? undefined : todayDateKey()}
+                // Today and future only, in both add and edit modes. Editing an existing
+                // (possibly already-past) holiday's name/recurrence must still work without
+                // forcing its date to change, so handleSubmit compares against the original
+                // date -- matching updateHoliday's unchanged backend behavior.
+                min={todayDateKey()}
                 onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
               />

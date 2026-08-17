@@ -7,8 +7,10 @@ import {
   decideApprovalRequest,
   findApprovalRequestById,
   findApprovalRequestsForUser,
+  findApprovalRequests,
   findPendingApprovalRequests,
-  insertApprovalRequest
+  insertApprovalRequest,
+  updatePendingApprovalSetup
 } from './projectApproval.repository.js';
 
 const db = newDb();
@@ -21,7 +23,8 @@ before(async () => {
     CREATE SCHEMA work;
     CREATE TABLE work.ProjectApprovalRequests (
       ApprovalRequestId BIGSERIAL PRIMARY KEY,
-      ProjectId INT NOT NULL,
+      ProjectId INT NULL,
+      ProjectTitle VARCHAR(500) NOT NULL,
       RequestType VARCHAR(30) NOT NULL,
       RequestedByUserId INT NOT NULL,
       RequestedChangesJson TEXT NULL,
@@ -47,6 +50,7 @@ after(async () => {
 test('persists and loads requests through the lowercase-folded project approval table', async () => {
   const id = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'Updated title' }),
@@ -68,8 +72,14 @@ test('persists and loads requests through the lowercase-folded project approval 
 });
 
 test('Team Lead project edit request persists and appears in Admin inbox newest first', async () => {
+  const persistedPayload = {
+    version: 1,
+    changes: [{ fieldKey: 'title', fieldLabel: 'Project Name', oldValue: 'Project 42', newValue: 'Latest proposal' }],
+    proposal: { title: 'Latest proposal' }
+  };
   const olderId = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'First proposal' }),
@@ -77,9 +87,10 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
   });
   const newerId = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
-    requestedChangesJson: JSON.stringify({ title: 'Latest proposal' }),
+    requestedChangesJson: JSON.stringify(persistedPayload),
     reason: 'Latest scope update'
   });
   await pool.query(
@@ -93,12 +104,15 @@ test('Team Lead project edit request persists and appears in Admin inbox newest 
 
   const pending = await findPendingApprovalRequests();
   assert.deepEqual(pending.map((item) => item.approvalrequestid), [newerId, olderId]);
-  assert.deepEqual(JSON.parse(pending[0].requestedchangesjson || '{}'), { title: 'Latest proposal' });
+  assert.deepEqual(JSON.parse(pending[0].requestedchangesjson || '{}'), persistedPayload);
+  const reloaded = await findApprovalRequestById(newerId);
+  assert.deepEqual(JSON.parse(reloaded?.requestedchangesjson || '{}'), persistedPayload);
 });
 
 test('rejection persists the required reason for request history and notifications', async () => {
   const id = await insertApprovalRequest({
     projectId: 42,
+    projectTitle: 'Project 42',
     requestType: 'PROJECT_EDIT',
     requestedByUserId: 7,
     requestedChangesJson: JSON.stringify({ title: 'Rejected proposal' }),
@@ -108,4 +122,27 @@ test('rejection persists the required reason for request history and notificatio
   assert.equal(decided?.requeststatus, 'Rejected');
   assert.equal(decided?.decisionreason, 'The approved scope must remain unchanged.');
   assert.equal((await findApprovalRequestsForUser(7))[0].decisionreason, 'The approved scope must remain unchanged.');
+});
+
+test('approved and rejected project requests survive reload and status filtering', async () => {
+  const createId = await insertApprovalRequest({ projectId: 42, projectTitle: 'Created', requestType: 'PROJECT_CREATE', requestedByUserId: 7, requestedChangesJson: null, reason: 'Create it' });
+  const editId = await insertApprovalRequest({ projectId: 42, projectTitle: 'Edited', requestType: 'PROJECT_EDIT', requestedByUserId: 7, requestedChangesJson: '{}', reason: 'Edit it' });
+  await decideApprovalRequest(createId, 'Approved', 1, null);
+  await decideApprovalRequest(editId, 'Rejected', 1, 'Keep the baseline.');
+  assert.deepEqual((await findApprovalRequests('Approved')).map((row) => row.approvalrequestid), [createId]);
+  assert.deepEqual((await findApprovalRequests('Rejected')).map((row) => row.approvalrequestid), [editId]);
+  assert.equal((await findApprovalRequests('Pending')).length, 0);
+});
+
+test('TASK_CREATE setup updates persist while pending and duplicate decisions are blocked', async () => {
+  const id = await insertApprovalRequest({
+    projectId: 42, projectTitle: 'Project 42', requestType: 'TASK_CREATE', requestedByUserId: 7,
+    requestedChangesJson: JSON.stringify({ title: 'Original', assigneeIds: ['usr-8'] }), reason: 'Needed work'
+  });
+  const updated = await updatePendingApprovalSetup(id, JSON.stringify({ title: 'Admin adjusted', assigneeIds: ['usr-9'] }));
+  assert.equal(JSON.parse(updated?.requestedchangesjson || '{}').title, 'Admin adjusted');
+  assert.equal((await findApprovalRequests('Pending'))[0].requesttype, 'TASK_CREATE');
+  assert.equal((await decideApprovalRequest(id, 'Rejected', 1, 'Not in scope.'))?.decisionreason, 'Not in scope.');
+  assert.equal(await decideApprovalRequest(id, 'Approved', 1, null), null);
+  assert.equal(await updatePendingApprovalSetup(id, '{}'), null);
 });

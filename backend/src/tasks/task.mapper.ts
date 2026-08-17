@@ -9,15 +9,26 @@ import {
   TaskStatusHistoryRow
 } from './task.types.js';
 
-const DB_TO_API_PRIORITY: Record<string, ApiTaskPriority> = {
+// work.Priorities stores 'Critical'; the product calls that tier 'Urgent' everywhere a person
+// can see it. Exported so anything rendering a priority to a user (notification copy, activity
+// log) goes through the same translation the DTO does, rather than leaking the DB's vocabulary.
+export const DB_TO_API_PRIORITY: Record<string, ApiTaskPriority> = {
   Low: 'Low',
   Medium: 'Medium',
   High: 'High',
   Critical: 'Urgent'
 };
 
-const formatDate = (value: string | Date): string =>
+// node-postgres parses a Postgres `date` column into a JS Date (at local midnight), NOT a string
+// — despite TaskRow declaring these columns `string`, which hides it from the compiler (the same
+// class of mismatch already documented for the bigint `taskid`). Anything comparing a row's date
+// against an inbound 'YYYY-MM-DD' string must normalize through here first: `'2026-08-20' !==
+// <Date>` is true for every value, so a raw comparison reports "changed" on every single edit.
+// Exported for that reason.
+export const toDateKey = (value: string | Date): string =>
   typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
+
+const formatDate = toDateKey;
 
 const formatProjectTaskNumber = (projectCode: string, taskNumber: number): string => {
   const prefix = projectCode.replace(/^PROJ-/, '') || projectCode;

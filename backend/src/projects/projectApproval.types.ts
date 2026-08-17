@@ -5,6 +5,7 @@
 
 export type ProjectApprovalRequestType =
   | 'PROJECT_CREATE'
+  | 'TASK_CREATE'
   | 'PROJECT_EDIT'
   | 'PROJECT_ARCHIVE'
   | 'PROJECT_RESTORE'
@@ -15,7 +16,10 @@ export type ProjectApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected';
 
 export interface ProjectApprovalRequestRow {
   approvalrequestid: string;
-  projectid: number;
+  // A rejected creation removes its project, while the decision record is retained so its
+  // rejection reason remains available to notification/history consumers.
+  projectid: number | null;
+  projecttitle: string;
   requesttype: ProjectApprovalRequestType;
   requestedbyuserid: number;
   requestedchangesjson: string | null;
@@ -34,6 +38,8 @@ export interface ProjectApprovalRequestDTO {
   requestType: ProjectApprovalRequestType;
   requestedByUserId: string;
   requestedByName: string;
+  requestedByRole?: string;
+  requestedByEmail?: string;
   requestedChanges: Record<string, unknown> | null;
   reason: string;
   status: ProjectApprovalRequestStatus;

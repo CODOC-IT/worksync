@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
+import { canCreateProject, isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
-import { Project, ProjectStatus, TaskPriority, Milestone, ProjectFile } from '../../types';
+import { Project, ProjectStatus, Task, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
 import {
   FolderKanban,
@@ -16,7 +17,8 @@ import {
   StickyNote,
   Check,
   AlertCircle,
-  ArchiveRestore
+  ArchiveRestore,
+  UserRound
 } from 'lucide-react';
 
 type StatusFilter = 'All' | ProjectStatus;
@@ -33,6 +35,20 @@ interface ProjectFormState {
   creationReason: string;
   milestones: Milestone[];
   files: ProjectFile[];
+  // Multi-team architecture (Admin, create mode). When useTeams is on, the project is built
+  // from the team rows below instead of the single teamLeadId/memberIds fields, which are
+  // ignored for the payload.
+  useTeams: boolean;
+  teams: DraftTeam[];
+}
+
+// An in-progress team row in the create form's team builder (before it's sent to the backend).
+interface DraftTeam {
+  id: string;
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
 }
 
 const EMPTY_FORM: ProjectFormState = {
@@ -46,25 +62,53 @@ const EMPTY_FORM: ProjectFormState = {
   status: 'Active',
   creationReason: '',
   milestones: [],
-  files: []
+  files: [],
+  useTeams: false,
+  teams: []
 };
 
 const ALLOWED_FILE_EXTENSIONS = ['pdf', 'doc', 'docx', 'xlsx', 'json', 'fig', 'png', 'jpg', 'jpeg', 'zip'];
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
+// Issue #6 -- Member Removal Workflow. One active task or subtask assignment a member being
+// unchecked from the project still has, shown in the Pending Removal confirmation dialog below.
+interface ActiveWorkItem {
+  id: string;
+  title: string;
+  isSubtask: boolean;
+  parentTitle?: string;
+}
+
+interface BlockedMemberInfo {
+  memberId: string;
+  memberName: string;
+  activeItems: ActiveWorkItem[];
+}
+
+interface ImmediateRemovalMember {
+  memberId: string;
+  memberName: string;
+}
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export const ProjectsView: React.FC = () => {
+export const ProjectsView: React.FC<{
+  onViewProjectTasks: (projectId: string) => void;
+  initialProjectId?: string;
+  onInitialProjectConsumed?: () => void;
+}> = ({ onViewProjectTasks, initialProjectId, onInitialProjectConsumed }) => {
   const {
     projects, tasks, users, currentRole, currentUser,
     createProject, updateProject, deleteProject, permanentlyDeleteProject, restoreProject, refreshProjectDetails
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
 
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -98,6 +142,14 @@ export const ProjectsView: React.FC = () => {
   const [editApprovalReason, setEditApprovalReason] = useState('');
   const [editApprovalReasonError, setEditApprovalReasonError] = useState('');
   const [editApprovalSubmitting, setEditApprovalSubmitting] = useState(false);
+
+  // Shown before an Admin save when any selected removal still has active work. The dialog lets
+  // the Admin restore individual members to the project before confirming the final member list.
+  const [pendingRemovalWarning, setPendingRemovalWarning] = useState<{
+    data: Partial<Project>;
+    blocked: BlockedMemberInfo[];
+    immediate: ImmediateRemovalMember[];
+  } | null>(null);
   const [fileError, setFileError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -111,6 +163,12 @@ export const ProjectsView: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!initialProjectId) return;
+    setSelectedProjectId(initialProjectId);
+    onInitialProjectConsumed?.();
+  }, [initialProjectId, onInitialProjectConsumed]);
 
   // Admins must never be selectable as a project's Team Lead or Member, even if upstream
   // user data is ever wrong/inconsistent about role — scoped to this form's two selectors only.
@@ -128,32 +186,41 @@ export const ProjectsView: React.FC = () => {
   // positive-offset timezone. See calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
 
-  const canCreate = currentRole === 'Team_Member' || currentRole === 'Team_Lead' || currentRole === 'Admin';
+  const canCreate = canCreateProject(currentRole);
   // Matches the backend's per-project lead check (project.service.ts's isProjectLead /
   // resolveTeamLeadUserId) -- Team Lead is not a separate account role; a Team_Member becomes a
   // project's lead only via this project-specific assignment. Every permission decision below
   // must go through this (or an explicit currentRole === 'Admin' check), never a bare
   // currentRole !== 'Admin' -- that's true for a normal Team_Member too.
-  const isProjectLead = (project: Project) => project.teamLeadId === currentUser.id;
-  const canManage = (project: Project) =>
-    currentRole === 'Admin' || (currentRole !== 'HR' && isProjectLead(project));
+  const isProjectLead = (project: Project) => isCurrentProjectLead(project, currentUser.id);
 
-  // The backend (listProjectsForUser) returns every project to every role -- visibility is
-  // narrowed here instead. Admin/HR keep full org-wide visibility; everyone else (Team Lead isn't
-  // a separate account role -- see isProjectLead above) only sees projects they lead or are a
-  // member of.
+  // This mirrors the API's access check and keeps the card list defensive if stale client data is
+  // ever present. Admin/HR have organization-wide visibility; other users see assigned/led work.
   const visibleProjects = projects;
 
   const filteredProjects = visibleProjects.filter((p) => {
     const q = searchQuery.trim().toLowerCase();
+    const leadQuery = leadSearchQuery.trim().toLowerCase();
+    const lead = users.find((user) => user.id === p.teamLeadId);
     const matchesSearch = !q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    const matchesLead = !leadQuery || Boolean(
+      lead && (lead.name.toLowerCase().includes(leadQuery) || lead.username?.toLowerCase().includes(leadQuery))
+    );
+    const matchesArchiveView = showArchivedProjects ? p.status === 'Archived' : p.status !== 'Archived';
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
     const matchesVisibility =
       currentRole === 'Admin' ||
       currentRole === 'HR' ||
       isProjectLead(p) ||
       p.memberIds.includes(currentUser.id);
-    return matchesSearch && matchesStatus && matchesVisibility;
+    return matchesSearch && matchesLead && matchesArchiveView && matchesStatus && matchesVisibility;
+  }).sort((left, right) => {
+    const order: Partial<Record<ProjectStatus, number>> = {
+      Active: 0,
+      'Pending Approval': 1,
+      Completed: 2
+    };
+    return (order[left.status] ?? 3) - (order[right.status] ?? 3) || left.title.localeCompare(right.title);
   });
 
   const openCreateForm = () => {
@@ -190,7 +257,9 @@ export const ProjectsView: React.FC = () => {
       status: source.status === 'Pending Approval' ? 'Active' : source.status,
       creationReason: source.creationReason || '',
       milestones: source.milestones,
-      files: source.files
+      files: source.files,
+      useTeams: false,
+      teams: []
     });
     setFormOpen(true);
   };
@@ -201,7 +270,30 @@ export const ProjectsView: React.FC = () => {
     setFormNotice('');
   };
 
+  // Issue #6 -- every task/subtask in this project where `memberId` is a current assignee and the
+  // item isn't Done/completed yet. Subtasks are checked independently of their parent task's own
+  // status (a parent can still be In Progress while one of its subtasks is already Done), matching
+  // the backend's identical rule in task.repository.ts's findActiveTaskAssignmentsForUserInProject.
+  const getActiveWorkForMember = (projectId: string, memberId: string): ActiveWorkItem[] => {
+    const items: ActiveWorkItem[] = [];
+    tasks
+      .filter((t) => t.projectId === projectId)
+      .forEach((t) => {
+        const isTaskAssignee = t.assigneeId === memberId || t.assigneeIds?.includes(memberId);
+        if (isTaskAssignee && t.status !== 'Done') {
+          items.push({ id: t.id, title: t.title, isSubtask: false });
+        }
+        t.subtasks.forEach((st) => {
+          if (st.assigneeIds?.includes(memberId) && !st.completed) {
+            items.push({ id: st.id, title: st.title, isSubtask: true, parentTitle: t.title });
+          }
+        });
+      });
+    return items;
+  };
+
   const toggleMember = (userId: string) => {
+    if (editingProject?.pendingRemovalMemberIds?.includes(userId)) return;
     if (userId === form.teamLeadId) {
       setFormErrors((previous) => ({
         ...previous,
@@ -209,33 +301,65 @@ export const ProjectsView: React.FC = () => {
       }));
       return;
     }
-    setForm((prev) => ({
-      ...prev,
-      memberIds: prev.memberIds.includes(userId)
-        ? prev.memberIds.filter((id) => id !== userId)
-        : [...prev.memberIds, userId]
-    }));
+    const memberIds = form.memberIds.includes(userId)
+      ? form.memberIds.filter((id) => id !== userId)
+      : [...form.memberIds, userId];
+    updateForm({ memberIds });
+  };
+
+  // --- Multi-team builder (Admin, create mode) ----------------------------------------------
+  const addTeam = () => {
+    const id = `draft-${Date.now()}-${form.teams.length}`;
+    updateForm({ teams: [...form.teams, { id, name: '', description: '', leadId: '', memberIds: [] }] });
+  };
+
+  const removeTeam = (teamId: string) => {
+    updateForm({ teams: form.teams.filter((team) => team.id !== teamId) });
+  };
+
+  const updateTeamField = (teamId: string, field: keyof DraftTeam, value: string) => {
+    updateForm({
+      teams: form.teams.map((team) => (team.id === teamId ? { ...team, [field]: value } : team))
+    });
+  };
+
+  const toggleTeamMember = (teamId: string, userId: string) => {
+    const teams = form.teams.map((team) => {
+      if (team.id !== teamId) return team;
+      const memberIds = team.memberIds.includes(userId)
+        ? team.memberIds.filter((id) => id !== userId)
+        : [...team.memberIds, userId];
+      return { ...team, memberIds };
+    });
+    updateForm({ teams });
+  };
+
+  const setTeamLead = (teamId: string, userId: string) => {
+    const teams = form.teams.map((team) => {
+      if (team.id !== teamId) return team;
+      const memberIds = userId && !team.memberIds.includes(userId)
+        ? [...team.memberIds, userId]
+        : team.memberIds;
+      return { ...team, leadId: userId, memberIds };
+    });
+    updateForm({ teams });
   };
 
   const addMilestone = () => {
-    setForm((prev) => ({
-      ...prev,
+    updateForm({
       milestones: [
-        ...prev.milestones,
-        { id: `m-${Date.now()}-${prev.milestones.length}`, title: '', dueDate: prev.startDate || '', completed: false }
+        ...form.milestones,
+        { id: `m-${Date.now()}-${form.milestones.length}`, title: '', dueDate: form.startDate || '', completed: false }
       ]
-    }));
+    });
   };
 
   const updateMilestone = (id: string, field: 'title' | 'dueDate', value: string) => {
-    setForm((prev) => ({
-      ...prev,
-      milestones: prev.milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m))
-    }));
+    updateForm({ milestones: form.milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m)) });
   };
 
   const removeMilestone = (id: string) => {
-    setForm((prev) => ({ ...prev, milestones: prev.milestones.filter((m) => m.id !== id) }));
+    updateForm({ milestones: form.milestones.filter((m) => m.id !== id) });
   };
 
   // Reads real content as a base64 data URL (same convention already used for Project Chat
@@ -316,16 +440,75 @@ export const ProjectsView: React.FC = () => {
     if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
       errors.memberIds = 'The selected Team Lead must be included in project members.';
     }
-    if (data.memberIds.length === 0) errors.memberIds = 'At least one project member is required before activation.';
+    // Mirrors backend/src/projects/projectWorkflow.rules.ts's resolveCreateParticipants/
+    // resolveUpdatedParticipants -- a Team Lead is an existing member designated as lead, not a
+    // separate entity, so `memberIds.length === 0` alone never catches a lead-only project (the
+    // check above already force-includes the lead). This checks for at least one *other* member.
+    const nonLeadMemberCount = data.memberIds.filter((id) => id !== data.teamLeadId).length;
+    if (nonLeadMemberCount === 0) {
+      errors.memberIds = 'A project must have at least one member besides the Team Lead.';
+    }
+
+    // Multi-team validation (Admin create only): when the team builder is active, it replaces the
+    // single-lead checks above with per-team rules, mirroring projectWorkflow.rules.ts's
+    // resolveTeamSetup -- every team needs a name, description, one lead, and >= 2 people, team
+    // names are unique, and no one may appear in more than one team.
+    if (data.useTeams) {
+      delete errors.teamLeadId;
+      delete errors.memberIds;
+      if (data.teams.length === 0) {
+        errors.teams = 'Add at least one team, or turn off team mode.';
+      } else {
+        const teamNames = new Set<string>();
+        const seenMembers = new Set<string>();
+        let crossTeamDuplicate = false;
+        for (const team of data.teams) {
+          if (!team.name.trim()) { errors.teams = 'Every team must have a name.'; break; }
+          if (teamNames.has(team.name.trim().toLowerCase())) {
+            errors.teams = `Duplicate team name "${team.name.trim()}". Team names must be unique.`;
+            break;
+          }
+          teamNames.add(team.name.trim().toLowerCase());
+          if (!team.description.trim()) { errors.teams = `Team "${team.name.trim()}" needs a description.`; break; }
+          if (!team.leadId) { errors.teams = `Team "${team.name.trim()}" needs a Team Lead.`; break; }
+          const members = Array.from(new Set([...team.memberIds, team.leadId]));
+          if (members.length < 2) {
+            errors.teams = `Team "${team.name.trim()}" needs at least one member besides its Team Lead.`;
+            break;
+          }
+          for (const userId of members) {
+            if (seenMembers.has(userId)) crossTeamDuplicate = true;
+            seenMembers.add(userId);
+          }
+          if (crossTeamDuplicate) { errors.teams = 'A person cannot be in more than one team in the same project.'; break; }
+        }
+        // Mirrors backend/src/projects/project.service.ts's createProject: a non-Admin submitter
+        // must be the Team Lead of one of their proposed teams. Client-side only for a faster,
+        // friendlier message -- the backend enforces this regardless of what the UI sends.
+        if (
+          !errors.teams &&
+          currentRole !== 'Admin' &&
+          !data.teams.some((team) => team.leadId === currentUser.id)
+        ) {
+          errors.teams = 'You must be the Team Lead of one of the teams you propose.';
+        }
+      }
+    }
     if (!data.startDate) {
       errors.startDate = 'Start date is required.';
-    } else if (formMode === 'create' && data.startDate < todayStr) {
+    } else if (
+      data.startDate < todayStr &&
+      (formMode === 'create' || data.startDate !== projects.find((project) => project.id === editingProjectId)?.startDate)
+    ) {
       errors.startDate = "Start date cannot be before today's date.";
     }
 
     if (!data.targetDate) {
       errors.targetDate = 'Deadline is required.';
-    } else if (data.targetDate < todayStr) {
+    } else if (
+      data.targetDate < todayStr &&
+      (formMode === 'create' || data.targetDate !== projects.find((project) => project.id === editingProjectId)?.targetDate)
+    ) {
       errors.targetDate = "Deadline cannot be before today's date.";
     } else if (data.startDate && data.targetDate < data.startDate) {
       errors.targetDate = 'Deadline cannot be before the start date.';
@@ -348,16 +531,89 @@ export const ProjectsView: React.FC = () => {
       if (violations.length > 0) {
         errors.milestones = `Milestone dates must fall within the project's start/end dates: ${violations.join('; ')}.`;
       }
+
+      // Existing tasks and subtasks are project scope too. This mirrors the server's final check
+      // so date changes receive useful feedback before the user attempts to save.
+      if (formMode === 'edit' && editingProjectId) {
+        const taskDates = tasks
+          .filter((task) => task.projectId === editingProjectId)
+          .flatMap((task) => [
+            { label: task.taskNumber || task.title, startDate: (task as Task & { startDate?: string }).startDate, dueDate: task.dueDate },
+            ...task.subtasks.map((subtask) => ({
+              label: `${task.taskNumber || task.title} → ${subtask.title}`,
+              startDate: subtask.startDate,
+              dueDate: subtask.dueDate
+            }))
+          ]);
+        const taskStartingTooEarly = taskDates.find((task) => task.startDate && task.startDate < data.startDate);
+        const taskEndingTooLate = taskDates.find((task) => task.dueDate && task.dueDate > data.targetDate);
+        if (taskStartingTooEarly) {
+          errors.startDate = `Start date cannot be after existing task "${taskStartingTooEarly.label}" starts (${taskStartingTooEarly.startDate}).`;
+        }
+        if (taskEndingTooLate) {
+          errors.targetDate = `Deadline cannot be before existing task "${taskEndingTooLate.label}" ends (${taskEndingTooLate.dueDate}).`;
+        }
+      }
+    }
+
+    // Every non-Admin create becomes a PROJECT_CREATE approval request (see project.service.ts's
+    // actorRole === 'Admin' ? 'Active' : 'PendingActivation'), so the reviewer needs real context
+    // here -- not required on edit, which has its own separate, already-mandatory Edit Approval
+    // Reason field for the "Admin Approval Required" dialog.
+    if (formMode === 'create' && currentRole !== 'Admin' && !data.creationReason.trim()) {
+      errors.creationReason = 'Creation notes are required when submitting a project for Admin approval.';
     }
 
     return errors;
+  };
+
+  // Surface field errors while the user is editing, without waiting for a failed save. This uses
+  // the same complete rule set as submit so inline guidance and server-side expectations agree.
+  const updateForm = (changes: Partial<ProjectFormState>) => {
+    const next = { ...form, ...changes };
+    setForm(next);
+    setFormErrors(validate(next));
+    setFormNotice('');
+  };
+
+  // Actually performs the save -- factored out of handleSubmit so the Issue #6 Pending Removal
+  // warning dialog below can resume the exact same save after the Admin confirms through it,
+  // without duplicating this logic.
+  const submitProjectSave = async (data: Partial<Project>) => {
+    setFormSubmitting(true);
+    setFormNotice('');
+    try {
+      // Real backend call -- the form only closes once the server confirms the change. On
+      // failure the modal stays open with the real error so the user can retry (no fake success).
+      const result =
+        formMode === 'create'
+          ? await createProject(data)
+          : editingProjectId
+            ? await updateProject(editingProjectId, { ...data, status: form.status })
+            : { success: false, message: 'No project selected to update.' };
+
+      if (!result.success) {
+        setFormNotice(result.message);
+        return;
+      }
+
+      setNotice({ type: 'success', message: result.message });
+      closeForm();
+    } catch (error: any) {
+      setFormNotice(error?.message || 'The project could not be submitted. Please try again.');
+    } finally {
+      setFormSubmitting(false);
+    }
   };
 
   const handleSubmit = async () => {
     if (formSubmitting) return;
     const errors = validate(form);
     setFormErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    if (Object.keys(errors).length > 0) {
+      setFormNotice(Object.values(errors)[0] || 'Please correct the highlighted fields.');
+      return;
+    }
 
     const data: Partial<Project> = {
       title: form.title.trim(),
@@ -371,6 +627,20 @@ export const ProjectsView: React.FC = () => {
       files: form.files,
       creationReason: form.creationReason.trim() || undefined
     };
+
+    // Multi-team create: pass the full team setup (the backend materializes it as-is on save /
+    // approval). The single-lead fields above are left out of the payload so they can't conflict.
+    if (form.useTeams) {
+      (data as unknown as { teams: Array<{ name: string; description: string; leadId: string; memberIds: string[] }> }).teams =
+        form.teams.map((team) => ({
+          name: team.name.trim(),
+          description: team.description.trim(),
+          leadId: team.leadId,
+          memberIds: team.memberIds.filter((id) => id !== team.leadId)
+        }));
+      delete data.teamLeadId;
+      delete data.memberIds;
+    }
 
     // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
     // request. Instead of saving straight away, hand off to the "Admin Approval Required"
@@ -393,30 +663,61 @@ export const ProjectsView: React.FC = () => {
         setEditApprovalOpen(true);
         return;
       }
-    }
 
-    setFormSubmitting(true);
-    setFormNotice('');
-    try {
-      // Real backend call -- the form only closes once the server confirms the change. On
-      // failure the modal stays open with the real error so the user can retry (no fake success).
-      const result =
-        formMode === 'create'
-          ? await createProject(data)
-          : editingProjectId
-            ? await updateProject(editingProjectId, { ...data, status: form.status })
-            : { success: false, message: 'No project selected to update.' };
+      // Issue #6 -- an Admin's direct save (Team Lead edits above never reach here; their member
+      // changes apply only once an Admin later approves them, going through this same check then
+      // too) must not silently drop a member who still has active work in this project. The
+      // backend's removeMember independently refuses to hard-remove such a member on its own (it
+      // flags Pending Removal instead) -- this pre-check exists purely so the Admin sees that
+      // *before* saving, with the choice to back out entirely, rather than finding out after.
+      if (editingProject) {
+        const projectId = editingProjectId;
+        const removedMemberIds = editingProject.memberIds.filter((id) => !form.memberIds.includes(id));
+        const removalCandidates = removedMemberIds.map((memberId) => ({
+          memberId,
+          memberName: users.find((u) => u.id === memberId)?.name || memberId,
+          activeItems: getActiveWorkForMember(projectId, memberId)
+        }));
+        const blocked: BlockedMemberInfo[] = removalCandidates
+          .filter((entry) => entry.activeItems.length > 0)
+          .map(({ memberId, memberName, activeItems }) => ({ memberId, memberName, activeItems }));
+        const immediate: ImmediateRemovalMember[] = removalCandidates
+          .filter((entry) => entry.activeItems.length === 0)
+          .map(({ memberId, memberName }) => ({ memberId, memberName }));
 
-      if (!result.success) {
-        setFormNotice(result.message);
-        return;
+        if (blocked.length > 0) {
+          setPendingRemovalWarning({ data, blocked, immediate });
+          return;
+        }
       }
-
-      setNotice({ type: 'success', message: result.message });
-      closeForm();
-    } finally {
-      setFormSubmitting(false);
     }
+
+    await submitProjectSave(data);
+  };
+
+  // Cancel keeps the edit modal open, preserving the Admin's in-progress changes so they can
+  // adjust the membership list instead of starting over.
+  const cancelPendingRemovalWarning = () => {
+    setPendingRemovalWarning(null);
+  };
+
+  const keepMemberFromRemoval = (memberId: string) => {
+    if (!pendingRemovalWarning) return;
+    const memberIds = Array.from(new Set([...(pendingRemovalWarning.data.memberIds || []), memberId]));
+    const data = { ...pendingRemovalWarning.data, memberIds };
+    setForm((current) => ({ ...current, memberIds }));
+    setPendingRemovalWarning({
+      data,
+      blocked: pendingRemovalWarning.blocked.filter((member) => member.memberId !== memberId),
+      immediate: pendingRemovalWarning.immediate.filter((member) => member.memberId !== memberId)
+    });
+  };
+
+  const confirmPendingRemovalWarning = () => {
+    if (!pendingRemovalWarning) return;
+    const { data } = pendingRemovalWarning;
+    setPendingRemovalWarning(null);
+    void submitProjectSave(data);
   };
 
   const closeEditApproval = () => {
@@ -601,8 +902,9 @@ export const ProjectsView: React.FC = () => {
         </div>
       )}
 
-      {/* Search + Status Filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      {/* Project search and filters */}
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
         <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900/50 border border-white/10 flex-1">
           <Search size={15} className="text-cyan-400 shrink-0" />
           <input
@@ -610,28 +912,55 @@ export const ProjectsView: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by title or code..."
+            aria-label="Search projects by title or code"
             className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
           />
         </div>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          aria-label="Filter projects by status"
           className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-sm text-slate-200 focus:outline-none"
         >
           <option value="All">All Statuses</option>
           <option value="Active">Active</option>
           <option value="Pending Approval">Pending Approval</option>
           <option value="Completed">Completed</option>
-          <option value="Archived">Archived</option>
         </select>
+        </div>
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+          <div className="flex w-full max-w-sm items-center gap-2 rounded-xl border border-white/10 bg-slate-900/50 px-4 py-2">
+            <UserRound size={15} className="shrink-0 text-slate-500" />
+            <input
+              type="text"
+              value={leadSearchQuery}
+              onChange={(e) => setLeadSearchQuery(e.target.value)}
+              placeholder="Search by project lead..."
+              aria-label="Search projects by assigned lead name or username"
+              className="w-full bg-transparent text-sm text-white placeholder-slate-400 focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowArchivedProjects((current) => !current);
+              setStatusFilter('All');
+            }}
+            className={`px-3 py-2 rounded-xl border text-sm transition-colors ${showArchivedProjects
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+              : 'bg-slate-900/50 border-white/10 text-slate-200 hover:border-amber-400/40'}`}
+          >
+            {showArchivedProjects ? 'Show Current Projects' : 'Archived Projects'}
+          </button>
+        </div>
       </div>
 
       {/* Project Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         {filteredProjects.map((project) => {
           const isOverdue = project.status === 'Active' && project.targetDate < todayStr;
           const teamLead = users.find((u) => u.id === project.teamLeadId);
-          const manageable = canManage(project);
+          const actions = projectCardActions(currentRole, currentUser.id, project);
 
           return (
             <ProjectCard
@@ -639,9 +968,7 @@ export const ProjectsView: React.FC = () => {
               project={project}
               teamLead={teamLead}
               isOverdue={isOverdue}
-              manageable={manageable}
-              currentUserId={currentUser.id}
-              currentRole={currentRole}
+              actions={actions}
               onEdit={() => openEditForm(project)}
               onDelete={() => openDeleteConfirm(project.id)}
               onRestore={() => openRestoreConfirm(project.id)}
@@ -652,7 +979,7 @@ export const ProjectsView: React.FC = () => {
 
         {filteredProjects.length === 0 && (
           <div className="col-span-full text-center text-sm text-slate-400 py-12">
-            No projects match your search/filter.
+            {showArchivedProjects ? 'No archived projects match your search.' : 'No projects match your search/filter.'}
           </div>
         )}
       </div>
@@ -676,7 +1003,7 @@ export const ProjectsView: React.FC = () => {
                 <input
                   type="text"
                   value={form.title}
-                  onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
+                  onChange={(e) => updateForm({ title: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="e.g. Nexus AI Copilot Integration"
                 />
@@ -687,7 +1014,7 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Description</label>
                 <textarea
                   value={form.description}
-                  onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                  onChange={(e) => updateForm({ description: e.target.value })}
                   rows={3}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   placeholder="What is this project about?"
@@ -701,13 +1028,9 @@ export const ProjectsView: React.FC = () => {
                   <input
                     type="date"
                     value={form.startDate}
-                    onChange={(e) => setForm((prev) => ({ ...prev, startDate: e.target.value }))}
-                    min={todayStr}
-                    // The original creation start date is fixed once a project exists -- only
-                    // Deadline/other fields remain editable, matching Team Lead's own
-                    // create-only-editable pattern just below.
-                    disabled={formMode === 'edit'}
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onChange={(e) => updateForm({ startDate: e.target.value })}
+                    min={formMode === 'create' ? todayStr : undefined}
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.startDate && <p className="text-rose-400 mt-1">{formErrors.startDate}</p>}
                 </div>
@@ -716,8 +1039,8 @@ export const ProjectsView: React.FC = () => {
                   <input
                     type="date"
                     value={form.targetDate}
-                    onChange={(e) => setForm((prev) => ({ ...prev, targetDate: e.target.value }))}
-                    min={form.startDate || todayStr}
+                    onChange={(e) => updateForm({ targetDate: e.target.value })}
+                    min={form.startDate || undefined}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   />
                   {formErrors.targetDate && <p className="text-rose-400 mt-1">{formErrors.targetDate}</p>}
@@ -728,7 +1051,7 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Priority</label>
                 <select
                   value={form.priority}
-                  onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value as TaskPriority }))}
+                  onChange={(e) => updateForm({ priority: e.target.value as TaskPriority })}
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                 >
                   <option value="Low">Low</option>
@@ -743,16 +1066,15 @@ export const ProjectsView: React.FC = () => {
                 <label className="block text-slate-300 font-semibold mb-1">Team Lead</label>
                 <select
                   value={form.teamLeadId}
-                  onChange={(e) => setForm((prev) => {
+                  onChange={(e) => {
                     const teamLeadId = e.target.value;
-                    return {
-                      ...prev,
+                    updateForm({
                       teamLeadId,
-                      memberIds: teamLeadId && !prev.memberIds.includes(teamLeadId)
-                        ? [...prev.memberIds, teamLeadId]
-                        : prev.memberIds
-                    };
-                  })}
+                      memberIds: teamLeadId && !form.memberIds.includes(teamLeadId)
+                        ? [...form.memberIds, teamLeadId]
+                        : form.memberIds
+                    });
+                  }}
                   // A project's lead can edit their own project but must not reassign its Team
                   // Lead; only Admins are allowed to change this field once a project exists.
                   disabled={
@@ -771,8 +1093,10 @@ export const ProjectsView: React.FC = () => {
               </div>
               )}
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Project Members</label>
+              <div className={formMode === 'edit' && currentRole !== 'Admin' ? 'opacity-50' : ''}>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Project Members {formMode === 'edit' && currentRole !== 'Admin' && <span className="text-slate-500 font-normal">(locked for Team Leads)</span>}
+                </label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-2 rounded-lg bg-black/30 border border-white/10">
                   {assignableMembers.map((u) => (
                     <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer">
@@ -780,22 +1104,128 @@ export const ProjectsView: React.FC = () => {
                         type="checkbox"
                         checked={form.memberIds.includes(u.id)}
                         onChange={() => toggleMember(u.id)}
-                        disabled={u.id === form.teamLeadId}
+                        // A Team Lead is an existing member designated as lead, not a separate
+                        // manager of other members -- only Admins may add/remove them. Same
+                        // edit-mode + non-Admin-lead condition already used above to lock the
+                        // Team Lead <select>.
+                        disabled={
+                          u.id === form.teamLeadId ||
+                          editingProject?.pendingRemovalMemberIds?.includes(u.id) ||
+                          (formMode === 'edit' &&
+                            currentRole !== 'Admin' &&
+                            (!editingProject || isProjectLead(editingProject)))
+                        }
                         className="accent-cyan-500"
                       />
                       {u.name}
+                      {editingProject?.pendingRemovalMemberIds?.includes(u.id) && (
+                        <span
+                          className="inline-flex min-w-24 items-center justify-center rounded-full bg-amber-300 px-2 py-1 text-center text-[9px] font-bold uppercase tracking-wide text-amber-900"
+                          title="Still has active tasks/subtasks -- kept in the project until that work is resolved."
+                        >
+                          Pending Removal
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
                 {formErrors.memberIds && <p className="text-rose-400 mt-1">{formErrors.memberIds}</p>}
               </div>
 
+              {/* Multi-team builder (create mode only). Available to every role that can create a
+                  project (canCreate), not just Admin -- the backend already accepts a complete
+                  multi-team proposal from a Team Lead/Team Member (project.service.ts's createProject
+                  teams-branch), it only additionally requires the submitter lead one of the
+                  proposed teams (mirrored client-side in validate() below). */}
+              {formMode === 'create' && canCreate && (
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <label className="flex items-center gap-2 text-slate-300 font-semibold mb-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.useTeams}
+                      onChange={(e) => updateForm({ useTeams: e.target.checked })}
+                      className="accent-cyan-500"
+                    />
+                    Build project teams
+                    <span className="text-slate-500 font-normal text-[11px]">(multiple teams, each with its own lead)</span>
+                  </label>
+
+                  {form.useTeams && (
+                    <div className="space-y-3">
+                      {form.teams.map((team) => (
+                        <div key={team.id} className="rounded-lg border border-cyan-500/20 bg-black/30 p-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <input
+                              placeholder="Team name"
+                              value={team.name}
+                              onChange={(e) => updateTeamField(team.id, 'name', e.target.value)}
+                              className="flex-1 px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeTeam(team.id)}
+                              className="text-rose-400 hover:text-rose-300 text-[11px] font-semibold"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <textarea
+                            placeholder="Team description (purpose / scope)"
+                            value={team.description}
+                            onChange={(e) => updateTeamField(team.id, 'description', e.target.value)}
+                            rows={2}
+                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
+                          />
+                          <select
+                            value={team.leadId}
+                            onChange={(e) => setTeamLead(team.id, e.target.value)}
+                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
+                          >
+                            <option value="">Select Team Lead...</option>
+                            {teamLeads.map((u) => (
+                              <option key={u.id} value={u.id} disabled={form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))}>
+                                {u.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto p-1.5 rounded-lg bg-black/20 border border-white/10">
+                            {assignableMembers.map((u) => (
+                              <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={team.memberIds.includes(u.id)}
+                                  onChange={() => toggleTeamMember(team.id, u.id)}
+                                  disabled={
+                                    u.id === team.leadId ||
+                                    form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))
+                                  }
+                                  className="accent-cyan-500"
+                                />
+                                {u.name}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={addTeam}
+                        className="w-full rounded-lg border border-dashed border-cyan-500/40 py-2 text-cyan-300 hover:text-cyan-200 text-sm font-semibold flex items-center justify-center gap-1"
+                      >
+                        <Plus size={14} /> Add team
+                      </button>
+                      {formErrors.teams && <p className="text-rose-400 mt-1 text-sm">{formErrors.teams}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {formMode === 'edit' && (
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Status</label>
                   <select
                     value={form.status}
-                    onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as ProjectStatus }))}
+                    onChange={(e) => updateForm({ status: e.target.value as ProjectStatus })}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
                   >
                     <option value="Active">Active</option>
@@ -899,20 +1329,30 @@ export const ProjectsView: React.FC = () => {
 
               {/* Creation reason / notes -- a plain project-level note, independent of the
                   PROJECT_EDIT approval request's own required reason (captured in the "Admin
-                  Approval Required" dialog below for a Team Lead's edit). */}
-              <div>
-                <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
-                  <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
-                  <span className="text-slate-500 font-normal">(recommended for Admin review)</span>
-                </label>
-                <textarea
-                  value={form.creationReason}
-                  onChange={(e) => setForm((prev) => ({ ...prev, creationReason: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
-                  placeholder="Why is this project being created? Any context for the reviewer?"
-                />
-              </div>
+                  Approval Required" dialog below for a Team Lead's edit). Admin creates/edits
+                  apply immediately with no approval step, so the field is meaningless for them --
+                  hidden entirely rather than just left optional. Only mandatory at creation
+                  (see validate() below): every non-Admin create becomes a PROJECT_CREATE approval
+                  request, so this is the reviewer's context; an edit's own justification is the
+                  separate Edit Approval Reason field, not this one. */}
+              {currentRole !== 'Admin' && (
+                <div>
+                  <label className="text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
+                    <StickyNote size={12} className="text-cyan-400" /> Creation Reason / Notes{' '}
+                    <span className="text-slate-500 font-normal">
+                      {formMode === 'create' ? '(required for Admin approval)' : '(recommended for Admin review)'}
+                    </span>
+                  </label>
+                  <textarea
+                    value={form.creationReason}
+                    onChange={(e) => updateForm({ creationReason: e.target.value })}
+                    rows={2}
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                    placeholder="Why is this project being created? Any context for the reviewer?"
+                  />
+                  {formErrors.creationReason && <p className="text-rose-400 mt-1">{formErrors.creationReason}</p>}
+                </div>
+              )}
 
               {/* No project exists yet at creation time, so there's no per-project lead to check
                   against -- this must match project.service.ts's own condition for who gets
@@ -935,6 +1375,7 @@ export const ProjectsView: React.FC = () => {
 
             <div className="p-4 border-t border-white/10 flex items-center justify-end gap-2 bg-slate-900/40">
               <button
+                type="button"
                 onClick={closeForm}
                 disabled={formSubmitting}
                 className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
@@ -942,6 +1383,7 @@ export const ProjectsView: React.FC = () => {
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleSubmit}
                 disabled={formSubmitting}
                 className="px-4 py-2 rounded-xl glass-button-neon text-xs font-bold disabled:opacity-60"
@@ -999,6 +1441,87 @@ export const ProjectsView: React.FC = () => {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {editApprovalSubmitting ? 'Sending...' : 'Send Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending-removal confirmation for an Admin's member changes. */}
+      {pendingRemovalWarning && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
+          <div className="w-full max-w-md glass-panel-glow border border-amber-500/40 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-amber-400">
+              <AlertTriangle size={18} />
+              <h2 className="text-sm font-bold text-white">Members Still Have Active Work</h2>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Members with active tasks will be removed automatically when their active work is completed or removed.
+            </p>
+
+            <div className="space-y-2 max-h-52 overflow-y-auto">
+              {pendingRemovalWarning.blocked.map((b) => (
+                <div key={b.memberId} className="rounded-lg border border-white/10 bg-black/30 p-3">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <p className="text-slate-200 font-semibold">{b.memberName}</p>
+                    <button
+                      type="button"
+                      onClick={() => keepMemberFromRemoval(b.memberId)}
+                      className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                      title={`Keep ${b.memberName} in this project`}
+                      aria-label={`Keep ${b.memberName} in this project`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <ul className="space-y-1">
+                    {b.activeItems.map((item) => (
+                      <li key={item.id} className="text-[11px] text-slate-400 flex items-start gap-1.5">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 shrink-0 mt-1.5" />
+                        <span>{item.isSubtask ? `${item.parentTitle} → ${item.title}` : item.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {pendingRemovalWarning.immediate.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-300">
+                    Removed immediately
+                  </p>
+                  <div className="space-y-1.5">
+                    {pendingRemovalWarning.immediate.map((member) => (
+                      <div key={member.memberId} className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                        <span>{member.memberName}</span>
+                        <button
+                          type="button"
+                          onClick={() => keepMemberFromRemoval(member.memberId)}
+                          className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                          title={`Keep ${member.memberName} in this project`}
+                          aria-label={`Keep ${member.memberName} in this project`}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                onClick={cancelPendingRemovalWarning}
+                className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPendingRemovalWarning}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40"
+              >
+                Notify Team Lead & Save Changes
               </button>
             </div>
           </div>
@@ -1077,8 +1600,8 @@ export const ProjectsView: React.FC = () => {
                     ? `Permanently delete "${deleteTarget.title}"?`
                     : `Request permanent deletion of "${deleteTarget.title}"?`
                   : currentRole === 'Admin'
-                    ? `Delete "${deleteTarget.title}"?`
-                    : `Request deletion of "${deleteTarget.title}"?`}
+                    ? `Archive "${deleteTarget.title}"?`
+                    : `Request archiving of "${deleteTarget.title}"?`}
               </h2>
             </div>
 
@@ -1158,7 +1681,7 @@ export const ProjectsView: React.FC = () => {
                       ? 'Yes, Permanently Delete'
                       : 'Send Request'
                     : currentRole === 'Admin'
-                      ? 'Delete Project'
+                      ? 'Archive Project'
                       : 'Send Request'}
               </button>
             </div>
@@ -1169,7 +1692,9 @@ export const ProjectsView: React.FC = () => {
       <ProjectDetailsDrawer
         project={selectedProject}
         users={users}
+        tasks={tasks}
         onClose={() => setSelectedProjectId(null)}
+        onViewTasks={onViewProjectTasks}
       />
     </div>
   );

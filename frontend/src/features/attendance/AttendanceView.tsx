@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../store/AppContext';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { AttendanceRecord, HRRequest, User, WorkBreak } from '../../types';
 import { todayDateKey, toDateKey } from '../calendar/calendarRules';
-import { canShowAttendanceCorrection, isPastDate, validateAttendanceCorrection } from './attendanceValidation';
+import {
+  canShowAttendanceCorrection,
+  isPastDate,
+  validateAttendanceCorrection,
+  validateLeaveRequestOverlap,
+  type CorrectionShift
+} from './attendanceValidation';
+import { matchesAttendanceRoleFilter, type AttendanceRoleFilter } from './attendanceFilters';
+import { AttendanceTimeInput } from './Time24Input';
+import { DEFAULT_SHIFT_WINDOW_MINUTES, DEFAULT_SHIFT_NET_MINUTES } from './attendanceTime';
 import {
   CheckCircle2,
   Clock,
@@ -75,6 +84,8 @@ interface AttendanceRowProps {
   canRequestChange?: boolean;
   requestStatus?: HRRequest['status'];
   onRequestChange?: (record: AttendanceRecord) => void;
+  editingRecordId?: string | null;
+  renderEditor?: (record: AttendanceRecord) => React.ReactNode;
 }
 
 const AttendanceRow: React.FC<AttendanceRowProps> = ({
@@ -85,7 +96,9 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
   onEdit,
   canRequestChange = false,
   requestStatus,
-  onRequestChange
+  onRequestChange,
+  editingRecordId,
+  renderEditor
 }) => {
   const correctionAvailable = canShowAttendanceCorrection(record.checkIn, record.checkOut, record.status);
   const totalBreakMinutes = getTotalBreakMinutes(record);
@@ -109,67 +122,75 @@ const AttendanceRow: React.FC<AttendanceRowProps> = ({
       : 'Incomplete';
 
   return (
-    <div className="p-4 rounded-xl bg-slate-900/50 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div>
-        {employee && (
-          <span className="text-sm font-bold text-white block mb-1">
-            {employee.name}
+    <div className="p-4 rounded-xl bg-slate-900/50 border border-white/5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          {employee && (
+            <span className="text-sm font-bold text-white block mb-1">
+              {employee.name}
+            </span>
+          )}
+          <span className="text-xs font-bold text-cyan-300 font-mono">
+            {record.date}
           </span>
-        )}
-        <span className="text-xs font-bold text-cyan-300 font-mono">
-          {record.date}
-        </span>
-        <div className="flex flex-wrap gap-4 mt-1 text-xs text-slate-300">
-          <span>Check In: {record.checkIn || 'Not recorded'}</span>
-          <span>Check Out: {checkOutLabel}</span>
-          <span>Breaks: {formatDuration(totalBreakMinutes)}</span>
-          <span>Net Working Time: {netWorkingTimeLabel}</span>
+          <div className="flex flex-wrap gap-4 mt-1 text-xs text-slate-300">
+            <span>Check In: {record.checkIn || 'Not recorded'}</span>
+            <span>Check Out: {checkOutLabel}</span>
+            <span>Breaks: {formatDuration(totalBreakMinutes)}</span>
+            <span>Net Working Time: {netWorkingTimeLabel}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <StatusBadge status={record.status} size="sm" />
+          {correctionAvailable && canEdit && onEdit && (
+            <button
+              type="button"
+              onClick={() => onEdit(record)}
+              disabled={requestStatus === 'Pending'}
+              className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Pencil size={13} />
+              {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
+            </button>
+          )}
+          {correctionAvailable && canRequestChange && onRequestChange && (
+            <button
+              type="button"
+              onClick={() => onRequestChange(record)}
+              disabled={requestStatus === 'Pending' || requestStatus === 'Approved'}
+              className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+                requestStatus === 'Approved'
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed'
+                  : requestStatus === 'Pending'
+                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
+                    : requestStatus === 'Rejected'
+                      ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                      : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
+              }`}
+            >
+              {requestStatus === 'Approved' ? (
+                <CheckCircle2 size={13} />
+              ) : (
+                <FileText size={13} />
+              )}
+              {requestStatus === 'Approved'
+                ? 'Approved'
+                : requestStatus === 'Pending'
+                  ? 'Pending'
+                  : requestStatus === 'Rejected'
+                    ? 'Request Again'
+                    : 'Request Change'}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <StatusBadge status={record.status} size="sm" />
-        {correctionAvailable && canEdit && onEdit && (
-          <button
-            type="button"
-            onClick={() => onEdit(record)}
-            disabled={requestStatus === 'Pending'}
-            className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Pencil size={13} />
-            {requestStatus === 'Pending' ? 'Pending Approval' : 'Edit Attendance'}
-          </button>
-        )}
-        {correctionAvailable && canRequestChange && onRequestChange && (
-          <button
-            type="button"
-            onClick={() => onRequestChange(record)}
-            disabled={requestStatus === 'Pending' || requestStatus === 'Approved'}
-            className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
-              requestStatus === 'Approved'
-                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 cursor-not-allowed'
-                : requestStatus === 'Pending'
-                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 cursor-not-allowed'
-                  : requestStatus === 'Rejected'
-                    ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
-                    : 'bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border-purple-500/30'
-            }`}
-          >
-            {requestStatus === 'Approved' ? (
-              <CheckCircle2 size={13} />
-            ) : (
-              <FileText size={13} />
-            )}
-            {requestStatus === 'Approved'
-              ? 'Approved'
-              : requestStatus === 'Pending'
-                ? 'Pending'
-                : requestStatus === 'Rejected'
-                  ? 'Request Again'
-                  : 'Request Change'}
-          </button>
-        )}
-      </div>
+      {canEdit && renderEditor && editingRecordId === record.id && (
+        <div className="mt-3 rounded-lg border-t border-cyan-500/20 pt-3">
+          {renderEditor(record)}
+        </div>
+      )}
     </div>
   );
 };
@@ -185,6 +206,8 @@ interface AttendanceHistoryProps {
   canRequestChange?: boolean;
   getRequestStatus?: (record: AttendanceRecord) => HRRequest['status'] | undefined;
   onRequestChange?: (record: AttendanceRecord) => void;
+  editingRecordId?: string | null;
+  renderEditor?: (record: AttendanceRecord) => React.ReactNode;
   icon?: 'history' | 'team';
   emptyMessage: string;
 }
@@ -200,6 +223,8 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
   canRequestChange = false,
   getRequestStatus,
   onRequestChange,
+  editingRecordId,
+  renderEditor,
   icon = 'history',
   emptyMessage
 }) => (
@@ -241,6 +266,8 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({
             canRequestChange={canRequestChange}
             requestStatus={getRequestStatus?.(record)}
             onRequestChange={onRequestChange}
+            editingRecordId={editingRecordId}
+            renderEditor={renderEditor}
           />
         ))
       )}
@@ -252,6 +279,7 @@ interface AttendanceEditorProps {
   record: AttendanceRecord;
   employee?: User;
   requiresApproval?: boolean;
+  shift?: CorrectionShift;
   onCancel: () => void;
   onSave: (
     recordId: string,
@@ -264,6 +292,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
   record,
   employee,
   requiresApproval = false,
+  shift,
   onCancel,
   onSave
 }) => {
@@ -301,7 +330,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
         : 'A reason is required for an administrator correction.');
       return;
     }
-    const validationError = validateAttendanceCorrection(checkIn, checkOut, breaks);
+    const validationError = validateAttendanceCorrection(checkIn, checkOut, breaks, shift);
     if (validationError) {
       setMessage(validationError);
       return;
@@ -323,31 +352,24 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             {employee?.name || record.userId} · {record.date}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs text-slate-400 hover:text-white"
-        >
-          Cancel
-        </button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="text-xs text-slate-400">
           Check-in time
-          <input
-            type="time"
+          <AttendanceTimeInput
             value={checkIn}
-            onChange={(event) => setCheckIn(event.target.value)}
+            onChange={setCheckIn}
+            aria-label="Check-in time in 24-hour HH:mm format"
             className={`${inputClass} mt-1`}
           />
         </label>
         <label className="text-xs text-slate-400">
           Check-out time
-          <input
-            type="time"
+          <AttendanceTimeInput
             value={checkOut}
-            onChange={(event) => setCheckOut(event.target.value)}
+            onChange={setCheckOut}
+            aria-label="Check-out time in 24-hour HH:mm format"
             className={`${inputClass} mt-1`}
           />
         </label>
@@ -378,19 +400,19 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
             >
               <label className="text-[11px] text-slate-500">
                 Start
-                <input
-                  type="time"
+                <AttendanceTimeInput
                   value={workBreak.startTime}
-                  onChange={(event) => updateBreak(index, { startTime: event.target.value })}
+                  onChange={(next) => updateBreak(index, { startTime: next })}
+                  aria-label={`Break start time in 24-hour HH:mm format`}
                   className={`${inputClass} mt-1`}
                 />
               </label>
               <label className="text-[11px] text-slate-500">
                 End
-                <input
-                  type="time"
+                <AttendanceTimeInput
                   value={workBreak.endTime || ''}
-                  onChange={(event) => updateBreak(index, { endTime: event.target.value })}
+                  onChange={(next) => updateBreak(index, { endTime: next })}
+                  aria-label={`Break end time in 24-hour HH:mm format`}
                   className={`${inputClass} mt-1`}
                 />
               </label>
@@ -439,14 +461,23 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
 
       {message && <p className="text-xs text-rose-300 mt-3">{message}</p>}
 
-      <button
-        type="button"
-        onClick={handleSave}
-        className="mt-4 w-full py-3 rounded-xl glass-button-neon text-xs font-bold flex items-center justify-center gap-2"
-      >
-        <Save size={15} />
-        {requiresApproval ? 'Submit Attendance Edit Request' : 'Save Attendance Changes'}
-      </button>
+      <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex-1 sm:flex-none rounded-xl bg-white/5 px-4 py-3 text-xs font-bold text-slate-300 transition-colors hover:bg-white/10"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          className="flex-1 sm:flex-none rounded-xl glass-button-neon px-4 py-3 text-xs font-bold flex items-center justify-center gap-2"
+        >
+          <Save size={15} />
+          {requiresApproval ? 'Submit Attendance Edit Request' : 'Save Attendance Changes'}
+        </button>
+      </div>
     </div>
   );
 };
@@ -454,6 +485,7 @@ const AttendanceEditor: React.FC<AttendanceEditorProps> = ({
 interface LeaveApplicationFormProps {
   pending: boolean;
   onClose: () => void;
+  halfDayBoundary?: string;
   onSubmit: (
     leaveType: 'Full Day Leave' | 'Half Day Leave',
     leavePeriod: 'First Half' | 'Second Half' | undefined,
@@ -465,6 +497,7 @@ interface LeaveApplicationFormProps {
 const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
   pending,
   onClose,
+  halfDayBoundary = '12:00',
   onSubmit
 }) => {
   const [leaveType, setLeaveType] = useState<'Full Day Leave' | 'Half Day Leave'>('Full Day Leave');
@@ -526,8 +559,8 @@ const LeaveApplicationForm: React.FC<LeaveApplicationFormProps> = ({
                 className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-white"
                 required
               >
-                <option value="First Half">First Half (work from 12:00 PM)</option>
-                <option value="Second Half">Second Half (work until 12:00 PM)</option>
+                <option value="First Half">First Half (work from {halfDayBoundary})</option>
+                <option value="Second Half">Second Half (work until {halfDayBoundary})</option>
               </select>
             </label>
           )}
@@ -678,17 +711,62 @@ export const AttendanceView: React.FC = () => {
     startBreak,
     endBreak,
     updateAttendanceRecord,
-    submitHRRequest
+    submitHRRequest,
+    workingSchedule,
+    updateWorkingSchedule,
+    showToast
   } = useApp();
   const [selectedUserId, setSelectedUserId] = useState('all');
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | '30days' | 'custom'>('30days');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'HR' | 'Team_Member' | 'Team_Lead'>('all');
+  const [roleFilter, setRoleFilter] = useState<AttendanceRoleFilter>('all');
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [leaveFormOpen, setLeaveFormOpen] = useState(false);
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [authorizationError, setAuthorizationError] = useState('');
+  const [scheduleStart, setScheduleStart] = useState('');
+  const [scheduleEnd, setScheduleEnd] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
+
+  const currentScheduleStart = workingSchedule?.startTime || '';
+  const currentScheduleEnd = workingSchedule?.endTime || '';
+  useEffect(() => {
+    setScheduleStart(currentScheduleStart);
+    setScheduleEnd(currentScheduleEnd);
+  }, [currentScheduleStart, currentScheduleEnd]);
+
+  const parseTime = (time?: string): number | null => {
+    if (!time) return null;
+    const match = time.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  };
+  const formatMinutesAsHhmm = (totalMinutes: number): string => {
+    const safe = ((totalMinutes % 1440) + 1440) % 1440;
+    const hours = Math.floor(safe / 60);
+    const minutes = safe % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  };
+  const shiftStartMinutes = parseTime(currentScheduleStart);
+  const shiftEndMinutes = parseTime(currentScheduleEnd);
+  const shiftWindowMinutes =
+    shiftStartMinutes !== null && shiftEndMinutes !== null
+      ? ((shiftEndMinutes - shiftStartMinutes + 1440) % 1440) || 0
+      : 0;
+  const halfDayBoundary =
+    shiftStartMinutes !== null && shiftWindowMinutes > 0
+      ? formatMinutesAsHhmm(shiftStartMinutes + Math.floor(shiftWindowMinutes / 2))
+      : '12:00';
+  const editingShift: CorrectionShift = currentScheduleStart && currentScheduleEnd
+    ? { startTime: currentScheduleStart, endTime: currentScheduleEnd }
+    : {};
 
   // Local-safe "today" -- new Date().toISOString() reports UTC, which reads a full calendar day
   // behind local time for ~5 hours after midnight in Pakistan (UTC+5) and any other
@@ -696,6 +774,11 @@ export const AttendanceView: React.FC = () => {
   // could be recorded for the wrong day, then render on the wrong Calendar day. See
   // calendarRules.ts's todayDateKey.
   const todayStr = todayDateKey();
+  const customDateError =
+    dateFilter === 'custom' && Boolean(customFrom) && Boolean(customTo) && customFrom > customTo
+      ? 'From date cannot be later than the To date.'
+      : '';
+
   const todayAttendance = attendanceRecords.find(
     (record) => record.userId === currentUser.id && record.date === todayStr
   );
@@ -717,14 +800,8 @@ export const AttendanceView: React.FC = () => {
     start.setDate(start.getDate() - (dateFilter === '7days' ? 6 : 29));
     return record.date >= toDateKey(start) && record.date <= todayStr;
   };
-  const filterByRole = (record: AttendanceRecord) => {
-    if (roleFilter === 'all') return true;
-    const user = users.find((candidate) => candidate.id === record.userId);
-    if (!user) return false;
-    if (roleFilter === 'Team_Lead') return user.activePermissions?.teamLead === true;
-    if (roleFilter === 'HR') return user.activePermissions?.hr === true || user.role === 'HR';
-    return user.role === roleFilter && user.activePermissions?.teamLead !== true;
-  };
+  const filterByRole = (record: AttendanceRecord) =>
+    matchesAttendanceRoleFilter(record, users, roleFilter);
   const myAttendanceRecords = attendanceRecords.filter(
     (record) => record.userId === currentUser.id && filterByDate(record)
   );
@@ -765,9 +842,6 @@ export const AttendanceView: React.FC = () => {
       filterByDate(record) &&
       filterByRole(record)
   );
-  const editingRecord = attendanceRecords.find(
-    (record) => record.id === editingRecordId
-  );
   const openEditor = (record: AttendanceRecord) => {
     if (!canEditRecord(record)) {
       setAuthorizationError(
@@ -786,6 +860,8 @@ export const AttendanceView: React.FC = () => {
     date: string,
     reason: string
   ) => {
+    const overlapError = validateLeaveRequestOverlap(date, leaveType, leavePeriod, hrRequests);
+    if (overlapError) return { success: false, message: overlapError };
     setLeaveSubmitting(true);
     const result = await submitHRRequest(
       'Leave',
@@ -795,6 +871,25 @@ export const AttendanceView: React.FC = () => {
     );
     setLeaveSubmitting(false);
     return result;
+  };
+
+  const saveWorkingSchedule = async () => {
+    const start = scheduleStart.trim();
+    const end = scheduleEnd.trim();
+    if (!start || !end) {
+      setScheduleError('Shift start and end times are required.');
+      return;
+    }
+    setScheduleError('');
+    setScheduleSaving(true);
+    const result = await updateWorkingSchedule(start, end);
+    setScheduleSaving(false);
+    if (!result.success) {
+      setScheduleError(result.message);
+      showToast('error', 'Working Schedule Not Updated', result.message);
+      return;
+    }
+    showToast('success', 'Working Schedule Updated', 'The attendance shift has been updated.');
   };
 
   return (
@@ -835,6 +930,68 @@ export const AttendanceView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {isAdmin && (
+        <div className="glass-panel p-5">
+          <div className="flex items-center gap-2 border-b border-white/10 pb-3 mb-4">
+            <Clock size={18} className="text-cyan-400" />
+            <div>
+              <h2 className="text-base font-bold text-white">Attendance Working Schedule</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Shift start/end in {workingSchedule?.timeZone || 'Asia/Karachi'} (PKT), shown in HH:mm. The 8-hour window and 60-minute break allowance are fixed.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            {[
+              { label: 'Shift Window', value: `${workingSchedule?.windowMinutes ?? DEFAULT_SHIFT_WINDOW_MINUTES} min (8h)` },
+              { label: 'Break Allowance', value: `${workingSchedule?.breakMinutes ?? 60} min` },
+              { label: 'Expected Net Work', value: `${workingSchedule?.netMinutes ?? DEFAULT_SHIFT_NET_MINUTES} min (7h)` },
+              { label: 'Working Days', value: 'Monday - Friday' }
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-lg bg-slate-950/60 border border-white/10 px-3 py-2">
+                <p className="text-[11px] text-slate-400 uppercase tracking-wide">{stat.label}</p>
+                <p className="text-sm font-bold text-cyan-300 mt-0.5">{stat.value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col sm:flex-row items-end gap-3">
+            <label className="text-xs text-slate-400 flex flex-col gap-1">
+              Shift start
+              <AttendanceTimeInput
+                value={scheduleStart}
+                onChange={setScheduleStart}
+                aria-label="Shift start time in 24-hour HH:mm format"
+                className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </label>
+            <label className="text-xs text-slate-400 flex flex-col gap-1">
+              Shift end
+              <AttendanceTimeInput
+                value={scheduleEnd}
+                onChange={setScheduleEnd}
+                aria-label="Shift end time in 24-hour HH:mm format"
+                className="px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={saveWorkingSchedule}
+              disabled={scheduleSaving}
+              className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-500/40 text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              <Save size={14} />
+              {scheduleSaving ? 'Saving…' : 'Save Schedule'}
+            </button>
+            {scheduleError && (
+              <p role="alert" className="text-xs text-rose-300">{scheduleError}</p>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-3">
+            An end time earlier than the start time means the shift crosses midnight (for example 16:00 – 00:00).
+          </p>
+        </div>
+      )}
 
       {!isAdmin && (<>
         <div className="flex items-center gap-2">
@@ -996,14 +1153,17 @@ export const AttendanceView: React.FC = () => {
           </label>
           {dateFilter === 'custom' && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
-              <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || todayStr} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+              <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} max={todayStr} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
             </div>
+          )}
+          {customDateError && (
+            <p role="alert" className="mt-2 text-xs text-rose-300">{customDateError}</p>
           )}
         </div>
       )}
 
-      <AttendanceHistory
+<AttendanceHistory
         title="My Attendance History"
         records={myAttendanceRecords}
         users={users}
@@ -1012,6 +1172,20 @@ export const AttendanceView: React.FC = () => {
         onEdit={openEditor}
         canRequestChange={false}
         getRequestStatus={getCorrectionRequestStatus}
+        editingRecordId={editingRecordId}
+        renderEditor={(record) =>
+          canEditRecord(record) ? (
+            <AttendanceEditor
+              key={record.id}
+              record={record}
+              employee={users.find((user) => user.id === record.userId)}
+              requiresApproval={!isAdmin}
+              shift={editingShift}
+              onCancel={() => setEditingRecordId(null)}
+              onSave={updateAttendanceRecord}
+            />
+          ) : null
+        }
         emptyMessage="No personal attendance records found."
       />
       </>)}
@@ -1020,6 +1194,7 @@ export const AttendanceView: React.FC = () => {
         <LeaveApplicationForm
           pending={leaveSubmitting}
           onClose={() => setLeaveFormOpen(false)}
+          halfDayBoundary={halfDayBoundary}
           onSubmit={submitLeave}
         />
       )}
@@ -1028,17 +1203,6 @@ export const AttendanceView: React.FC = () => {
         <p role="alert" className="text-xs text-rose-300">
           {authorizationError}
         </p>
-      )}
-
-      {editingRecord && canEditRecord(editingRecord) && (
-        <AttendanceEditor
-          key={editingRecord.id}
-          record={editingRecord}
-          employee={users.find((user) => user.id === editingRecord.userId)}
-          requiresApproval={!isAdmin}
-          onCancel={() => setEditingRecordId(null)}
-          onSave={updateAttendanceRecord}
-        />
       )}
 
       {canViewOthers && (
@@ -1084,9 +1248,12 @@ export const AttendanceView: React.FC = () => {
             </div>
             {dateFilter === 'custom' && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
-                <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+                <label className="text-xs text-slate-400">From<input type="date" value={customFrom} max={customTo || todayStr} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
+                <label className="text-xs text-slate-400">To<input type="date" value={customTo} min={customFrom || undefined} max={todayStr} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-950/70 border border-white/10 text-xs text-white" /></label>
               </div>
+            )}
+            {customDateError && (
+              <p role="alert" className="mt-2 text-xs text-rose-300">{customDateError}</p>
             )}
             <p className="text-[11px] text-slate-500">
               {isAdmin

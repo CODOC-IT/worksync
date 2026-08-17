@@ -1,7 +1,7 @@
 import * as repo from './projectApproval.repository.js';
 import * as projectRepo from './project.repository.js';
 import * as projectService from './project.service.js';
-import { resolveTeamLeadUserId } from './project.mapper.js';
+import { isTeamLeadOfProject, rowToProjectDTO } from './project.mapper.js';
 import { fromProjectPk, fromUserPk, toProjectPk, toUserPk } from '../utils/idMapping.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
@@ -11,8 +11,20 @@ import { actorDisplayName } from '../utils/actorDisplay.js';
 import {
   buildProjectDecisionMessage,
   projectDecisionEffect,
+  resolveUpdatedParticipants,
   validateProjectDecision
 } from './projectWorkflow.rules.js';
+import { buildProjectApprovalRejectionCopy } from './projectApprovalRejectionCopy.js';
+import { UpdateProjectInput } from './project.types.js';
+import * as taskService from '../tasks/task.service.js';
+import { CreateTaskInput } from '../tasks/task.types.js';
+import {
+  buildProjectEditPayload,
+  conflictingProjectFields,
+  enrichProjectEditPayload,
+  parseProjectEditPayload,
+  resolveProjectUserIdentity,
+} from './projectApprovalChanges.js';
 
 // Service Layer for the Project Management Approval Workflow -- business logic + authorization +
 // notification publishing, matching project.service.ts's own layering. No SQL here (that's
@@ -31,17 +43,30 @@ import { ProjectAuthorizationError, ProjectNotFoundError, ProjectValidationError
 
 const actorName = (userId: string): string => actorDisplayName(userId);
 
+const unknownUser = (id: string): string => `Unknown user (ID: ${id})`;
+
 const toDTO = async (row: ProjectApprovalRequestRow): Promise<ProjectApprovalRequestDTO> => {
-  const project = await projectRepo.findProjectById(row.projectid);
+  const project = row.projectid != null ? await projectRepo.findProjectById(row.projectid) : null;
   const requestedByFrontendId = fromUserPk(row.requestedbyuserid);
+  const users = await userStore.getAllUsers();
+  const userNames = new Map(users.map((user) => [user.id, user.name]));
+  const requester = resolveProjectUserIdentity(requestedByFrontendId, users);
+  const parsedChanges = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null;
+  const projectEditPayload = row.requesttype === 'PROJECT_EDIT'
+    ? parseProjectEditPayload(row.requestedchangesjson)
+    : null;
   return {
     id: row.approvalrequestid,
-    projectId: fromProjectPk(row.projectid),
-    projectTitle: project?.projectname || fromProjectPk(row.projectid),
+    projectId: row.projectid != null ? fromProjectPk(row.projectid) : '',
+    projectTitle: project?.projectname || row.projecttitle,
     requestType: row.requesttype,
     requestedByUserId: requestedByFrontendId,
-    requestedByName: actorName(requestedByFrontendId),
-    requestedChanges: row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : null,
+    requestedByName: requester.name,
+    requestedByRole: requester.role,
+    requestedByEmail: requester.email,
+    requestedChanges: projectEditPayload
+      ? enrichProjectEditPayload(projectEditPayload, (id) => userNames.get(id) || unknownUser(id))
+      : parsedChanges,
     reason: row.reason,
     status: row.requeststatus,
     reviewedByUserId: row.reviewedbyuserid != null ? fromUserPk(row.reviewedbyuserid) : undefined,
@@ -71,6 +96,7 @@ const notifyRequester = (
 
 const REQUEST_TYPE_LABEL: Record<ProjectApprovalRequestType, string> = {
   PROJECT_CREATE: 'create',
+  TASK_CREATE: 'create task',
   PROJECT_EDIT: 'edit',
   PROJECT_ARCHIVE: 'archive',
   PROJECT_RESTORE: 'restore',
@@ -100,18 +126,38 @@ export const createApprovalRequest = async (
   const row = await projectRepo.findProjectById(projectPk);
   if (!row) throw new ProjectNotFoundError('Project not found.');
 
-  const members = await projectRepo.findMembersForProject(projectPk);
-  if (resolveTeamLeadUserId(row, members) !== requesterId) {
+  const [members, teamMembers] = await Promise.all([
+    projectRepo.findMembersForProject(projectPk),
+    projectRepo.findTeamMembersForProject(projectPk)
+  ]);
+  // isTeamLeadOfProject so any of a multi-team project's several team leads may submit a request
+  // for it, not just whichever one resolveTeamLeadUserId happens to resolve first.
+  if (!isTeamLeadOfProject(row, members, teamMembers, requesterId)) {
     throw new ProjectAuthorizationError('You can only request changes for projects you lead.');
   }
 
+  let persistedChanges = requestedChanges;
+  if (requestType === 'PROJECT_EDIT') {
+    const current = rowToProjectDTO(row, members, 0);
+    const requestedEdit = { ...(requestedChanges || {}) } as UpdateProjectInput;
+    const participants = resolveUpdatedParticipants(current.teamLeadId, requestedEdit.teamLeadId, requestedEdit.memberIds);
+    if (participants.error) throw new ProjectValidationError(participants.error);
+    if (requestedEdit.memberIds !== undefined) requestedEdit.memberIds = participants.memberIds;
+    const payload = buildProjectEditPayload(current, requestedEdit);
+    if (payload.changes.length === 0) {
+      throw new ProjectValidationError('No project changes were detected. Update at least one field before requesting approval.');
+    }
+    persistedChanges = payload as unknown as Record<string, unknown>;
+  }
+
   const approvalRequestId = await repo.insertApprovalRequest({
-    projectId: projectPk,
-    requestType,
-    requestedByUserId: toUserPk(requesterId),
-    requestedChangesJson: requestedChanges ? JSON.stringify(requestedChanges) : null,
-    reason: reason.trim()
-  });
+  projectId: projectPk,
+  projectTitle: row.projectname,
+  requestType,
+  requestedByUserId: toUserPk(requesterId),
+  requestedChangesJson: persistedChanges ? JSON.stringify(persistedChanges) : null,
+  reason: reason.trim()
+});
 
   const requesterDisplayName = actorName(requesterId);
   notifyAdmins({
@@ -133,13 +179,46 @@ export const createApprovalRequest = async (
   return toDTO(created!);
 };
 
+export const createTaskApprovalRequest = async (
+  proposed: CreateTaskInput, requesterId: string, requesterRole: string
+): Promise<ProjectApprovalRequestDTO> => {
+  if (requesterRole !== 'Team_Lead') throw new ProjectAuthorizationError('Only Team Leads can submit task creation requests.');
+  const projectPk = toProjectPk(proposed.projectId);
+  const project = await projectRepo.findProjectById(projectPk);
+  if (!project || project.statuscode !== 'Active') throw new ProjectNotFoundError('Active project not found.');
+  const [members, teams, teamMembers] = await Promise.all([
+    projectRepo.findMembersForProject(projectPk),
+    projectRepo.findTeamsForProject(projectPk),
+    projectRepo.findTeamMembersForProject(projectPk)
+  ]);
+  if (!isTeamLeadOfProject(project, members, teamMembers, requesterId)) {
+    throw new ProjectAuthorizationError('You can only create tasks for a project you lead.');
+  }
+  if (teams.length > 0) {
+    const actorTeam = teamMembers.find((member) => member.userid === toUserPk(requesterId) && member.islead);
+    if (!actorTeam) throw new ProjectAuthorizationError('You can only create tasks for your own team.');
+    const assigneeIds = [proposed, ...(proposed.subtasks || [])].flatMap((task) => task.assigneeIds || []);
+    if (assigneeIds.some((id) => !teamMembers.some((member) => member.teamid === actorTeam.teamid && member.userid === toUserPk(id)))) {
+      throw new ProjectAuthorizationError('Every proposed assignee must belong to your team.');
+    }
+    proposed = { ...proposed, teamId: `tm-${actorTeam.teamid}` };
+  }
+  const reason = (proposed as CreateTaskInput & { creationReason?: string }).creationReason?.trim() || `Create task "${proposed.title.trim()}".`;
+  const approvalRequestId = await repo.insertApprovalRequest({
+    projectId: projectPk, projectTitle: project.projectname, requestType: 'TASK_CREATE',
+    requestedByUserId: toUserPk(requesterId), requestedChangesJson: JSON.stringify(proposed), reason
+  });
+  notifyAdmins({ type: 'approval', title: 'Task Creation Requested', message: `${actorName(requesterId)} requested creation of "${proposed.title}" in "${project.projectname}".`, actorId: requesterId, projectId: proposed.projectId });
+  return toDTO((await repo.findApprovalRequestById(approvalRequestId))!);
+};
+
 // Admin's Approval Inbox -- every Pending request, regardless of project. HR is deliberately
 // never checked for here or anywhere else in this module: HR has no role in this workflow beyond
 // the read-only Activity Log visibility it already has (backend/src/activity), which this module
 // doesn't touch.
-export const listPendingApprovalsForAdmin = async (actorRole: string): Promise<ProjectApprovalRequestDTO[]> => {
+export const listApprovalsForAdmin = async (actorRole: string, status?: 'Pending' | 'Approved' | 'Rejected'): Promise<ProjectApprovalRequestDTO[]> => {
   if (actorRole !== 'Admin') throw new ProjectAuthorizationError('Only Admins can view the project approval inbox.');
-  const rows = await repo.findPendingApprovalRequests();
+  const rows = await repo.findApprovalRequests(status);
   return Promise.all(rows.map(toDTO));
 };
 
@@ -184,16 +263,35 @@ export const decideApprovalRequest = async (
   if (decision === 'Approved') {
     switch (row.requesttype) {
       case 'PROJECT_CREATE':
-        await projectService.updateProject(projectIdStr, { status: 'Active' }, actorId, 'Admin');
+        await projectService.activatePendingProject(projectIdStr, 'Admin');
         break;
+      case 'TASK_CREATE': {
+        const proposal = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) as CreateTaskInput : null;
+        if (!proposal) throw new ProjectValidationError('This task request has invalid setup details.');
+        await taskService.createTask(proposal, requesterId, 'Admin');
+        break;
+      }
       case 'PROJECT_EDIT':
+        {
+          const payload = parseProjectEditPayload(row.requestedchangesjson);
+          if (!payload) throw new ProjectValidationError('This project edit request has invalid or incomplete change details.');
+          const currentRow = await projectRepo.findProjectById(row.projectid);
+          if (!currentRow) throw new ProjectNotFoundError('Project not found.');
+          const currentMembers = await projectRepo.findMembersForProject(row.projectid);
+          const conflicts = conflictingProjectFields(rowToProjectDTO(currentRow, currentMembers, 0), payload);
+          if (conflicts.length > 0) {
+            throw new ProjectValidationError(
+              `This project changed after the request was submitted. Review and resubmit: ${conflicts.join(', ')}.`
+            );
+          }
         await projectService.updateProject(
           projectIdStr,
-          row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) : {},
+          payload.proposal,
           actorId,
           'Admin'
         );
         break;
+        }
       case 'PROJECT_ARCHIVE':
         await projectService.archiveProject(projectIdStr, row.reason, actorId, 'Admin');
         break;
@@ -255,16 +353,25 @@ export const decideApprovalRequest = async (
   const requesterDisplayName = actorName(requesterId);
   const reviewerDisplayName = actorName(actorId);
   const outcomeVerb = decision === 'Approved' ? 'approved' : 'rejected';
+  const rejectionCopy = decision === 'Rejected' ? buildProjectApprovalRejectionCopy({
+    reviewerName: reviewerDisplayName,
+    projectName,
+    requestTypeLabel: REQUEST_TYPE_LABEL[row.requesttype],
+    reason: decisionReason || '',
+    decidedAt: decidedDto.decidedAt ? new Date(decidedDto.decidedAt) : new Date()
+  }) : null;
   notifyRequester(requesterId, {
     type: 'approval',
-    title: `Project Request ${decision}`,
-    message: buildProjectDecisionMessage(
+    title: rejectionCopy?.title || `Project Request ${decision}`,
+    message: rejectionCopy?.message || buildProjectDecisionMessage(
       reviewerDisplayName,
       decision,
       REQUEST_TYPE_LABEL[row.requesttype],
       projectName,
       decisionReason
     ),
+    detail: rejectionCopy?.detail,
+    metadata: rejectionCopy?.metadata,
     actorId,
     projectId:
       row.requesttype === 'PROJECT_PERMANENT_DELETE' ||
@@ -274,7 +381,8 @@ export const decideApprovalRequest = async (
   });
   recordActivitySafe({
     actorId, actorName: reviewerDisplayName, actorEmail: userStore.findById(actorId)?.email, actorRole,
-    action: decision, module: 'Projects', entityType: 'Project', entityId: projectIdStr,
+    action: row.requesttype === 'PROJECT_EDIT' ? `Project Edit ${decision}` : decision,
+    module: 'Projects', entityType: 'Project', entityId: projectIdStr,
     entityName: projectName, projectName,
     description: `${reviewerDisplayName} ${outcomeVerb} ${requesterDisplayName}'s request to ${REQUEST_TYPE_LABEL[row.requesttype]} "${projectName}".`,
     reason: decisionReason?.trim() || undefined, linkRoute: 'approvals', important: true
@@ -285,4 +393,15 @@ export const decideApprovalRequest = async (
   // there's nothing left to re-fetch or mark Approved. Report the outcome from the in-memory row
   // instead of erroring on "row not found."
   return decidedDto;
+};
+
+export const changePendingSetup = async (id: string, changes: Record<string, unknown>, actorId: string, actorRole: string): Promise<ProjectApprovalRequestDTO> => {
+  if (actorRole !== 'Admin') throw new ProjectAuthorizationError('Only Admins can change approval setup.');
+  const row = await repo.findApprovalRequestById(id);
+  if (!row || row.requeststatus !== 'Pending') throw new ProjectValidationError('Only pending requests can be changed.');
+  if (row.requesttype !== 'PROJECT_CREATE' && row.requesttype !== 'TASK_CREATE') throw new ProjectValidationError('Change Setup is only available for creation requests.');
+  if (row.requesttype === 'PROJECT_CREATE') await projectService.updateProject(fromProjectPk(row.projectid), changes as UpdateProjectInput, actorId, 'Admin');
+  const updated = await repo.updatePendingApprovalSetup(id, JSON.stringify(changes));
+  if (!updated) throw new ProjectValidationError('The request is no longer pending.');
+  return toDTO(updated);
 };

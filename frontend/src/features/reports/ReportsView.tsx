@@ -58,6 +58,10 @@ import {
   ClipboardList
 } from 'lucide-react';
 
+import { fetchActivities } from '../activity/activityApi';
+import type { ActivityItem } from '../activity/activityTypes';
+import { DEFAULT_ACTIVITY_FILTERS } from '../activity/activityTypes';
+
 type ReportTab = 'overview' | 'projects' | 'tasks' | 'workload' | 'deadlines' | 'attendance';
 
 interface DateRange {
@@ -81,6 +85,19 @@ function formatHumanDate(d: string | undefined): string {
   const parts = d.slice(0, 10).split('-');
   const date = new Date(+parts[0], +parts[1] - 1, +parts[2]);
   return date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatActivityTime(iso: string): string {
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return iso;
+  return date.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatActivityPdfTime(iso: string | undefined): string {
+  if (!iso) return '\u2014';
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return iso;
+  return date.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function getShortName(fullName: string): string {
@@ -207,6 +224,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [attendanceCustomFrom, setAttendanceCustomFrom] = useState<string>('');
   const [attendanceCustomTo, setAttendanceCustomTo] = useState<string>('');
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [projectTimeline, setProjectTimeline] = useState<ActivityItem[]>([]);
+  const [projectTimelineLoading, setProjectTimelineLoading] = useState(false);
+  const [taskTimeline, setTaskTimeline] = useState<ActivityItem[]>([]);
+  const [taskTimelineLoading, setTaskTimelineLoading] = useState(false);
 
   // ── API data fetch ──────────────────────────────────────────────────
   const [reportData, setReportData] = useState<any>(null);
@@ -273,6 +294,31 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       .then((data) => { setDetailProject(data.success ? data.data : null); })
       .catch(() => setDetailProject(null))
       .finally(() => setDetailLoading(false));
+  }, [selectedProjectId, apiAvailable]);
+
+  // ── Project activity timeline ─────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedProjectId || !apiAvailable) {
+      setProjectTimeline([]);
+      setProjectTimelineLoading(false);
+      return;
+    }
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) {
+      setProjectTimeline([]);
+      setProjectTimelineLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setProjectTimelineLoading(true);
+    fetchActivities(
+      { ...DEFAULT_ACTIVITY_FILTERS, projectId: selectedProjectId, from: '1970-01-01T00:00:00.000Z', to: '2100-01-01T00:00:00.000Z', sort: 'oldest' },
+      1, 200
+    )
+      .then((res) => { if (!cancelled) setProjectTimeline(res.items); })
+      .catch(() => { if (!cancelled) setProjectTimeline([]); })
+      .finally(() => { if (!cancelled) setProjectTimelineLoading(false); });
+    return () => { cancelled = true; };
   }, [selectedProjectId, apiAvailable]);
 
   // ── Local fallback: date-filtered data ────────────────────────────────
@@ -416,9 +462,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
     const absent = att.filter((a: any) => a.status === 'Absent').length;
     const onLeave = att.filter((a: any) => a.status === 'On Leave').length;
     const halfDay = att.filter((a: any) => a.status === 'Half Day').length;
+    const shortHours = att.filter((a: any) => a.status === 'Short Hours').length;
     const totalHours = att.reduce((s: number, a: any) => s + (a.totalHours || 0), 0);
     const avgHours = att.length > 0 ? (totalHours / att.length).toFixed(1) : '0';
-    return { present, late, absent, onLeave, halfDay, avgHours, total: att.length };
+    return { present, late, absent, onLeave, halfDay, shortHours, avgHours, total: att.length };
   }, [attendanceTabRecords]);
 
   // ── Task detail fetch ────────────────────────────────────────────────
@@ -443,9 +490,34 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       .finally(() => setDetailTaskLoading(false));
   }, [selectedTaskId, apiAvailable, roleFiltered.tasks]);
 
+  // ── Task activity timeline ───────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedTaskId || !apiAvailable) {
+      setTaskTimeline([]);
+      setTaskTimelineLoading(false);
+      return;
+    }
+    const token = localStorage.getItem('worksync_auth_token');
+    if (!token) {
+      setTaskTimeline([]);
+      setTaskTimelineLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setTaskTimelineLoading(true);
+    fetchActivities(
+      { ...DEFAULT_ACTIVITY_FILTERS, taskId: selectedTaskId, from: '1970-01-01T00:00:00.000Z', to: '2100-01-01T00:00:00.000Z', sort: 'oldest' },
+      1, 200
+    )
+      .then((res) => { if (!cancelled) setTaskTimeline(res.items); })
+      .catch(() => { if (!cancelled) setTaskTimeline([]); })
+      .finally(() => { if (!cancelled) setTaskTimelineLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedTaskId, apiAvailable]);
+
   // ── Derived metrics from API when available, else from local ──────────
   const buildStatusDist = (tasks: any[]): { name: string; value: number }[] => {
-    const order = ['Todo', 'In Progress', 'Review', 'Blocked', 'Done'];
+    const order = ['Todo', 'In Progress', 'Review', 'Done'];
     const counts = new Map<string, number>();
     tasks.forEach((t: any) => {
       const key = t.status || 'Unknown';
@@ -567,8 +639,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
     const overdue = tasks.filter((t) => t.status !== 'Done' && t.dueDate < todayStr()).length;
     const todo = tasks.filter((t) => t.status === 'Todo').length;
     const review = tasks.filter((t) => t.status === 'Review').length;
-    const blocked = tasks.filter((t) => t.status === 'Blocked').length;
-    return { total, completed, inProgress, overdue, todo, review, blocked };
+    return { total, completed, inProgress, overdue, todo, review };
   }, [roleFiltered.tasks]);
 
   // Tasks-tab distribution cards must reflect the SAME population as the task list and KPIs
@@ -953,12 +1024,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
         onLeaveToday: h.onLeaveToday ?? 0,
         lateToday: h.lateToday ?? 0,
         halfDayToday: h.halfDayToday ?? 0,
+        shortHoursToday: h.shortHoursToday ?? 0,
+        inSessionToday: h.inSessionToday ?? 0,
         avgHours: h.avgHours ?? '0',
         pendingLeaveReqs: h.pendingLeaveReqs ?? 0,
         pendingCorrections: h.pendingCorrections ?? 0,
       };
     }
-    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
+    return { presentToday: 0, absentToday: 0, onLeaveToday: 0, lateToday: 0, halfDayToday: 0, shortHoursToday: 0, inSessionToday: 0, avgHours: '0', pendingLeaveReqs: 0, pendingCorrections: 0 };
   }, [apiAvailable, reportData]);
 
   // ── Rest of the component: unchanged UI code ─────────────────────────
@@ -1210,7 +1283,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       bodyHtml += kpi('In Progress', taskKpiStats.inProgress);
       bodyHtml += kpi('Review', taskKpiStats.review);
       bodyHtml += kpi('Done', taskKpiStats.completed);
-      bodyHtml += kpi('Blocked', taskKpiStats.blocked);
       bodyHtml += kpi('Overdue', taskKpiStats.overdue);
       bodyHtml += `</div>`;
       bodyHtml += section('Status Distribution');
@@ -1512,6 +1584,20 @@ ${bodyHtml}
     bodyHtml += section('Completion Summary');
     bodyHtml += `<p style="font-size:11px;color:#475569;margin:4px 0;">${t.completionSummary || 'No completion summary provided.'}</p>`;
 
+    if (taskTimeline.length > 0) {
+      bodyHtml += section(`Activity Timeline (${taskTimeline.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:8px 0;">`;
+      bodyHtml += `<thead><tr>${th('Action')}${th('Entity')}${th('User')}${th('Changes')}${th('Date')}</tr></thead><tbody>`;
+      taskTimeline.forEach((item: ActivityItem) => {
+        const actorName = item.actor?.name || 'System';
+        const details = (item.changes && item.changes.length > 0)
+          ? item.changes.map((c: any) => `${c.field}: ${c.previousValue || '\u2014'} \u2192 ${c.newValue || '\u2014'}`).join('; ')
+          : item.description || '\u2014';
+        bodyHtml += `<tr>${td(item.action || '\u2014', '#0f172a')}${td(item.entityType || '\u2014')}${td(actorName)}${td(details)}${td(formatActivityPdfTime(item.timestamp))}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
     const fullHtml = `<!DOCTYPE html><html><head><title>Task - ${t.taskNumber || t.title}</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:40px;color:#1e293b;margin:0;}
@@ -1702,7 +1788,7 @@ ${bodyHtml}
 
     const healthLabel = (project.progress || 0) >= 70 ? 'On Track' : (project.progress || 0) >= 40 ? 'At Risk' : 'Needs Attention';
 
-    const statusOrder = ['Todo', 'In Progress', 'Review', 'Done', 'Blocked'];
+    const statusOrder = ['Todo', 'In Progress', 'Review', 'Done'];
 
     let bodyHtml = '';
 
@@ -1761,6 +1847,16 @@ ${bodyHtml}
       bodyHtml += `</tbody></table>`;
     }
 
+    if (projectTasks.length > 0) {
+      bodyHtml += section(`Task Dates (${totalTasks})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
+      bodyHtml += `<thead><tr>${th('Task')}${th('Start Date')}${th('Due Date')}${th('Created')}</tr></thead><tbody>`;
+      projectTasks.forEach((t: any) => {
+        bodyHtml += `<tr>${td(t.title || '\u2014', '#0f172a')}${td(formatDate(t.startDate))}${td(formatDate(t.dueDate))}${td(formatDate(t.createdAt))}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
     if (milestones.length > 0) {
       bodyHtml += section(`Milestones (${milestones.length})`);
       bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
@@ -1780,6 +1876,21 @@ ${bodyHtml}
         const fileSize = f.size != null ? (typeof f.size === 'number' ? formatFileSize(f.size) : f.size) : '';
         const fileType = f.mimeType || f.type || '';
         bodyHtml += `<tr>${td(f.name, '#0f172a')}${td(fileType)}${td(fileSize)}${td(`${uploader?.name || f.uploadedBy || ''} ${f.uploadedAt ? formatDate(f.uploadedAt) : ''}`)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
+
+    if (projectTimeline.length > 0) {
+      bodyHtml += section(`Activity Timeline (${projectTimeline.length})`);
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
+      bodyHtml += `<thead><tr>${th('Action')}${th('Entity')}${th('Task')}${th('User')}${th('Changes')}${th('Date')}</tr></thead><tbody>`;
+      projectTimeline.forEach((item: ActivityItem) => {
+        const actorName = item.actor?.name || 'System';
+        const taskCol = item.task?.name || '\u2014';
+        const details = (item.changes && item.changes.length > 0)
+          ? item.changes.map((c: any) => `${c.field}: ${c.previousValue || '\u2014'} \u2192 ${c.newValue || '\u2014'}`).join('; ')
+          : item.description || '\u2014';
+        bodyHtml += `<tr>${td(item.action || '\u2014', '#0f172a')}${td(item.entityType || '\u2014')}${td(taskCol)}${td(actorName)}${td(details)}${td(formatActivityPdfTime(item.timestamp))}</tr>`;
       });
       bodyHtml += `</tbody></table>`;
     }
@@ -2218,6 +2329,57 @@ ${bodyHtml}
     </div>
   );
 
+  const renderActivityTimeline = (items: ActivityItem[], loading: boolean, emptyHint: string) => {
+    if (loading) {
+      return <div className="text-center py-8 text-xs text-slate-500">Loading activity...</div>;
+    }
+    if (!items || items.length === 0) {
+      return <div className="text-center py-8 text-xs text-slate-500">{emptyHint}</div>;
+    }
+    return (
+      <div className="mt-3 space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
+        {items.map((item, idx) => {
+          const actorName = item.actor?.name || 'System';
+          const scopeName = item.entityType === 'Project'
+            ? (item.project?.name || item.entityName || 'Project')
+            : item.task?.name || item.entityName || item.entityType;
+          return (
+            <div key={item.id || idx} className="flex items-start gap-2 p-2 rounded-lg bg-slate-800/20">
+              <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-1.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium text-slate-200">{item.action}</span>
+                  {item.entityType !== undefined && (
+                    <span className="text-[10px] text-slate-500">{item.entityType}</span>
+                  )}
+                </div>
+                {scopeName && <div className="text-[10px] text-slate-400 mt-0.5">{scopeName}</div>}
+                {item.description && <div className="text-[11px] text-slate-300 mt-0.5">{item.description}</div>}
+                {item.changes && item.changes.length > 0 && (
+                  <div className="mt-1 space-y-0.5 text-[10px] text-slate-400">
+                    {item.changes.map((c: any, i: number) => (
+                      <div key={i} className="flex flex-wrap gap-1">
+                        <span className="text-slate-500">{c.field}:</span>
+                        {c.previousValue != null && <span className="text-amber-300/90">{String(c.previousValue)}</span>}
+                        <span>→</span>
+                        {c.newValue != null && <span className="text-emerald-300/90">{String(c.newValue)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+                  <span>{actorName}</span>
+                  {item.timestamp && <span>•</span>}
+                  {item.timestamp && <span className="font-mono">{formatActivityTime(item.timestamp)}</span>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderProjectDetail = () => {
     if (detailLoading) {
       return (
@@ -2250,14 +2412,13 @@ ${bodyHtml}
     const overdueTasks = projectTasks.filter((t: any) => t.status !== 'Done' && t.dueDate < todayStr()).length;
     const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-    const statusOrder = ['Todo', 'In Progress', 'Review', 'Done', 'Blocked'];
+    const statusOrder = ['Todo', 'In Progress', 'Review', 'Done'];
     const statusCounts: Record<string, number> = {};
     const statusColorMap: Record<string, string> = {
       Todo: 'text-slate-400',
       'In Progress': 'text-cyan-400',
       Review: 'text-amber-400',
       Done: 'text-emerald-400',
-      Blocked: 'text-rose-400',
     };
     projectTasks.forEach((t: any) => { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; });
 
@@ -2483,6 +2644,13 @@ ${bodyHtml}
             </div>
           </GlassCard>
         )}
+
+        <GlassCard glowColor="cyan" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
+          <div className="glass-panel p-4 rounded-lg">
+            {renderSectionHeader(<History size={16} className="text-cyan-400" />, 'Activity Timeline', projectTimelineLoading ? undefined : `${projectTimeline.length} events`)}
+            {renderActivityTimeline(projectTimeline, projectTimelineLoading, 'No activity recorded for this project in the selected date range.')}
+          </div>
+        </GlassCard>
 
         <div className="flex justify-end gap-2">
           <button
@@ -2849,7 +3017,6 @@ ${bodyHtml}
                 <option value="Todo">Not Started</option>
                 <option value="In Progress">In Progress</option>
                 <option value="Review">Review</option>
-                <option value="Blocked">Blocked</option>
               </select>
               {(deadlineSearchQuery || deadlineFilterProject || deadlineFilterAssignee || deadlineFilterDateRange !== 'all' || deadlineFilterStatus) && (
                 <button
@@ -2932,7 +3099,6 @@ ${bodyHtml}
         {renderKPICard('In Progress', taskKpiStats.inProgress, <Clock size={14} className="text-amber-400" />, 'amber')}
         {renderKPICard('Review', taskKpiStats.review, <Activity size={14} className="text-amber-400" />, 'amber')}
         {renderKPICard('Done', taskKpiStats.completed, <CheckCircle2 size={14} className="text-emerald-400" />, 'emerald')}
-        {renderKPICard('Blocked', taskKpiStats.blocked, <AlertTriangle size={14} className="text-rose-400" />, 'magenta')}
         {renderKPICard('Overdue', taskKpiStats.overdue, <AlertTriangle size={14} className="text-rose-400" />, 'magenta')}
       </div>
 
@@ -2948,7 +3114,7 @@ ${bodyHtml}
                   const maxVal = Math.max(...taskStatusDistData.map((d: any) => d.value), 1);
                   const statusColorMap: Record<string, string> = {
                     'Todo': 'bg-cyan-500', 'In Progress': 'bg-amber-500', 'Review': 'bg-amber-500',
-                    'Done': 'bg-emerald-500', 'Blocked': 'bg-rose-500',
+                    'Done': 'bg-emerald-500',
                   };
                   return taskStatusDistData.map((d: any) => {
                     const pct = Math.round((d.value / maxVal) * 100);
@@ -3028,7 +3194,6 @@ ${bodyHtml}
               <option value="In Progress">In Progress</option>
               <option value="Review">Review</option>
               <option value="Done">Done</option>
-              <option value="Blocked">Blocked</option>
             </select>
             <select
               value={taskFilterPriority}
@@ -3329,6 +3494,12 @@ ${bodyHtml}
             </div>
           </GlassCard>
         )}
+      <GlassCard>
+            <div className="p-4">
+              {renderSectionHeader(<History size={16} className="text-cyan-400" />, 'Activity Timeline', taskTimelineLoading ? undefined : `${taskTimeline.length} events`)}
+              {renderActivityTimeline(taskTimeline, taskTimelineLoading, 'No activity recorded for this task.')}
+            </div>
+          </GlassCard>
       </div>
     );
   };
@@ -3653,13 +3824,14 @@ ${bodyHtml}
 
   const renderAttendanceTab = () => (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
         {renderKPICard('Present', attendanceTabStats.present, <UserCheck size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Late', attendanceTabStats.late, <Clock size={14} className="text-amber-400" />, 'amber')}
+        {renderKPICard('Short Hours', attendanceTabStats.shortHours, <Hourglass size={14} className="text-orange-400" />, 'slate')}
         {renderKPICard('Absent', attendanceTabStats.absent, <UserX size={14} className="text-rose-400" />, 'magenta')}
         {renderKPICard('On Leave', attendanceTabStats.onLeave, <Coffee size={14} className="text-cyan-400" />, 'cyan')}
-        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Hourglass size={14} className="text-violet-400" />, 'violet')}
-        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <Target size={14} className="text-emerald-400" />, 'emerald')}
+        {renderKPICard('Half Day', attendanceTabStats.halfDay, <Target size={14} className="text-violet-400" />, 'violet')}
+        {renderKPICard('Avg Hours', `${attendanceTabStats.avgHours}h`, <BarChart3 size={14} className="text-emerald-400" />, 'emerald')}
         {renderKPICard('Total Records', attendanceTabStats.total, <FileSpreadsheet size={14} className="text-cyan-400" />, 'cyan')}
       </div>
 
@@ -3721,7 +3893,7 @@ ${bodyHtml}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-slate-400">Filter by status:</span>
         <div className="flex flex-wrap gap-1.5">
-          {(['', 'Present', 'Late', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
+          {(['', 'Present', 'Late', 'Short Hours', 'Absent', 'On Leave', 'Half Day'] as const).map((s) => {
             const isActive = attendanceStatusFilter === s;
             if (s === '') {
               return (

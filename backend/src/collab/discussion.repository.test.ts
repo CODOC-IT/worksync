@@ -74,10 +74,27 @@ const SCHEMA_DDL = `
     PriorityId SMALLINT NOT NULL REFERENCES work.Priorities(PriorityId)
   );
 
+  CREATE TABLE work.ProjectTeams (
+    TeamId BIGSERIAL PRIMARY KEY,
+    ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+    TeamName VARCHAR(150) NOT NULL,
+    Description VARCHAR(2000) NOT NULL
+  );
+
+  CREATE TABLE work.TeamMembers (
+    TeamMemberId BIGSERIAL PRIMARY KEY,
+    TeamId BIGINT NOT NULL REFERENCES work.ProjectTeams(TeamId),
+    ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
+    UserId INT NOT NULL REFERENCES iam.Users(UserId),
+    IsLead BOOLEAN NOT NULL DEFAULT FALSE,
+    LeftAtUtc TIMESTAMPTZ NULL
+  );
+
   CREATE TABLE work.ProjectMembers (
     ProjectMemberId BIGSERIAL PRIMARY KEY,
     ProjectId INT NOT NULL REFERENCES work.Projects(ProjectId),
     UserId INT NOT NULL REFERENCES iam.Users(UserId),
+    MemberRoleCode VARCHAR(30) NULL,
     LeftAtUtc TIMESTAMPTZ NULL
   );
 
@@ -101,6 +118,7 @@ const SCHEMA_DDL = `
     Subject VARCHAR(200) NULL,
     ProjectId INT NULL REFERENCES work.Projects(ProjectId),
     TaskId BIGINT NULL REFERENCES work.Tasks(TaskId),
+    TeamId BIGINT NULL REFERENCES work.ProjectTeams(TeamId),
     CreatedByUserId INT NOT NULL REFERENCES iam.Users(UserId),
     IsResolved BOOLEAN NOT NULL DEFAULT FALSE,
     ResolvedByUserId INT NULL,
@@ -154,6 +172,11 @@ const SEED_DML = `
     (1, 2, NULL),
     (2, 5, NULL),
     (1, 5, CURRENT_TIMESTAMP);
+  INSERT INTO work.ProjectTeams (ProjectId, TeamName, Description) VALUES
+    (1, 'Design Team', 'Owns the UI');
+  INSERT INTO work.TeamMembers (TeamId, ProjectId, UserId, IsLead) VALUES
+    (1, 1, 1, TRUE),
+    (1, 1, 2, FALSE);
   INSERT INTO work.Tasks (ProjectId, Title, TaskStatusId, PriorityId) VALUES (1, 'Test Task', 1, 1);
 `;
 
@@ -235,6 +258,40 @@ test('insertThread: a Task-scoped thread derives its project id via the task, no
   assert.equal(row!.effectiveprojectid, 1);
 });
 
+test('insertThread: a Team-scoped thread stores TeamId only and derives its project via the team', async () => {
+  const repo = await import('./discussion.repository.js');
+  const { threadId } = await repo.insertThread({
+    projectId: 1,
+    teamId: 1,
+    title: 'Design team sync',
+    commentKind: 'Blocker',
+    creatorUserId: 1,
+    body: 'Any blockers for the sprint?',
+    mentionUserIds: [],
+    attachments: []
+  });
+
+  const row = await repo.findThreadById(threadId);
+  assert.ok(row);
+  assert.equal(row!.threadtype, 'Team');
+  assert.equal(row!.teamid, 1);
+  assert.equal(row!.teamname, 'Design Team');
+  assert.equal(row!.taskid, null);
+  // Only TeamId is stored — the project is resolved through work.ProjectTeams.ProjectId.
+  assert.equal(row!.effectiveprojectid, 1);
+});
+
+test('findMentionableUsersForTeam: returns the team members plus the project lead, HR, and Admin', async () => {
+  const repo = await import('./discussion.repository.js');
+  const mentionable = await repo.findMentionableUsersForTeam(1, 1);
+
+  assert.deepEqual(
+    mentionable.map((row) => row.userid),
+    [1, 2, 3, 4],
+    'team lead/member/Admin/HR are eligible; unrelated, departed, and inactive users are not'
+  );
+});
+
 test('findThreadsForProjects: only returns threads whose effective project id is in the given set', async () => {
   const repo = await import('./discussion.repository.js');
   await repo.insertThread({
@@ -304,7 +361,7 @@ test('updateCommentText: sets EditedAtUtc alongside the new text', async () => {
   assert.ok(comment!.editedatutc, 'EditedAtUtc should be set after an edit');
 });
 
-test('softDeleteComment: sets DeletedAtUtc without violating the non-empty text constraint', async () => {
+test('softDeleteComment: preserves text for authorized review while marking the comment deleted', async () => {
   const repo = await import('./discussion.repository.js');
   const { commentId } = await repo.insertThread({
     projectId: 1, title: 'Deletable thread', commentKind: 'General', creatorUserId: 1,
@@ -314,6 +371,6 @@ test('softDeleteComment: sets DeletedAtUtc without violating the non-empty text 
   await repo.softDeleteComment(commentId);
   const comment = await repo.findCommentById(commentId);
   assert.ok(comment!.deletedatutc, 'DeletedAtUtc should be set');
-  assert.ok(comment!.commenttext.length > 0, 'CommentText must stay non-empty (CK_Comments_Text)');
+  assert.equal(comment!.commenttext, 'Will be deleted.');
 });
 

@@ -94,6 +94,41 @@ export interface ProjectMemberRow {
   projectid: number;
   userid: number;
   memberrolecode: ProjectMemberRoleCode;
+  pendingremovalatutc: Date | null;
+  pendingremovalbyuserid: number | null;
+  pendingremovalreason: string | null;
+}
+
+// Row shapes for the new Team layer (database/migrations/20260816_01_project_teams.sql).
+export interface ProjectTeamRow {
+  teamid: number;
+  projectid: number;
+  teamname: string;
+  description: string;
+  createdbyuserid: number;
+}
+
+export interface TeamMemberRow {
+  teamid: number;
+  projectid: number;
+  userid: number;
+  islead: boolean;
+}
+
+export interface TeamDTO {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
+}
+
+export interface CreateTeamInput {
+  name: string;
+  description: string;
+  leadId: string;
+  memberIds: string[];
 }
 
 export interface MilestoneDTO {
@@ -127,6 +162,14 @@ export interface ProjectDTO {
   createdBy: string;
   teamLeadId: string;
   memberIds: string[];
+  // Members currently kept in the project (LeftAtUtc still NULL) because an Admin's removal
+  // attempt found them with active task/subtask work still assigned -- see project.service.ts's
+  // removeMember. Always a subset of memberIds, never a separate/parallel identity.
+  pendingRemovalMemberIds: string[];
+  // The project's team breakdown (multi-team architecture). Every project member belongs to
+  // exactly one team; team leads are also team members. Empty for projects created before this
+  // feature -- those keep working through the single project-lead model.
+  teams: TeamDTO[];
   startDate: string;
   targetDate: string;
   priority: ApiProjectPriority;
@@ -147,6 +190,10 @@ export interface CreateProjectInput {
   teamLeadId?: string;
   memberIds?: string[];
   creationReason?: string;
+  // Full team setup (multi-team architecture). Admin supplies this when constructing the whole
+  // team structure up front; a member's project suggestion carries the same complete setup so an
+  // Admin approval can materialize it as-is without re-entering it.
+  teams?: CreateTeamInput[];
 }
 
 export interface UpdateProjectInput {

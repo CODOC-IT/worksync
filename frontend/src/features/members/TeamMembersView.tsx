@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { GlassCard } from '../../components/common/GlassCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { useApp } from '../../store/AppContext';
-import { Project, Task, User, UserRole } from '../../types';
+import { Project, Task, Team, User, UserRole } from '../../types';
 import { AccountFieldErrors, AccountFormValues, PASSWORD_POLICY_MESSAGE, getPasswordChecks, isStrongPassword, validateAccountForm } from './accountFormRules';
 import { getMemberDirectoryRole } from './memberRole';
 import {
@@ -74,9 +74,14 @@ const ROLE_SORT_ORDER: Record<UserRole, number> = {
   Team_Member: 3,
 };
 
+interface LedTeam {
+  project: Project;
+  team: Team | null;
+}
+
 interface MemberInsights {
   activeProjects: Project[];
-  leadProjects: Project[];
+  ledTeams: LedTeam[];
   activeTasks: Task[];
   completedTasks: Task[];
   overdueTasks: Task[];
@@ -85,12 +90,26 @@ interface MemberInsights {
 const isTaskAssignedToUser = (task: Task, userId: string) =>
   task.assigneeId === userId || task.assigneeIds?.includes(userId) === true;
 
+const isMemberOfAnyTeam = (project: Project, userId: string) =>
+  !!project.teams?.some((team) => team.leadId === userId || team.memberIds?.includes(userId));
+
 const getMemberInsights = (member: User, projects: Project[], tasks: Task[]): MemberInsights => {
-  const projectMembership = projects.filter((project) =>
-    project.memberIds.includes(member.id) || project.teamLeadId === member.id,
+  const projectMembership = projects.filter(
+    (project) =>
+      project.memberIds.includes(member.id) ||
+      project.teamLeadId === member.id ||
+      isMemberOfAnyTeam(project, member.id),
   );
 
-  const leadProjects = projects.filter((project) => project.teamLeadId === member.id);
+  const ledTeams: LedTeam[] = projects.flatMap((project) => {
+    if (project.teams && project.teams.length > 0) {
+      return project.teams
+        .filter((team) => team.leadId === member.id)
+        .map((team) => ({ project, team }));
+    }
+    return project.teamLeadId === member.id ? [{ project, team: null }] : [];
+  });
+
   const activeProjects = projectMembership.filter((project) => project.status === 'Active');
   const assignedTasks = tasks.filter((task) => isTaskAssignedToUser(task, member.id));
   const activeTasks = assignedTasks.filter((task) => task.status !== 'Done');
@@ -99,7 +118,7 @@ const getMemberInsights = (member: User, projects: Project[], tasks: Task[]): Me
 
   return {
     activeProjects,
-    leadProjects,
+    ledTeams,
     activeTasks,
     completedTasks,
     overdueTasks,
@@ -138,7 +157,7 @@ const EMPTY_MEMBER_FORM: MemberFormState = {
 };
 
 export const TeamMembersView: React.FC = () => {
-  const { users, tasks, projects, currentRole, currentUser, refreshUsers, showToast } = useApp();
+  const { users, tasks, projects, currentRole, refreshUsers, showToast } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchField, setSearchField] = useState<SearchField>('name');
@@ -168,7 +187,11 @@ export const TeamMembersView: React.FC = () => {
     () => new Set(
       projects
         .filter((project) => project.status === 'Active' && project.approvalStatus === 'Approved')
-        .map((project) => project.teamLeadId)
+        .flatMap((project) =>
+          project.teams && project.teams.length > 0
+            ? project.teams.map((team) => team.leadId)
+            : project.teamLeadId ? [project.teamLeadId] : [],
+        )
         .filter(Boolean)
     ),
     [projects],
@@ -226,15 +249,14 @@ export const TeamMembersView: React.FC = () => {
     () => (selectedMember ? getMemberInsights(selectedMember, projects, tasks) : null),
     [projects, selectedMember, tasks],
   );
-  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR'));
-  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || (selectedMember?.role === 'HR' && selectedMember.id !== currentUser.id));
+  const canDeactivateSelectedMember = Boolean(selectedMember) && !(currentRole === 'HR' && selectedMember?.role === 'Admin');
+  const hrCannotManageSelectedMember = currentRole === 'HR' && (selectedMember?.role === 'Admin' || selectedMember?.role === 'HR');
   const canEditSelectedMember = Boolean(selectedMember) && !hrCannotManageSelectedMember;
   const selectedMemberIsAdmin = selectedMember?.role === 'Admin';
 
   const activeMembersCount = useMemo(() => directoryUsers.filter((member) => member.status !== 'inactive').length, [directoryUsers]);
   const deactivatedMembersCount = useMemo(() => directoryUsers.filter((member) => member.status === 'inactive').length, [directoryUsers]);
   const roleLockedToProjectLead = manageMode === 'edit' && Boolean(manageTargetId) && activeProjectLeadIds.has(manageTargetId || '');
-  const isEditingSelf = manageMode === 'edit' && Boolean(manageTargetId) && manageTargetId === currentUser.id;
 
   useEffect(() => {
     if (!canInspectMembers) {
@@ -1013,8 +1035,8 @@ export const TeamMembersView: React.FC = () => {
                   <div className="mt-2 text-2xl font-bold text-white">{selectedMemberInsights.activeProjects.length}</div>
                 </GlassCard>
                 <GlassCard glowColor="violet" hover3dTilt={false} className="cursor-default p-4">
-                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Lead assignments' : 'Projects leading'}</div>
-                  <div className="mt-2 text-2xl font-bold text-purple-300">{selectedMemberInsights.leadProjects.length}</div>
+                  <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Lead assignments' : 'Teams leading'}</div>
+                  <div className="mt-2 text-2xl font-bold text-purple-300">{selectedMemberInsights.ledTeams.length}</div>
                 </GlassCard>
                 <GlassCard glowColor="amber" hover3dTilt={false} className="cursor-default p-4">
                   <div className="text-xs font-mono text-slate-400">{selectedMemberIsAdmin ? 'Open assignments' : 'Open tasks'}</div>
@@ -1085,11 +1107,24 @@ export const TeamMembersView: React.FC = () => {
                               <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1">
                                 {project.progress}% progress
                               </span>
-                              {project.teamLeadId === selectedMember.id && (
-                                <span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-purple-300">
-                                  Project lead
-                                </span>
-                              )}
+                              {(() => {
+                                const ledTeamsInProject = project.teams?.filter((t) => t.leadId === selectedMember.id) ?? [];
+                                if (ledTeamsInProject.length > 0) {
+                                  return ledTeamsInProject.map((t) => (
+                                    <span key={t.id} className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-purple-300">
+                                      Team lead · {t.name}
+                                    </span>
+                                  ));
+                                }
+                                if (!project.teams?.length && project.teamLeadId === selectedMember.id) {
+                                  return (
+                                    <span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-purple-300">
+                                      Project lead
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           </div>
                         ))
@@ -1173,20 +1208,22 @@ export const TeamMembersView: React.FC = () => {
                     <div className="glass-panel border border-white/10 p-5">
                       <div className="flex items-center gap-2">
                         <Sparkles size={16} className="text-purple-300" />
-                        <h3 className="text-sm font-semibold text-white">Projects led</h3>
+                        <h3 className="text-sm font-semibold text-white">Teams led</h3>
                       </div>
                       <div className="mt-4 max-h-56 space-y-3 overflow-y-auto pr-1">
-                        {selectedMemberInsights.leadProjects.length === 0 ? (
+                        {selectedMemberInsights.ledTeams.length === 0 ? (
                           <p className="rounded-xl border border-dashed border-white/10 bg-black/20 px-4 py-5 text-sm text-slate-500">
-                            This member is not leading any projects right now.
+                            This member is not leading any teams right now.
                           </p>
                         ) : (
-                          selectedMemberInsights.leadProjects.map((project) => (
-                            <div key={project.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                          selectedMemberInsights.ledTeams.map(({ project, team }) => (
+                            <div key={team ? `${project.id}-${team.id}` : `legacy-${project.id}`} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                               <div className="text-sm font-semibold text-white">{project.title}</div>
-                              <div className="mt-1 text-xs text-slate-400">{project.code}</div>
+                              <div className="mt-1 text-xs text-slate-400">
+                                {team ? `${project.code} · ${team.name}` : project.code}
+                              </div>
                               <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-400">
-                                <span>{project.memberIds.length} members</span>
+                                <span>{team ? team.memberIds.length : project.memberIds.length} members</span>
                                 <span>{project.progress}% progress</span>
                               </div>
                             </div>
@@ -1267,7 +1304,7 @@ export const TeamMembersView: React.FC = () => {
               </label>
                 <label className="text-sm text-slate-300">
                   <span className="mb-1 block text-xs">Role</span>
-                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && (isEditingSelf || memberForm.role === 'Admin')) || roleLockedToProjectLead} className={surfaceInputClass}>
+                  <select value={memberForm.role} onChange={(event) => setMemberForm((prev) => ({ ...prev, role: event.target.value as UserRole }))} disabled={(currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin') || roleLockedToProjectLead} className={surfaceInputClass}>
                     {currentRole === 'Admin' && <option value="Admin">Administrator</option>}
                     {currentRole === 'HR' && manageMode === 'edit' && memberForm.role === 'Admin' && <option value="Admin">Administrator</option>}
                     {roleLockedToProjectLead && <option value="Team_Lead">Team Lead</option>}
@@ -1276,11 +1313,9 @@ export const TeamMembersView: React.FC = () => {
                   </select>
                   {(currentRole === 'HR' || roleLockedToProjectLead) && (
                     <p className="mt-2 text-xs text-slate-500">
-                      {isEditingSelf
-                        ? 'Your role cannot be changed from this screen.'
-                        : roleLockedToProjectLead
-                          ? 'Team Lead assignment is managed from the Projects section.'
-                          : 'HR cannot create or change Administrator roles.'}
+                      {roleLockedToProjectLead
+                        ? 'Team Lead assignment is managed from the Projects section.'
+                        : 'HR cannot create or change Administrator roles.'}
                     </p>
                   )}
                 </label>

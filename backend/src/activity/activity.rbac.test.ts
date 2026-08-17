@@ -312,6 +312,44 @@ test('Team Member: cannot retrieve an Admin-performed event by direct ID even in
   assert.equal(row, null, 'Team Member must not retrieve an Admin-performed event by direct ID');
 });
 
+test('Team Member: sees approval events recorded against them even when performed by an Admin', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, affecteduseridtext)
+    VALUES (1, 1, 'Leave Approved', 'Leave', 'hrq-own-approval', '00000000-0000-0000-0000-000000000028', 'Attendance', 'Admin approved my own leave', 'Admin', 'usr-4')`);
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, affecteduseridtext)
+    VALUES (1, 1, 'Leave Approved', 'Leave', 'hrq-other-approval', '00000000-0000-0000-0000-000000000029', 'Attendance', 'Admin approved someone elses leave', 'Admin', 'usr-5')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('Admin approved my own leave'), "Team Member should see approval events recorded against themselves even when performed by an Admin");
+  assert.ok(!descriptions.includes('Admin approved someone elses leave'), "Team Member must not see approval events recorded against other users");
+});
+
+test('Team Member: "My activity only" feed includes approval events recorded against them', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, affecteduseridtext)
+    VALUES (1, 5, 'Leave Approved', 'Leave', 'hrq-my-feed', '00000000-0000-0000-0000-000000000031', 'Attendance', 'HR approved my leave request', 'HR', 'usr-4')`);
+
+  const { findActivities } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const result = await findActivities({ myActivityOnly: true, page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
+  const descriptions = result.rows.map((r: any) => r.description);
+  assert.ok(descriptions.includes('HR approved my leave request'), "My activity only should include approval decisions made on my own request");
+});
+
+test('Team Member: can retrieve an Admin-performed approval event by direct ID when they are the affected user', async () => {
+  memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot, affecteduseridtext)
+    VALUES (997, 1, 1, 'Leave Approved', 'Leave', 'hrq-own-detail', '00000000-0000-0000-0000-000000000030', 'Attendance', 'My own leave approval detail', 'Admin', 'usr-4')`);
+
+  const { findVisibleActivityById } = await import('./activity.repository.js');
+  const { getEffectiveRoles } = await import('./activity.rbac.js');
+  const effectiveRoles = await getEffectiveRoles('usr-4');
+  const row = await findVisibleActivityById('997', 'usr-4', effectiveRoles);
+  assert.ok(row, 'Team Member should retrieve an Admin-performed approval event recorded against them');
+});
+
 test('Team Member: cannot retrieve restricted record by direct ID', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (auditeventid, organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
     VALUES (999, 1, 1, 'Permission Granted', 'Permission', 'perm-99', '00000000-0000-0000-0000-000000000030', 'Permissions', 'Admin permission grant', 'Admin')`);
@@ -539,14 +577,14 @@ test('HR: cannot see activity performed by Admins', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'HRRepresentative'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
-    VALUES (1, 1, 'Permission Granted', 'Permission', 'perm-admin-hr', '00000000-0000-0000-0000-000000000086', 'Permissions', 'Admin action hidden from HR', 'Admin')`);
+    VALUES (1, 1, 'Permission Granted', 'Permission', 'perm-admin-hr', '00000000-0000-0000-0000-000000000086', 'Permissions', 'Admin action visible to HR', 'Admin')`);
 
   const { findActivities } = await import('./activity.repository.js');
   const { getEffectiveRoles } = await import('./activity.rbac.js');
   const effectiveRoles = await getEffectiveRoles('usr-4');
   const result = await findActivities({ page: 1, pageSize: 50 }, effectiveRoles, 'usr-4');
   const descriptions = result.rows.map((r: any) => r.description);
-  assert.ok(!descriptions.includes('Admin action hidden from HR'), 'HR must not see events performed by Admins');
+  assert.ok(!descriptions.includes('Admin action visible to HR'), 'HR must never see events performed by Admins');
 });
 
 test('HR: cannot see NULL-snapshot events performed by a current Administrator', async () => {
@@ -862,7 +900,7 @@ test('Revoked Team Lead: immediately loses elevated access', async () => {
   assert.ok(!effectiveRoles.isActiveTeamLead, 'Revoked Team Lead must not be active');
 });
 
-test('Overlapping Team Lead and HR: combined scopes without unrestricted access', async () => {
+test('Overlapping Team Lead and HR: combined HR scope sees all non-Admin events', async () => {
   memDb.public.none(`INSERT INTO iam.userroles (userid, roleid, grantedbyuserid, startsatutc)
     VALUES (4, (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead'), 1, CURRENT_TIMESTAMP - INTERVAL '1 hour')`);
   const tlUrId = memDb.public.one(`SELECT userroleid FROM iam.userroles WHERE userid = 4 AND roleid = (SELECT roleid FROM iam.roles WHERE rolecode = 'TeamLead')`).userroleid;
@@ -875,7 +913,7 @@ test('Overlapping Team Lead and HR: combined scopes without unrestricted access'
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, projectid, correlationid, modulecode, description, actorrolesnapshot) VALUES
     (1, 5, 'Updated', 'Task', 'tsk-7', 2, '00000000-0000-0000-0000-000000000110', 'Tasks', 'Combined HR+Lead non-admin task activity', 'Team_Member'),
     (1, 4, 'Checked In', 'Attendance', 'att-40', NULL, '00000000-0000-0000-0000-000000000111', 'Attendance', 'Combined HR attendance activity', 'Team_Member'),
-    (1, 1, 'Permission Revoked', 'Permission', 'perm-admin-combined', NULL, '00000000-0000-0000-0000-000000000112', 'Permissions', 'Admin action must stay hidden', 'Admin')`);
+    (1, 1, 'Permission Revoked', 'Permission', 'perm-admin-combined', NULL, '00000000-0000-0000-0000-000000000112', 'Permissions', 'Admin action visible to combined HR+Lead', 'Admin')`);
 
   const { findActivities } = await import('./activity.repository.js');
   const { getEffectiveRoles } = await import('./activity.rbac.js');
@@ -889,7 +927,7 @@ test('Overlapping Team Lead and HR: combined scopes without unrestricted access'
 
   assert.ok(descriptions.includes('Combined HR+Lead non-admin task activity'), 'Combined HR+Lead should see all non-admin activity');
   assert.ok(descriptions.includes('Combined HR attendance activity'), 'Combined HR+Lead should see attendance activity');
-  assert.ok(!descriptions.includes('Admin action must stay hidden'), 'Combined HR+Lead must not see Admin-performed events');
+  assert.ok(!descriptions.includes('Admin action visible to combined HR+Lead'), 'Combined HR+Lead must not see Admin-performed events');
 });
 
 // ─── Notification preference change events ('Notifications' module) ────────────
@@ -977,7 +1015,7 @@ test('Notification preference change: HR\'s own change is hidden from Team Membe
   );
 });
 
-test('Notification preference change: Admin\'s own change is visible only to Admin', async () => {
+test('Notification preference change: Admin\'s own change is hidden from HR but visible to Admin', async () => {
   memDb.public.none(`INSERT INTO audit.auditevents (organizationid, actoruserid, actioncode, entitytypecode, entityidtext, correlationid, modulecode, description, actorrolesnapshot)
     VALUES (1, 1, 'Preference Changed', 'Notification Preference', 'notification-preference-dueReminders', '00000000-0000-0000-0000-000000000123', 'Notifications', 'Admin turned off due reminder notifications', 'Admin')`);
 

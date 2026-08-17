@@ -272,6 +272,19 @@
   transform: none;
 }
 
+/* Approval-type pills need explicit light-theme hover contrast; generic translucent hover
+   utilities otherwise inherit a purple foreground over a purple-tinted surface. */
+.light [data-approval-type-filters] button:hover {
+  color: #312e81;
+  background: rgba(139, 92, 246, 0.14);
+  border-color: rgba(109, 40, 217, 0.38);
+}
+
+.light [data-approval-type-filters] button:disabled {
+  color: #64748b;
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .light .text-gradient-neon {
   background: none;
   -webkit-text-fill-color: currentColor;
@@ -581,6 +594,25 @@
 .light [data-kanban] .text-fuchsia-300,
 .light [data-kanban] .text-fuchsia-400 {
   color: #334E3D;
+}
+
+/* Project selector's SELECTED and HOVERED/keyboard-highlighted rows only — `.text-cyan-200`
+   (selected title), `.text-cyan-300/80` (selected code) and `.text-cyan-100` (hovered code) are
+   used nowhere else under [data-kanban], so none of this touches an unselected, non-hovered row
+   (`.text-slate-200`/`.text-slate-400`) — see KanbanView.tsx's ProjectSelect. The hovered row's
+   title (`.text-white`) needs no override: Light Theme already remaps `--shade-white` to a near-
+   black ink color for exactly this reason.
+   --tone-accent-100/200/300 all resolve to pale sage tones in Light Theme with too little
+   contrast against either row's fill to read reliably; a dark neutral reads correctly instead,
+   since the point of a "selected"/"hovered" indicator is legibility, not matching the accent
+   color. Selected/hover background, ring and check icon are untouched. */
+.light [data-kanban] .text-cyan-200 {
+  color: #111827;
+}
+
+.light [data-kanban] .text-cyan-300\/80,
+.light [data-kanban] .text-cyan-100 {
+  color: #4B5563;
 }
 
 .light [data-calendar] .glass-panel {
@@ -1083,6 +1115,28 @@
 [data-project-chats] .project-chat-message.is-mine {
   background: var(--pc-own);
   border-color: var(--pc-border-strong);
+}
+
+[data-project-chats] .project-chat-message.is-deleted {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--pc-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--pc-elevated) 82%, transparent);
+}
+
+[data-project-chats] .project-chat-deleted-label {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 42%, transparent);
+  color: #fbbf24;
+}
+
+[data-project-chats] .project-chat-attachment-download {
+  color: var(--pc-secondary);
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+[data-project-chats] .project-chat-attachment-download:hover {
+  background: var(--pc-hover);
+  color: var(--pc-text);
 }
 
 [data-project-chats] .project-chat-initials {

@@ -1,11 +1,11 @@
 import * as repo from './notification.repository.js';
-import { API_TO_DB_PRIORITY, rowToNotificationDTO } from './notification.mapper.js';
+import { API_TO_DB_PRIORITY, deriveLinkRoute, rowToNotificationDTO } from './notification.mapper.js';
 import { toUserPk, fromUserPk } from '../utils/idMapping.js';
 import { processEmailCandidates } from './notification.email.js';
 import { getSupabaseClient } from '../db/pool.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
-import { actorDisplayName } from '../utils/actorDisplay.js';
+import { actorDisplayName, normalizeActorMessage } from '../utils/actorDisplay.js';
 import {
   NotificationCategory,
   NotificationDTO,
@@ -164,6 +164,40 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
   if (recipientIds.length === 0) return [];
   event = { ...event, recipientIds };
 
+  // Centralized actor-name repair: every module in the app publishes through this one function
+  // (see the doc comment above), so sanitizing here — rather than auditing and fixing every
+  // individual call site in task.service.ts/project.service.ts/AppContext.tsx/etc. — guarantees
+  // no notification can ever persist with a raw "usr-<n>" id or the legacy "Someone" placeholder
+  // baked into its text, regardless of what the calling module happened to construct (e.g. a
+  // userStore cache miss at the moment actorDisplayName was called there — see its own comment).
+  // Applied to title/message/detail and every per-recipient override, before anything is written,
+  // so it also protects the in-memory DTOs this function returns (used for the immediate API
+  // response and the live Realtime broadcast), not only what a later GET /notifications re-fetch
+  // would show via notification.mapper.ts's identical read-time repair.
+  const resolvedActorName = actorDisplayName(event.actorId);
+  event = {
+    ...event,
+    title: normalizeActorMessage(event.title, resolvedActorName),
+    message: normalizeActorMessage(event.message, resolvedActorName),
+    detail: event.detail ? normalizeActorMessage(event.detail, resolvedActorName) : event.detail,
+    recipientMessages: event.recipientMessages
+      ? Object.fromEntries(
+          Object.entries(event.recipientMessages).map(([id, text]) => [
+            id,
+            normalizeActorMessage(text, resolvedActorName)
+          ])
+        )
+      : event.recipientMessages,
+    recipientDetails: event.recipientDetails
+      ? Object.fromEntries(
+          Object.entries(event.recipientDetails).map(([id, text]) => [
+            id,
+            normalizeActorMessage(text, resolvedActorName)
+          ])
+        )
+      : event.recipientDetails
+  };
+
   const suppressedUserIds = new Set<number>();
   for (const recipientPk of deliverablePks) {
     if (await isSuppressedForRecipient(recipientPk, event.type)) {
@@ -171,29 +205,30 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
     }
   }
 
-  const eventWithPerRecipientMessage = (recipientId: string): NotificationEvent => ({
-    ...event,
-    message: event.recipientMessages?.[recipientId] ?? event.message
-  });
-
-  // Per-recipient message text (see frontend's identical `recipientMessages` pattern) means
-  // each recipient technically gets their own Notification row rather than sharing one — the
-  // schema has no separate "message override" column, and SafePreviewText is per-Notification,
-  // not per-UserNotification. This trades a little storage for correctness (never showing the
-  // wrong pronoun to the wrong reader), consistent with why the frontend feature was built this
-  // way in the first place (see docs/Notification_Module_Guide.md's message-personalization
-  // section).
+  // Per-recipient message/detail text (see frontend's identical `recipientMessages` pattern)
+  // means each distinct wording technically gets its own Notification row rather than every
+  // recipient sharing one — the schema has no per-UserNotification override column, and
+  // SafePreviewText/DetailText are per-Notification. This trades a little storage for
+  // correctness (never showing the wrong pronoun to the wrong reader), consistent with why the
+  // frontend feature was built this way in the first place (see
+  // docs/Notification_Module_Guide.md's message-personalization section).
   const created: NotificationDTO[] = [];
-  const recipientsByMessage = new Map<string, string[]>();
+  const linkRoute = deriveLinkRoute(typeMeta.categoryCode, event.type);
+  const buckets = new Map<string, { message: string; detail?: string; recipientIds: string[] }>();
   for (const recipientId of event.recipientIds) {
-    const message = eventWithPerRecipientMessage(recipientId).message;
-    const bucket = recipientsByMessage.get(message) || [];
-    bucket.push(recipientId);
-    recipientsByMessage.set(message, bucket);
+    const message = event.recipientMessages?.[recipientId] ?? event.message;
+    const detail = event.recipientDetails?.[recipientId] ?? event.detail;
+    // Keyed on both parts so a shared preview with differing detail (or vice versa) never
+    // collapses two genuinely different notifications into one row. The separator is a
+    // delimiter string that cannot appear in either half.
+    const key = `${message}||~||${detail ?? ''}`;
+    const bucket = buckets.get(key) || { message, detail, recipientIds: [] };
+    bucket.recipientIds.push(recipientId);
+    buckets.set(key, bucket);
   }
 
-  for (const [message, recipientIds] of recipientsByMessage) {
-    const scopedEvent: NotificationEvent = { ...event, message, recipientIds };
+  for (const { message, detail, recipientIds } of buckets.values()) {
+    const scopedEvent: NotificationEvent = { ...event, message, detail, recipientIds };
     const result = await repo.insertNotificationWithFanout(
       scopedEvent,
       typeMeta.notificationTypeId,
@@ -209,12 +244,18 @@ export const publishEvent = async (event: NotificationEvent): Promise<Notificati
         actorId: event.actorId,
         title: event.title,
         message,
+        detail,
+        metadata: event.metadata,
         type: event.type,
         priority: priority === 'Normal' ? 'Medium' : (priority as NotificationDTO['priority']),
         read: false,
         timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
         createdAt: new Date().toISOString(),
-        linkRoute: 'notifications',
+        // Derived from the same lookup findByUser's mapper uses, so a notification that arrives
+        // live (Supabase broadcast / the publisher's own response) deep-links to exactly the same
+        // tab it will after a refetch. This used to be hardcoded to 'notifications', which left a
+        // just-published notification inert until the page was reloaded.
+        linkRoute,
         projectId: event.projectId,
         taskId: event.taskId
       });

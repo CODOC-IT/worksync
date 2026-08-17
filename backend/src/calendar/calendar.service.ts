@@ -136,11 +136,12 @@ const assertValidDepartments = async (departmentIds: number[]): Promise<void> =>
   }
 };
 
-// Server-side enforcement of "Admin/HR must never appear in the Specific Users audience" -- the
-// frontend hiding them from the picker is the UX layer only, mirrors
-// project.service.ts's assertEligibleAssignee exactly (active-account + role-eligibility check
-// against userStore, not just the request body).
-const assertEligibleAudienceUsers = async (userIds: string[]): Promise<void> => {
+// Server-side enforcement of who can appear in the Specific Users audience. HR may target any
+// employee (active, non-Admin, non-HR); Admin may additionally target HR staff (so Admin can give
+// holidays to HR), but never other Admins. Mirrors project.service.ts's assertEligibleAssignee
+// exactly (active-account + role-eligibility check against userStore, not just the request body);
+// the frontend hiding users from the picker is the UX layer only.
+const assertEligibleAudienceUsers = async (userIds: string[], actorIsAdmin: boolean): Promise<void> => {
   if (userIds.length === 0) return;
   const allUsers = await userStore.getAllUsers();
   for (const userId of userIds) {
@@ -149,22 +150,23 @@ const assertEligibleAudienceUsers = async (userIds: string[]): Promise<void> => 
     if (target.status === 'inactive') {
       throw new CalendarValidationError(`${target.name} is a deactivated account and cannot be part of a holiday's audience.`);
     }
-    if (target.role === 'Admin' || target.role === 'HR') {
+    if (target.role === 'Admin' || (target.role === 'HR' && !actorIsAdmin)) {
       throw new CalendarValidationError(`${target.name} cannot be selected as a specific holiday audience member.`);
     }
   }
 };
 
-// Uses effectiveRoles.ts (backend/src/auth/effectiveRoles.ts) rather than a direct
-// `role === 'HR'` string comparison, per the same rule Attendance/Activity already follow:
-// isActiveHR is computed as `!isAdmin && ...` there, so an Admin can never satisfy this check --
-// including an Admin who also happens to hold an HR grant -- Admin access is excluded by
-// construction, not by an extra check layered on here.
-const assertIsHR = async (actorId: string): Promise<void> => {
+// Uses effectiveRoles.ts (backend/src/auth/effectiveRoles.ts) rather than a direct string
+// comparison, per the same rule Attendance/Activity already follow. Both Admin and HR can manage
+// holidays: HR manages them for the whole org's members, and Admin is always permitted (including
+// assigning holidays to HR staff). An Admin can never satisfy isActiveHR (it's computed as
+// `!isAdmin && ...`), so an explicit `isAdmin || isActiveHR` check is required to include Admin.
+const assertCanManageHolidays = async (actorId: string): Promise<boolean> => {
   const roles = await getEffectiveRoles(actorId);
-  if (!roles.isActiveHR) {
-    throw new CalendarAuthorizationError('Only HR can manage holidays.');
+  if (!roles.isAdmin && !roles.isActiveHR) {
+    throw new CalendarAuthorizationError('Only Admin or HR can manage holidays.');
   }
+  return roles.isAdmin;
 };
 
 const parseHolidayId = (holidayId: string): number => {
@@ -190,12 +192,12 @@ export interface DepartmentOptionDTO {
 }
 
 // Every active department in the org, gated the same way create/update/delete already are
-// (HR-only, via assertIsHR) -- only HR manages holidays, so only HR needs this list. Deliberately
+// (Admin or HR, via assertCanManageHolidays) -- holiday managers need this list. Deliberately
 // separate from GET /api/accounts/departments (see calendar.repository.ts's
 // findAllActiveDepartments) -- that endpoint's HR-permitted-hierarchy scoping is specific to
 // member-provisioning authorization and must not limit which departments a holiday can target.
 export const listDepartmentsForHolidayAudience = async (actorId: string): Promise<DepartmentOptionDTO[]> => {
-  await assertIsHR(actorId);
+  await assertCanManageHolidays(actorId);
   const rows = await repo.findAllActiveDepartments();
   return rows.map((row) => ({ id: row.departmentid, name: row.departmentname }));
 };
@@ -221,8 +223,8 @@ export const listHolidays = async (viewerId: string, viewerRole: string): Promis
 
 // Recipients for the 'holiday_created' notification: the audience itself, plus every Admin
 // unconditionally (requirement: "Admin must always receive a notification"), deduped, minus the
-// actor. createHoliday is HR-only (assertIsHR), so actorId can never itself be an Admin id here --
-// the exclude-actor step can never accidentally drop an Admin recipient.
+// actor. createHoliday is Admin-or-HR (assertCanManageHolidays), so actorId can itself be an
+// Admin id here -- the exclude-actor step never drops an Admin recipient incorrectly.
 const resolveHolidayAudienceRecipients = async (dto: HolidayDTO, actorId: string): Promise<string[]> => {
   let audiencePks: number[];
   if (dto.audienceType === 'Everyone') {
@@ -271,7 +273,7 @@ export const createHoliday = async (
   audience: HolidayAudienceInput,
   actorId: string
 ): Promise<HolidayDTO> => {
-  await assertIsHR(actorId);
+  const actorIsAdmin = await assertCanManageHolidays(actorId);
   if (!name?.trim()) throw new CalendarValidationError('Holiday name is required.');
   const dateError = validateHolidayDate(date, await repo.getBusinessDate());
   if (dateError) throw new CalendarValidationError(dateError);
@@ -279,7 +281,7 @@ export const createHoliday = async (
   const audienceError = validateAudience(audience.audienceType, audience.departmentIds, audience.userIds);
   if (audienceError) throw new CalendarValidationError(audienceError);
   await assertValidDepartments(audience.departmentIds);
-  await assertEligibleAudienceUsers(audience.userIds);
+  await assertEligibleAudienceUsers(audience.userIds, actorIsAdmin);
 
   const audienceType = audience.audienceType as repo.HolidayAudienceType;
   const departmentPks = audience.departmentIds;
@@ -314,7 +316,7 @@ export const updateHoliday = async (
   updates: { name?: string; date?: string; isRecurringAnnual?: boolean; audience?: HolidayAudienceInput },
   actorId: string
 ): Promise<HolidayDTO> => {
-  await assertIsHR(actorId);
+  const actorIsAdmin = await assertCanManageHolidays(actorId);
   const id = parseHolidayId(holidayId);
   const existing = await repo.findHolidayById(id);
   if (!existing) throw new CalendarNotFoundError('Holiday not found.');
@@ -353,7 +355,7 @@ export const updateHoliday = async (
     );
     if (audienceError) throw new CalendarValidationError(audienceError);
     await assertValidDepartments(updates.audience.departmentIds);
-    await assertEligibleAudienceUsers(updates.audience.userIds);
+    await assertEligibleAudienceUsers(updates.audience.userIds, actorIsAdmin);
 
     const nextAudienceType = updates.audience.audienceType as repo.HolidayAudienceType;
     const nextDepartmentIds = updates.audience.departmentIds;
@@ -395,7 +397,7 @@ export const updateHoliday = async (
 };
 
 export const deleteHoliday = async (holidayId: string, actorId: string): Promise<void> => {
-  await assertIsHR(actorId);
+  await assertCanManageHolidays(actorId);
   const id = parseHolidayId(holidayId);
   const existing = await repo.findHolidayById(id);
   const deleted = await repo.deleteHoliday(id);

@@ -4,20 +4,39 @@ import { toUserPk } from '../utils/idMapping.js';
 import { query } from '../db/pool.js';
 import * as repo from '../reports/reports.repository.js';
 import * as attendanceRepo from '../attendance/attendance.repository.js';
-import { attendanceRole, canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
+import { canUsePersonalAttendance, getEffectiveRoles } from '../auth/effectiveRoles.js';
 import { calculateAttendanceOutcome } from '../attendance/attendancePolicy.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
 import { userStore } from '../store/userStore.js';
 import { materializeAbsences } from '../attendance/absenceMaterialization.js';
-import { DEFAULT_BUSINESS_TIME_ZONE } from '../attendance/businessTime.js';
+import { DEFAULT_BUSINESS_TIME_ZONE, formatBusinessTime } from '../attendance/businessTime.js';
+import { resolveAttendanceViewerRole, visibleAttendanceUserIds } from '../attendance/attendanceAccess.js';
+import {
+  DEFAULT_SHIFT_BREAK_MINUTES,
+  DEFAULT_SHIFT_WINDOW_MINUTES,
+  SHIFT_TIME_PATTERN,
+  scheduleNetMinutes,
+  scheduleWindowMinutes
+} from '../attendance/workingSchedule.js';
 
 const router = Router();
 
 const ensureBreakStorage = async (): Promise<void> => {
   await query(`
     INSERT INTO hr.attendancestatuses (statuscode, statusname, countsaspresent)
-    VALUES ('In Session', 'In Session', FALSE)
+    VALUES ('In Session', 'In Session', FALSE),
+           ('Short Hours', 'Short Hours', TRUE)
     ON CONFLICT (statuscode) DO NOTHING
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS public.worksync_active_attendance_breaks (
+      user_id TEXT PRIMARY KEY,
+      work_date DATE NOT NULL,
+      break_id TEXT NOT NULL,
+      break_type TEXT NOT NULL,
+      started_at_utc TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
   await query(`
     CREATE TABLE IF NOT EXISTS public.worksync_attendance_breaks (
@@ -57,8 +76,9 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
     }
 
     const userPk = toUserPk(req.user.id);
-    const role = attendanceRole(await getEffectiveRoles(req.user.id));
-    if (role !== 'Member') await materializeAbsences(from, to);
+    const effectiveRoles = await getEffectiveRoles(req.user.id);
+    const role = resolveAttendanceViewerRole(req.user.role, effectiveRoles);
+    await materializeAbsences(from, to);
     let visibleUserPks: number[];
     if (role === 'Member') {
       visibleUserPks = [userPk];
@@ -80,8 +100,11 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
             )`,
         [userPk]
       );
-      visibleUserPks = visible.rows.map((row) => row.userid);
-      if (role === 'HR') visibleUserPks.push(userPk);
+      visibleUserPks = visibleAttendanceUserIds(
+        userPk,
+        role,
+        visible.rows.map((row) => row.userid)
+      );
     }
     const records = visibleUserPks.length
       ? await repo.getAttendanceRecords(from, to, visibleUserPks)
@@ -101,12 +124,40 @@ router.get('/', authenticateJWT, async (req: AuthenticatedRequest, res: Response
       ])
     );
 
+    const activeBreakResult = await query<{
+      break_id: string;
+      break_type: string;
+      started_at_utc: string | Date;
+      work_date: string | Date;
+    }>(
+      `SELECT active_break.break_id, active_break.break_type,
+              active_break.started_at_utc, active_break.work_date
+         FROM public.worksync_active_attendance_breaks active_break
+         JOIN hr.attendancerecords attendance
+           ON attendance.userid = $2
+          AND attendance.workdate = active_break.work_date
+          AND attendance.actualcheckinatutc IS NOT NULL
+          AND attendance.actualcheckoutatutc IS NULL
+        WHERE active_break.user_id = $1`,
+      [req.user.id, userPk]
+    );
+    const persistedActiveBreak = activeBreakResult.rows[0];
+
     res.json({
       success: true,
       data: records.map((record) => ({
         ...record,
         breaks: breaksByDate.get(`${record.userId}:${record.date}`) || []
-      }))
+      })),
+      activeBreak: persistedActiveBreak
+        ? {
+            id: persistedActiveBreak.break_id,
+            userId: req.user.id,
+            workDate: new Date(persistedActiveBreak.work_date).toISOString().split('T')[0],
+            breakType: persistedActiveBreak.break_type,
+            startedAtUtc: new Date(persistedActiveBreak.started_at_utc).toISOString()
+          }
+        : null
     });
   } catch (err: any) {
     console.error('[Attendance Error]', err);
@@ -121,99 +172,7 @@ router.put('/:userId/:date', authenticateJWT, async (req: AuthenticatedRequest, 
       res.status(401).json({ success: false, message: 'Not authenticated.' });
       return;
     }
-    res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
-    return;
-    /*
-    const effectiveRoles = await getEffectiveRoles(req.user.id);
-    if (!effectiveRoles.isAdmin) {
-      res.status(403).json({ success: false, message: 'Only Admin can directly edit attendance.' });
-      return;
-    }
-    const { checkIn, checkOut, breaks, reason } = req.body as {
-      checkIn?: string;
-      checkOut?: string;
-      breaks?: unknown[];
-      reason?: string;
-    };
-    const cleanReason = typeof reason === 'string' ? reason.trim() : '';
-    if (!cleanReason) {
-      res.status(400).json({ success: false, message: 'A correction reason is required.' });
-      return;
-    }
-    if (req.params.userId === req.user.id) {
-      res.status(403).json({ success: false, message: 'Admins do not have personal attendance records.' });
-      return;
-    }
-    const targetAdmin = await query(
-      `SELECT 1
-         FROM iam.userroles ur
-         JOIN iam.roles r ON r.roleid = ur.roleid
-        WHERE ur.userid = $1 AND r.rolecode = 'Administrator'
-          AND ur.revokedatutc IS NULL AND ur.startsatutc <= now()
-          AND (ur.endsatutc IS NULL OR ur.endsatutc > now())
-        LIMIT 1`,
-      [toUserPk(req.params.userId)]
-    );
-    if (targetAdmin.rowCount) {
-      res.status(403).json({ success: false, message: 'Administrators do not have attendance records.' });
-      return;
-    }
-    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (!checkIn || !timePattern.test(checkIn) || (checkOut && !timePattern.test(checkOut))) {
-      res.status(400).json({ success: false, message: 'Attendance times must use HH:mm format.' });
-      return;
-    }
-    if (checkOut && checkOut <= checkIn) {
-      res.status(400).json({ success: false, message: 'Check-out must be later than check-in.' });
-      return;
-    }
-    const updated = await query(
-      `UPDATE hr.attendancerecords
-          SET actualcheckinatutc = ($2::date + $3::time) AT TIME ZONE 'UTC',
-              actualcheckoutatutc = CASE WHEN NULLIF($4, '') IS NULL THEN NULL
-                ELSE ($2::date + $4::time) AT TIME ZONE 'UTC' END,
-              workingminutes = CASE WHEN NULLIF($4, '') IS NULL THEN 0
-                ELSE GREATEST(0, EXTRACT(EPOCH FROM (
-                  (($2::date + $4::time) AT TIME ZONE 'UTC') -
-                  (($2::date + $3::time) AT TIME ZONE 'UTC')
-                )) / 60)::int END,
-              sourcecode = 'HRCorrection',
-              updatedatutc = CURRENT_TIMESTAMP
-        WHERE userid = $1 AND workdate = $2::date`,
-      [toUserPk(req.params.userId), req.params.date, checkIn, checkOut || '']
-    );
-    if (!updated.rowCount) {
-      res.status(404).json({ success: false, message: 'Attendance record not found.' });
-      return;
-    }
-    await ensureBreakStorage();
-    await query(
-      `INSERT INTO public.worksync_attendance_breaks (user_id, work_date, breaks, updated_at)
-       VALUES ($1, $2::date, $3::jsonb, NOW())
-       ON CONFLICT (user_id, work_date) DO UPDATE SET breaks = EXCLUDED.breaks, updated_at = NOW()`,
-      [req.params.userId, req.params.date, JSON.stringify(Array.isArray(breaks) ? breaks : [])]
-    );
-    await recordActivity({
-      actorId: req.user.id,
-      actorEmail: req.user.email,
-      actorRole: 'Admin',
-      affectedUserId: req.params.userId,
-      action: 'Corrected',
-      module: 'Attendance',
-      entityType: 'Attendance',
-      entityId: `${req.params.userId}:${req.params.date}`,
-      entityName: `Attendance ${req.params.date}`,
-      description: `Administrator corrected attendance for ${req.params.userId}.`,
-      reason: cleanReason,
-      source: 'API',
-      important: true,
-      linkRoute: 'attendance',
-      changes: [
-        { field: 'checkIn', previousValue: null, newValue: checkIn },
-        { field: 'checkOut', previousValue: null, newValue: checkOut || null },
-      ],
-    });
-    res.json({ success: true, message: 'Attendance record updated.' }); */
+res.status(403).json({ success: false, message: 'Attendance records are view-only for Administrators.' });
   } catch (err: any) {
     console.error('[Attendance Update Error]', err);
     res.status(500).json({ success: false, message: 'Failed to update attendance record.' });
@@ -341,11 +300,9 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
     }>(
       `SELECT ar.actualcheckinatutc,
               CASE WHEN wsd.starttime IS NULL THEN NULL
-                   ELSE (ar.workdate + wsd.starttime) AT TIME ZONE 'UTC' END AS scheduledstartatutc,
-              GREATEST(1, COALESCE(
-                EXTRACT(EPOCH FROM (wsd.endtime - wsd.starttime)) / 60 - wsd.breakminutes,
-                480
-              ))::int AS scheduledminutes,
+                   ELSE (ar.workdate + wsd.starttime) AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $4)
+                   END AS scheduledstartatutc,
+              GREATEST(1, COALESCE(hr.schedule_net_minutes(wsd.starttime, wsd.endtime, wsd.breakminutes), 1))::int AS scheduledminutes,
               COALESCE(ws.graceminutes, 0)::int AS graceminutes,
               COALESCE((
                 SELECT SUM(GREATEST(0, (item->>'durationSeconds')::numeric))
@@ -366,8 +323,14 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
                    AND wr.details->>'leaveType' = 'Half Day Leave'
                  ORDER BY wr.decided_at DESC NULLS LAST LIMIT 1
               ), 'Second Half') AS approvedleaveperiod,
-              (ar.workdate + TIME '12:00') AT TIME ZONE 'UTC' AS halfdayboundaryatutc
+              CASE WHEN wsd.starttime IS NULL THEN NULL
+                   ELSE ((ar.workdate + wsd.starttime) AT TIME ZONE COALESCE(profile.timezoneid, o.timezoneid, $4))
+                        + (hr.schedule_window_minutes(wsd.starttime, wsd.endtime) / 2.0) * interval '1 minute'
+                   END AS halfdayboundaryatutc
          FROM hr.attendancerecords ar
+         JOIN iam.users u ON u.userid = ar.userid
+         JOIN org.organizations o ON o.organizationid = u.organizationid
+         LEFT JOIN iam.userprofiles profile ON profile.userid = u.userid
          LEFT JOIN hr.userworkscheduleassignments uwa ON uwa.userid = ar.userid
           AND uwa.effectivefrom <= ar.workdate
           AND (uwa.effectiveto IS NULL OR uwa.effectiveto >= ar.workdate)
@@ -375,7 +338,7 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
          LEFT JOIN hr.workscheduledays wsd ON wsd.workscheduleid = ws.workscheduleid
           AND wsd.isoweekday = EXTRACT(ISODOW FROM ar.workdate)
         WHERE ar.attendancerecordid = $1`,
-      [recordId, workDate, req.user.id]
+      [recordId, workDate, req.user.id, DEFAULT_BUSINESS_TIME_ZONE]
     );
     const row = policy.rows[0];
     if (!row?.actualcheckinatutc) {
@@ -405,6 +368,8 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
       outcome.lateMinutes
     );
     await attendanceRepo.insertAttendancePunch(recordId, 'CheckOut', checkOutUtc, userPk);
+    await ensureBreakStorage();
+    await query('DELETE FROM public.worksync_active_attendance_breaks WHERE user_id = $1', [req.user.id]);
 
     const actorName = userStore.findById(req.user.id)?.name || req.user.email;
 
@@ -436,6 +401,48 @@ router.post('/check-out', authenticateJWT, async (req: AuthenticatedRequest, res
   }
 });
 
+router.post('/breaks/start', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user || !canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
+      res.status(403).json({ success: false, message: 'Personal attendance is unavailable.' });
+      return;
+    }
+    const { workDate, id, type, startedAtUtc } = req.body as Record<string, string>;
+    const started = new Date(startedAtUtc);
+    if (!workDate || !id || !Number.isFinite(started.getTime())) {
+      res.status(400).json({ success: false, message: 'Valid active-break data is required.' });
+      return;
+    }
+    const activeAttendance = await query(
+      `SELECT 1 FROM hr.attendancerecords
+        WHERE userid = $1 AND workdate = $2::date
+          AND actualcheckinatutc IS NOT NULL AND actualcheckoutatutc IS NULL`,
+      [toUserPk(req.user.id), workDate]
+    );
+    if (!activeAttendance.rowCount) {
+      res.status(409).json({ success: false, message: 'Breaks require an active attendance session.' });
+      return;
+    }
+    await ensureBreakStorage();
+    await query(
+      `INSERT INTO public.worksync_active_attendance_breaks
+         (user_id, work_date, break_id, break_type, started_at_utc, updated_at)
+       VALUES ($1, $2::date, $3, $4, $5::timestamptz, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         work_date = EXCLUDED.work_date,
+         break_id = EXCLUDED.break_id,
+         break_type = EXCLUDED.break_type,
+         started_at_utc = EXCLUDED.started_at_utc,
+         updated_at = NOW()`,
+      [req.user.id, workDate, id, type || 'Other', started.toISOString()]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Attendance Break Start Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to start break.' });
+  }
+});
+
 router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     if (!req.user || !canUsePersonalAttendance(await getEffectiveRoles(req.user.id))) {
@@ -461,10 +468,26 @@ router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: R
     }
     await ensureBreakStorage();
     const durationSeconds = Math.max(0, Math.floor((ended.getTime() - started.getTime()) / 1000));
+    const existingBreakSeconds = await query<{ total: number }>(
+      `SELECT COALESCE(SUM(GREATEST(0, (item->>'durationSeconds')::numeric)), 0)::int AS total
+         FROM public.worksync_attendance_breaks wab,
+              jsonb_array_elements(wab.breaks) item
+        WHERE wab.user_id = $1 AND wab.work_date = $2::date`,
+      [req.user.id, workDate]
+    );
+    const cumulativeBreakSeconds =
+      (existingBreakSeconds.rows[0]?.total || 0) + durationSeconds;
+    if (cumulativeBreakSeconds > DEFAULT_SHIFT_BREAK_MINUTES * 60) {
+      res.status(400).json({
+        success: false,
+        message: `Cumulative break time cannot exceed ${DEFAULT_SHIFT_BREAK_MINUTES} minutes (${DEFAULT_SHIFT_BREAK_MINUTES * 60} seconds) per shift.`
+      });
+      return;
+    }
     const savedBreak = {
       id, type: type || 'Other',
-      startTime: started.toISOString().slice(11, 16),
-      endTime: ended.toISOString().slice(11, 16),
+      startTime: formatBusinessTime(started),
+      endTime: formatBusinessTime(ended),
       startedAtUtc: started.toISOString(), endedAtUtc: ended.toISOString(),
       durationSeconds, durationMinutes: durationSeconds / 60
     };
@@ -475,10 +498,234 @@ router.post('/breaks', authenticateJWT, async (req: AuthenticatedRequest, res: R
        SET breaks = public.worksync_attendance_breaks.breaks || EXCLUDED.breaks, updated_at = NOW()`,
       [req.user.id, workDate, JSON.stringify(savedBreak)]
     );
+    await query(
+      'DELETE FROM public.worksync_active_attendance_breaks WHERE user_id = $1 AND break_id = $2',
+      [req.user.id, id]
+    );
     res.json({ success: true, data: savedBreak });
   } catch (err: any) {
     console.error('[Attendance Break Error]', err);
     res.status(500).json({ success: false, message: 'Failed to persist break.' });
+  }
+});
+
+// Resolves the caller's organization, its time zone and its active default working schedule
+// into the response shape shared by GET/PUT /api/attendance/schedule. Returns null when the
+// schedule configuration is missing so callers can decide how to surface it.
+const loadWorkingSchedule = async (userPk: number) => {
+  const orgResult = await query<{ organizationid: number; timezone: string }>(
+    `SELECT u.organizationid, COALESCE(o.timezoneid, $2) AS timezone
+       FROM iam.users u
+       JOIN org.organizations o ON o.organizationid = u.organizationid
+      WHERE u.userid = $1`,
+    [userPk, DEFAULT_BUSINESS_TIME_ZONE]
+  );
+  const org = orgResult.rows[0];
+  if (!org) return null;
+
+  const scheduleResult = await query<{
+    workscheduleid: number;
+    schedulename: string;
+    graceminutes: number;
+  }>(
+    `SELECT ws.workscheduleid, ws.schedulename, ws.graceminutes
+       FROM hr.workschedules ws
+      WHERE ws.organizationid = $1 AND ws.isdefault
+      ORDER BY ws.effectivefrom DESC
+      LIMIT 1`,
+    [org.organizationid]
+  );
+  const schedule = scheduleResult.rows[0];
+  if (!schedule) return null;
+
+  const daysResult = await query<{
+    isoweekday: number;
+    isworkingday: boolean;
+    starttime: string | null;
+    endtime: string | null;
+    breakminutes: number;
+  }>(
+    `SELECT wsd.isoweekday, wsd.isworkingday, wsd.starttime::text AS starttime,
+            wsd.endtime::text AS endtime, wsd.breakminutes
+       FROM hr.workscheduledays wsd
+      WHERE wsd.workscheduleid = $1
+      ORDER BY wsd.isoweekday`,
+    [schedule.workscheduleid]
+  );
+  const days = daysResult.rows;
+  const workingDay = days.find((day) => day.isworkingday);
+  const startTime = workingDay?.starttime || null;
+  const endTime = workingDay?.endtime || null;
+  const breakMinutes = workingDay?.breakminutes ?? DEFAULT_SHIFT_BREAK_MINUTES;
+
+  return {
+    workScheduleId: schedule.workscheduleid,
+    scheduleName: schedule.schedulename,
+    graceMinutes: schedule.graceminutes,
+    timeZone: org.timezone,
+    startTime,
+    endTime,
+    breakMinutes,
+    windowMinutes: scheduleWindowMinutes(startTime, endTime) ?? DEFAULT_SHIFT_WINDOW_MINUTES,
+    netMinutes: scheduleNetMinutes(startTime, endTime, breakMinutes),
+    days: days.map((day) => ({
+      isoWeekday: day.isoweekday,
+      isWorkingDay: day.isworkingday,
+      startTime: day.starttime,
+      endTime: day.endtime,
+      breakMinutes: day.breakminutes
+    }))
+  };
+};
+
+// GET /api/attendance/schedule — read the organization working schedule. Available to every
+// authenticated user (the shift start drives the check-in late flag client-side), while only
+// Administrators may change it via PUT below. The 8h window / 60m break / 7h net figures are
+// always derived from the same rules used by checkout and corrections.
+router.get('/schedule', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+    const schedule = await loadWorkingSchedule(toUserPk(req.user.id));
+    if (!schedule) {
+      res.status(404).json({ success: false, message: 'No working schedule is configured for your organization.' });
+      return;
+    }
+    res.json({ success: true, data: schedule });
+  } catch (err: any) {
+    console.error('[Attendance Schedule Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to load the working schedule.' });
+  }
+});
+
+// PUT /api/attendance/schedule — Admin configures the shift start/end (HH:mm). The 8-hour
+// window is enforced, the break allowance is fixed server-side at 60 minutes and the change
+// is written to the audit log.
+router.put('/schedule', authenticateJWT, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Not authenticated.' });
+      return;
+    }
+    if (!(await getEffectiveRoles(req.user.id)).isAdmin) {
+      res.status(403).json({ success: false, message: 'Only Administrators can update the working schedule.' });
+      return;
+    }
+    const { startTime, endTime } = req.body as { startTime?: unknown; endTime?: unknown };
+    if (
+      typeof startTime !== 'string' ||
+      typeof endTime !== 'string' ||
+      !SHIFT_TIME_PATTERN.test(startTime) ||
+      !SHIFT_TIME_PATTERN.test(endTime)
+    ) {
+      res.status(400).json({ success: false, message: 'Shift start and end times are required in HH:mm format.' });
+      return;
+    }
+    if (startTime === endTime) {
+      res.status(400).json({ success: false, message: 'Shift start and end times must differ.' });
+      return;
+    }
+    if (scheduleWindowMinutes(startTime, endTime) !== DEFAULT_SHIFT_WINDOW_MINUTES) {
+      res.status(400).json({
+        success: false,
+        message: `Shift length must be exactly ${DEFAULT_SHIFT_WINDOW_MINUTES / 60} hours (${DEFAULT_SHIFT_WINDOW_MINUTES} minutes).`
+      });
+      return;
+    }
+
+    const userPk = toUserPk(req.user.id);
+    const orgResult = await query<{ organizationid: number }>(
+      `SELECT u.organizationid
+         FROM iam.users u
+        WHERE u.userid = $1`,
+      [userPk]
+    );
+    const organizationId = orgResult.rows[0]?.organizationid;
+    if (!organizationId) {
+      res.status(404).json({ success: false, message: 'Organization was not found.' });
+      return;
+    }
+
+    const existingResult = await query<{
+      workscheduleid: number;
+      starttime: string | null;
+      endtime: string | null;
+    }>(
+      `SELECT ws.workscheduleid, monday.starttime::text AS starttime, monday.endtime::text AS endtime
+         FROM hr.workschedules ws
+         LEFT JOIN LATERAL (
+           SELECT wsd.starttime, wsd.endtime
+             FROM hr.workscheduledays wsd
+            WHERE wsd.workscheduleid = ws.workscheduleid AND wsd.isoweekday = 1
+         ) monday ON TRUE
+        WHERE ws.organizationid = $1 AND ws.isdefault
+        ORDER BY ws.effectivefrom DESC
+        LIMIT 1`,
+      [organizationId]
+    );
+    const existing = existingResult.rows[0];
+    let workScheduleId = existing?.workscheduleid;
+    if (!workScheduleId) {
+      const created = await query<{ workscheduleid: number }>(
+        `INSERT INTO hr.workschedules
+           (organizationid, schedulename, effectivefrom, graceminutes, isdefault, createdbyuserid)
+         VALUES ($1, 'Default Attendance Work Schedule', CURRENT_DATE, 0, TRUE, $2)
+         RETURNING workscheduleid`,
+        [organizationId, userPk]
+      );
+      workScheduleId = created.rows[0]?.workscheduleid;
+    }
+    if (!workScheduleId) {
+      res.status(500).json({ success: false, message: 'Failed to resolve the working schedule.' });
+      return;
+    }
+
+    await query(
+      `INSERT INTO hr.workscheduledays
+         (workscheduleid, isoweekday, isworkingday, starttime, endtime, breakminutes)
+       VALUES
+         ($1, 1, TRUE, $2::time, $3::time, 60),
+         ($1, 2, TRUE, $2::time, $3::time, 60),
+         ($1, 3, TRUE, $2::time, $3::time, 60),
+         ($1, 4, TRUE, $2::time, $3::time, 60),
+         ($1, 5, TRUE, $2::time, $3::time, 60),
+         ($1, 6, FALSE, NULL, NULL, 0),
+         ($1, 7, FALSE, NULL, NULL, 0)
+       ON CONFLICT (workscheduleid, isoweekday) DO UPDATE SET
+         isworkingday = EXCLUDED.isworkingday,
+         starttime = EXCLUDED.starttime,
+         endtime = EXCLUDED.endtime,
+         breakminutes = EXCLUDED.breakminutes`,
+      [workScheduleId, startTime, endTime]
+    );
+
+    const actorName = userStore.findById(req.user.id)?.name || req.user.email;
+    recordActivitySafe({
+      actorId: req.user.id,
+      actorName,
+      actorEmail: req.user.email,
+      actorRole: req.user.role,
+      action: 'Updated Working Schedule',
+      module: 'Attendance',
+      entityType: 'Attendance',
+      entityId: String(workScheduleId),
+      entityName: 'Default Attendance Work Schedule',
+      description: `${actorName} updated the working schedule shift from ${existing?.starttime || startTime} to ${startTime}${existing?.endtime ? ` and ${existing.endtime} to ${endTime}` : ''}.`,
+      source: 'Web',
+      linkRoute: 'attendance',
+      changes: [
+        { field: 'startTime', previousValue: existing?.starttime || null, newValue: startTime },
+        { field: 'endTime', previousValue: existing?.endtime || null, newValue: endTime },
+      ],
+    });
+
+    const schedule = await loadWorkingSchedule(userPk);
+    res.json({ success: true, data: schedule });
+  } catch (err: any) {
+    console.error('[Attendance Schedule Update Error]', err);
+    res.status(500).json({ success: false, message: 'Failed to update the working schedule.', details: err.message });
   }
 });
 

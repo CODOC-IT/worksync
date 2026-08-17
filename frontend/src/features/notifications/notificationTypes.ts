@@ -5,11 +5,13 @@ import {
   AtSign,
   Ban,
   BarChart3,
+  CalendarOff,
   CheckCircle2,
   CheckSquare,
   Clock,
   Coffee,
   Database,
+  FilePen,
   FileWarning,
   FolderKanban,
   MessageSquare,
@@ -62,6 +64,13 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   subtask_due_today: { label: 'Subtask Due Today', icon: FileWarning, tone: 'warning', priority: 'High' },
   subtask_overdue: { label: 'Subtask Overdue', icon: AlertTriangle, tone: 'error', priority: 'High' },
   task_reopened: { label: 'Task Reopened', icon: RefreshCcw, tone: 'warning', priority: 'High' },
+  subtask_assignment_changed: { label: 'Subtask Assignment Changed', icon: UserCog, tone: 'info', priority: 'High' },
+  task_edit_approval_requested: { label: 'Task Edit Request', icon: FilePen, tone: 'info', priority: 'High' },
+  task_edit_approval_approved: { label: 'Task Edit Approved', icon: CheckCircle2, tone: 'success', priority: 'High' },
+  task_edit_approval_rejected: { label: 'Task Edit Rejected', icon: XCircle, tone: 'error', priority: 'High' },
+  leave_requested: { label: 'Leave Requested', icon: CalendarOff, tone: 'info', priority: 'Medium' },
+  leave_approved: { label: 'Leave Approved', icon: CheckCircle2, tone: 'success', priority: 'Medium' },
+  leave_rejected: { label: 'Leave Rejected', icon: XCircle, tone: 'error', priority: 'Medium' },
   comment_added: { label: 'New Comment', icon: MessageSquare, tone: 'info', priority: 'Medium' },
   mention: { label: 'Mentioned You', icon: AtSign, tone: 'info', priority: 'Medium' },
   attachment_uploaded: { label: 'File Attached', icon: Paperclip, tone: 'info', priority: 'Low' },
@@ -72,6 +81,9 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   project_deleted: { label: 'Project Deleted', icon: Trash2, tone: 'error', priority: 'High' },
   project_member_added: { label: 'Added to Project', icon: UserPlus, tone: 'success', priority: 'Medium' },
   project_member_removed: { label: 'Removed from Project', icon: UserMinus, tone: 'warning', priority: 'Medium' },
+  project_member_pending_removal: { label: 'Member Pending Removal', icon: AlertTriangle, tone: 'warning', priority: 'Medium' },
+  project_member_auto_removed: { label: 'Member Removed', icon: UserMinus, tone: 'info', priority: 'Medium' },
+  project_approval_rejected: { label: 'Project Approval Rejected', icon: XCircle, tone: 'error', priority: 'High' },
   approval: { label: 'Approval Requested', icon: CheckSquare, tone: 'info', priority: 'High' },
   user_registered: { label: 'New User Registered', icon: UserRoundPlus, tone: 'info', priority: 'Medium' },
   user_role_changed: { label: 'Role Changed', icon: UserCog, tone: 'warning', priority: 'High' },
@@ -97,8 +109,6 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   break_ended: { label: 'Break Ended', icon: Coffee, tone: 'info', priority: 'Low' },
   break_exceeded: { label: 'Break Exceeded', icon: AlertTriangle, tone: 'warning', priority: 'High' },
   break_reminder: { label: 'Break Reminder', icon: Clock, tone: 'info', priority: 'Medium' },
-  break_approved: { label: 'Break Request Approved', icon: CheckCircle2, tone: 'success', priority: 'Medium' },
-  break_rejected: { label: 'Break Request Rejected', icon: XCircle, tone: 'error', priority: 'Medium' },
   report_weekly_generated: { label: 'Weekly Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },
   report_monthly_generated: { label: 'Monthly Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },
   report_sprint_ready: { label: 'Sprint Report Ready', icon: BarChart3, tone: 'info', priority: 'Medium' },
@@ -135,7 +145,12 @@ const ADMIN_BLOCKED_TYPES = new Set<NotificationType>([
   // high-level project notifications"). 'task_reopened' is deliberately NOT blocked: reopening
   // a completed task reverses a recorded outcome and is an accountability event Admins keep.
   'subtask_assigned', 'subtask_completed', 'subtask_reopened',
-  'subtask_due_today', 'subtask_overdue'
+  'subtask_due_today', 'subtask_overdue', 'subtask_assignment_changed',
+  // A controlled task edit is a Team Lead <-> Team Member conversation about one task's fields.
+  // Both ends are already targeted precisely (the request goes to that project's Lead, the
+  // decision back to the requester), so an Admin is never a legitimate recipient — this entry is
+  // the same defensive second layer every other routine task event gets.
+  'task_edit_approval_requested', 'task_edit_approval_approved', 'task_edit_approval_rejected'
 ]);
 
 const TEAM_LEAD_BLOCKED_TYPES = new Set<NotificationType>([
@@ -157,6 +172,38 @@ export const isNotificationVisibleForRole = (type: NotificationType, role: UserR
   if (role === 'Team_Lead') return !TEAM_LEAD_BLOCKED_TYPES.has(type);
   if (role === 'Team_Member') return !TEAM_MEMBER_BLOCKED_TYPES.has(type);
   return true; // HR and any future role: no notification-module-specific restriction defined
+};
+
+// Label for the primary action button in a notification's expanded view. Keyed by `linkRoute`
+// (derived server-side from the notification's category/type — see
+// backend/src/notifications/notification.mapper.ts's deriveLinkRoute) so the button always names
+// the tab the click actually lands on.
+const ROUTE_ACTION_LABELS: Record<string, string> = {
+  tasks: 'Open Task',
+  kanban: 'Open Board',
+  projects: 'Open Project',
+  approvals: 'Open Approvals',
+  attendance: 'Open Attendance',
+  calendar: 'Open Calendar',
+  reports: 'Open Reports',
+  'project-chats': 'Open Project Chat',
+  chat: 'Open Project Chat', // legacy route id, aliased in NotificationsView
+  members: 'Open Members',
+  activity: 'Open Activity Log',
+  'ai-assistant': 'Open AI Assistant',
+  profile: 'Open Profile',
+  dashboard: 'Open Dashboard'
+};
+
+export const getNotificationActionLabel = (linkRoute: string): string =>
+  ROUTE_ACTION_LABELS[linkRoute] || 'Open';
+
+// camelCase metadata keys ("rejectionReason") render as readable labels ("Rejection reason").
+// Metadata is written by the publishing module and rendered back verbatim, so this is the one
+// place that has to turn a key into UI copy.
+export const humanizeMetadataKey = (key: string): string => {
+  const spaced = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 };
 
 export const PRIORITY_ORDER: Record<NotificationPriority, number> = {

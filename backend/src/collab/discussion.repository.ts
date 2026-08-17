@@ -20,17 +20,19 @@ import { parseAttachmentDataUrl, writeAttachmentToDisk } from './fileStorage.js'
 const ORGANIZATION_ID = 1;
 
 // collab.DiscussionThreads.CK_DiscussionThreads_OneParent allows exactly one parent column, so a
-// task-scoped thread stores TaskId only (ProjectId NULL) — the frontend's always-present
-// `projectId` field is derived here via a join back to the task's own project, never stored
-// redundantly.
+// task-scoped thread stores TaskId only (ProjectId NULL) and a team-scoped thread stores TeamId
+// only (ProjectId/TaskId NULL) — the frontend's always-present `projectId` field is derived here
+// via a join back to the task's/team's own project, never stored redundantly.
 const THREAD_COLUMNS = `
-  dt.threadid, dt.threadtype, dt.subject, COALESCE(dt.projectid, t.projectid) AS effectiveprojectid,
-  p.projectname, dt.taskid, t.title AS tasktitle, dt.createdbyuserid, dt.createdatutc
+  dt.threadid, dt.threadtype, dt.subject, COALESCE(dt.projectid, t.projectid, pt.projectid) AS effectiveprojectid,
+  p.projectname, dt.taskid, t.title AS tasktitle, dt.teamid, pt.teamname AS teamname,
+  dt.createdbyuserid, dt.createdatutc
 `;
 const THREAD_JOINS = `
   FROM collab.discussionthreads dt
   LEFT JOIN work.tasks t ON t.taskid = dt.taskid
-  JOIN work.projects p ON p.projectid = COALESCE(dt.projectid, t.projectid)
+  LEFT JOIN work.projectteams pt ON pt.teamid = dt.teamid
+  JOIN work.projects p ON p.projectid = COALESCE(dt.projectid, t.projectid, pt.projectid)
 `;
 
 export const findThreadsForProjects = async (projectIds: number[]): Promise<DiscussionThreadRow[]> => {
@@ -133,6 +135,42 @@ export const findMentionableUsersForTask = async (
          AND u.organizationid = $3 AND u.accountstatus = 'Active' AND u.deactivatedatutc IS NULL
      ) eligible`,
     [taskId, projectId, ORGANIZATION_ID]
+  );
+  return result.rows;
+};
+
+// Team-scoped discussions are narrower still: only the team's current members (lead included),
+// the project's functional lead, and active HR/Admin accounts may participate. The project's
+// functional lead is included so the project owner can always see what any of their teams is
+// discussing — the same oversight the task-scoped directory gives them for task conversations.
+export const findMentionableUsersForTeam = async (
+  teamId: number,
+  projectId: number
+): Promise<ProjectMentionableUserRow[]> => {
+  const result = await query<ProjectMentionableUserRow>(
+    `SELECT DISTINCT $2::int AS projectid, eligible.userid
+     FROM (
+       SELECT tm.userid
+       FROM work.teammembers tm
+       JOIN iam.users u ON u.userid = tm.userid
+       WHERE tm.teamid = $1 AND tm.leftatutc IS NULL
+         AND u.organizationid = $3 AND u.accountstatus = 'Active' AND u.deactivatedatutc IS NULL
+       UNION
+       SELECT COALESCE(
+         (SELECT pm.userid FROM work.projectmembers pm WHERE pm.projectid = $2 AND pm.memberrolecode = 'TeamLead' AND pm.leftatutc IS NULL LIMIT 1),
+         p.owneruserid
+       )
+       FROM work.projects p WHERE p.projectid = $2
+       UNION
+       SELECT ur.userid
+       FROM iam.userroles ur
+       JOIN iam.roles r ON r.roleid = ur.roleid
+       JOIN iam.users u ON u.userid = ur.userid
+       WHERE r.rolecode IN ('Administrator', 'HRRepresentative')
+         AND ur.startsatutc <= now() AND (ur.endsatutc IS NULL OR ur.endsatutc > now()) AND ur.revokedatutc IS NULL
+         AND u.organizationid = $3 AND u.accountstatus = 'Active' AND u.deactivatedatutc IS NULL
+     ) eligible`,
+    [teamId, projectId, ORGANIZATION_ID]
   );
   return result.rows;
 };
@@ -248,6 +286,7 @@ const insertMentions = async (runQuery: typeof query, commentId: number, mention
 export interface InsertThreadRow {
   projectId: number;
   taskId?: number;
+  teamId?: number;
   title: string;
   commentKind: CommentKindCode;
   creatorUserId: number;
@@ -260,10 +299,10 @@ export interface InsertThreadRow {
 // no opening message would violate the app's own contract that every discussion starts with one.
 export const insertThread = async (input: InsertThreadRow): Promise<{ threadId: number; commentId: number }> =>
   withTransaction(async (runQuery) => {
-    const threadType = input.taskId ? 'Task' : 'Project';
+    const threadType = input.teamId ? 'Team' : input.taskId ? 'Task' : 'Project';
     const threadResult = await runQuery<{ threadid: number }>(
-      `INSERT INTO collab.discussionthreads (organizationid, threadtype, subject, projectid, taskid, createdbyuserid)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO collab.discussionthreads (organizationid, threadtype, subject, projectid, taskid, teamid, createdbyuserid)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING threadid`,
       [
         ORGANIZATION_ID,
@@ -271,6 +310,7 @@ export const insertThread = async (input: InsertThreadRow): Promise<{ threadId: 
         input.title,
         threadType === 'Project' ? input.projectId : null,
         threadType === 'Task' ? input.taskId : null,
+        threadType === 'Team' ? input.teamId : null,
         input.creatorUserId
       ]
     );
@@ -325,11 +365,13 @@ export const updateCommentText = async (commentId: number, body: string): Promis
 };
 
 // Soft-delete — collab.Comments has DeletedAtUtc for exactly this, matching the same
-// "never a hard DELETE" pattern as Projects/Tasks/Notifications.
+// "never a hard DELETE" pattern as Projects/Tasks/Notifications. Preserve the original text so
+// HR/Admin can review an inappropriate or otherwise deleted message; response mapping redacts it
+// for every other role.
 export const softDeleteComment = async (commentId: number): Promise<void> => {
   await query(
     `UPDATE collab.comments
-     SET deletedatutc = CURRENT_TIMESTAMP, commenttext = '[deleted]', rowversion = rowversion + 1
+     SET deletedatutc = CURRENT_TIMESTAMP, rowversion = rowversion + 1
      WHERE commentid = $1`,
     [commentId]
   );

@@ -15,6 +15,8 @@ const SELECT_NOTIFICATION_COLUMNS = `
   actor.displayname AS actordisplayname,
   n.title,
   n.safepreviewtext,
+  n.detailtext,
+  n.metadatajson,
   nt.typecode,
   nt.categorycode,
   n.prioritycode,
@@ -79,6 +81,9 @@ export const getRecipientPreferences = async (
   }));
 };
 
+const truncate = (value: string, max: number): string =>
+  value.length > max ? `${value.slice(0, max - 3)}...` : value;
+
 export interface InsertNotificationResult {
   notificationId: number;
   recipients: { recipientUserId: number; deliveryStatus: 'Delivered' | 'Suppressed' }[];
@@ -99,8 +104,9 @@ export const insertNotificationWithFanout = async (
     const inserted = await runQuery<{ notificationid: number }>(
       `INSERT INTO notify.notifications
          (notificationtypeid, actoruserid, projectid, taskid, changerequestid,
-          attendancecorrectionid, leaverequestid, title, safepreviewtext, prioritycode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          attendancecorrectionid, leaverequestid, title, safepreviewtext, detailtext,
+          metadatajson, prioritycode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
        RETURNING notificationid`,
       [
         notificationTypeId,
@@ -111,7 +117,12 @@ export const insertNotificationWithFanout = async (
         null, // attendanceCorrectionId — see note above
         null, // leaveRequestId — see note above
         event.title,
-        event.message.length > 500 ? event.message.slice(0, 497) + '...' : event.message,
+        truncate(event.message, 500),
+        // DetailText is varchar(4000) — long enough for any rejection reason or review comment
+        // we produce, but truncated defensively rather than letting a pathological input turn a
+        // notification insert into a 22001 error that would roll back the whole publish.
+        event.detail ? truncate(event.detail, 4000) : null,
+        event.metadata ? JSON.stringify(event.metadata) : null,
         priority
       ]
     );

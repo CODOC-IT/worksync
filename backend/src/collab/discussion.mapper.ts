@@ -1,4 +1,4 @@
-import { fromCommentPk, fromProjectPk, fromTaskPk, fromThreadPk, fromUserPk } from '../utils/idMapping.js';
+import { fromCommentPk, fromProjectPk, fromTaskPk, fromTeamPk, fromThreadPk, fromUserPk } from '../utils/idMapping.js';
 import { getAttachmentUrl } from './fileStorage.js';
 import {
   ChatAttachmentDTO,
@@ -22,7 +22,7 @@ import {
 const buildAttachmentDTO = async (row: CommentFileRow): Promise<ChatAttachmentDTO> => {
   let url: string | undefined;
   try {
-    url = await getAttachmentUrl(row.storageobjectkey, row.mimetype);
+    url = await getAttachmentUrl(row.storageobjectkey, row.mimetype, row.originalfilename);
   } catch (error) {
     console.warn(`[discussion.mapper] Could not read stored attachment "${row.storageobjectkey}" from disk.`, error);
   }
@@ -38,17 +38,20 @@ const buildAttachmentDTO = async (row: CommentFileRow): Promise<ChatAttachmentDT
 export const buildCommentDTO = async (
   row: CommentRow,
   mentions: CommentMentionRow[],
-  attachmentRows: CommentFileRow[]
+  attachmentRows: CommentFileRow[],
+  includeDeletedContent = false
 ): Promise<DiscussionCommentDTO> => ({
   id: fromCommentPk(row.commentid),
   threadId: fromThreadPk(row.threadid),
   parentCommentId: row.parentcommentid ? fromCommentPk(row.parentcommentid) : undefined,
   authorId: fromUserPk(row.authoruserid),
-  body: row.commenttext,
+  // Deletion is a soft-delete. The original is retained for HR/Admin review, but never sent to
+  // ordinary project participants after it has been deleted.
+  body: row.deletedatutc && !includeDeletedContent ? '[deleted]' : row.commenttext,
   mentionIds: mentions.filter((m) => m.commentid === row.commentid).map((m) => fromUserPk(m.mentioneduserid)),
-  attachments: await Promise.all(
-    attachmentRows.filter((a) => a.commentid === row.commentid).map(buildAttachmentDTO)
-  ),
+  attachments: row.deletedatutc && !includeDeletedContent
+    ? []
+    : await Promise.all(attachmentRows.filter((a) => a.commentid === row.commentid).map(buildAttachmentDTO)),
   createdAt: row.createdatutc.toISOString(),
   editedAt: row.editedatutc ? row.editedatutc.toISOString() : undefined,
   deletedAt: row.deletedatutc ? row.deletedatutc.toISOString() : undefined
@@ -78,6 +81,8 @@ export const buildThreadDTO = (
     projectName: row.projectname,
     taskId: row.taskid ? fromTaskPk(row.taskid) : undefined,
     taskName: row.tasktitle || undefined,
+    teamId: row.teamid ? fromTeamPk(row.teamid) : undefined,
+    teamName: row.teamname || undefined,
     title: row.subject || '',
     type: DB_TO_API_DISCUSSION_TYPE[openingCommentKind],
     creatorId: fromUserPk(row.createdbyuserid),

@@ -237,11 +237,14 @@ export const KanbanView: React.FC = () => {
       {accessibleProjects.length === 0 ? (
         <div className="glass-panel flex min-h-52 flex-col items-center justify-center px-6 text-center">
           <UsersIcon className="text-slate-500" size={26} />
-          <h3 className="mt-3 font-semibold text-slate-200">No projects assigned</h3>
+          <h3 className="mt-3 font-semibold text-slate-200">No active projects</h3>
+          {/* "Active" is load-bearing here: getAccessibleProjects deliberately hides projects
+              that are still Pending Approval, Draft, On Hold, Completed or Archived, so someone
+              who *is* on a project but whose only project is awaiting approval lands here. */}
           <p className="mt-1 text-xs text-slate-500">
             {currentRole === 'Team_Lead'
-              ? "You aren't leading any projects yet."
-              : "You haven't been added to a project yet."}
+              ? "You aren't leading any active projects yet. Projects awaiting approval appear here once they're activated."
+              : "You haven't been added to an active project yet. Projects awaiting approval appear here once they're activated."}
           </p>
         </div>
       ) : (
@@ -490,7 +493,7 @@ const ProjectSelect: React.FC<{
         {selectedProject ? (
           <span className="min-w-0 truncate">
             <span className="font-semibold text-slate-100">{selectedProject.title}</span>
-            <span className="ml-1.5 font-mono text-[10px] text-slate-500">{selectedProject.code}</span>
+            <span className="ml-1.5 font-mono text-[10px] text-slate-400">{selectedProject.code}</span>
           </span>
         ) : (
           <span className="text-slate-500">Select a project…</span>
@@ -526,25 +529,53 @@ const ProjectSelect: React.FC<{
             {filteredProjects.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-500">No projects match "{query}".</p>
             ) : (
-              filteredProjects.map((project, index) => (
-                <button
-                  key={project.id}
-                  type="button"
-                  role="option"
-                  aria-selected={project.id === selectedProjectId}
-                  onMouseEnter={() => setHighlightIndex(index)}
-                  onClick={() => selectProject(project.id)}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition ${
-                    index === highlightIndex ? 'bg-cyan-500/15 text-cyan-200' : 'text-slate-300 hover:bg-white/5'
-                  }`}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">{project.title}</span>
-                    <span className="block font-mono text-[10px] text-slate-500">{project.code}</span>
-                  </span>
-                  {project.id === selectedProjectId && <Check size={13} className="shrink-0 text-cyan-400" />}
-                </button>
-              ))
+              filteredProjects.map((project, index) => {
+                const isHighlighted = index === highlightIndex;
+                const isSelected = project.id === selectedProjectId;
+                return (
+                  <button
+                    key={project.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setHighlightIndex(index)}
+                    onClick={() => selectProject(project.id)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition ${
+                      isHighlighted
+                        ? 'bg-cyan-500/20 ring-1 ring-inset ring-cyan-400/50'
+                        : isSelected
+                        ? 'bg-white/[0.07] ring-1 ring-inset ring-white/10'
+                        : 'hover:bg-white/[0.07]'
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      {/* Both lines get an explicit colour per state rather than inheriting: the
+                          project code used to stay at text-slate-500 on top of the cyan hover
+                          fill, which fell below a readable contrast ratio. Hovered/keyboard-
+                          highlighted rows now read near-white over a slightly stronger fill, and
+                          the selected-but-not-hovered row stays distinguishable through its own
+                          fill + ring + check mark rather than through text colour alone. */}
+                      <span
+                        className={`block truncate font-semibold ${
+                          isHighlighted ? 'text-white' : isSelected ? 'text-cyan-200' : 'text-slate-200'
+                        }`}
+                      >
+                        {project.title}
+                      </span>
+                      <span
+                        className={`block font-mono text-[10px] ${
+                          isHighlighted ? 'text-cyan-100' : isSelected ? 'text-cyan-300/80' : 'text-slate-400'
+                        }`}
+                      >
+                        {project.code}
+                      </span>
+                    </span>
+                    {isSelected && (
+                      <Check size={13} className={`shrink-0 ${isHighlighted ? 'text-white' : 'text-cyan-300'}`} />
+                    )}
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
@@ -1561,12 +1592,24 @@ const TaskDetailsModal: React.FC<{
                   <h3 className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
                     <History size={12} />
                     Status History
+                    <span className="ml-auto font-normal normal-case tracking-normal text-slate-600">
+                      {history.length} {history.length === 1 ? 'entry' : 'entries'}
+                    </span>
                   </h3>
                   {/* Newest first — the reverse of the API's chronological order, since the most
                       recent change is what a reader opening this task is looking for. Covers the
                       parent and its subtasks (see findStatusHistoryForTask), so a subtask entry is
-                      labelled with its own title to keep the two apart. */}
-                  <ul className="space-y-1.5">
+                      labelled with its own title to keep the two apart.
+
+                      The list owns its own bounded scroll region. Previously it had none, so a
+                      task with a long audit trail pushed the whole dialog to its 88vh cap and the
+                      *entire* body — task info, description, assignees, subtasks — scrolled with
+                      it, burying the fixed context a reader needs while reading history. Capping
+                      the timeline instead keeps the dialog's height independent of how many
+                      history entries exist: everything above stays put and only the timeline
+                      scrolls. The cap is viewport-relative (40vh) with a fixed ceiling from `sm`
+                      up so it stays sensible on short laptop screens and on phones. */}
+                  <ul className="max-h-[40vh] space-y-1.5 overflow-y-auto overscroll-contain scroll-smooth pr-1 sm:max-h-72">
                     {[...history].reverse().map((entry) => {
                       const forSubtask =
                         entry.taskId && entry.taskId !== task.id
