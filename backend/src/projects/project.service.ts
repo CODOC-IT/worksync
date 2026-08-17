@@ -226,7 +226,7 @@ const publishTeamAssignments = async (
   projectPk: number,
   projectName: string,
   actorId: string,
-  options: { pendingActivation?: boolean; approvedFromProposalBy?: string } = {}
+  options: { approvedFromProposalBy?: string } = {}
 ): Promise<void> => {
   const [teams, teamMembers] = await Promise.all([
     repo.findTeamsForProject(projectPk),
@@ -237,7 +237,6 @@ const publishTeamAssignments = async (
   const actorName = actorDisplayName(actorId);
   const teamsById = new Map(teams.map((team) => [team.teamid, team]));
   const projectIdStr = fromProjectPk(projectPk);
-  const suffix = options.pendingActivation ? ' (pending Admin activation)' : '';
 
   for (const membership of teamMembers) {
     const team = teamsById.get(membership.teamid);
@@ -253,7 +252,7 @@ const publishTeamAssignments = async (
       {
         type: 'project_member_added',
         title: copy.title,
-        message: suffix ? copy.message.replace(/\.$/, `${suffix}.`) : copy.message,
+        message: copy.message,
         detail: copy.detail,
         metadata: copy.metadata,
         actorId,
