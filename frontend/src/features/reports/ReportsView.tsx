@@ -205,6 +205,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [taskFilterStatus, setTaskFilterStatus] = useState('');
   const [taskFilterPriority, setTaskFilterPriority] = useState('');
   const [taskFilterProject, setTaskFilterProject] = useState('');
+  const [taskFilterTeam, setTaskFilterTeam] = useState('');
   const [taskFilterAssignee, setTaskFilterAssignee] = useState('');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [detailMember, setDetailMember] = useState<any>(null);
@@ -626,10 +627,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       if (taskFilterStatus && t.status !== taskFilterStatus) return false;
       if (taskFilterPriority && t.priority !== taskFilterPriority) return false;
       if (taskFilterProject && t.projectId !== taskFilterProject) return false;
+      if (taskFilterTeam && t.teamId !== taskFilterTeam) return false;
       if (taskFilterAssignee && !getTaskAssigneeIds(t).includes(taskFilterAssignee)) return false;
       return true;
     });
-  }, [roleFiltered.tasks, taskSearchQuery, taskFilterStatus, taskFilterPriority, taskFilterProject, taskFilterAssignee]);
+  }, [roleFiltered.tasks, taskSearchQuery, taskFilterStatus, taskFilterPriority, taskFilterProject, taskFilterTeam, taskFilterAssignee]);
 
   const taskKpiStats = useMemo(() => {
     const tasks = roleFiltered.tasks as any[];
@@ -673,6 +675,21 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       return { id: uid, name: u?.name || uid };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }, [roleFiltered.tasks, users]);
+
+  // Teams offered by the Select Team filter. Only teams belonging to the currently selected
+  // project are shown (mirroring the Admin task form, which reads the same `projects.teams` data).
+  // `projects` here is the AppContext project list — the same RBAC-scoped source the rest of the
+  // report derives from — so no new data-access path is introduced.
+  const taskTeamOptions = useMemo(() => {
+    if (!taskFilterProject) return [];
+    const project = projects.find((p: any) => p.id === taskFilterProject);
+    return (project?.teams || []).filter((team) => team.projectId === taskFilterProject);
+  }, [taskFilterProject, projects]);
+
+  const handleTaskProjectFilterChange = (value: string) => {
+    setTaskFilterTeam('');
+    setTaskFilterProject(value);
+  };
 
   const workloadData = useMemo(() => {
     if (!apiAvailable || !reportData?.workload) return [];
@@ -3259,12 +3276,29 @@ ${bodyHtml}
             </select>
             <select
               value={taskFilterProject}
-              onChange={(e) => setTaskFilterProject(e.target.value)}
+              onChange={(e) => handleTaskProjectFilterChange(e.target.value)}
               className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
             >
               <option value="">All Projects</option>
               {taskProjectOptions.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <select
+              value={taskFilterTeam}
+              onChange={(e) => setTaskFilterTeam(e.target.value)}
+              disabled={!taskFilterProject || taskTeamOptions.length === 0}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">
+                {!taskFilterProject
+                  ? 'Select Team'
+                  : taskTeamOptions.length > 0
+                    ? 'All Teams'
+                    : 'No Teams'}
+              </option>
+              {taskTeamOptions.map((team) => (
+                <option key={team.id} value={team.id}>{team.name}</option>
               ))}
             </select>
             <select
@@ -3277,9 +3311,9 @@ ${bodyHtml}
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </select>
-            {(taskSearchQuery || taskFilterStatus || taskFilterPriority || taskFilterProject || taskFilterAssignee) && (
+            {(taskSearchQuery || taskFilterStatus || taskFilterPriority || taskFilterProject || taskFilterTeam || taskFilterAssignee) && (
               <button
-                onClick={() => { setTaskSearchQuery(''); setTaskFilterStatus(''); setTaskFilterPriority(''); setTaskFilterProject(''); setTaskFilterAssignee(''); }}
+                onClick={() => { setTaskSearchQuery(''); setTaskFilterStatus(''); setTaskFilterPriority(''); setTaskFilterProject(''); setTaskFilterTeam(''); setTaskFilterAssignee(''); }}
                 className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
               >
                 <X size={11} /> Clear
