@@ -524,6 +524,17 @@ export type NotificationType =
   | 'project_member_pending_removal'
   | 'project_member_auto_removed'
   | 'project_approval_rejected'
+  // Multi-team project architecture. A "Team Lead" in any of these is a per-project, per-team
+  // designation (work.TeamMembers.IsLead), never the reader's account role — the same person can
+  // lead one project's team and be a plain member of another's.
+  | 'team_member_removed_needs_reassignment'
+  | 'team_member_moved'
+  | 'team_lead_changed'
+  | 'admin_task_needs_team_assignment'
+  | 'subtask_transfer_requested'
+  | 'subtask_transfer_approved'
+  | 'subtask_transfer_rejected'
+  | 'holiday_created'
   | 'approval'
   | 'user_registered'
   | 'user_role_changed'
