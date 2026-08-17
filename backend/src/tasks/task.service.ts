@@ -98,13 +98,24 @@ const assertTaskCanBeWorkedOn = (row: TaskRow): void => {
 // established (Admin always; Team Lead only for their own project; Team Member only if
 // assigned) — re-derived server-side since the backend must never trust the client's own
 // permission check.
+const isTaskTeamLead = async (row: TaskRow, userId: string, role: string): Promise<boolean> => {
+  if (role === 'HR') return false;
+  if (role === 'Admin') return true;
+  if (!row.teamid) return isProjectLead(projectFrontendId(row), userId, role, { allowAdmin: false });
+  const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
+  return teamMembers.some((member) =>
+    member.teamid === row.teamid && member.userid === toUserPk(userId) && member.islead
+  );
+};
+
 const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot edit tasks.');
+  if (role === 'Admin') return;
   const assignees = await repo.findAssigneesForTask(row.taskid);
   const isAssignee = assignees.some((assignee) => fromUserPk(assignee.userid) === userId);
 
   if (row.parenttaskid) {
-    if (await isProjectLead(projectFrontendId(row), userId, role)) return;
+    if (await isTaskTeamLead(row, userId, role)) return;
     const denialReason = getTaskEditDenialReason({
       actorId: userId,
       assigneeIds: assignees.map((assignee) => fromUserPk(assignee.userid)),
@@ -119,12 +130,12 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
   }
 
   if (Number(row.subtaskcount || 0) > 0) {
-    if (await isProjectLead(projectFrontendId(row), userId, role)) return;
+    if (await isTaskTeamLead(row, userId, role)) return;
     throw new TaskAuthorizationError('Only this project\'s Team Lead can edit a task that has subtasks.');
   }
 
   const projectId = projectFrontendId(row);
-  if (await isProjectLead(projectId, userId, role)) return;
+  if (await isTaskTeamLead(row, userId, role)) return;
   if (isAssignee && role !== 'Team_Member') return;
   if (isAssignee) {
     throw new TaskAuthorizationError('Submit this task edit for your Team Lead\'s approval.');
@@ -134,10 +145,8 @@ const assertCanEditTask = async (row: TaskRow, userId: string, role: string): Pr
 
 const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot delete tasks.');
-  const assignees = await repo.findAssigneesForTask(row.taskid);
-  if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
-  if (await isProjectLead(projectFrontendId(row), userId, role)) return;
-  throw new TaskAuthorizationError('You can only delete tasks assigned to you or in projects you lead.');
+  if (await isTaskTeamLead(row, userId, role)) return;
+  throw new TaskAuthorizationError('You can only delete tasks in teams you lead.');
 };
 
 // Kanban status movement is intentionally independent from the controlled task-detail edit
@@ -146,7 +155,7 @@ const assertCanDeleteTask = async (row: TaskRow, userId: string, role: string): 
 const assertCanChangeTaskStatus = async (row: TaskRow, userId: string, role: string): Promise<void> => {
   if (role === 'HR') throw new TaskAuthorizationError('HR users cannot change task status.');
   if (role === 'Admin') return;
-  if (await isProjectLead(projectFrontendId(row), userId, role)) return;
+  if (await isTaskTeamLead(row, userId, role)) return;
 
   const assignees = await repo.findAssigneesForTask(row.taskid);
   if (assignees.some((assignee) => fromUserPk(assignee.userid) === userId)) return;
@@ -168,11 +177,7 @@ const notifyTaskRecipients = (
   void (async () => {
     const recipientSet = new Set(assigneeIds);
     try {
-      const projectRow = await projectRepo.findProjectById(row.projectid);
-      if (projectRow) {
-        const members = await projectRepo.findMembersForProject(row.projectid);
-        recipientSet.add(resolveTeamLeadUserId(projectRow, members));
-      }
+      recipientSet.add(await resolveTaskTeamLead(row));
     } catch (error) {
       console.error('[task.service] Failed to resolve project Team Lead for notification recipients.', error);
     }
@@ -192,10 +197,15 @@ const notifyTaskRecipients = (
 // the subtask cascade raises. resolveTeamLeadUserId falls back to the project Owner when there
 // is no separate 'TeamLead' membership row (the common case for a project a Team Lead created
 // for themselves), matching how authorization already resolves the lead in project.service.ts.
-const resolveProjectTeamLead = async (projectPk: number): Promise<string> => {
-  const projectRow = await projectRepo.findProjectById(projectPk);
+const resolveTaskTeamLead = async (row: TaskRow): Promise<string> => {
+  if (row.teamid) {
+    const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
+    const lead = teamMembers.find((member) => member.teamid === row.teamid && member.islead);
+    if (lead) return fromUserPk(lead.userid);
+  }
+  const projectRow = await projectRepo.findProjectById(row.projectid);
   if (!projectRow) return '';
-  const members = await projectRepo.findMembersForProject(projectPk);
+  const members = await projectRepo.findMembersForProject(row.projectid);
   return resolveTeamLeadUserId(projectRow, members);
 };
 
@@ -292,43 +302,6 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   if (input.dueDate > projectRow.enddate) {
     throw new TaskValidationError(`Due date cannot be after ${projectRow.enddate}.`);
   }
-  // --- Multi-team scoping ----------------------------------------------------------------
-  // When a project uses teams, a task belongs to exactly one team. A Team Lead may only build
-  // tasks for their own team; an Admin may either target a whole team (handoff -- the task is
-  // created unassigned for the team lead to distribute) or create directly for a team's members.
-  //
-  // Resolved BEFORE the assignee validation below, not after: an Admin->Team handoff is defined by
-  // having no assignees yet, so deciding it afterwards made the branch unreachable -- every such
-  // create was rejected by "At least one assignee is required" before it could ever be recognized
-  // as a handoff, and admin_task_needs_team_assignment could never be published.
-  const teams = await projectRepo.findTeamsForProject(projectRow.projectid);
-  const teamMembers = await projectRepo.findTeamMembersForProject(projectRow.projectid);
-  const userTeamByPk = new Map<number, number>();
-  for (const tm of teamMembers) userTeamByPk.set(tm.userid, tm.teamid);
-  const teamLeadByTeam = new Map<number, number>();
-  for (const tm of teamMembers) if (tm.islead) teamLeadByTeam.set(tm.teamid, tm.userid);
-
-  const teamHandoff = Boolean(
-    teams.length > 0 && actorRole === 'Admin' && input.teamId
-      && (!input.assigneeIds || input.assigneeIds.length === 0)
-  );
-
-  // An assignee is required for every task except an Admin's team handoff, whose whole point is
-  // that the receiving Team Lead -- not the Admin -- chooses who does the work (§8: "Admin can only
-  // assign the task to a TEAM, not directly to an individual member").
-  if (!teamHandoff && (!input.assigneeIds || input.assigneeIds.length === 0)) {
-    throw new TaskValidationError('At least one assignee is required.');
-  }
-
-  // A handoff is the one create that legitimately arrives with no assignees, so the list is
-  // normalized to [] here rather than left possibly-undefined for the validation, insert and
-  // notification code below — all of which index into it unconditionally.
-  input = {
-    ...input,
-    assigneeIds: input.assigneeIds || [],
-    subtasks: input.subtasks?.map((subtask) => ({ ...subtask, assigneeIds: subtask.assigneeIds || [] }))
-  };
-
   const allInputs = [input, ...(input.subtasks || [])];
   for (const [index, taskInput] of allInputs.entries()) {
     const label = index === 0 ? 'Task' : `Subtask ${index}`;
@@ -340,7 +313,7 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.startDate < projectRow.startdate || taskInput.dueDate > projectRow.enddate) {
       throw new TaskValidationError(`${label} dates must be within the project dates.`);
     }
-    if (!teamHandoff && !taskInput.assigneeIds?.length) {
+    if (!taskInput.assigneeIds?.length && !(index === 0 && actorRole === 'Admin' && input.teamId && !(input.subtasks || []).length)) {
       throw new TaskValidationError(`${label} requires at least one assignee.`);
     }
   }
@@ -348,8 +321,28 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   const projectMembers = await projectRepo.findMembersForProject(projectRow.projectid);
   const projectMemberIds = new Set(projectMembers.map((member) => fromUserPk(member.userid)));
 
+  // --- Multi-team scoping ----------------------------------------------------------------
+  // When a project uses teams, a task belongs to exactly one team. A Team Lead may only build
+  // tasks for their own team; an Admin may either target a whole team (handoff -- the task is
+  // created unassigned for the team lead to distribute) or create directly for a team's members.
+  const teams = await projectRepo.findTeamsForProject(projectRow.projectid);
+  const teamMembers = await projectRepo.findTeamMembersForProject(projectRow.projectid);
+  const userTeamByPk = new Map<number, number>();
+  for (const tm of teamMembers) userTeamByPk.set(tm.userid, tm.teamid);
+  const teamLeadByTeam = new Map<number, number>();
+  for (const tm of teamMembers) if (tm.islead) teamLeadByTeam.set(tm.teamid, tm.userid);
+
   let taskTeamId: number | undefined;
   let assignmentStatus: 'NeedsTeamAssignment' | 'Assigned' | undefined;
+  const teamHandoff = teams.length > 0 && actorRole === 'Admin' && input.teamId
+    && (!input.assigneeIds || input.assigneeIds.length === 0);
+
+  if (teams.length > 0 && actorRole === 'Admin' && !input.teamId) {
+    throw new TaskValidationError('Admins must select a project team for each new task.');
+  }
+  if (teams.length > 0 && actorRole === 'Admin' && input.assigneeIds?.length) {
+    throw new TaskValidationError('Admins assign new tasks to a team, not directly to individual members.');
+  }
 
   if (teamHandoff) {
     const targetTeam = teams.find((team) => team.teamid === toTeamPk(input.teamId!));
@@ -368,6 +361,13 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
       taskTeamId = firstTeamId;
     }
     assignmentStatus = 'Assigned';
+  }
+
+  if (!input.assigneeIds?.length && !teamHandoff) {
+    throw new TaskValidationError('At least one assignee is required.');
+  }
+  if (teamHandoff && (input.subtasks || []).length > 0) {
+    throw new TaskValidationError('Assign the team task before adding subtasks.');
   }
 
   for (const taskInput of allInputs) {
@@ -536,7 +536,7 @@ const notifyTaskEdited = (context: {
       const target = await resolveTaskEditTarget(row, dto.title);
       const isSubtask = target.isSubtask;
       const where = target.label;
-      const teamLeadId = await resolveProjectTeamLead(row.projectid);
+      const teamLeadId = await resolveTaskTeamLead(row);
 
       const previous = new Set(previousAssigneeIds);
       const current = new Set(dto.assigneeIds);
@@ -654,8 +654,8 @@ export const updateTask = async (
   assertTaskCanBeWorkedOn(row);
   await assertCanEditTask(row, actorId, actorRole);
 
-  if (input.assigneeIds !== undefined && !(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
-    throw new TaskAuthorizationError('Only this project\'s Team Lead can change task assignments.');
+  if (input.assigneeIds !== undefined && !(await isTaskTeamLead(row, actorId, actorRole))) {
+    throw new TaskAuthorizationError('Only this task team\'s Team Lead can change task assignments.');
   }
 
   if (input.title !== undefined && !input.title.trim()) throw new TaskValidationError('Task title cannot be empty.');
@@ -682,12 +682,14 @@ export const updateTask = async (
     const projectRow = await projectRepo.findProjectById(row.projectid);
     const projectMembers = await projectRepo.findMembersForProject(row.projectid);
     const projectMemberIds = new Set(projectMembers.map((member) => fromUserPk(member.userid)));
-    const projectLeadId = projectRow ? resolveTeamLeadUserId(projectRow, projectMembers) : '';
     if (input.assigneeIds.some((id) => !projectMemberIds.has(id))) {
       throw new TaskValidationError('Every assignee must be an active project member.');
     }
-    if (projectLeadId && input.assigneeIds.includes(projectLeadId)) {
-      throw new TaskValidationError('The active project Team Lead cannot be assigned development tasks in this project.');
+    if (row.teamid) {
+      const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
+      if (input.assigneeIds.some((id) => !teamMembers.some((member) => member.teamid === row.teamid && fromUserPk(member.userid) === id))) {
+        throw new TaskValidationError('Every assignee must belong to this task\'s team.');
+      }
     }
     if (row.parenttaskid) {
       const parentAssigneeIds = new Set((await repo.findAssigneesForTask(row.parenttaskid)).map((assignee) => fromUserPk(assignee.userid)));
@@ -1203,38 +1205,11 @@ export const requestSubtaskTransfer = async (
 
   const actorName = actorDisplayName(actorId);
   const admins = (await userStore.getAllUsers()).filter((user) => user.role === 'Admin');
-  // Everything an Admin needs in order to decide, in the expanded body rather than the preview:
-  // which parent task the subtask hangs off, which team holds it now, which team is asking for it,
-  // who leads each, and the requester's stated reason (§9).
-  const fromTeam = await projectRepo.findTeamById(row.teamid);
-  const targetLead = teamMembers.find((tm) => tm.teamid === toTeam.teamid && tm.islead);
-  const parentTask = row.parenttaskid ? await repo.findTaskById(row.parenttaskid) : null;
-  const fromTeamName = fromTeam?.teamname || 'the current team';
-  const targetLeadName = targetLead ? actorDisplayName(fromUserPk(targetLead.userid)) : 'unassigned';
-
   publishSafely(
     {
       type: 'subtask_transfer_requested',
       title: 'Subtask Transfer Requested',
-      message: `${actorName} requested to transfer subtask "${row.title}" from the "${fromTeamName}" to the ` +
-        `"${toTeam.teamname}".`,
-      detail: [
-        `${actorName}, Team Lead of the "${fromTeamName}", requested to transfer subtask "${row.title}" to the ` +
-          `"${toTeam.teamname}" in project "${project.projectname}", and is waiting on your decision.`,
-        '',
-        `Reason: ${reason.trim()}`
-      ].join('\n'),
-      metadata: {
-        project: project.projectname,
-        ...(parentTask ? { parentTask: parentTask.title } : {}),
-        subtask: row.title,
-        currentTeam: fromTeamName,
-        proposedTeam: toTeam.teamname,
-        currentTeamLead: actorName,
-        targetTeamLead: targetLeadName,
-        requestedBy: actorName,
-        reason: reason.trim()
-      },
+      message: `${actorName} requested to move subtask "${row.title}" to team "${toTeam.teamname}" in ${project.projectname}.`,
       actorId,
       projectId: fromProjectPk(row.projectid),
       taskId: fromTaskPk(row.taskid)
@@ -1282,103 +1257,35 @@ export const decideSubtaskTransfer = async (
   const subtask = await repo.findTaskById(decided.subtaskid);
   const project = await projectRepo.findProjectById(decided.projectid);
   const toTeam = decided.toteamid ? await projectRepo.findTeamById(decided.toteamid) : null;
-  const fromTeam = decided.fromteamid ? await projectRepo.findTeamById(decided.fromteamid) : null;
   const teamMembers = await projectRepo.findTeamMembersForProject(decided.projectid);
   const toTeamLead = toTeam ? teamMembers.find((tm) => tm.teamid === toTeam.teamid && tm.islead) : undefined;
   const actorName = actorDisplayName(actorId);
   const requesterId = fromUserPk(decided.requestedbyuserid);
-  const subtaskTitle = subtask?.title || '';
-  const toTeamName = toTeam?.teamname || '';
-  const fromTeamName = fromTeam?.teamname || 'the previous team';
-  const projectName = project?.projectname || '';
-  const trimmedReason = decisionReason?.trim();
 
-  if (decision === 'Approved') {
-    // Both leads, each reading it from their own side: the requesting lead hears their request was
-    // carried out, the receiving lead hears they have gained ownership of the subtask.
-    const recipients = [requesterId];
-    const recipientMessages: Record<string, string> = {};
-    const recipientDetails: Record<string, string> = {};
-    if (toTeamLead) {
-      const toTeamLeadId = fromUserPk(toTeamLead.userid);
-      recipients.push(toTeamLeadId);
-      recipientMessages[toTeamLeadId] = `Subtask "${subtaskTitle}" has been transferred to your team.`;
-      recipientDetails[toTeamLeadId] = [
-        `${actorName} approved transferring subtask "${subtaskTitle}" from the "${fromTeamName}" to your ` +
-          `team, the "${toTeamName}", in project "${projectName}".`,
-        '',
-        'It is now your team\'s work — assign it to one of your members, or to yourself.'
-      ].join('\n');
-    }
-    publishSafely(
-      {
-        type: 'subtask_transfer_approved',
-        title: 'Subtask Transfer Approved',
-        message: `${actorName} approved the transfer of subtask "${subtaskTitle}" to the "${toTeamName}".`,
-        detail: [
-          `${actorName} approved your request to transfer subtask "${subtaskTitle}" from the ` +
-            `"${fromTeamName}" to the "${toTeamName}" in project "${projectName}".`,
-          '',
-          `The subtask now belongs to the "${toTeamName}", whose Team Lead owns assigning it.`,
-          ...(trimmedReason ? ['', `Comment: ${trimmedReason}`] : [])
-        ].join('\n'),
-        metadata: {
-          project: projectName,
-          subtask: subtaskTitle,
-          previousTeam: fromTeamName,
-          newTeam: toTeamName,
-          approvedBy: `${actorName} (Admin)`,
-          status: 'Approved'
-        },
-        actorId,
-        projectId: fromProjectPk(decided.projectid),
-        taskId: fromTaskPk(decided.subtaskid),
-        recipientMessages,
-        recipientDetails
-      },
-      recipients,
-      actorId
-    );
-  } else {
-    // Only the requester. recipientMessages used to be built before the decision was branched on,
-    // so its wording was fixed at "approved ... to your team" — meaning on a *rejection* the
-    // receiving team's lead was told the subtask had been transferred to them when it had not. They
-    // gain nothing from a transfer that did not happen, so they are no longer written to at all.
-    //
-    // The reason moves out of the compact preview into detail/metadata, where every other rejection
-    // in the app keeps it (§13). It is the value decideSubtaskTransferRequest just persisted to
-    // work.SubtaskTransferRequests.DecisionReason, so the notification and the stored record cannot
-    // disagree, and it stays readable after a refresh without re-reading the request table.
-    publishSafely(
-      {
-        type: 'subtask_transfer_rejected',
-        title: 'Subtask Transfer Rejected',
-        message: `${actorName} rejected the request to transfer subtask "${subtaskTitle}".`,
-        detail: [
-          `${actorName} rejected your request to transfer subtask "${subtaskTitle}" from the ` +
-            `"${fromTeamName}" to the "${toTeamName}" in project "${projectName}".`,
-          '',
-          `The subtask stays with the "${fromTeamName}".`,
-          '',
-          `Reason: ${trimmedReason || 'No reason was recorded.'}`
-        ].join('\n'),
-        metadata: {
-          project: projectName,
-          subtask: subtaskTitle,
-          currentTeam: fromTeamName,
-          proposedTeam: toTeamName,
-          rejectedBy: `${actorName} (Admin)`,
-          status: 'Rejected',
-          rejectionReason: trimmedReason || ''
-        },
-        actorId,
-        projectId: fromProjectPk(decided.projectid),
-        taskId: fromTaskPk(decided.subtaskid)
-      },
-      [requesterId],
-      actorId
-    );
+  const recipients: string[] = [requesterId];
+  const recipientMessages: Record<string, string> = {};
+  if (toTeamLead) {
+    recipients.push(fromUserPk(toTeamLead.userid));
+    recipientMessages[fromUserPk(toTeamLead.userid)] =
+      `${actorName} approved moving subtask "${subtask?.title || ''}" to your team "${toTeam?.teamname || ''}".`;
   }
+  publishSafely(
+    {
+      type: decision === 'Approved' ? 'subtask_transfer_approved' : 'subtask_transfer_rejected',
+      title: decision === 'Approved' ? 'Subtask Transfer Approved' : 'Subtask Transfer Rejected',
+      message:
+        decision === 'Approved'
+          ? `${actorName} approved moving subtask "${subtask?.title || ''}" to team "${toTeam?.teamname || ''}".`
+          : `${actorName} rejected your request to move subtask "${subtask?.title || ''}"` +
+            (decisionReason?.trim() ? ` (${decisionReason.trim()})` : '') + '.',
+      actorId,
+      projectId: fromProjectPk(decided.projectid),
+      taskId: fromTaskPk(decided.subtaskid),
+      recipientMessages
+    },
+    recipients,
+    actorId
+  );
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: decision === 'Approved' ? 'Approved' : 'Rejected', module: 'Tasks', entityType: 'Task',
@@ -1554,7 +1461,7 @@ const notifySubtaskStatusChange = async (
 
   // Subtask completion is a Team Lead signal (they track throughput); reopening additionally
   // concerns the subtask's own assignees, who now have work back on their plate.
-  const teamLeadId = await resolveProjectTeamLead(subtaskRow.projectid);
+  const teamLeadId = await resolveTaskTeamLead(subtaskRow);
   const assignees = (await repo.findAssigneesForTask(subtaskRow.taskid)).map((a) => fromUserPk(a.userid));
   const recipients = becameComplete ? [teamLeadId] : [teamLeadId, ...assignees];
 
@@ -1608,7 +1515,7 @@ const syncParentFromSubtasks = async (
   });
 
   const actorName = actorDisplayName(actorId);
-  const teamLeadId = await resolveProjectTeamLead(parent.projectid);
+  const teamLeadId = await resolveTaskTeamLead(parent);
   const assignees = (await repo.findAssigneesForTask(parent.taskid)).map((a) => fromUserPk(a.userid));
   const projectId = fromProjectPk(parent.projectid);
   const parentFrontendId = fromTaskPk(parent.taskid);
@@ -1688,7 +1595,7 @@ export const reopenTask = async (
 
   // Admin is intentionally excluded here, unlike everywhere else in this service: reopening is a
   // delivery decision owned by whoever leads the project, not a system-administration action.
-  if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole))) {
+  if (actorRole === 'Admin' || !(await isTaskTeamLead(row, actorId, actorRole))) {
     throw new TaskAuthorizationError('You can only reopen tasks in projects you lead.');
   }
 
@@ -1856,7 +1763,7 @@ const decideReview = async (
   // own per-project Team Lead (ProjectMembers.MemberRoleCode = 'TeamLead', resolved by
   // isProjectLead — never the actor's account role) may decide a review. Reviewing delivered
   // work is that project's responsibility, not a system-administration action.
-  if (!(await isProjectLead(projectFrontendId(row), actorId, actorRole, { allowAdmin: false }))) {
+  if (actorRole === 'Admin' || !(await isTaskTeamLead(row, actorId, actorRole))) {
     throw new TaskAuthorizationError('Only this project\'s Team Lead may decide a review.');
   }
   if (!note?.trim()) throw new TaskValidationError('A reason is required.');

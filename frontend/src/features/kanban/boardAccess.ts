@@ -1,5 +1,5 @@
-import { Project, TaskStatus, UserRole } from '../../types';
-import { isActiveProject } from '../tasks/taskRules';
+import { Project, Task, TaskStatus, UserRole } from '../../types';
+import { getProjectTeamLedBy, getTaskTeamId, isActiveProject, isProjectTeamLead } from '../tasks/taskRules';
 
 // The four columns the Project Board renders. `Blocked` remains a valid Task.status value
 // owned by the Task Creation module but is intentionally not surfaced on the board
@@ -30,7 +30,7 @@ export const getAccessibleProjects = (
 ): Project[] => {
   const activeProjects = projects.filter(isActiveProject);
   if (role === 'Admin' || role === 'HR') return activeProjects;
-  if (role === 'Team_Lead') return activeProjects.filter((project) => project.teamLeadId === userId);
+  if (role === 'Team_Lead') return activeProjects.filter((project) => isProjectTeamLead(project, userId));
   return activeProjects.filter((project) => project.memberIds.includes(userId));
 };
 
@@ -42,8 +42,10 @@ export const getAccessibleProjects = (
 export const canDecideReview = (
   role: UserRole,
   userId: string,
-  project: Project
-): boolean => role !== 'HR' && project.teamLeadId === userId;
+  project: Project,
+  task?: Task
+): boolean => role !== 'HR' && isProjectTeamLead(project, userId)
+  && (!task || !getTaskTeamId(task) || getProjectTeamLedBy(project, userId)?.id === getTaskTeamId(task));
 
 // Who may reopen a Done task. Deliberately stricter than canDecideReview: an Admin can approve
 // a review but may NOT reopen a completed task — reversing a delivered outcome belongs to the
@@ -52,8 +54,10 @@ export const canDecideReview = (
 export const canReopenTask = (
   role: UserRole,
   userId: string,
-  project: Project
-): boolean => role !== 'HR' && project.teamLeadId === userId;
+  project: Project,
+  task?: Task
+): boolean => role !== 'HR' && isProjectTeamLead(project, userId)
+  && (!task || !getTaskTeamId(task) || getProjectTeamLedBy(project, userId)?.id === getTaskTeamId(task));
 
 // Where a reopened task may land. Never 'Done' (that's where it is) and never 'Blocked'
 // (Task Module territory) — matches REOPEN_TARGETS in backend/src/tasks/task.service.ts.

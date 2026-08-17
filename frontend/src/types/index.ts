@@ -170,6 +170,10 @@ export interface Task {
   id: string;
   taskNumber: string;
   projectId: string;
+  /** Owning project team. Undefined only for tasks created before project teams existed. */
+  teamId?: string;
+  /** Admin-created team handoffs remain unassigned until that team's lead distributes work. */
+  assignmentStatus?: 'NeedsTeamAssignment' | 'Assigned';
   parentTaskId?: string;
   title: string;
   description: string;

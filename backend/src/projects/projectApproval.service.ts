@@ -297,7 +297,7 @@ export const createApprovalRequest = async (
 export const createTaskApprovalRequest = async (
   proposed: CreateTaskInput, requesterId: string, requesterRole: string
 ): Promise<ProjectApprovalRequestDTO> => {
-  if (requesterRole !== 'Team_Lead') throw new ProjectAuthorizationError('Only Team Leads can submit task creation requests.');
+  if (requesterRole === 'Admin' || requesterRole === 'HR') throw new ProjectAuthorizationError('Only Team Leads can submit task creation requests.');
   const projectPk = toProjectPk(proposed.projectId);
   const project = await projectRepo.findProjectById(projectPk);
   if (!project || project.statuscode !== 'Active') throw new ProjectNotFoundError('Active project not found.');
@@ -308,6 +308,9 @@ export const createTaskApprovalRequest = async (
   ]);
   if (!isTeamLeadOfProject(project, members, teamMembers, requesterId)) {
     throw new ProjectAuthorizationError('You can only create tasks for a project you lead.');
+  }
+  if (!proposed.assigneeIds?.length) {
+    throw new ProjectValidationError('Team Leads must assign each new task to themselves or a member of their team.');
   }
   if (teams.length > 0) {
     const actorTeam = teamMembers.find((member) => member.userid === toUserPk(requesterId) && member.islead);
@@ -399,7 +402,8 @@ export const decideApprovalRequest = async (
       case 'TASK_CREATE': {
         const proposal = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) as CreateTaskInput : null;
         if (!proposal) throw new ProjectValidationError('This task request has invalid setup details.');
-        await taskService.createTask(proposal, requesterId, 'Admin');
+        const requester = userStore.findById(requesterId);
+        await taskService.createTask(proposal, requesterId, requester?.role || 'Team_Member');
         break;
       }
       case 'PROJECT_EDIT':

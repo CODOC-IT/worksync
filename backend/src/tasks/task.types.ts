@@ -84,6 +84,8 @@ export interface TaskDTO {
   id: string;
   taskNumber: string;
   projectId: string;
+  teamId?: string;
+  assignmentStatus?: 'NeedsTeamAssignment' | 'Assigned';
   parentTaskId?: string;
   title: string;
   description: string;
