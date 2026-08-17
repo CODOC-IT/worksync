@@ -19,6 +19,36 @@ const VALID_PRIORITIES = new Set(['Low', 'Medium', 'High', 'Urgent']);
 const VALID_STATUSES = new Set(['Draft', 'Active', 'On Hold', 'Archived', 'Pending Approval', 'Completed']);
 const FRONTEND_ID_PATTERN = /^usr-\d+$/;
 
+// Shared by validateCreateProjectBody and validateUpdateProjectBody (the latter only when the
+// caller -- Admin editing a pending proposal's setup, see project.service.ts's
+// updateProjectTeamSetup -- includes a `teams` array) so the two never drift on what a
+// syntactically valid team looks like.
+const validateTeamsArray = (teams: unknown): ValidationResult => {
+  if (!Array.isArray(teams)) return { valid: false, message: 'teams must be an array.' };
+  for (const rawTeam of teams) {
+    if (!rawTeam || typeof rawTeam !== 'object') return { valid: false, message: 'Each team must be an object.' };
+    const team = rawTeam as {
+      name?: unknown;
+      description?: unknown;
+      leadId?: unknown;
+      memberIds?: unknown;
+    };
+    if (!team.name || typeof team.name !== 'string' || !team.name.trim()) {
+      return { valid: false, message: 'Each team must have a name.' };
+    }
+    if (!team.description || typeof team.description !== 'string' || !team.description.trim()) {
+      return { valid: false, message: `Team "${String(team.name)}" must have a description.` };
+    }
+    if (!team.leadId || typeof team.leadId !== 'string' || !FRONTEND_ID_PATTERN.test(team.leadId)) {
+      return { valid: false, message: `Team "${String(team.name)}" must have a valid "usr-<n>" Team Lead.` };
+    }
+    if (!Array.isArray(team.memberIds) || team.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id))) {
+      return { valid: false, message: `Team "${String(team.name)}" memberIds must be an array of "usr-<n>" ids.` };
+    }
+  }
+  return { valid: true };
+};
+
 export const validateCreateProjectBody = (body: unknown): ValidationResult => {
   if (!body || typeof body !== 'object') return { valid: false, message: 'Request body is required.' };
   const input = body as Partial<CreateProjectInput>;
@@ -45,28 +75,8 @@ export const validateCreateProjectBody = (body: unknown): ValidationResult => {
     return { valid: false, message: 'memberIds must be an array of "usr-<n>" ids.' };
   }
   if (input.teams !== undefined) {
-    if (!Array.isArray(input.teams)) return { valid: false, message: 'teams must be an array.' };
-    for (const rawTeam of input.teams) {
-      if (!rawTeam || typeof rawTeam !== 'object') return { valid: false, message: 'Each team must be an object.' };
-      const team = rawTeam as {
-        name?: unknown;
-        description?: unknown;
-        leadId?: unknown;
-        memberIds?: unknown;
-      };
-      if (!team.name || typeof team.name !== 'string' || !team.name.trim()) {
-        return { valid: false, message: 'Each team must have a name.' };
-      }
-      if (!team.description || typeof team.description !== 'string' || !team.description.trim()) {
-        return { valid: false, message: `Team "${String(team.name)}" must have a description.` };
-      }
-      if (!team.leadId || typeof team.leadId !== 'string' || !FRONTEND_ID_PATTERN.test(team.leadId)) {
-        return { valid: false, message: `Team "${String(team.name)}" must have a valid "usr-<n>" Team Lead.` };
-      }
-      if (!Array.isArray(team.memberIds) || team.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id))) {
-        return { valid: false, message: `Team "${String(team.name)}" memberIds must be an array of "usr-<n>" ids.` };
-      }
-    }
+    const teamsValidation = validateTeamsArray(input.teams);
+    if (!teamsValidation.valid) return teamsValidation;
   }
   return { valid: true };
 };
@@ -99,6 +109,10 @@ export const validateUpdateProjectBody = (body: unknown): ValidationResult => {
   if (input.memberIds !== undefined &&
       (!Array.isArray(input.memberIds) || input.memberIds.some((id) => !FRONTEND_ID_PATTERN.test(id)))) {
     return { valid: false, message: 'memberIds must be an array of "usr-<n>" ids.' };
+  }
+  if (input.teams !== undefined) {
+    const teamsValidation = validateTeamsArray(input.teams);
+    if (!teamsValidation.valid) return teamsValidation;
   }
   return { valid: true };
 };

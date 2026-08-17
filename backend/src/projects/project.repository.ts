@@ -265,6 +265,57 @@ export const replaceTeamLead = async (
     return true;
   });
 
+// Admin editing a pending (PROJECT_CREATE) proposal's team structure before approval -- see
+// project.service.ts's updateProjectTeamSetup, the only caller. Wholesale replace, not a diff:
+// safe because this only ever runs against a PendingActivation project, which cannot have tasks
+// yet (task creation requires Active), so no task/team-scoped data is ever orphaned by dropping
+// the old team layer outright. Mirrors insertProject's own member-seeding + per-team insertTeam
+// steps exactly, rather than duplicating that logic a second way.
+export const replaceProjectTeams = async (
+  projectId: number,
+  ownerUserId: number,
+  teams: InsertTeamRow[],
+  actorUserId: number
+): Promise<void> =>
+  withTransaction(async (runQuery) => {
+    await runQuery('DELETE FROM work.teammembers WHERE projectid = $1', [projectId]);
+    await runQuery('DELETE FROM work.projectteams WHERE projectid = $1', [projectId]);
+
+    // Reset to just the Owner row -- the flattened new team roster is rebuilt from scratch below,
+    // same shape as removeProjectMember's own soft-delete update.
+    await runQuery(
+      `UPDATE work.projectmembers
+       SET leftatutc = CURRENT_TIMESTAMP, removedbyuserid = $1, removalreason = $2
+       WHERE projectid = $3 AND userid != $4 AND leftatutc IS NULL`,
+      [actorUserId, 'Team setup changed by Admin before approval.', projectId, ownerUserId]
+    );
+
+    const leadIds = Array.from(new Set(teams.map((team) => team.leadId)));
+    for (const leadId of leadIds) {
+      if (leadId === ownerUserId) continue;
+      await runQuery(
+        `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+         VALUES ($1, $2, 'TeamLead', $3)`,
+        [projectId, leadId, actorUserId]
+      );
+    }
+
+    const memberIds = Array.from(new Set(teams.flatMap((team) => team.memberIds))).filter(
+      (id) => id !== ownerUserId && !leadIds.includes(id)
+    );
+    for (const memberId of memberIds) {
+      await runQuery(
+        `INSERT INTO work.projectmembers (projectid, userid, memberrolecode, addedbyuserid)
+         VALUES ($1, $2, 'Member', $3)`,
+        [projectId, memberId, actorUserId]
+      );
+    }
+
+    for (const team of teams) {
+      await insertTeam(runQuery, projectId, team, actorUserId);
+    }
+  });
+
 const MILESTONE_COLUMNS = `
   milestoneid, projectid, milestonename, description, duedate::text, completedatutc,
   createdbyuserid, createdatutc

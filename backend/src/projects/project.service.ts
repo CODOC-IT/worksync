@@ -6,13 +6,29 @@ import {
   rowToProjectDTO,
   rowToProjectFileDTO
 } from './project.mapper.js';
-import { fromTeamPk, fromUserPk, toProjectPk, toTeamPk, toUserPk } from '../utils/idMapping.js';
+import { fromProjectPk, fromTeamPk, fromUserPk, toProjectPk, toTeamPk, toUserPk } from '../utils/idMapping.js';
 import { actorDisplayName } from '../utils/actorDisplay.js';
 import { userStore } from '../store/userStore.js';
 import * as notificationService from '../notifications/notification.service.js';
 import { recordActivitySafe } from '../activity/activity.service.js';
-import { findActiveTaskAssignmentsForUserInProject, getProjectTaskCompletion } from '../tasks/task.repository.js';
+import {
+  findActiveTaskAssignmentsForUserInProject,
+  getProjectTaskCompletion,
+  reassignActiveTasksInProject
+} from '../tasks/task.repository.js';
 import { resolveCreateParticipants, resolveTeamSetup, resolveUpdatedParticipants } from './projectWorkflow.rules.js';
+import {
+  AffectedTaskRef,
+  TeamRef,
+  buildIncomingLeadCopy,
+  buildLeadTaskReassignmentCopy,
+  buildMemberMovedCopy,
+  buildMoveReassignmentCopy,
+  buildOutgoingLeadCopy,
+  buildRemovalReassignmentCopy,
+  buildTeamLeadAssignmentCopy,
+  buildTeamMemberAddedCopy
+} from './teamNotificationCopy.js';
 import {
   API_TO_DB_PRIORITY,
   API_TO_DB_PROJECT_STATUS,
@@ -20,6 +36,7 @@ import {
   CreateMilestoneInput,
   CreateProjectFileInput,
   CreateProjectInput,
+  CreateTeamInput,
   MilestoneDTO,
   MilestoneRow,
   ProjectDTO,
@@ -146,6 +163,106 @@ const notifyRecipients = (
   notificationService.publishEvent({ ...event, recipientIds }).catch((error) => {
     console.error('[project.service] Failed to publish notification event.', event.type, error);
   });
+};
+
+// Fire-and-forget publish to an explicit recipient list, excluding the actor (nobody is notified of
+// their own action). The task module's publishSafely, restated here rather than imported, so this
+// service keeps its existing one-way dependency on tasks/task.repository.ts only.
+const publishSafely = (
+  event: Omit<Parameters<typeof notificationService.publishEvent>[0], 'recipientIds'>,
+  recipientIds: (string | null | undefined)[],
+  actorId: string
+): void => {
+  const ids = Array.from(new Set(recipientIds)).filter((id): id is string => Boolean(id) && id !== actorId);
+  if (ids.length === 0) return;
+  notificationService.publishEvent({ ...event, recipientIds: ids }).catch((error) => {
+    console.error('[project.service] Failed to publish notification event.', event.type, error);
+  });
+};
+
+// The Team Lead OF A SPECIFIC TEAM, resolved from work.TeamMembers.IsLead — never from the account
+// role. §1 of the team model: "Team Lead" is a per-project, per-team designation, so the same person
+// can lead Team 1 of project A and be a plain member of project B, and no notification recipient may
+// be derived from iam.Roles. Distinct from project.mapper.ts's resolveTeamLeadUserId, which answers
+// the older, project-wide question ("who represents this project?") and returns one lead for the
+// whole project — the wrong person to tell about a specific team's stranded work.
+const leadOfTeam = (teamMembers: TeamMemberRow[], teamId: number): string | undefined => {
+  const lead = teamMembers.find((member) => member.teamid === teamId && member.islead);
+  return lead ? fromUserPk(lead.userid) : undefined;
+};
+
+/** The team a given member currently belongs to in this project, or undefined on a legacy project. */
+const teamOfMember = (teamMembers: TeamMemberRow[], memberUserId: string): TeamMemberRow | undefined =>
+  teamMembers.find((member) => member.userid === toUserPk(memberUserId));
+
+const teamRef = (team: ProjectTeamRow | undefined): TeamRef | undefined =>
+  team ? { name: team.teamname, description: team.description } : undefined;
+
+// Active (not archived, not completed) task/subtask assignments a member still holds in a project,
+// as the shape the team copy templates take. `parenttaskid` distinguishes a subtask from a task so
+// the expanded body can say which it is.
+const affectedTasksForMember = async (
+  projectPk: number,
+  memberUserId: string
+): Promise<AffectedTaskRef[]> => {
+  const rows = await findActiveTaskAssignmentsForUserInProject(projectPk, toUserPk(memberUserId));
+  return rows.map((row) => ({ title: row.title, isSubtask: row.parenttaskid !== null }));
+};
+
+/**
+ * One targeted assignment notification per person in a newly materialized team structure, telling
+ * each of them *which* team they are in and in what capacity — the distinction that only exists
+ * once a project has more than one team, and the thing a single project-wide "you were added"
+ * event cannot express (§2's "Team Lead Assignment" / "Team Member Added").
+ *
+ * Called at creation for an Admin-created project, and again at approval for a member-proposed one
+ * (where `approvedFromProposalBy` names the Admin, so a recipient is never told the proposer
+ * personally made assignments an Admin may have edited before approving — §3).
+ *
+ * Published as `project_member_added`: these events *are* project membership, and reusing the
+ * established type keeps them inside the existing preference/category/link-route machinery rather
+ * than adding parallel type codes for what is the same fact with better wording.
+ */
+const publishTeamAssignments = async (
+  projectPk: number,
+  projectName: string,
+  actorId: string,
+  options: { approvedFromProposalBy?: string } = {}
+): Promise<void> => {
+  const [teams, teamMembers] = await Promise.all([
+    repo.findTeamsForProject(projectPk),
+    repo.findTeamMembersForProject(projectPk)
+  ]);
+  if (teams.length === 0) return;
+
+  const actorName = actorDisplayName(actorId);
+  const teamsById = new Map(teams.map((team) => [team.teamid, team]));
+  const projectIdStr = fromProjectPk(projectPk);
+
+  for (const membership of teamMembers) {
+    const team = teamsById.get(membership.teamid);
+    if (!team) continue;
+    const recipientId = fromUserPk(membership.userid);
+    const copy = (membership.islead ? buildTeamLeadAssignmentCopy : buildTeamMemberAddedCopy)({
+      actorName,
+      projectName,
+      team: { name: team.teamname, description: team.description },
+      approvedFromProposalBy: options.approvedFromProposalBy
+    });
+    publishSafely(
+      {
+        type: 'project_member_added',
+        title: copy.title,
+        message: copy.message,
+        detail: copy.detail,
+        metadata: copy.metadata,
+        actorId,
+        projectId: projectIdStr
+      },
+      [recipientId],
+      actorId
+    );
+  }
 };
 
 export const listProjectsForUser = async (userId: string, role: string): Promise<ProjectDTO[]> => {
@@ -372,9 +489,44 @@ export const createProject = async (
   // is per-recipient, so this is one publishEvent call, not two. There is no separate "Project
   // Lead" concept -- this is the same per-project Team Lead designation resolveTeamLeadUserId
   // resolves, just worded for whoever that happens to be on a single-lead/legacy project.
+  //
+  // On a multi-team project this single "you are the Team Lead" override is not enough: it names
+  // only teamLeadUserIds[0], so every *other* team's lead used to be told they had merely been
+  // "added to the project". Those projects instead get one targeted assignment notification per
+  // team below (publishTeamAssignments), and the event here stays purely about the project itself.
   const leadFrontendId = teamLeadPk ? fromUserPk(teamLeadPk) : undefined;
+  const createdTeams = teamsForInsert || [];
+  const pendingSuffix = statusCode === 'Active' ? '' : ' (pending Admin activation)';
 
-  if (statusCode === 'Active') {
+  if (createdTeams.length > 0) {
+    notifyRecipients(members, actorId, {
+      type: 'project_created',
+      title: 'Project Created',
+      message: `${actorName} created project "${dto.title}"${pendingSuffix}.`,
+      detail: [
+        `${actorName} created project "${dto.title}" with ${createdTeams.length} ` +
+          `${createdTeams.length === 1 ? 'team' : 'teams'}${pendingSuffix}.`,
+        '',
+        input.description.trim()
+      ].join('\n'),
+      metadata: {
+        project: dto.title,
+        createdBy: `${actorName} (${actorRole === 'Admin' ? 'Admin' : 'Team Member'})`,
+        teams: createdTeams.map((team) => team.name).join(', '),
+        status: dto.status
+      },
+      actorId,
+      projectId: dto.id
+    });
+    // Only once the structure is real. A proposal still awaiting Admin review is exactly the case
+    // §3 warns about: the Admin may edit the teams, leads and members before approving, so telling
+    // someone now that they are Team Lead of a given team would name an assignment the proposer
+    // does not have the authority to make. activatePendingProject publishes these instead, from the
+    // final approved configuration and crediting the approving Admin.
+    if (statusCode === 'Active') {
+      await publishTeamAssignments(projectId, dto.title, actorId);
+    }
+  } else if (statusCode === 'Active') {
     notifyRecipients(members, actorId, {
       type: 'project_created',
       title: 'Project Created',
@@ -401,6 +553,9 @@ export const createProject = async (
       actorId,
       projectId: dto.id
     });
+  }
+
+  if (statusCode !== 'Active') {
     (async () => {
       const admins = (await userStore.getAllUsers()).filter(
         (user) => user.role === 'Admin' && user.id !== actorId
@@ -624,7 +779,8 @@ export const updateProject = async (
 
 export const activatePendingProject = async (
   projectId: string,
-  actorRole: string
+  actorRole: string,
+  actorId?: string
 ): Promise<void> => {
   if (actorRole !== 'Admin') throw new ProjectAuthorizationError('Only Admins can activate project proposals.');
   const projectPk = toProjectPk(projectId);
@@ -635,6 +791,18 @@ export const activatePendingProject = async (
   }
   if (!await repo.activatePendingProject(projectPk)) {
     throw new ProjectValidationError('This project proposal is no longer pending activation.');
+  }
+
+  // §3: approval is the moment the team structure becomes real, and until now it produced no
+  // notification for anyone except the requester (who got a generic "Project Request Approved" from
+  // projectApproval.service.ts). Everyone placed on a team by the *final, approved* configuration is
+  // told here — crediting the approving Admin as the actor, because the Admin may have edited the
+  // proposed teams, leads or members via changePendingSetup before approving, and the proposer must
+  // never appear to have made an assignment they did not make.
+  if (actorId) {
+    await publishTeamAssignments(projectPk, row.projectname, actorId, {
+      approvedFromProposalBy: actorDisplayName(actorId)
+    });
   }
 };
 
@@ -853,18 +1021,82 @@ export const removeMember = async (
     const dto = await buildDTO(row, members);
     const memberName = actorDisplayName(memberUserId);
 
-    notificationService
-      .publishEvent({
+    // The lead of the removed member's OWN team, not the project's first lead. On a multi-team
+    // project resolveTeamLeadUserId returns a single project-wide representative, so this used to
+    // hand "reassign this person's work" to a lead who may have nothing to do with the team the work
+    // belongs to — while the lead who actually owns it heard nothing (§4). Falls back to the
+    // project-wide lead only for a legacy project that has no team rows at all.
+    const memberTeam = teamOfMember(currentTeamMembers, memberUserId);
+    const owningTeam = memberTeam
+      ? (await repo.findTeamsForProject(row.projectid)).find((team) => team.teamid === memberTeam.teamid)
+      : undefined;
+    const owningTeamLeadId = memberTeam ? leadOfTeam(currentTeamMembers, memberTeam.teamid) : undefined;
+    const reassignmentRecipient = owningTeamLeadId || resolveTeamLeadUserId(row, members);
+
+    if (owningTeam && owningTeamLeadId) {
+      const copy = buildRemovalReassignmentCopy({
+        actorName,
+        memberName,
+        projectName: dto.title,
+        team: { name: owningTeam.teamname, description: owningTeam.description },
+        tasks: activeAssignments.map((task) => ({ title: task.title, isSubtask: task.parenttaskid !== null }))
+      });
+      publishSafely(
+        {
+          type: 'team_member_removed_needs_reassignment',
+          title: copy.title,
+          message: copy.message,
+          detail: copy.detail,
+          metadata: copy.metadata,
+          actorId,
+          projectId: dto.id
+        },
+        [reassignmentRecipient],
+        actorId
+      );
+    } else {
+      notificationService
+        .publishEvent({
+          type: 'project_member_pending_removal',
+          title: 'Member Pending Removal',
+          message: `${actorName} tried to remove ${memberName} from "${dto.title}", but they still ` +
+            `have ${activeAssignments.length} active task/subtask assignment(s). Reassign or complete their work to ` +
+            'finish removing them.',
+          actorId,
+          projectId: dto.id,
+          recipientIds: [reassignmentRecipient]
+        })
+        .catch((error) => console.error('[project.service] Failed to publish pending-removal event.', error));
+    }
+
+    // The member themselves, per §4's "the affected member should receive an appropriate project
+    // membership notification" — they are the only other person concerned, and they are told their
+    // removal is pending rather than done, which is what is actually true of their access.
+    publishSafely(
+      {
         type: 'project_member_pending_removal',
-        title: 'Member Pending Removal',
-        message: `${actorName} tried to remove ${memberName} from "${dto.title}", but they still ` +
-          `have ${activeAssignments.length} active task/subtask assignment(s). Reassign or complete their work to ` +
-          'finish removing them.',
+        title: 'Removal Pending',
+        message: `${actorName} removed you from project "${dto.title}".`,
+        detail: [
+          `${actorName} removed you from project "${dto.title}".`,
+          '',
+          `You still have ${activeAssignments.length} active ` +
+            `${activeAssignments.length === 1 ? 'assignment' : 'assignments'} in this project. Your removal ` +
+            'completes once that work has been reassigned or completed, so keep working on it until then.'
+        ].join('\n'),
+        metadata: {
+          project: dto.title,
+          removedBy: actorName,
+          status: 'Pending removal',
+          openAssignments: String(activeAssignments.length),
+          ...(owningTeam ? { team: owningTeam.teamname } : {})
+        },
         actorId,
-        projectId: dto.id,
-        recipientIds: [resolveTeamLeadUserId(row, members)]
-      })
-      .catch((error) => console.error('[project.service] Failed to publish pending-removal event.', error));
+        projectId: dto.id
+      },
+      [memberUserId],
+      actorId
+    );
 
     recordActivitySafe({
       actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -930,6 +1162,20 @@ export const moveMember = async (
     throw new ProjectValidationError('Target team not found in this project.');
   }
 
+  // Read before the move: afterwards the member's TeamMembers row already points at the target, so
+  // the team they are leaving — and that team's Lead, who §6 requires be told what work just lost
+  // its owner — would be unrecoverable. The active assignments are captured here for the same
+  // reason they are captured at all: they are the concrete thing the previous Lead has to act on.
+  const teamMembersBeforeMove = await repo.findTeamMembersForProject(row.projectid);
+  const previousMembership = teamOfMember(teamMembersBeforeMove, memberUserId);
+  const previousTeam = previousMembership
+    ? (await repo.findTeamsForProject(row.projectid)).find((team) => team.teamid === previousMembership.teamid)
+    : undefined;
+  const previousTeamLeadId = previousMembership
+    ? leadOfTeam(teamMembersBeforeMove, previousMembership.teamid)
+    : undefined;
+  const strandedTasks = previousTeam ? await affectedTasksForMember(row.projectid, memberUserId) : [];
+
   const moved = await repo.moveTeamMember(row.projectid, toUserPk(memberUserId), targetTeam.teamid, toUserPk(actorId));
   if (!moved) {
     throw new ProjectValidationError('That user is not currently in a team of this project.');
@@ -939,24 +1185,75 @@ export const moveMember = async (
   const dto = await buildDTO(row, members);
   const actorName = actorDisplayName(actorId);
   const memberName = actorDisplayName(memberUserId);
+  const fromRef = teamRef(previousTeam);
+  const toRef: TeamRef = { name: targetTeam.teamname, description: targetTeam.description };
 
-  notificationService
-    .publishEvent({
-      type: 'team_member_moved',
-      title: 'Moved to a New Team',
-      message: `${actorName} moved you to team "${targetTeam.teamname}" in "${dto.title}".`,
-      actorId,
-      projectId: dto.id,
-      recipientIds: [memberUserId]
-    })
-    .catch((error) => console.error('[project.service] Failed to publish member-moved event.', error));
+  // The moved member. Names both ends of the move, not just the destination — "you were moved to
+  // Team Y" alone leaves them unable to tell which of their current tasks they keep.
+  if (fromRef) {
+    const memberCopy = buildMemberMovedCopy({ actorName, projectName: dto.title, fromTeam: fromRef, toTeam: toRef });
+    publishSafely(
+      {
+        type: 'team_member_moved',
+        title: memberCopy.title,
+        message: memberCopy.message,
+        detail: memberCopy.detail,
+        metadata: memberCopy.metadata,
+        actorId,
+        projectId: dto.id
+      },
+      [memberUserId],
+      actorId
+    );
+  } else {
+    notificationService
+      .publishEvent({
+        type: 'team_member_moved',
+        title: 'Moved to a New Team',
+        message: `${actorName} moved you to team "${targetTeam.teamname}" in "${dto.title}".`,
+        actorId,
+        projectId: dto.id,
+        recipientIds: [memberUserId]
+      })
+      .catch((error) => console.error('[project.service] Failed to publish member-moved event.', error));
+  }
+
+  // The team they left, but only when work was actually stranded: a move with nothing outstanding
+  // gives that Lead nothing to do, and §6's "do not notify unrelated users" applies to a Lead with
+  // no action as much as to anyone else.
+  if (fromRef && previousTeamLeadId && strandedTasks.length > 0) {
+    const leadCopy = buildMoveReassignmentCopy({
+      actorName,
+      memberName,
+      projectName: dto.title,
+      team: fromRef,
+      fromTeam: fromRef,
+      toTeam: toRef,
+      tasks: strandedTasks
+    });
+    publishSafely(
+      {
+        type: 'team_member_removed_needs_reassignment',
+        title: leadCopy.title,
+        message: leadCopy.message,
+        detail: leadCopy.detail,
+        metadata: leadCopy.metadata,
+        actorId,
+        projectId: dto.id
+      },
+      [previousTeamLeadId],
+      actorId
+    );
+  }
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     affectedUserId: memberUserId, affectedUserName: memberName,
     action: 'Reassigned', module: 'Projects', entityType: 'User', entityId: memberUserId,
     entityName: memberName, projectId: dto.id, projectName: dto.title,
-    description: `${actorName} moved ${memberName} to team “${targetTeam.teamname}” in “${dto.title}”.`,
+    description: fromRef
+      ? `${actorName} moved ${memberName} from team “${fromRef.name}” to team “${targetTeam.teamname}” in “${dto.title}”.`
+      : `${actorName} moved ${memberName} to team “${targetTeam.teamname}” in “${dto.title}”.`,
     linkRoute: 'projects', important: true
   });
 
@@ -1006,26 +1303,83 @@ export const replaceTeamLead = async (
 
   await repo.replaceTeamLead(row.projectid, team.teamid, currentLead.userid, toUserPk(newLeadId), toUserPk(actorId));
 
-  const members = await repo.findMembersForProject(row.projectid);
-  const dto = await buildDTO(row, members);
+  const outgoingLeadId = fromUserPk(currentLead.userid);
   const actorName = actorDisplayName(actorId);
   const newLeadName = actorDisplayName(newLeadId);
-  const oldLeadName = actorDisplayName(fromUserPk(currentLead.userid));
+  const oldLeadName = actorDisplayName(outgoingLeadId);
 
-  notificationService
-    .publishEvent({
+  // §5: the outgoing lead's open work follows the role. Done inside the same request that performed
+  // the replacement -- and before the notifications below, so what each recipient is told about the
+  // reassignment is what the database actually holds, not an intention that could still fail.
+  const reassignedRows = await reassignActiveTasksInProject(
+    row.projectid,
+    currentLead.userid,
+    toUserPk(newLeadId),
+    toUserPk(actorId)
+  );
+  const reassignedTasks: AffectedTaskRef[] = reassignedRows.map((task) => ({
+    title: task.title,
+    isSubtask: task.parenttaskid !== null
+  }));
+
+  const members = await repo.findMembersForProject(row.projectid);
+  const dto = await buildDTO(row, members);
+
+  const changeInput = {
+    actorName,
+    projectName: dto.title,
+    team: { name: team.teamname, description: team.description },
+    outgoingLeadName: oldLeadName,
+    newLeadName,
+    reassignedTasks
+  };
+  const outgoingCopy = buildOutgoingLeadCopy(changeInput);
+  const incomingCopy = buildIncomingLeadCopy(changeInput);
+
+  // One event, two readings. The previous wording told the outgoing lead only that they had been
+  // "replaced", without naming their successor -- the one fact they need in order to hand anything
+  // over. Per-recipient detail/metadata as well as message, so the expanded view differs too.
+  publishSafely(
+    {
       type: 'team_lead_changed',
-      title: 'Team Lead Changed',
-      message: `${actorName} made you the Team Lead of team "${team.teamname}" in "${dto.title}".`,
-      recipientMessages: {
-        [fromUserPk(currentLead.userid)]: `${actorName} replaced you as the Team Lead of team ` +
-          `"${team.teamname}" in "${dto.title}".`
-      },
+      title: incomingCopy.title,
+      message: incomingCopy.message,
+      detail: incomingCopy.detail,
+      metadata: incomingCopy.metadata,
+      recipientMessages: { [outgoingLeadId]: outgoingCopy.message },
+      recipientDetails: { [outgoingLeadId]: outgoingCopy.detail },
       actorId,
-      projectId: dto.id,
-      recipientIds: [newLeadId, fromUserPk(currentLead.userid)]
-    })
-    .catch((error) => console.error('[project.service] Failed to publish team-lead-changed event.', error));
+      projectId: dto.id
+    },
+    [newLeadId, outgoingLeadId],
+    actorId
+  );
+
+  // One notification per reassigned task, addressed only to the new lead: an assignment is acted on
+  // per task, and the outgoing lead already has the full list in their own expanded detail above.
+  for (const task of reassignedTasks) {
+    const taskCopy = buildLeadTaskReassignmentCopy({
+      taskTitle: task.title,
+      isSubtask: task.isSubtask,
+      teamName: team.teamname,
+      projectName: dto.title,
+      previousAssigneeName: oldLeadName,
+      actorName
+    });
+    publishSafely(
+      {
+        type: 'task_reassigned',
+        title: taskCopy.title,
+        message: taskCopy.message,
+        detail: taskCopy.detail,
+        metadata: taskCopy.metadata,
+        actorId,
+        projectId: dto.id
+      },
+      [newLeadId],
+      actorId
+    );
+  }
 
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
@@ -1034,10 +1388,58 @@ export const replaceTeamLead = async (
     entityName: newLeadName, projectId: dto.id, projectName: dto.title,
     description: `${actorName} made ${newLeadName} the Team Lead of “${team.teamname}” in “${dto.title}”, ` +
       `replacing ${oldLeadName}.`,
-    linkRoute: 'projects', important: true
+    linkRoute: 'projects', important: true,
+    changes: reassignedTasks.length > 0
+      ? [{ field: 'Tasks reassigned', previousValue: oldLeadName, newValue: newLeadName }]
+      : undefined
   });
 
   return dto;
+};
+
+// Admin editing a member-suggested project's proposed team structure before approving it (req. 2
+// -- "Admin must be able to review and EDIT the proposed project setup"). Only reachable from
+// projectApproval.service.ts's changePendingSetup, itself Admin-gated, but re-checked here too
+// per this module's usual defense-in-depth. Deliberately restricted to PendingActivation: an
+// already-Active project's team structure is restructured exclusively through the dedicated
+// moveMember/replaceTeamLead endpoints (req. 3/4), which carry their own task-safety checks --
+// this wholesale replace has none of those and must never run against a live project.
+export const updateProjectTeamSetup = async (
+  projectId: string,
+  teams: CreateTeamInput[],
+  actorId: string,
+  actorRole: string
+): Promise<ProjectDTO> => {
+  if (actorRole !== 'Admin') {
+    throw new ProjectAuthorizationError('Only Admins can change a pending proposal\'s team setup.');
+  }
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  if (row.statuscode !== 'PendingActivation') {
+    throw new ProjectValidationError('Team setup can only be changed while a project proposal is pending activation.');
+  }
+
+  const teamSetup = resolveTeamSetup(teams);
+  if (teamSetup.error) throw new ProjectValidationError(teamSetup.error);
+
+  for (const leadId of teamSetup.teamLeadUserIds) {
+    await assertEligibleAssignee(leadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+  }
+  for (const memberId of teamSetup.memberUserIds) {
+    if (teamSetup.teamLeadUserIds.includes(memberId)) continue;
+    await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
+  }
+
+  const teamsForInsert: repo.InsertTeamRow[] = teamSetup.teams.map((team) => ({
+    name: team.name,
+    description: team.description,
+    leadId: toUserPk(team.leadId),
+    memberIds: team.memberIds.map(toUserPk)
+  }));
+  await repo.replaceProjectTeams(row.projectid, row.owneruserid, teamsForInsert, toUserPk(actorId));
+
+  const members = await repo.findMembersForProject(row.projectid);
+  return buildDTO(row, members);
 };
 
 // Re-checks a single Pending-Removal member after one of their tasks/subtasks in this project

@@ -1205,11 +1205,38 @@ export const requestSubtaskTransfer = async (
 
   const actorName = actorDisplayName(actorId);
   const admins = (await userStore.getAllUsers()).filter((user) => user.role === 'Admin');
+  // Everything an Admin needs in order to decide, in the expanded body rather than the preview:
+  // which parent task the subtask hangs off, which team holds it now, which team is asking for it,
+  // who leads each, and the requester's stated reason (§9).
+  const fromTeam = await projectRepo.findTeamById(row.teamid);
+  const targetLead = teamMembers.find((tm) => tm.teamid === toTeam.teamid && tm.islead);
+  const parentTask = row.parenttaskid ? await repo.findTaskById(row.parenttaskid) : null;
+  const fromTeamName = fromTeam?.teamname || 'the current team';
+  const targetLeadName = targetLead ? actorDisplayName(fromUserPk(targetLead.userid)) : 'unassigned';
+
   publishSafely(
     {
       type: 'subtask_transfer_requested',
       title: 'Subtask Transfer Requested',
-      message: `${actorName} requested to move subtask "${row.title}" to team "${toTeam.teamname}" in ${project.projectname}.`,
+      message: `${actorName} requested to transfer subtask "${row.title}" from the "${fromTeamName}" to the ` +
+        `"${toTeam.teamname}".`,
+      detail: [
+        `${actorName}, Team Lead of the "${fromTeamName}", requested to transfer subtask "${row.title}" to the ` +
+          `"${toTeam.teamname}" in project "${project.projectname}", and is waiting on your decision.`,
+        '',
+        `Reason: ${reason.trim()}`
+      ].join('\n'),
+      metadata: {
+        project: project.projectname,
+        ...(parentTask ? { parentTask: parentTask.title } : {}),
+        subtask: row.title,
+        currentTeam: fromTeamName,
+        proposedTeam: toTeam.teamname,
+        currentTeamLead: actorName,
+        targetTeamLead: targetLeadName,
+        requestedBy: actorName,
+        reason: reason.trim()
+      },
       actorId,
       projectId: fromProjectPk(row.projectid),
       taskId: fromTaskPk(row.taskid)
@@ -1259,33 +1286,101 @@ export const decideSubtaskTransfer = async (
   const toTeam = decided.toteamid ? await projectRepo.findTeamById(decided.toteamid) : null;
   const teamMembers = await projectRepo.findTeamMembersForProject(decided.projectid);
   const toTeamLead = toTeam ? teamMembers.find((tm) => tm.teamid === toTeam.teamid && tm.islead) : undefined;
+  const fromTeam = decided.fromteamid ? await projectRepo.findTeamById(decided.fromteamid) : null;
   const actorName = actorDisplayName(actorId);
   const requesterId = fromUserPk(decided.requestedbyuserid);
+  const subtaskTitle = subtask?.title || '';
+  const toTeamName = toTeam?.teamname || '';
+  const fromTeamName = fromTeam?.teamname || 'the previous team';
+  const projectName = project?.projectname || '';
+  const trimmedReason = decisionReason?.trim();
 
-  const recipients: string[] = [requesterId];
-  const recipientMessages: Record<string, string> = {};
-  if (toTeamLead) {
-    recipients.push(fromUserPk(toTeamLead.userid));
-    recipientMessages[fromUserPk(toTeamLead.userid)] =
-      `${actorName} approved moving subtask "${subtask?.title || ''}" to your team "${toTeam?.teamname || ''}".`;
+  if (decision === 'Approved') {
+    // Both leads, each reading it from their own side: the requesting lead hears their request was
+    // carried out, the receiving lead hears they have gained ownership of the subtask.
+    const recipients = [requesterId];
+    const recipientMessages: Record<string, string> = {};
+    const recipientDetails: Record<string, string> = {};
+    if (toTeamLead) {
+      const toTeamLeadId = fromUserPk(toTeamLead.userid);
+      recipients.push(toTeamLeadId);
+      recipientMessages[toTeamLeadId] = `Subtask "${subtaskTitle}" has been transferred to your team.`;
+      recipientDetails[toTeamLeadId] = [
+        `${actorName} approved transferring subtask "${subtaskTitle}" from the "${fromTeamName}" to your ` +
+          `team, the "${toTeamName}", in project "${projectName}".`,
+        '',
+        'It is now your team\'s work — assign it to one of your members, or to yourself.'
+      ].join('\n');
+    }
+    publishSafely(
+      {
+        type: 'subtask_transfer_approved',
+        title: 'Subtask Transfer Approved',
+        message: `${actorName} approved the transfer of subtask "${subtaskTitle}" to the "${toTeamName}".`,
+        detail: [
+          `${actorName} approved your request to transfer subtask "${subtaskTitle}" from the ` +
+            `"${fromTeamName}" to the "${toTeamName}" in project "${projectName}".`,
+          '',
+          `The subtask now belongs to the "${toTeamName}", whose Team Lead owns assigning it.`,
+          ...(trimmedReason ? ['', `Comment: ${trimmedReason}`] : [])
+        ].join('\n'),
+        metadata: {
+          project: projectName,
+          subtask: subtaskTitle,
+          previousTeam: fromTeamName,
+          newTeam: toTeamName,
+          approvedBy: `${actorName} (Admin)`,
+          status: 'Approved'
+        },
+        actorId,
+        projectId: fromProjectPk(decided.projectid),
+        taskId: fromTaskPk(decided.subtaskid),
+        recipientMessages,
+        recipientDetails
+      },
+      recipients,
+      actorId
+    );
+  } else {
+    // Only the requester. recipientMessages used to be built before the decision was branched on,
+    // so its wording was fixed at "approved ... to your team" — meaning on a *rejection* the
+    // receiving team's lead was told the subtask had been transferred to them when it had not. They
+    // gain nothing from a transfer that did not happen, so they are no longer written to at all.
+    //
+    // The reason moves out of the compact preview into detail/metadata, where every other rejection
+    // in the app keeps it (§13). It is the value decideSubtaskTransferRequest just persisted to
+    // work.SubtaskTransferRequests.DecisionReason, so the notification and the stored record cannot
+    // disagree, and it stays readable after a refresh without re-reading the request table.
+    publishSafely(
+      {
+        type: 'subtask_transfer_rejected',
+        title: 'Subtask Transfer Rejected',
+        message: `${actorName} rejected the request to transfer subtask "${subtaskTitle}".`,
+        detail: [
+          `${actorName} rejected your request to transfer subtask "${subtaskTitle}" from the ` +
+            `"${fromTeamName}" to the "${toTeamName}" in project "${projectName}".`,
+          '',
+          `The subtask stays with the "${fromTeamName}".`,
+          '',
+          `Reason: ${trimmedReason || 'No reason was recorded.'}`
+        ].join('\n'),
+        metadata: {
+          project: projectName,
+          subtask: subtaskTitle,
+          currentTeam: fromTeamName,
+          proposedTeam: toTeamName,
+          rejectedBy: `${actorName} (Admin)`,
+          status: 'Rejected',
+          rejectionReason: trimmedReason || ''
+        },
+        actorId,
+        projectId: fromProjectPk(decided.projectid),
+        taskId: fromTaskPk(decided.subtaskid)
+      },
+      [requesterId],
+      actorId
+    );
   }
-  publishSafely(
-    {
-      type: decision === 'Approved' ? 'subtask_transfer_approved' : 'subtask_transfer_rejected',
-      title: decision === 'Approved' ? 'Subtask Transfer Approved' : 'Subtask Transfer Rejected',
-      message:
-        decision === 'Approved'
-          ? `${actorName} approved moving subtask "${subtask?.title || ''}" to team "${toTeam?.teamname || ''}".`
-          : `${actorName} rejected your request to move subtask "${subtask?.title || ''}"` +
-            (decisionReason?.trim() ? ` (${decisionReason.trim()})` : '') + '.',
-      actorId,
-      projectId: fromProjectPk(decided.projectid),
-      taskId: fromTaskPk(decided.subtaskid),
-      recipientMessages
-    },
-    recipients,
-    actorId
-  );
   recordActivitySafe({
     actorId, actorName, actorEmail: userStore.findById(actorId)?.email, actorRole,
     action: decision === 'Approved' ? 'Approved' : 'Rejected', module: 'Tasks', entityType: 'Task',

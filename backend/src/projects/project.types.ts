@@ -206,6 +206,10 @@ export interface UpdateProjectInput {
   teamLeadId?: string;
   memberIds?: string[];
   creationReason?: string;
+  // Admin editing a pending (PROJECT_CREATE) proposal's team structure before approval -- see
+  // project.service.ts's updateProjectTeamSetup. Never applicable to an already-Active project;
+  // team restructuring there stays on the dedicated moveMember/replaceTeamLead endpoints.
+  teams?: CreateTeamInput[];
 }
 
 export interface CreateMilestoneInput {

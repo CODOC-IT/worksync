@@ -106,6 +106,10 @@ export interface UpdateProjectPayload {
   teamLeadId?: string;
   memberIds?: string[];
   creationReason?: string;
+  // Admin editing a pending (PROJECT_CREATE) proposal's team structure before approval -- see
+  // backend/src/projects/project.service.ts's updateProjectTeamSetup. Never applicable to an
+  // already-Active project.
+  teams?: CreateTeamPayload[];
   // Approval-request reason, only meaningful (and required) when the caller is a Team Lead --
   // see backend/src/projects/project.controller.ts's updateProject. Ignored for Admin's direct
   // edits, which apply immediately as before.

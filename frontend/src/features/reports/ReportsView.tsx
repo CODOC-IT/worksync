@@ -205,6 +205,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
   const [taskFilterStatus, setTaskFilterStatus] = useState('');
   const [taskFilterPriority, setTaskFilterPriority] = useState('');
   const [taskFilterProject, setTaskFilterProject] = useState('');
+  const [taskFilterTeam, setTaskFilterTeam] = useState('');
   const [taskFilterAssignee, setTaskFilterAssignee] = useState('');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [detailMember, setDetailMember] = useState<any>(null);
@@ -626,10 +627,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       if (taskFilterStatus && t.status !== taskFilterStatus) return false;
       if (taskFilterPriority && t.priority !== taskFilterPriority) return false;
       if (taskFilterProject && t.projectId !== taskFilterProject) return false;
+      if (taskFilterTeam && t.teamId !== taskFilterTeam) return false;
       if (taskFilterAssignee && !getTaskAssigneeIds(t).includes(taskFilterAssignee)) return false;
       return true;
     });
-  }, [roleFiltered.tasks, taskSearchQuery, taskFilterStatus, taskFilterPriority, taskFilterProject, taskFilterAssignee]);
+  }, [roleFiltered.tasks, taskSearchQuery, taskFilterStatus, taskFilterPriority, taskFilterProject, taskFilterTeam, taskFilterAssignee]);
 
   const taskKpiStats = useMemo(() => {
     const tasks = roleFiltered.tasks as any[];
@@ -673,6 +675,21 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialTab, onInitialT
       return { id: uid, name: u?.name || uid };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }, [roleFiltered.tasks, users]);
+
+  // Teams offered by the Select Team filter. Only teams belonging to the currently selected
+  // project are shown (mirroring the Admin task form, which reads the same `projects.teams` data).
+  // `projects` here is the AppContext project list — the same RBAC-scoped source the rest of the
+  // report derives from — so no new data-access path is introduced.
+  const taskTeamOptions = useMemo(() => {
+    if (!taskFilterProject) return [];
+    const project = projects.find((p: any) => p.id === taskFilterProject);
+    return (project?.teams || []).filter((team) => team.projectId === taskFilterProject);
+  }, [taskFilterProject, projects]);
+
+  const handleTaskProjectFilterChange = (value: string) => {
+    setTaskFilterTeam('');
+    setTaskFilterProject(value);
+  };
 
   const workloadData = useMemo(() => {
     if (!apiAvailable || !reportData?.workload) return [];
@@ -1820,13 +1837,28 @@ ${bodyHtml}
     bodyHtml += `</tbody></table>`;
 
     bodyHtml += section('Team');
-    bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
-    bodyHtml += `<thead><tr>${th('Role')}${th('Name')}</tr></thead><tbody>`;
-    bodyHtml += `<tr>${td('Project Lead')}${td(teamLeadUser?.name || project.teamLeadId || '\u2014')}</tr>`;
-    memberUsers.forEach((u: any) => {
-      bodyHtml += `<tr>${td('Member')}${td(u.name || u.id)}</tr>`;
-    });
-    bodyHtml += `</tbody></table>`;
+    const projectTeams = project.teams || [];
+    if (projectTeams.length > 0) {
+      projectTeams.forEach((team: any) => {
+        const leadUser = users.find((u: any) => u.id === team.leadId);
+        const teamMemberUsers = users.filter((u: any) => (team.memberIds || []).includes(u.id));
+        bodyHtml += `<div style="margin:8px 0;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">`;
+        bodyHtml += `<div style="font-size:11px;font-weight:700;color:#0f172a;margin-bottom:4px;">${team.name || '\u2014'}</div>`;
+        bodyHtml += `<div style="font-size:9px;color:#475569;">Team Lead: ${leadUser?.name || team.leadId || '\u2014'}</div>`;
+        if (teamMemberUsers.length > 0) {
+          bodyHtml += `<div style="font-size:9px;color:#475569;margin-top:2px;">Members: ${teamMemberUsers.map((u: any) => u.name || u.id).join(', ')}</div>`;
+        }
+        bodyHtml += `</div>`;
+      });
+    } else {
+      bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
+      bodyHtml += `<thead><tr>${th('Role')}${th('Name')}</tr></thead><tbody>`;
+      bodyHtml += `<tr>${td('Project Lead')}${td(teamLeadUser?.name || project.teamLeadId || '\u2014')}</tr>`;
+      memberUsers.forEach((u: any) => {
+        bodyHtml += `<tr>${td('Member')}${td(u.name || u.id)}</tr>`;
+      });
+      bodyHtml += `</tbody></table>`;
+    }
 
     bodyHtml += section('Task Status Breakdown');
     bodyHtml += `<table style="width:100%;border-collapse:collapse;margin:6px 0;">`;
@@ -2403,6 +2435,11 @@ ${bodyHtml}
     const projectTasks = roleFiltered.tasks.filter((t: any) => t.projectId === selectedProjectId);
     const memberUsers = users.filter((u: any) => (project.memberIds || []).includes(u.id));
     const teamLeadUser = users.find((u: any) => u.id === project.teamLeadId);
+    const projectTeams = (project.teams || []).map((team: any) => ({
+      ...team,
+      leadUser: users.find((u: any) => u.id === team.leadId),
+      teamMemberUsers: users.filter((u: any) => (team.memberIds || []).includes(u.id)),
+    }));
     const milestones = detailProject?.milestones || project.milestones || [];
     const attachments = detailProject?.files || project.files || [];
 
@@ -2503,26 +2540,57 @@ ${bodyHtml}
           <GlassCard glowColor="violet" hover3dTilt={false} className="hover:-translate-y-0.5 hover:!shadow-[0_8px_24px_rgba(0,0,0,0.25)] hover:!border-white/20">
             <div className="glass-panel p-4 rounded-lg">
               {renderSectionHeader(<Users size={16} className="text-violet-400" />, 'Team')}
-              <div className="mt-3 space-y-2.5 text-xs">
-                <div className="flex justify-between py-1.5 border-b border-white/5">
-                  <span className="text-slate-400">Project Lead</span>
-                  <span className="text-slate-200 font-mono">{teamLeadUser?.name || project.teamLeadId || '\u2014'}</span>
-                </div>
-                {memberUsers.length > 0 ? (
-                  <div className="pt-1">
-                    <span className="text-slate-400 block mb-2">Members ({memberUsers.length})</span>
-                    <div className="max-h-[200px] overflow-y-auto space-y-1.5 pr-1">
-                      {memberUsers.map((u: any) => (
-                        <div key={u.id} className="flex items-center justify-between py-1 px-2 rounded bg-slate-900/40">
-                          <span className="text-slate-200">{u.name || u.id}</span>
+              {projectTeams.length > 0 ? (
+                <div className="mt-3 space-y-2.5 text-xs">
+                  {projectTeams.map((team: any) => (
+                    <div key={team.id} className="rounded-lg bg-slate-900/40 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-100">{team.name}</span>
+                        <span className="text-[10px] font-mono text-slate-500">{team.teamMemberUsers.length} members</span>
+                      </div>
+                      <div className="flex justify-between py-1.5 border-b border-white/5">
+                        <span className="text-slate-400">Team Lead</span>
+                        <span className="text-slate-200 font-mono">{team.leadUser?.name || team.leadId || '\u2014'}</span>
+                      </div>
+                      {team.teamMemberUsers.length > 0 ? (
+                        <div className="pt-1">
+                          <span className="text-slate-400 block mb-2">Members ({team.teamMemberUsers.length})</span>
+                          <div className="space-y-1.5">
+                            {team.teamMemberUsers.map((u: any) => (
+                              <div key={u.id} className="flex items-center justify-between py-1 px-2 rounded bg-slate-900/40">
+                                <span className="text-slate-200">{u.name || u.id}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      ))}
+                      ) : (
+                        <p className="text-xs text-slate-500 text-center pt-2">No members in this team</p>
+                      )}
                     </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 space-y-2.5 text-xs">
+                  <div className="flex justify-between py-1.5 border-b border-white/5">
+                    <span className="text-slate-400">Project Lead</span>
+                    <span className="text-slate-200 font-mono">{teamLeadUser?.name || project.teamLeadId || '\u2014'}</span>
                   </div>
-                ) : (
-                  <p className="text-xs text-slate-500 text-center pt-2">No members assigned</p>
-                )}
-              </div>
+                  {memberUsers.length > 0 ? (
+                    <div className="pt-1">
+                      <span className="text-slate-400 block mb-2">Members ({memberUsers.length})</span>
+                      <div className="max-h-[200px] overflow-y-auto space-y-1.5 pr-1">
+                        {memberUsers.map((u: any) => (
+                          <div key={u.id} className="flex items-center justify-between py-1 px-2 rounded bg-slate-900/40">
+                            <span className="text-slate-200">{u.name || u.id}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 text-center pt-2">No members assigned</p>
+                  )}
+                </div>
+              )}
             </div>
           </GlassCard>
         </div>
@@ -3208,12 +3276,29 @@ ${bodyHtml}
             </select>
             <select
               value={taskFilterProject}
-              onChange={(e) => setTaskFilterProject(e.target.value)}
+              onChange={(e) => handleTaskProjectFilterChange(e.target.value)}
               className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px]"
             >
               <option value="">All Projects</option>
               {taskProjectOptions.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <select
+              value={taskFilterTeam}
+              onChange={(e) => setTaskFilterTeam(e.target.value)}
+              disabled={!taskFilterProject || taskTeamOptions.length === 0}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/60 text-xs text-slate-300 outline-none focus:border-cyan-500/50 min-w-[120px] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">
+                {!taskFilterProject
+                  ? 'Select Team'
+                  : taskTeamOptions.length > 0
+                    ? 'All Teams'
+                    : 'No Teams'}
+              </option>
+              {taskTeamOptions.map((team) => (
+                <option key={team.id} value={team.id}>{team.name}</option>
               ))}
             </select>
             <select
@@ -3226,9 +3311,9 @@ ${bodyHtml}
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </select>
-            {(taskSearchQuery || taskFilterStatus || taskFilterPriority || taskFilterProject || taskFilterAssignee) && (
+            {(taskSearchQuery || taskFilterStatus || taskFilterPriority || taskFilterProject || taskFilterTeam || taskFilterAssignee) && (
               <button
-                onClick={() => { setTaskSearchQuery(''); setTaskFilterStatus(''); setTaskFilterPriority(''); setTaskFilterProject(''); setTaskFilterAssignee(''); }}
+                onClick={() => { setTaskSearchQuery(''); setTaskFilterStatus(''); setTaskFilterPriority(''); setTaskFilterProject(''); setTaskFilterTeam(''); setTaskFilterAssignee(''); }}
                 className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all flex items-center gap-1"
               >
                 <X size={11} /> Clear

@@ -84,6 +84,18 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   project_member_pending_removal: { label: 'Member Pending Removal', icon: AlertTriangle, tone: 'warning', priority: 'Medium' },
   project_member_auto_removed: { label: 'Member Removed', icon: UserMinus, tone: 'info', priority: 'Medium' },
   project_approval_rejected: { label: 'Project Approval Rejected', icon: XCircle, tone: 'error', priority: 'High' },
+  // Multi-team project architecture. Without these rows the backend's team events fell through
+  // getNotificationTypeMeta's `system` fallback and rendered as a grey "System" line with a server
+  // icon — losing the Low/High distinction and making them unfindable in the type filter, even
+  // though they were being persisted correctly all along.
+  team_member_removed_needs_reassignment: { label: 'Reassignment Needed', icon: UserMinus, tone: 'warning', priority: 'High' },
+  team_member_moved: { label: 'Moved Between Teams', icon: UserCog, tone: 'info', priority: 'High' },
+  team_lead_changed: { label: 'Team Lead Changed', icon: UserCog, tone: 'warning', priority: 'High' },
+  admin_task_needs_team_assignment: { label: 'Task Awaits Assignment', icon: UserPlus, tone: 'warning', priority: 'High' },
+  subtask_transfer_requested: { label: 'Subtask Transfer Request', icon: RefreshCcw, tone: 'info', priority: 'High' },
+  subtask_transfer_approved: { label: 'Subtask Transfer Approved', icon: CheckCircle2, tone: 'success', priority: 'High' },
+  subtask_transfer_rejected: { label: 'Subtask Transfer Rejected', icon: XCircle, tone: 'error', priority: 'Medium' },
+  holiday_created: { label: 'Holiday Announced', icon: CalendarOff, tone: 'info', priority: 'Medium' },
   approval: { label: 'Approval Requested', icon: CheckSquare, tone: 'info', priority: 'High' },
   user_registered: { label: 'New User Registered', icon: UserRoundPlus, tone: 'info', priority: 'Medium' },
   user_role_changed: { label: 'Role Changed', icon: UserCog, tone: 'warning', priority: 'High' },
@@ -161,7 +173,15 @@ const TEAM_LEAD_BLOCKED_TYPES = new Set<NotificationType>([
 const TEAM_MEMBER_BLOCKED_TYPES = new Set<NotificationType>([
   'user_registered', 'workspace_created', 'workspace_deleted', 'backup_completed',
   'backup_failed', 'security_alert', 'audit_alert', 'system_maintenance',
-  'project_deleted', 'approval'
+  'project_deleted'
+  // 'approval' is deliberately NOT blocked here. Under the team-based hierarchy a Team Lead is a
+  // per-project designation held by someone whose *account* role is Team_Member, and it is that
+  // person who submits project/task creation requests — so the `approval`-typed decision that comes
+  // back ("Admin Ahmed approved your project ...", and the rejection reason with it) is addressed to
+  // exactly one Team_Member and used to be filtered out of their own Notification Center by this
+  // list. Recipient targeting is the real gate (every `approval` event names its recipients
+  // explicitly: the deciding Admins, or the single requester), so blocking a whole type by account
+  // role can only ever hide something its publisher meant for that specific person.
 ]);
 
 // Defensive, role-level second layer on top of recipient targeting (see

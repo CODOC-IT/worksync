@@ -125,20 +125,41 @@ export const bootstrapDatabase = async (): Promise<void> => {
       ['subtask_assigned', 'Task', 'High'], ['subtask_completed', 'Task', 'Normal'],
       ['subtask_reopened', 'Task', 'Normal'], ['subtask_due_today', 'Task', 'High'],
       ['subtask_overdue', 'Task', 'High'], ['task_reopened', 'Task', 'High'],
+      ['subtask_assignment_changed', 'Task', 'High'],
       ['mention', 'Chat', 'Normal'], ['attachment_uploaded', 'Task', 'Low'],
+      // Controlled task edit approval (Team Member -> their Team Lead) -- see
+      // database/29_notify_detail_metadata.sql for the matching baseline rows.
+      ['task_edit_approval_requested', 'Approval', 'High'],
+      ['task_edit_approval_approved', 'Approval', 'High'],
+      ['task_edit_approval_rejected', 'Approval', 'High'],
+      // Leave (HR)
+      ['leave_requested', 'Approval', 'Normal'], ['leave_approved', 'Approval', 'Normal'],
+      ['leave_rejected', 'Approval', 'Normal'],
       // Project
       ['project_created', 'Project', 'Normal'], ['project_updated', 'Project', 'Low'],
       ['project_archived', 'Project', 'Normal'], ['project_restored', 'Project', 'Normal'],
       ['project_deleted', 'Project', 'High'], ['project_member_added', 'Project', 'Normal'],
       ['project_member_removed', 'Project', 'Normal'],
       ['project_member_pending_removal', 'Project', 'Normal'], ['project_member_auto_removed', 'Project', 'Normal'],
+      ['project_approval_rejected', 'Project', 'High'],
+      // Multi-team project architecture -- the Team layer between a Project and its members.
+      // Mirrors database/30_notify_team_seed.sql (and migrations/20260816_01_project_teams.sql).
+      // A "Team Lead" here is always a per-project/per-team designation, never an account role.
+      ['team_member_removed_needs_reassignment', 'Project', 'High'],
+      ['team_member_moved', 'Project', 'High'],
+      ['team_lead_changed', 'Project', 'High'],
+      ['admin_task_needs_team_assignment', 'Task', 'High'],
+      ['subtask_transfer_requested', 'Task', 'High'],
+      ['subtask_transfer_approved', 'Task', 'High'],
+      ['subtask_transfer_rejected', 'Task', 'Normal'],
       // Approvals / system / admin
       ['approval', 'Approval', 'High'], ['user_registered', 'System', 'Normal'],
       ['user_role_changed', 'System', 'High'], ['user_deactivated', 'System', 'High'],
       ['workspace_created', 'System', 'Normal'], ['workspace_deleted', 'System', 'High'],
       ['backup_completed', 'System', 'Low'], ['backup_failed', 'System', 'Critical'],
       ['security_alert', 'System', 'Critical'], ['audit_alert', 'System', 'High'],
-      ['system_maintenance', 'System', 'Normal'], ['attendance', 'Attendance', 'Normal'],
+      ['system_maintenance', 'System', 'Normal'], ['holiday_created', 'System', 'Normal'],
+      ['attendance', 'Attendance', 'Normal'],
       ['task', 'Task', 'Normal'], ['system', 'System', 'Low'],
       // Attendance
       ['attendance_check_in', 'Attendance', 'Low'], ['attendance_check_out', 'Attendance', 'Low'],
