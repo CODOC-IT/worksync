@@ -562,7 +562,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         return;
       }
       resetForm();
-      setNotice({ type: 'success', message: 'Task and subtasks created successfully.' });
+      setNotice({ type: 'success', message: result.message });
     } catch {
       setNotice({ type: 'error', message: 'Task and subtasks could not be created. Please try again.' });
     } finally {
@@ -570,7 +570,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
     }
   };
 
-  const handleCancelSubtasks = async () => {
+  const handleSkipSubtasks = async () => {
     if (isCreatingSubtasks) return;
     setIsCreatingSubtasks(true);
     try {
@@ -581,6 +581,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         priority: form.priority as TaskModulePriority,
         startDate: form.startDate,
         dueDate: form.dueDate,
+        teamId: form.teamId || selectedTaskTeam?.id,
         assigneeId: form.assigneeIds[0],
         assigneeIds: form.assigneeIds,
         status: form.status
@@ -590,12 +591,17 @@ export const TasksView: React.FC<TasksViewProps> = ({
         return;
       }
       resetForm();
-      setNotice({ type: 'success', message: 'Task created successfully.' });
+      setNotice({ type: 'success', message: result.message });
     } catch {
       setNotice({ type: 'error', message: 'Task could not be created. Please try again.' });
     } finally {
       setIsCreatingSubtasks(false);
     }
+  };
+
+  const handleCancelTaskCreation = () => {
+    if (isCreatingSubtasks) return;
+    resetForm();
   };
 
   const handleDelete = async () => {
@@ -1013,7 +1019,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) handleCancelSubtasks();
+            if (event.target === event.currentTarget) handleCancelTaskCreation();
           }}
         >
           <div className="glass-panel-glow w-full max-w-lg p-6">
@@ -1034,8 +1040,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" onClick={handleCancelSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5">Skip</button>
-              <button type="button" onClick={() => { if (subtaskCount <= 0) handleCancelSubtasks(); else startSubtasks(); }} className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold">Continue</button>
+              <button type="button" onClick={handleSkipSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5">Skip</button>
+              <button type="button" onClick={() => { if (subtaskCount <= 0) handleSkipSubtasks(); else startSubtasks(); }} className="glass-button-neon rounded-lg px-5 py-2 text-sm font-bold">Continue</button>
             </div>
           </div>
         </div>
@@ -1045,7 +1051,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) handleCancelSubtasks();
+            if (event.target === event.currentTarget) handleCancelTaskCreation();
           }}
         >
           <div className="glass-panel-glow flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden">
@@ -1175,7 +1181,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             </div>
             <div className="border-t border-white/10 bg-black/10 px-5 py-4">
               <div className="flex justify-end gap-2">
-                <button type="button" onClick={handleCancelSubtasks} disabled={isCreatingSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50">Cancel</button>
+                <button type="button" onClick={handleCancelTaskCreation} disabled={isCreatingSubtasks} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50">Cancel</button>
                 <button type="button" onClick={handleSubtasksSubmit} disabled={isCreatingSubtasks} className="glass-button-neon inline-flex items-center gap-2 rounded-lg px-5 py-2 text-sm font-bold disabled:opacity-60">
                   {isCreatingSubtasks && <LoaderCircle size={14} className="animate-spin" />}
                   {isCreatingSubtasks ? 'Creating...' : `Create ${subtaskDrafts.length} subtask${subtaskDrafts.length > 1 ? 's' : ''}`}
