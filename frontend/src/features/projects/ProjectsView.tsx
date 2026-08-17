@@ -3,6 +3,8 @@ import { useApp } from '../../store/AppContext';
 import { ProjectCard } from './ProjectCard';
 import { canCreateProject, isCurrentProjectLead, projectCardActions } from './projectActionRules';
 import { ProjectDetailsDrawer } from './ProjectDetailsDrawer';
+import { TeamBuilder } from './TeamBuilder';
+import { DraftTeam, validateTeamSetup } from './teamBuilderRules';
 import { Project, ProjectStatus, Task, TaskPriority, Milestone, ProjectFile } from '../../types';
 import { todayDateKey } from '../calendar/calendarRules';
 import {
@@ -35,20 +37,12 @@ interface ProjectFormState {
   creationReason: string;
   milestones: Milestone[];
   files: ProjectFile[];
-  // Multi-team architecture (Admin, create mode). When useTeams is on, the project is built
-  // from the team rows below instead of the single teamLeadId/memberIds fields, which are
-  // ignored for the payload.
-  useTeams: boolean;
+  // Multi-team architecture. Create mode always builds the project from these team rows (there is
+  // no separate "Project Lead" concept -- req. 1A/7); memberIds doubles, in create mode only, as
+  // the "Project Members" pool the team builder's dropdowns are restricted to (req. 1A's dropdown
+  // rule), never as a value actually sent to the backend for a create (see handleSubmit). Edit
+  // mode keeps using teamLeadId/memberIds as real project membership, unchanged.
   teams: DraftTeam[];
-}
-
-// An in-progress team row in the create form's team builder (before it's sent to the backend).
-interface DraftTeam {
-  id: string;
-  name: string;
-  description: string;
-  leadId: string;
-  memberIds: string[];
 }
 
 const EMPTY_FORM: ProjectFormState = {
@@ -63,7 +57,6 @@ const EMPTY_FORM: ProjectFormState = {
   creationReason: '',
   milestones: [],
   files: [],
-  useTeams: false,
   teams: []
 };
 
@@ -228,8 +221,14 @@ export const ProjectsView: React.FC<{
     setEditingProjectId(null);
     setForm({
       ...EMPTY_FORM,
-      teamLeadId: currentRole !== 'Admin' ? currentUser.id : '',
-      memberIds: currentRole !== 'Admin' ? [currentUser.id] : []
+      // memberIds seeds the "Project Members" pool for the team builder below (req. 1A) -- a
+      // non-Admin creator starts with just themselves in the pool, pre-placed as the lead of a
+      // starter team, matching the old single-lead default's convenience without reintroducing a
+      // top-level Team Lead field.
+      memberIds: currentRole !== 'Admin' ? [currentUser.id] : [],
+      teams: currentRole !== 'Admin'
+        ? [{ id: `draft-${Date.now()}-0`, name: '', description: '', leadId: currentUser.id, memberIds: [currentUser.id] }]
+        : []
     });
     setFormErrors({});
     setFileError('');
@@ -258,7 +257,6 @@ export const ProjectsView: React.FC<{
       creationReason: source.creationReason || '',
       milestones: source.milestones,
       files: source.files,
-      useTeams: false,
       teams: []
     });
     setFormOpen(true);
@@ -293,6 +291,23 @@ export const ProjectsView: React.FC<{
   };
 
   const toggleMember = (userId: string) => {
+    // Create mode: this checklist is the "Project Members" pool the team builder's dropdowns are
+    // restricted to (req. 1A), not real membership yet. Removing someone from the pool also drops
+    // them from any team they were already placed on -- the builder's options are pool-filtered,
+    // so a person no longer in the pool can't stay assigned to a team either.
+    if (formMode === 'create') {
+      const inPool = form.memberIds.includes(userId);
+      const memberIds = inPool ? form.memberIds.filter((id) => id !== userId) : [...form.memberIds, userId];
+      const teams = inPool
+        ? form.teams.map((team) => ({
+            ...team,
+            leadId: team.leadId === userId ? '' : team.leadId,
+            memberIds: team.memberIds.filter((id) => id !== userId)
+          }))
+        : form.teams;
+      updateForm({ memberIds, teams });
+      return;
+    }
     if (editingProject?.pendingRemovalMemberIds?.includes(userId)) return;
     if (userId === form.teamLeadId) {
       setFormErrors((previous) => ({
@@ -305,44 +320,6 @@ export const ProjectsView: React.FC<{
       ? form.memberIds.filter((id) => id !== userId)
       : [...form.memberIds, userId];
     updateForm({ memberIds });
-  };
-
-  // --- Multi-team builder (Admin, create mode) ----------------------------------------------
-  const addTeam = () => {
-    const id = `draft-${Date.now()}-${form.teams.length}`;
-    updateForm({ teams: [...form.teams, { id, name: '', description: '', leadId: '', memberIds: [] }] });
-  };
-
-  const removeTeam = (teamId: string) => {
-    updateForm({ teams: form.teams.filter((team) => team.id !== teamId) });
-  };
-
-  const updateTeamField = (teamId: string, field: keyof DraftTeam, value: string) => {
-    updateForm({
-      teams: form.teams.map((team) => (team.id === teamId ? { ...team, [field]: value } : team))
-    });
-  };
-
-  const toggleTeamMember = (teamId: string, userId: string) => {
-    const teams = form.teams.map((team) => {
-      if (team.id !== teamId) return team;
-      const memberIds = team.memberIds.includes(userId)
-        ? team.memberIds.filter((id) => id !== userId)
-        : [...team.memberIds, userId];
-      return { ...team, memberIds };
-    });
-    updateForm({ teams });
-  };
-
-  const setTeamLead = (teamId: string, userId: string) => {
-    const teams = form.teams.map((team) => {
-      if (team.id !== teamId) return team;
-      const memberIds = userId && !team.memberIds.includes(userId)
-        ? [...team.memberIds, userId]
-        : team.memberIds;
-      return { ...team, leadId: userId, memberIds };
-    });
-    updateForm({ teams });
   };
 
   const addMilestone = () => {
@@ -436,62 +413,36 @@ export const ProjectsView: React.FC<{
       errors.description = 'Description should clearly state purpose, scope, and expected outcome (min 20 characters).';
     }
 
-    if (!data.teamLeadId) errors.teamLeadId = 'A Team Lead must be assigned.';
-    if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
-      errors.memberIds = 'The selected Team Lead must be included in project members.';
-    }
-    // Mirrors backend/src/projects/projectWorkflow.rules.ts's resolveCreateParticipants/
-    // resolveUpdatedParticipants -- a Team Lead is an existing member designated as lead, not a
-    // separate entity, so `memberIds.length === 0` alone never catches a lead-only project (the
-    // check above already force-includes the lead). This checks for at least one *other* member.
-    const nonLeadMemberCount = data.memberIds.filter((id) => id !== data.teamLeadId).length;
-    if (nonLeadMemberCount === 0) {
-      errors.memberIds = 'A project must have at least one member besides the Team Lead.';
-    }
-
-    // Multi-team validation (Admin create only): when the team builder is active, it replaces the
-    // single-lead checks above with per-team rules, mirroring projectWorkflow.rules.ts's
-    // resolveTeamSetup -- every team needs a name, description, one lead, and >= 2 people, team
-    // names are unique, and no one may appear in more than one team.
-    if (data.useTeams) {
-      delete errors.teamLeadId;
-      delete errors.memberIds;
-      if (data.teams.length === 0) {
-        errors.teams = 'Add at least one team, or turn off team mode.';
-      } else {
-        const teamNames = new Set<string>();
-        const seenMembers = new Set<string>();
-        let crossTeamDuplicate = false;
-        for (const team of data.teams) {
-          if (!team.name.trim()) { errors.teams = 'Every team must have a name.'; break; }
-          if (teamNames.has(team.name.trim().toLowerCase())) {
-            errors.teams = `Duplicate team name "${team.name.trim()}". Team names must be unique.`;
-            break;
-          }
-          teamNames.add(team.name.trim().toLowerCase());
-          if (!team.description.trim()) { errors.teams = `Team "${team.name.trim()}" needs a description.`; break; }
-          if (!team.leadId) { errors.teams = `Team "${team.name.trim()}" needs a Team Lead.`; break; }
-          const members = Array.from(new Set([...team.memberIds, team.leadId]));
-          if (members.length < 2) {
-            errors.teams = `Team "${team.name.trim()}" needs at least one member besides its Team Lead.`;
-            break;
-          }
-          for (const userId of members) {
-            if (seenMembers.has(userId)) crossTeamDuplicate = true;
-            seenMembers.add(userId);
-          }
-          if (crossTeamDuplicate) { errors.teams = 'A person cannot be in more than one team in the same project.'; break; }
-        }
+    if (formMode === 'create') {
+      // Create mode always builds the project from the team builder below -- there is no
+      // top-level Team Lead field or single-lead path anymore (req. 1A/7). memberIds here is the
+      // "Project Members" pool (req. 1A's dropdown rule); the pool itself just needs to be
+      // non-empty, the per-team rules below (mirroring
+      // backend/src/projects/projectWorkflow.rules.ts's resolveTeamSetup) do the rest.
+      if (data.memberIds.length === 0) {
+        errors.memberIds = 'Select at least one project member before building teams.';
+      }
+      const teamsError = validateTeamSetup(data.teams);
+      if (teamsError) {
+        errors.teams = teamsError;
+      } else if (currentRole !== 'Admin' && !data.teams.some((team) => team.leadId === currentUser.id)) {
         // Mirrors backend/src/projects/project.service.ts's createProject: a non-Admin submitter
         // must be the Team Lead of one of their proposed teams. Client-side only for a faster,
         // friendlier message -- the backend enforces this regardless of what the UI sends.
-        if (
-          !errors.teams &&
-          currentRole !== 'Admin' &&
-          !data.teams.some((team) => team.leadId === currentUser.id)
-        ) {
-          errors.teams = 'You must be the Team Lead of one of the teams you propose.';
-        }
+        errors.teams = 'You must be the Team Lead of one of the teams you propose.';
+      }
+    } else {
+      if (!data.teamLeadId) errors.teamLeadId = 'A Team Lead must be assigned.';
+      if (data.teamLeadId && !data.memberIds.includes(data.teamLeadId)) {
+        errors.memberIds = 'The selected Team Lead must be included in project members.';
+      }
+      // Mirrors backend/src/projects/projectWorkflow.rules.ts's resolveUpdatedParticipants -- a
+      // Team Lead is an existing member designated as lead, not a separate entity, so
+      // `memberIds.length === 0` alone never catches a lead-only project (the check above already
+      // force-includes the lead). This checks for at least one *other* member.
+      const nonLeadMemberCount = data.memberIds.filter((id) => id !== data.teamLeadId).length;
+      if (nonLeadMemberCount === 0) {
+        errors.memberIds = 'A project must have at least one member besides the Team Lead.';
       }
     }
     if (!data.startDate) {
@@ -621,16 +572,15 @@ export const ProjectsView: React.FC<{
       startDate: form.startDate,
       targetDate: form.targetDate,
       priority: form.priority,
-      teamLeadId: form.teamLeadId,
-      memberIds: form.memberIds,
       milestones: form.milestones,
       files: form.files,
       creationReason: form.creationReason.trim() || undefined
     };
 
-    // Multi-team create: pass the full team setup (the backend materializes it as-is on save /
-    // approval). The single-lead fields above are left out of the payload so they can't conflict.
-    if (form.useTeams) {
+    if (formMode === 'create') {
+      // Multi-team create: pass the full team setup (the backend materializes it as-is on save /
+      // approval, and derives the project's real membership from it -- form.memberIds above was
+      // only ever the UI's "Project Members" pool, never sent as-is).
       (data as unknown as { teams: Array<{ name: string; description: string; leadId: string; memberIds: string[] }> }).teams =
         form.teams.map((team) => ({
           name: team.name.trim(),
@@ -638,8 +588,9 @@ export const ProjectsView: React.FC<{
           leadId: team.leadId,
           memberIds: team.memberIds.filter((id) => id !== team.leadId)
         }));
-      delete data.teamLeadId;
-      delete data.memberIds;
+    } else {
+      data.teamLeadId = form.teamLeadId;
+      data.memberIds = form.memberIds;
     }
 
     // A Team Lead's edit doesn't apply immediately -- it becomes a PROJECT_EDIT approval
@@ -967,6 +918,7 @@ export const ProjectsView: React.FC<{
               key={project.id}
               project={project}
               teamLead={teamLead}
+              users={users}
               isOverdue={isOverdue}
               actions={actions}
               onEdit={() => openEditForm(project)}
@@ -1061,7 +1013,7 @@ export const ProjectsView: React.FC<{
                 </select>
               </div>
 
-              {(formMode !== 'create' || currentRole === 'Admin') && (
+              {formMode === 'edit' && (
               <div>
                 <label className="block text-slate-300 font-semibold mb-1">Team Lead</label>
                 <select
@@ -1076,11 +1028,16 @@ export const ProjectsView: React.FC<{
                     });
                   }}
                   // A project's lead can edit their own project but must not reassign its Team
-                  // Lead; only Admins are allowed to change this field once a project exists.
+                  // Lead; only Admins are allowed to change this field once a project exists. Once
+                  // a project has its own team structure, this field is retired entirely -- editing
+                  // it here would write a stray ProjectMembers.TeamLead row outside that structure
+                  // (req. 5); replacing a team's lead must go through that team's own "Replace"
+                  // control in the project's details view instead.
                   disabled={
-                    formMode === 'edit' &&
-                    currentRole !== 'Admin' &&
-                    (!editingProject || isProjectLead(editingProject))
+                    Boolean(editingProject?.teams?.length) ||
+                    (formMode === 'edit' &&
+                      currentRole !== 'Admin' &&
+                      (!editingProject || isProjectLead(editingProject)))
                   }
                   className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -1089,13 +1046,20 @@ export const ProjectsView: React.FC<{
                     <option key={u.id} value={u.id}>{u.name}</option>
                   ))}
                 </select>
+                {Boolean(editingProject?.teams?.length) && (
+                  <p className="text-slate-500 mt-1">
+                    This project has its own teams -- replace a team's lead from its Teams panel in the project's details view.
+                  </p>
+                )}
                 {formErrors.teamLeadId && <p className="text-rose-400 mt-1">{formErrors.teamLeadId}</p>}
               </div>
               )}
 
               <div className={formMode === 'edit' && currentRole !== 'Admin' ? 'opacity-50' : ''}>
                 <label className="block text-slate-300 font-semibold mb-1">
-                  Project Members {formMode === 'edit' && currentRole !== 'Admin' && <span className="text-slate-500 font-normal">(locked for Team Leads)</span>}
+                  Project Members{' '}
+                  {formMode === 'create' && <span className="text-slate-500 font-normal">(pool available to the team builder below)</span>}
+                  {formMode === 'edit' && currentRole !== 'Admin' && <span className="text-slate-500 font-normal">(locked for Team Leads)</span>}
                 </label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-2 rounded-lg bg-black/30 border border-white/10">
                   {assignableMembers.map((u) => (
@@ -1107,13 +1071,20 @@ export const ProjectsView: React.FC<{
                         // A Team Lead is an existing member designated as lead, not a separate
                         // manager of other members -- only Admins may add/remove them. Same
                         // edit-mode + non-Admin-lead condition already used above to lock the
-                        // Team Lead <select>.
+                        // Team Lead <select>. Checking a brand-new member into a project that
+                        // already has teams is blocked too (edit mode only) -- there's no "add
+                        // straight into a team" endpoint, so a new member here would be a project
+                        // member belonging to no team; unchecking (removal) still works normally,
+                        // routed through the existing pending-removal-aware flow.
                         disabled={
                           u.id === form.teamLeadId ||
                           editingProject?.pendingRemovalMemberIds?.includes(u.id) ||
                           (formMode === 'edit' &&
                             currentRole !== 'Admin' &&
-                            (!editingProject || isProjectLead(editingProject)))
+                            (!editingProject || isProjectLead(editingProject))) ||
+                          (formMode === 'edit' &&
+                            Boolean(editingProject?.teams?.length) &&
+                            !form.memberIds.includes(u.id))
                         }
                         className="accent-cyan-500"
                       />
@@ -1132,91 +1103,28 @@ export const ProjectsView: React.FC<{
                 {formErrors.memberIds && <p className="text-rose-400 mt-1">{formErrors.memberIds}</p>}
               </div>
 
-              {/* Multi-team builder (create mode only). Available to every role that can create a
-                  project (canCreate), not just Admin -- the backend already accepts a complete
-                  multi-team proposal from a Team Lead/Team Member (project.service.ts's createProject
+              {/* Multi-team builder (create mode only) -- the only way a new project's teams are
+                  built now (req. 1A/7). Available to every role that can create a project
+                  (canCreate), not just Admin -- the backend already accepts a complete multi-team
+                  proposal from a Team Lead/Team Member (project.service.ts's createProject
                   teams-branch), it only additionally requires the submitter lead one of the
-                  proposed teams (mirrored client-side in validate() below). */}
+                  proposed teams (mirrored client-side in validate() above). Both pools are
+                  restricted to the "Project Members" selection above (req. 1A's dropdown rule):
+                  someone not selected as a Project Member cannot appear as a Team Lead or Member
+                  candidate here. */}
               {formMode === 'create' && canCreate && (
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <label className="flex items-center gap-2 text-slate-300 font-semibold mb-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.useTeams}
-                      onChange={(e) => updateForm({ useTeams: e.target.checked })}
-                      className="accent-cyan-500"
-                    />
-                    Build project teams
-                    <span className="text-slate-500 font-normal text-[11px]">(multiple teams, each with its own lead)</span>
+                  <label className="block text-slate-300 font-semibold mb-2">
+                    Build Project Teams
+                    <span className="ml-1.5 text-slate-500 font-normal text-[11px]">(one or more teams, each with its own lead)</span>
                   </label>
-
-                  {form.useTeams && (
-                    <div className="space-y-3">
-                      {form.teams.map((team) => (
-                        <div key={team.id} className="rounded-lg border border-cyan-500/20 bg-black/30 p-3">
-                          <div className="flex items-center gap-2 mb-2">
-                            <input
-                              placeholder="Team name"
-                              value={team.name}
-                              onChange={(e) => updateTeamField(team.id, 'name', e.target.value)}
-                              className="flex-1 px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeTeam(team.id)}
-                              className="text-rose-400 hover:text-rose-300 text-[11px] font-semibold"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                          <textarea
-                            placeholder="Team description (purpose / scope)"
-                            value={team.description}
-                            onChange={(e) => updateTeamField(team.id, 'description', e.target.value)}
-                            rows={2}
-                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
-                          />
-                          <select
-                            value={team.leadId}
-                            onChange={(e) => setTeamLead(team.id, e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-lg bg-black/40 border border-white/10 text-slate-100 focus:outline-none focus:border-cyan-500/50 text-sm mb-2"
-                          >
-                            <option value="">Select Team Lead...</option>
-                            {teamLeads.map((u) => (
-                              <option key={u.id} value={u.id} disabled={form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))}>
-                                {u.name}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="grid grid-cols-2 gap-1 max-h-32 overflow-y-auto p-1.5 rounded-lg bg-black/20 border border-white/10">
-                            {assignableMembers.map((u) => (
-                              <label key={u.id} className="flex items-center gap-2 text-slate-300 cursor-pointer text-sm">
-                                <input
-                                  type="checkbox"
-                                  checked={team.memberIds.includes(u.id)}
-                                  onChange={() => toggleTeamMember(team.id, u.id)}
-                                  disabled={
-                                    u.id === team.leadId ||
-                                    form.teams.some((t) => t.id !== team.id && t.memberIds.includes(u.id))
-                                  }
-                                  className="accent-cyan-500"
-                                />
-                                {u.name}
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={addTeam}
-                        className="w-full rounded-lg border border-dashed border-cyan-500/40 py-2 text-cyan-300 hover:text-cyan-200 text-sm font-semibold flex items-center justify-center gap-1"
-                      >
-                        <Plus size={14} /> Add team
-                      </button>
-                      {formErrors.teams && <p className="text-rose-400 mt-1 text-sm">{formErrors.teams}</p>}
-                    </div>
-                  )}
+                  <TeamBuilder
+                    teams={form.teams}
+                    onChange={(teams) => updateForm({ teams })}
+                    teamLeads={teamLeads.filter((u) => form.memberIds.includes(u.id))}
+                    assignableMembers={assignableMembers.filter((u) => form.memberIds.includes(u.id))}
+                    error={formErrors.teams}
+                  />
                 </div>
               )}
 

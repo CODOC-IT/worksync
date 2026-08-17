@@ -6,6 +6,9 @@ import type { ProjectCardAction } from './projectActionRules';
 interface ProjectCardProps {
   project: Project;
   teamLead?: User;
+  // Full user list, used only to resolve each team's Team Lead name for a multi-team project's
+  // "Leads:" line below -- `teamLead` above stays the single legacy fallback.
+  users: User[];
   isOverdue: boolean;
   actions: ProjectCardAction[];
   onEdit: () => void;
@@ -41,7 +44,7 @@ const formatShortDate = (iso: string): string => {
 };
 
 export const ProjectCard: React.FC<ProjectCardProps> = ({
-  project, teamLead, isOverdue, actions, onEdit, onDelete, onRestore, onClick
+  project, teamLead, users, isOverdue, actions, onEdit, onDelete, onRestore, onClick
 }) => (
   <div
     onClick={onClick}
@@ -114,7 +117,21 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
       </div>
       <div className="mt-4 flex min-w-0 items-start gap-2">
         <UserRound size={15} className="mt-0.5 text-slate-500" />
-        <div className="min-w-0"><p className="text-[11px] text-slate-500">Project lead</p><p className="mt-0.5 break-words text-sm font-medium text-slate-200 [overflow-wrap:anywhere]">{teamLead?.name || 'Not assigned'}</p></div>
+        {/* A project consists of teams, each with its own Team Lead -- there is no single overall
+            "Project Lead" to show once teams exist (req. 6). Falls back to the legacy single-name
+            display only for a project created before the team structure existed. */}
+        {project.teams.length > 0 ? (
+          <div className="min-w-0">
+            <p className="text-[11px] text-slate-500">
+              {project.teams.length} team{project.teams.length !== 1 ? 's' : ''}
+            </p>
+            <p className="mt-0.5 break-words text-sm font-medium text-slate-200 [overflow-wrap:anywhere]">
+              Leads: {project.teams.map((team) => team.leadId && users.find((u) => u.id === team.leadId)?.name).filter(Boolean).join(', ') || 'Not assigned'}
+            </p>
+          </div>
+        ) : (
+          <div className="min-w-0"><p className="text-[11px] text-slate-500">Project lead</p><p className="mt-0.5 break-words text-sm font-medium text-slate-200 [overflow-wrap:anywhere]">{teamLead?.name || 'Not assigned'}</p></div>
+        )}
       </div>
     </div>
   </div>

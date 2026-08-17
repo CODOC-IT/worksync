@@ -290,12 +290,17 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({ proj
                 </Field>
               </div>
 
-              {/* Team lead */}
-              <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
-                <SectionLabel icon={<UserRound size={13} className="text-cyan-300" />}>Team Lead</SectionLabel>
-                <p className="text-sm font-medium text-slate-200">{teamLead?.name || 'Unassigned'}</p>
-                {teamLead?.title && <p className="mt-1 text-xs text-slate-500">{teamLead.title}</p>}
-              </div>
+              {/* Team lead -- only for a project with no team structure of its own (created before
+                  the multi-team architecture existed). A project with teams shows its per-team
+                  leads in the "Teams" section below instead; there is no single overall "Project
+                  Lead" to show once teams exist (req. 6). */}
+              {project.teams.length === 0 && (
+                <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
+                  <SectionLabel icon={<UserRound size={13} className="text-cyan-300" />}>Team Lead</SectionLabel>
+                  <p className="text-sm font-medium text-slate-200">{teamLead?.name || 'Unassigned'}</p>
+                  {teamLead?.title && <p className="mt-1 text-xs text-slate-500">{teamLead.title}</p>}
+                </div>
+              )}
 
               {/* Members */}
               <div className="rounded-xl border border-white/10 bg-slate-900/35 p-4">
