@@ -96,6 +96,7 @@ export const createTaskViaApi = async (
       priority: data.priority,
       startDate: data.startDate,
       dueDate: data.dueDate,
+      teamId: data.teamId,
       assigneeIds: data.assigneeIds?.length
         ? data.assigneeIds
         : data.assigneeId

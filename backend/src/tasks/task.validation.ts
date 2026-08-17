@@ -15,6 +15,7 @@ const VALID_STATUSES = new Set(['Todo', 'In Progress', 'Review', 'Blocked', 'Don
 const FRONTEND_TASK_ID_PATTERN = /^tsk-\d+$/;
 const FRONTEND_PROJECT_ID_PATTERN = /^prj-\d+$/;
 const FRONTEND_USER_ID_PATTERN = /^usr-\d+$/;
+const FRONTEND_TEAM_ID_PATTERN = /^tm-\d+$/;
 
 const SUBTASK_TITLE_PATTERN = /^.{1,200}$/;
 
@@ -42,13 +43,13 @@ export const validateCreateTaskBody = (body: unknown): ValidationResult => {
   if (isValidIsoDate(input.startDate) && isValidIsoDate(input.dueDate) && input.dueDate! < input.startDate!) {
     fieldErrors.dueDate = 'Due date cannot be before the start date.';
   }
-  if (
-    !input.assigneeIds
-    || !Array.isArray(input.assigneeIds)
-    || input.assigneeIds.length === 0
+  if (!Array.isArray(input.assigneeIds)
     || input.assigneeIds.some((id) => typeof id !== 'string' || !FRONTEND_USER_ID_PATTERN.test(id))
   ) {
     fieldErrors.assigneeIds = 'Select at least one assignee.';
+  }
+  if (input.teamId !== undefined && !FRONTEND_TEAM_ID_PATTERN.test(input.teamId)) {
+    fieldErrors.teamId = 'Select a valid project team.';
   }
   if (input.status && !VALID_STATUSES.has(input.status)) {
     fieldErrors.status = 'Select a valid task status.';

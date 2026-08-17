@@ -169,7 +169,7 @@ test('rejects an assignee outside the project membership', () => {
   assert.ok(errors.assigneeIds);
 });
 
-test('shows only active non-admin, non-HR, non-lead project members as task assignees', () => {
+test('shows active non-admin, non-HR members and the Team Lead as task assignees', () => {
   const inactiveMember = { ...users[1], id: 'inactive-member', status: 'inactive' as const };
   const hrMember: User = {
     ...users[1],
@@ -187,7 +187,7 @@ test('shows only active non-admin, non-HR, non-lead project members as task assi
     [...users, hrMember, inactiveMember]
   );
 
-  assert.deepEqual(options.map((user) => user.id), ['member']);
+  assert.deepEqual(options.map((user) => user.id), ['lead', 'member']);
 });
 
 test('rejects HR and Admin users as task assignees even when they are project members', () => {
@@ -227,7 +227,7 @@ test('rejects pending project approval for task creation', () => {
 });
 
 test('enforces task creation roles and Team Lead project scope', () => {
-  assert.equal(canCreateTaskForProject('Admin', 'admin', project), false);
+  assert.equal(canCreateTaskForProject('Admin', 'admin', project), true);
   assert.equal(canCreateTaskForProject('Team_Lead', 'lead', project), true);
   assert.equal(canCreateTaskForProject('Team_Lead', 'outsider', project), false);
   assert.equal(canCreateTaskForProject('Team_Member', 'member', project), false);
@@ -251,7 +251,7 @@ test('filters task lists and sorts by due date', () => {
 });
 
 test('enforces edit and delete permission checks', () => {
-  assert.equal(canEditTask('Admin', 'admin', project, task), false);
+  assert.equal(canEditTask('Admin', 'admin', project, task), true);
   assert.equal(canEditTask('Team_Lead', 'lead', project, task), true);
   assert.equal(canEditTask('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }, task), true);
   assert.equal(canEditTask('Team_Member', 'member', project, task), true);
@@ -268,7 +268,7 @@ test('enforces edit and delete permission checks', () => {
     parentTaskId: 'tsk-parent',
     subtaskCount: 0
   }), true);
-  assert.equal(canDeleteTask('Admin', 'admin', project, task), false);
+  assert.equal(canDeleteTask('Admin', 'admin', project, task), true);
   assert.equal(canDeleteTask('Team_Lead', 'lead', project, task), true);
   assert.equal(canDeleteTask('Team_Member', 'lead', { ...project, teamLeadId: 'lead' }, task), true);
   assert.equal(canDeleteTask('Team_Lead', 'lead', project, task, true), true);
@@ -308,6 +308,35 @@ test('enforces edit and delete permission checks', () => {
     users
   });
   assert.equal(deniedDelete.success, false);
+});
+
+test('scopes Team Lead task creation and assignees to the lead\'s own team', () => {
+  const teamProject: Project = {
+    ...project,
+    teams: [
+      { id: 'tm-1', projectId: project.id, name: 'Team Alpha', description: '', leadId: 'lead', memberIds: ['lead', 'member'] },
+      { id: 'tm-2', projectId: project.id, name: 'Team Beta', description: '', leadId: 'outsider', memberIds: ['outsider'] }
+    ],
+    memberIds: ['lead', 'member', 'outsider'],
+    teamLeadId: 'lead'
+  };
+
+  assert.equal(canCreateTaskForProject('Team_Lead', 'lead', teamProject), true);
+  assert.equal(canCreateTaskForProject('Team_Lead', 'outsider', teamProject), true);
+  assert.deepEqual(
+    getAssignableProjectUsers(teamProject, users, 'tm-1').map((user) => user.id),
+    ['lead', 'member']
+  );
+  assert.ok(validateTaskInput(
+    { ...validInput, assigneeIds: ['outsider'], teamId: 'tm-1' },
+    teamProject,
+    users,
+    true,
+    undefined,
+    { allowedAssigneeIds: ['lead', 'member'] }
+  ).assigneeIds);
+  assert.equal(canEditTask('Team_Lead', 'outsider', teamProject, { ...task, teamId: 'tm-1' }), false);
+  assert.equal(canDeleteTask('Team_Lead', 'outsider', teamProject, { ...task, teamId: 'tm-1' }), false);
 });
 
 test('makes every related task read-only while its project is archived', () => {

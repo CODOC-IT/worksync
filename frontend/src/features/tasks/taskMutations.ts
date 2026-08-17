@@ -8,6 +8,10 @@ import {
   canCreateTaskForProject,
   canDeleteTask,
   canEditTask,
+  getProjectTeamLedBy,
+  getTaskTeamId,
+  getAssignableProjectUsers,
+  isProjectTeamLead,
   getTaskAssigneeIds,
   getTaskPriorityValue,
   getTaskStartDate,
@@ -67,6 +71,7 @@ export const toTaskFormInput = (data: TaskMutationData): TaskFormInput => {
     priority: data.priority || '',
     startDate: data.startDate || '',
     dueDate: data.dueDate || '',
+    teamId: data.teamId,
     assigneeIds,
     status: data.status || 'Todo'
   };
@@ -79,7 +84,14 @@ export const prepareTaskCreation = (
 ): TaskMutationResult => {
   const input = toTaskFormInput(data);
   const project = context.projects.find((item) => item.id === input.projectId);
-  const fieldErrors = validateTaskInput(input, project, context.users);
+  const leadTeam = project ? getProjectTeamLedBy(project, context.currentUserId) : undefined;
+  const isAdminTeamHandoff = context.currentRole === 'Admin' && Boolean(input.teamId);
+  const fieldErrors = validateTaskInput(input, project, context.users, true, undefined, {
+    allowUnassigned: isAdminTeamHandoff,
+    allowedAssigneeIds: leadTeam
+      ? getAssignableProjectUsers(project!, context.users, leadTeam.id).map((user) => user.id)
+      : undefined
+  });
 
   if (Object.keys(fieldErrors).length > 0) {
     return {
@@ -88,14 +100,17 @@ export const prepareTaskCreation = (
       fieldErrors
     };
   }
-  if (
-    !project
-    || !canCreateTaskForProject(context.currentRole, context.currentUserId, project)
-  ) {
+  if (!project || !canCreateTaskForProject(context.currentRole, context.currentUserId, project)) {
     return {
       success: false,
       message: 'You do not have permission to create tasks in this project.'
     };
+  }
+  if (context.currentRole === 'Admin' && project.teams.length === 0) {
+    return { success: false, message: 'This project must have a team before an Admin can create a task.', fieldErrors: { teamId: 'No project teams are available.' } };
+  }
+  if (context.currentRole === 'Admin' && !input.teamId) {
+    return { success: false, message: 'Select a team for this task.', fieldErrors: { teamId: 'Select a team.' } };
   }
 
   const localId = Math.floor(Math.random() * 900000) + 100000;
@@ -105,6 +120,7 @@ export const prepareTaskCreation = (
       (item) => item.projectId === project.id
     ).length + 1}`,
     projectId: input.projectId,
+    teamId: input.teamId || leadTeam?.id,
     title: input.title.trim(),
     description: input.description.trim(),
     status: input.status,
@@ -146,8 +162,10 @@ export const prepareTaskUpdate = (
     return { success: false, message: 'You do not have permission to edit this task.' };
   }
 
-  const isProjectLead = project.teamLeadId === context.currentUserId && context.currentRole !== 'HR';
-  if ((data.assigneeId !== undefined || data.assigneeIds !== undefined) && !isProjectLead) {
+  const isTaskTeamLead = context.currentRole !== 'HR'
+    && isProjectTeamLead(project, context.currentUserId)
+    && (!getTaskTeamId(task) || getProjectTeamLedBy(project, context.currentUserId)?.id === getTaskTeamId(task));
+  if ((data.assigneeId !== undefined || data.assigneeIds !== undefined) && !isTaskTeamLead) {
     return {
       success: false,
       message: 'Only this project\'s Team Lead can change task assignments.'
@@ -179,7 +197,10 @@ export const prepareTaskUpdate = (
     assigneeIds,
     status: updatedTask.status
   };
-  const fieldErrors = validateTaskEditInput(input, project, context.users);
+  const taskTeamId = getTaskTeamId(task) || getProjectTeamLedBy(project, context.currentUserId)?.id;
+  const fieldErrors = validateTaskEditInput(input, project, context.users, {
+    allowedAssigneeIds: getAssignableProjectUsers(project, context.users, taskTeamId).map((user) => user.id)
+  });
 
   if (Object.keys(fieldErrors).length > 0) {
     return {

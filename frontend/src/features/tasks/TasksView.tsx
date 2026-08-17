@@ -28,14 +28,17 @@ import {
   filterAndSortTasks,
   getProjectEndDate,
   getAssignableProjectUsers,
+  getProjectTeamLedBy,
   getProjectName,
   getLatestDate,
   getTaskAssigneeIds,
   getTaskPriorityValue,
   getTaskStartDate,
+  getTaskTeamId,
   getTaskStatusLabel,
   getTodayIsoDate,
   isTaskOverdue,
+  isProjectTeamLead,
   TASK_PRIORITIES,
   TASK_STATUSES,
   CREATE_TASK_STATUSES,
@@ -226,19 +229,32 @@ export const TasksView: React.FC<TasksViewProps> = ({
   }, [projectFilter, taskFilterProjects]);
 
   const selectedProject = projects.find((project) => project.id === form.projectId);
+  const selectedTaskTeam = useMemo(() => {
+    if (!selectedProject) return undefined;
+    const teamId = form.teamId || getProjectTeamLedBy(selectedProject, currentUser.id)?.id;
+    return selectedProject.teams.find((team) => team.id === teamId);
+  }, [currentUser.id, form.teamId, selectedProject]);
+  const isAdminTaskCreation = Boolean(!editingTaskId && currentRole === 'Admin');
+  const isAdminTeamHandoff = Boolean(isAdminTaskCreation && selectedProject?.teams.length);
+  const canManageSelectedTaskAssignments = Boolean(
+    selectedProject
+    && currentRole !== 'HR'
+    && isProjectTeamLead(selectedProject, currentUser.id)
+    && (!form.teamId || getProjectTeamLedBy(selectedProject, currentUser.id)?.id === form.teamId)
+  );
   const taskEditApprovals = useMemo(() => systemApprovals.filter((approval) =>
     approval.type === 'Controlled_Edit'
     && approval.proposedTaskUpdate
     && approval.status === 'Pending'
     && approval.projectId
-    && projects.some((project) => project.id === approval.projectId && project.teamLeadId === currentUser.id)
+    && projects.some((project) => project.id === approval.projectId && isProjectTeamLead(project, currentUser.id))
   ), [currentUser.id, projects, systemApprovals]);
-  const isActingTeamLead = projects.some((project) => project.teamLeadId === currentUser.id);
+  const isActingTeamLead = projects.some((project) => isProjectTeamLead(project, currentUser.id));
   const availableAssignees = useMemo(
-    () => selectedProject
-      ? getAssignableProjectUsers(selectedProject, users)
+    () => selectedProject && !isAdminTeamHandoff
+      ? getAssignableProjectUsers(selectedProject, users, selectedTaskTeam?.id)
       : [],
-    [selectedProject, users]
+    [isAdminTeamHandoff, selectedProject, selectedTaskTeam?.id, users]
   );
   const availableSubtaskAssignees = useMemo(
     () => availableAssignees.filter((user) => form.assigneeIds.includes(user.id)),
@@ -336,6 +352,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       priority: getTaskPriorityValue(task.priority),
       startDate: getTaskStartDate(task),
       dueDate: task.dueDate,
+      teamId: getTaskTeamId(task),
       assigneeIds: Array.from(new Set(getTaskAssigneeIds(task))),
       status: task.status
     });
@@ -354,6 +371,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       projectId,
       startDate,
       dueDate: project ? getProjectEndDate(project) : '',
+      teamId: '',
       assigneeIds: []
     }));
     setFieldErrors((current) => ({
@@ -383,20 +401,26 @@ export const TasksView: React.FC<TasksViewProps> = ({
       ? editingTaskSource || tasks.find((task) => task.id === editingTaskId)
       : undefined;
     const clientErrors = editingTaskId
-      ? validateTaskEditInput(form, selectedProject, users)
+      ? validateTaskEditInput(form, selectedProject, users, {
+        allowedAssigneeIds: availableAssignees.map((user) => user.id)
+      })
       : validateTaskInput(
       form,
       selectedProject,
       users,
       true,
-      today
+      today,
+      {
+        allowUnassigned: isAdminTeamHandoff,
+        allowedAssigneeIds: availableAssignees.map((user) => user.id)
+      }
     );
     if (Object.keys(clientErrors).length > 0) {
       setFieldErrors(clientErrors);
       setFormError(null);
       return;
     }
-    if (!editingTaskId && subtaskStep === null) {
+    if (!editingTaskId && subtaskStep === null && !isAdminTeamHandoff) {
       setSubtaskStep('ask');
       return;
     }
@@ -417,7 +441,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 priority: form.priority as TaskModulePriority,
                 startDate: form.startDate,
                 dueDate: form.dueDate,
-                ...(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id
+                ...(canManageSelectedTaskAssignments
                   ? { assigneeIds: form.assigneeIds }
                   : {})
               }, existingTask)
@@ -428,6 +452,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
               priority: form.priority as TaskModulePriority,
               startDate: form.startDate,
               dueDate: form.dueDate,
+              teamId: form.teamId || selectedTaskTeam?.id,
               assigneeId: form.assigneeIds[0],
               assigneeIds: form.assigneeIds,
               status: form.status
@@ -502,7 +527,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
         selectedProject,
         users,
         true,
-        form.startDate
+        form.startDate,
+        { allowedAssigneeIds: availableAssignees.map((user) => user.id) }
       );
       Object.entries(errors).forEach(([field, message]) => {
         if (field !== 'projectId') nextErrors[`${index}.${field}`] = message;
@@ -525,6 +551,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         priority: form.priority as TaskModulePriority,
         startDate: form.startDate,
         dueDate: form.dueDate,
+        teamId: form.teamId || selectedTaskTeam?.id,
         assigneeId: form.assigneeIds[0],
         assigneeIds: form.assigneeIds,
         status: form.status,
@@ -753,6 +780,25 @@ export const TasksView: React.FC<TasksViewProps> = ({
               </select>
             </Field>
 
+            {isAdminTaskCreation && (
+              <Field label="Team *" error={fieldErrors.teamId} className="xl:col-span-2">
+                <select
+                  value={form.teamId || ''}
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, teamId: event.target.value, assigneeIds: [] }));
+                    setFieldErrors((current) => ({ ...current, teamId: '', assigneeIds: '' }));
+                  }}
+                  disabled={!selectedProject || selectedProject.teams.length === 0}
+                  className={inputClass}
+                >
+                  <option value="">{selectedProject?.teams.length ? 'Select team' : 'No project teams available'}</option>
+                  {selectedProject?.teams.map((team) => (
+                    <option key={team.id} value={team.id}>{team.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
             <Field label="Priority *" error={fieldErrors.priority}>
               <select
                 value={form.priority}
@@ -859,7 +905,15 @@ export const TasksView: React.FC<TasksViewProps> = ({
               />
             </Field>
 
-            {editingTaskId && !(selectedProject && currentRole !== 'HR' && selectedProject.teamLeadId === currentUser.id) ? (
+            {isAdminTaskCreation ? (
+              <Field label="Assignment" className="md:col-span-2 xl:col-span-4">
+                <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+                  {selectedProject?.teams.length
+                    ? "The selected team's Team Lead will assign this task after it is created."
+                    : 'This project must have a team before an Admin can create a task.'}
+                </div>
+              </Field>
+            ) : editingTaskId && !canManageSelectedTaskAssignments ? (
               <Field label={`Assigned to (${form.assigneeIds.length})`} className="md:col-span-2 xl:col-span-4">
                 <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3">
                   {form.assigneeIds.map((userId) => {
