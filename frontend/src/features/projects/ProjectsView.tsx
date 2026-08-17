@@ -573,6 +573,7 @@ export const ProjectsView: React.FC<{
     const next = { ...form, ...changes };
     setForm(next);
     setFormErrors(validate(next));
+    setFormNotice('');
   };
 
   // Actually performs the save -- factored out of handleSubmit so the Issue #6 Pending Removal
@@ -598,6 +599,8 @@ export const ProjectsView: React.FC<{
 
       setNotice({ type: 'success', message: result.message });
       closeForm();
+    } catch (error: any) {
+      setFormNotice(error?.message || 'The project could not be submitted. Please try again.');
     } finally {
       setFormSubmitting(false);
     }
@@ -607,7 +610,10 @@ export const ProjectsView: React.FC<{
     if (formSubmitting) return;
     const errors = validate(form);
     setFormErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    if (Object.keys(errors).length > 0) {
+      setFormNotice(Object.values(errors)[0] || 'Please correct the highlighted fields.');
+      return;
+    }
 
     const data: Partial<Project> = {
       title: form.title.trim(),
@@ -1369,6 +1375,7 @@ export const ProjectsView: React.FC<{
 
             <div className="p-4 border-t border-white/10 flex items-center justify-end gap-2 bg-slate-900/40">
               <button
+                type="button"
                 onClick={closeForm}
                 disabled={formSubmitting}
                 className="px-4 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50"
@@ -1376,6 +1383,7 @@ export const ProjectsView: React.FC<{
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleSubmit}
                 disabled={formSubmitting}
                 className="px-4 py-2 rounded-xl glass-button-neon text-xs font-bold disabled:opacity-60"

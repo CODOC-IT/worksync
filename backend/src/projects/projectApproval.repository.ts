@@ -40,13 +40,25 @@ export const findApprovalRequestById = async (id: string): Promise<ProjectApprov
 
 // Admin's Approval Inbox: every Pending request, across all projects -- Admin is the sole
 // approver for this workflow (see projectApproval.service.ts's authorization checks).
-export const findPendingApprovalRequests = async (): Promise<ProjectApprovalRequestRow[]> => {
+export const findApprovalRequests = async (status?: 'Pending' | 'Approved' | 'Rejected'): Promise<ProjectApprovalRequestRow[]> => {
   const result = await query<ProjectApprovalRequestRow>(
     `SELECT ${COLUMNS} FROM work.projectapprovalrequests
-      WHERE requeststatus = 'Pending'
-      ORDER BY createdatutc DESC, approvalrequestid DESC`
+      ${status ? 'WHERE requeststatus = $1' : ''}
+      ORDER BY createdatutc DESC, approvalrequestid DESC`,
+    status ? [status] : []
   );
   return result.rows;
+};
+
+export const findPendingApprovalRequests = (): Promise<ProjectApprovalRequestRow[]> => findApprovalRequests('Pending');
+
+export const updatePendingApprovalSetup = async (id: string, changesJson: string): Promise<ProjectApprovalRequestRow | null> => {
+  const result = await query<ProjectApprovalRequestRow>(
+    `UPDATE work.projectapprovalrequests SET requestedchangesjson = $1
+      WHERE approvalrequestid = $2 AND requeststatus = 'Pending' RETURNING ${COLUMNS}`,
+    [changesJson, id]
+  );
+  return result.rows[0] || null;
 };
 
 // A Team Lead's own submitted requests (any status), so they can see what they've asked for and

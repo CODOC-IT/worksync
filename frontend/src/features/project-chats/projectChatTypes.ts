@@ -28,6 +28,8 @@ export interface DiscussionThread {
   projectName: string;
   taskId?: string;
   taskName?: string;
+  teamId?: string;
+  teamName?: string;
   title: string;
   type: DiscussionType;
   creatorId: string;
@@ -41,6 +43,7 @@ export interface DiscussionFilters {
   search: string;
   projectId: string;
   taskId: string;
+  teamId: string;
   type: string;
   authorId: string;
   mentionedOnly: boolean;

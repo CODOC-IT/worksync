@@ -1,4 +1,4 @@
-import { fromCommentPk, fromProjectPk, fromTaskPk, fromThreadPk, fromUserPk } from '../utils/idMapping.js';
+import { fromCommentPk, fromProjectPk, fromTaskPk, fromTeamPk, fromThreadPk, fromUserPk } from '../utils/idMapping.js';
 import { getAttachmentUrl } from './fileStorage.js';
 import {
   ChatAttachmentDTO,
@@ -81,6 +81,8 @@ export const buildThreadDTO = (
     projectName: row.projectname,
     taskId: row.taskid ? fromTaskPk(row.taskid) : undefined,
     taskName: row.tasktitle || undefined,
+    teamId: row.teamid ? fromTeamPk(row.teamid) : undefined,
+    teamName: row.teamname || undefined,
     title: row.subject || '',
     type: DB_TO_API_DISCUSSION_TYPE[openingCommentKind],
     creatorId: fromUserPk(row.createdbyuserid),

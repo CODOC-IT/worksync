@@ -83,9 +83,18 @@ team lead has yet to assign, `Assigned` otherwise). Also seeds the `team_member_
 and `subtask_transfer_*` notification types. Additive and safe to run more than once; existing
 projects simply have no team rows and keep working through the single project-lead model.
 
+`20260817_01_team_chat_threads.sql` extends Project Chats so a discussion can be scoped to a
+project team: it adds a nullable `collab.DiscussionThreads.TeamId` parent column (a team thread
+stores `TeamId` only and derives its project through `work.ProjectTeams.ProjectId`, mirroring how
+task-scoped threads store `TaskId` only), widens `CK_DiscussionThreads_Type` with the new `Team`
+thread type, includes `TeamId` in the "exactly one parent" constraint, and adds the team foreign
+key. Existing project/task threads are untouched (`TeamId` stays NULL). Safe to run more than once.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.
 2. Apply through a privileged migration connection, never a browser client.
 3. Run the protected reconciliation process from the provisioning rollout before enabling the
    Supabase-only authentication middleware.
+`20260816_02_task_create_approvals.sql` extends the existing persisted project-management approval
+store with `TASK_CREATE`; no parallel approval table is introduced.

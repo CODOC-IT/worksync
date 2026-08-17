@@ -1,0 +1,9 @@
+BEGIN;
+
+ALTER TABLE work.ProjectApprovalRequests
+    DROP CONSTRAINT IF EXISTS CK_ProjectApprovalRequests_Type;
+ALTER TABLE work.ProjectApprovalRequests
+    ADD CONSTRAINT CK_ProjectApprovalRequests_Type CHECK
+        (RequestType IN ('PROJECT_CREATE','TASK_CREATE','PROJECT_EDIT','PROJECT_ARCHIVE','PROJECT_DELETE','PROJECT_RESTORE','PROJECT_PERMANENT_DELETE'));
+
+COMMIT;

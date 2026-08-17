@@ -5,6 +5,7 @@
 
 export type ProjectApprovalRequestType =
   | 'PROJECT_CREATE'
+  | 'TASK_CREATE'
   | 'PROJECT_EDIT'
   | 'PROJECT_ARCHIVE'
   | 'PROJECT_RESTORE'
