@@ -20,6 +20,7 @@ import {
   CreateMilestoneInput,
   CreateProjectFileInput,
   CreateProjectInput,
+  CreateTeamInput,
   MilestoneDTO,
   MilestoneRow,
   ProjectDTO,
@@ -1038,6 +1039,51 @@ export const replaceTeamLead = async (
   });
 
   return dto;
+};
+
+// Admin editing a member-suggested project's proposed team structure before approving it (req. 2
+// -- "Admin must be able to review and EDIT the proposed project setup"). Only reachable from
+// projectApproval.service.ts's changePendingSetup, itself Admin-gated, but re-checked here too
+// per this module's usual defense-in-depth. Deliberately restricted to PendingActivation: an
+// already-Active project's team structure is restructured exclusively through the dedicated
+// moveMember/replaceTeamLead endpoints (req. 3/4), which carry their own task-safety checks --
+// this wholesale replace has none of those and must never run against a live project.
+export const updateProjectTeamSetup = async (
+  projectId: string,
+  teams: CreateTeamInput[],
+  actorId: string,
+  actorRole: string
+): Promise<ProjectDTO> => {
+  if (actorRole !== 'Admin') {
+    throw new ProjectAuthorizationError('Only Admins can change a pending proposal\'s team setup.');
+  }
+  const row = await repo.findProjectById(toProjectPk(projectId));
+  if (!row) throw new ProjectNotFoundError('Project not found.');
+  if (row.statuscode !== 'PendingActivation') {
+    throw new ProjectValidationError('Team setup can only be changed while a project proposal is pending activation.');
+  }
+
+  const teamSetup = resolveTeamSetup(teams);
+  if (teamSetup.error) throw new ProjectValidationError(teamSetup.error);
+
+  for (const leadId of teamSetup.teamLeadUserIds) {
+    await assertEligibleAssignee(leadId, PROJECT_LEAD_ELIGIBLE_ROLES, 'Team Lead');
+  }
+  for (const memberId of teamSetup.memberUserIds) {
+    if (teamSetup.teamLeadUserIds.includes(memberId)) continue;
+    await assertEligibleAssignee(memberId, PROJECT_MEMBER_ELIGIBLE_ROLES, 'a member');
+  }
+
+  const teamsForInsert: repo.InsertTeamRow[] = teamSetup.teams.map((team) => ({
+    name: team.name,
+    description: team.description,
+    leadId: toUserPk(team.leadId),
+    memberIds: team.memberIds.map(toUserPk)
+  }));
+  await repo.replaceProjectTeams(row.projectid, row.owneruserid, teamsForInsert, toUserPk(actorId));
+
+  const members = await repo.findMembersForProject(row.projectid);
+  return buildDTO(row, members);
 };
 
 // Re-checks a single Pending-Removal member after one of their tasks/subtasks in this project

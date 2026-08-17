@@ -400,7 +400,20 @@ export const changePendingSetup = async (id: string, changes: Record<string, unk
   const row = await repo.findApprovalRequestById(id);
   if (!row || row.requeststatus !== 'Pending') throw new ProjectValidationError('Only pending requests can be changed.');
   if (row.requesttype !== 'PROJECT_CREATE' && row.requesttype !== 'TASK_CREATE') throw new ProjectValidationError('Change Setup is only available for creation requests.');
-  if (row.requesttype === 'PROJECT_CREATE') await projectService.updateProject(fromProjectPk(row.projectid), changes as UpdateProjectInput, actorId, 'Admin');
+  if (row.requesttype === 'PROJECT_CREATE') {
+    // `teams` is handled by its own dedicated function (project.service.ts's
+    // updateProjectTeamSetup) rather than updateProject, which has no concept of a team
+    // structure -- split it out before the plain-field update below. The full `changes` blob
+    // (including `teams`) is still persisted via updatePendingApprovalSetup either way, so the
+    // Approval Inbox's "what was changed" display keeps working unchanged.
+    const { teams, ...plainChanges } = changes as UpdateProjectInput & { teams?: UpdateProjectInput['teams'] };
+    if (Object.keys(plainChanges).length > 0) {
+      await projectService.updateProject(fromProjectPk(row.projectid), plainChanges, actorId, 'Admin');
+    }
+    if (teams) {
+      await projectService.updateProjectTeamSetup(fromProjectPk(row.projectid), teams, actorId, 'Admin');
+    }
+  }
   const updated = await repo.updatePendingApprovalSetup(id, JSON.stringify(changes));
   if (!updated) throw new ProjectValidationError('The request is no longer pending.');
   return toDTO(updated);

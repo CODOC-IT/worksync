@@ -25,6 +25,8 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { AccountChangeRequest, HRRequest, Project, ProjectApprovalRequest, ProjectApprovalRequestType, SystemApproval, Task, User } from '../../types';
 import { newestProjectRequestsFirst } from '../projects/projectApprovalRules';
 import { formatProjectChangeValue, projectEditChanges } from '../projects/projectApprovalDisplay';
+import { TeamBuilder } from '../projects/TeamBuilder';
+import { DraftTeam, validateTeamSetup } from '../projects/teamBuilderRules';
 
 // Account Change Requests -- HR/Lead/Member request a single-field change to their own account
 // (name, email, username, password). Rendered with friendly labels; requested passwords are never
@@ -243,6 +245,16 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
   const [setupTarget, setSetupTarget] = useState<ProjectApprovalRequest | null>(null);
   const [setupDraft, setSetupDraft] = useState<Record<string, any>>({});
   const [setupLoading, setSetupLoading] = useState(false);
+  const [setupTeamsError, setSetupTeamsError] = useState('');
+
+  // Same eligibility filtering as ProjectsView.tsx's create form (Admin/HR and inactive accounts
+  // never appear as Team Lead or Member candidates -- req. 1A/5), reused here so Admin's Change
+  // Setup team editor can't offer an ineligible pick either.
+  const nonAdminUsers = users.filter((u) => u.role !== 'Admin');
+  const setupTeamLeads = nonAdminUsers.filter(
+    (u) => (u.role === 'Team_Lead' || u.role === 'Team_Member') && u.status !== 'inactive'
+  );
+  const setupAssignableMembers = nonAdminUsers.filter((u) => u.role === 'Team_Member' && u.status !== 'inactive');
 
   const isSystemApprovalRole =
     currentRole === 'Admin' || currentRole === 'Team_Lead';
@@ -423,19 +435,47 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
   const openSetup = (request: ProjectApprovalRequest) => {
     const project = projects.find((item) => item.id === request.projectId);
     setSetupTarget(request);
+    setSetupTeamsError('');
     setSetupDraft(request.requestType === 'PROJECT_CREATE' ? {
       title: project?.title || request.projectTitle,
       description: project?.description || '',
       priority: project?.priority || 'Medium',
       startDate: project?.startDate || '',
-      targetDate: project?.targetDate || ''
+      targetDate: project?.targetDate || '',
+      // Only a multi-team proposal gets a team editor -- a legacy single-lead proposal has no
+      // `teams` to seed, and the modal below leaves it out entirely in that case.
+      ...(project && project.teams.length > 0
+        ? { teams: project.teams.map((team): DraftTeam => ({
+            id: team.id, name: team.name, description: team.description,
+            leadId: team.leadId, memberIds: team.memberIds
+          })) }
+        : {})
     } : { ...(request.requestedChanges || {}) });
   };
 
   const saveSetup = async () => {
     if (!setupTarget) return;
+    if (setupDraft.teams) {
+      const teamsError = validateTeamSetup(setupDraft.teams as DraftTeam[]);
+      if (teamsError) {
+        setSetupTeamsError(teamsError);
+        return;
+      }
+    }
+    setSetupTeamsError('');
     setSetupLoading(true);
-    const result = await updateApprovalSetup(setupTarget.id, setupDraft);
+    const payload = setupDraft.teams
+      ? {
+          ...setupDraft,
+          teams: (setupDraft.teams as DraftTeam[]).map((team) => ({
+            name: team.name.trim(),
+            description: team.description.trim(),
+            leadId: team.leadId,
+            memberIds: team.memberIds.filter((id) => id !== team.leadId)
+          }))
+        }
+      : setupDraft;
+    const result = await updateApprovalSetup(setupTarget.id, payload);
     setSetupLoading(false);
     setNotice({ type: result.success ? 'success' : 'error', message: result.message });
     if (result.success) setSetupTarget(null);
@@ -450,6 +490,20 @@ export const ApprovalsInboxView: React.FC<{ onViewProject?: (projectId: string) 
             <label key={key} className="text-xs text-slate-300">{label}<input type={type} value={setupDraft[key] || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,[key]:event.target.value}))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
           ))}
           <label className="text-xs text-slate-300 sm:col-span-2">Description<textarea rows={5} value={setupDraft.description || ''} onChange={(event) => setSetupDraft((draft) => ({...draft,description:event.target.value}))} className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400/50"/></label>
+          {Array.isArray(setupDraft.teams) && (
+            <fieldset className="sm:col-span-2">
+              <legend className="text-xs text-slate-300">Team setup</legend>
+              <div className="mt-2">
+                <TeamBuilder
+                  teams={setupDraft.teams as DraftTeam[]}
+                  onChange={(teams) => setSetupDraft((draft) => ({ ...draft, teams }))}
+                  teamLeads={setupTeamLeads}
+                  assignableMembers={setupAssignableMembers}
+                  error={setupTeamsError}
+                />
+              </div>
+            </fieldset>
+          )}
           {setupTarget.requestType === 'TASK_CREATE' && <fieldset className="sm:col-span-2"><legend className="text-xs text-slate-300">Proposed assignees</legend><div className="mt-2 grid max-h-40 gap-2 overflow-y-auto rounded-lg border border-white/10 bg-slate-950/40 p-3 sm:grid-cols-2">{(() => {
             const project = projects.find((item) => item.id === setupTarget.projectId);
             const team = project?.teams.find((item) => item.id === setupDraft.teamId || item.leadId === setupTarget.requestedByUserId);
