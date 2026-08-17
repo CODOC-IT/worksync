@@ -88,6 +88,8 @@ export const createTaskViaApi = async (
     };
   }
 
+  const requestController = new AbortController();
+  const requestTimeout = window.setTimeout(() => requestController.abort(), 20_000);
   try {
     const body: Record<string, unknown> = {
       projectId: data.projectId,
@@ -114,6 +116,7 @@ export const createTaskViaApi = async (
 
     const response = await fetch('/api/tasks', {
       method: 'POST',
+      signal: requestController.signal,
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
@@ -139,11 +142,15 @@ export const createTaskViaApi = async (
       message: payload.message || 'Task created successfully.',
       task
     };
-  } catch {
+  } catch (error) {
     return {
       success: false,
-      message: 'Unable to reach the task service. Please try again.'
+      message: error instanceof DOMException && error.name === 'AbortError'
+        ? 'Task creation timed out. Please check the server connection and try again.'
+        : 'Unable to reach the task service. Please try again.'
     };
+  } finally {
+    window.clearTimeout(requestTimeout);
   }
 };
 
