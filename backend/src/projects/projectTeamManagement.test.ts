@@ -145,8 +145,9 @@ before(async () => {
       RemovedByUserId INT NULL
     );
 
-    -- Needed only so buildDTO's getProjectProgress read resolves -- stays empty, no scenario in
-    -- this file involves tasks.
+    -- Tasks/assignees are no longer inert fixtures here: replaceTeamLead reassigns the outgoing
+    -- lead's open work to the incoming one, and moveMember reads what a moved member leaves behind
+    -- for their previous Team Lead, so both read these tables for real.
     CREATE TABLE work.TaskStatuses (
       TaskStatusId SERIAL PRIMARY KEY,
       StatusCode VARCHAR(30) NOT NULL UNIQUE,
@@ -160,6 +161,15 @@ before(async () => {
       Title VARCHAR(200) NOT NULL,
       TaskStatusId SMALLINT NOT NULL REFERENCES work.TaskStatuses(TaskStatusId),
       ArchivedAtUtc TIMESTAMPTZ NULL
+    );
+
+    CREATE TABLE work.TaskAssignees (
+      TaskAssigneeId BIGSERIAL PRIMARY KEY,
+      TaskId BIGINT NOT NULL REFERENCES work.Tasks(TaskId),
+      UserId INT NOT NULL REFERENCES iam.Users(UserId),
+      AssignedByUserId INT NOT NULL,
+      UnassignedAtUtc TIMESTAMPTZ NULL,
+      UnassignedByUserId INT NULL
     );
 
     INSERT INTO org.Organizations (OrganizationId, OrganizationCode) VALUES (1, 'ORG');
@@ -177,7 +187,9 @@ before(async () => {
 
     INSERT INTO notify.NotificationTypes (TypeCode, CategoryCode, DefaultPriority) VALUES
       ('team_lead_changed', 'Project', 'High'),
-      ('team_member_moved', 'Project', 'High');
+      ('team_member_moved', 'Project', 'High'),
+      ('team_member_removed_needs_reassignment', 'Project', 'High'),
+      ('task_reassigned', 'Task', 'High');
 
     INSERT INTO work.ProjectStatuses (ProjectStatusId, StatusCode) VALUES (1, 'Active');
     INSERT INTO work.Priorities (PriorityId, PriorityCode) VALUES (1, 'Medium');
@@ -207,6 +219,24 @@ before(async () => {
       (1, 1, 3, FALSE, 2),
       (2, 1, 5, TRUE, 2),
       (2, 1, 6, FALSE, 2);
+
+    INSERT INTO work.TaskStatuses (TaskStatusId, StatusCode, IsCompletedState) VALUES
+      (1, 'Todo', FALSE),
+      (2, 'Done', TRUE);
+
+    -- Open work held by Team A's lead (usr-2) and by Team B's lead (usr-5), plus one already-Done
+    -- task, which must NOT be swept up by a reassignment.
+    INSERT INTO work.Tasks (TaskId, ProjectId, ParentTaskId, Title, TaskStatusId) VALUES
+      (1, 1, NULL, 'API Integration', 1),
+      (2, 1, 1,    'Wire up the auth endpoint', 1),
+      (3, 1, NULL, 'Retired groundwork', 2),
+      (4, 1, NULL, 'Ground support rota', 1);
+
+    INSERT INTO work.TaskAssignees (TaskId, UserId, AssignedByUserId) VALUES
+      (1, 2, 2),
+      (2, 2, 2),
+      (3, 2, 2),
+      (4, 5, 2);
   `);
 });
 
@@ -287,6 +317,37 @@ test('replaceTeamLead: a valid replacement (existing member of the same team) su
     { userid: 2, memberrolecode: 'Member' },
     { userid: 3, memberrolecode: 'TeamLead' }
   ]);
+});
+
+test('replaceTeamLead: the outgoing lead\'s open work is reassigned to the incoming lead, completed work is left alone', async () => {
+  // Follows the replacement above (usr-2 -> usr-3 on Team A). usr-2 held tasks 1 and 2 (both open)
+  // and task 3 (Done); only the first two may move, and task 3's assignment must be untouched.
+  const active = await pool.query(
+    `SELECT taskid, userid FROM work.taskassignees
+      WHERE unassignedatutc IS NULL AND taskid IN (1, 2, 3) ORDER BY taskid, userid`
+  );
+  assert.deepEqual(
+    active.rows,
+    [{ taskid: 1, userid: 3 }, { taskid: 2, userid: 3 }, { taskid: 3, userid: 2 }],
+    'open tasks move to the new lead; the completed task stays with the outgoing lead'
+  );
+
+  // The outgoing lead's assignments were closed out, not deleted -- the history of who held the
+  // work has to survive the handover.
+  const closed = await pool.query(
+    `SELECT taskid FROM work.taskassignees
+      WHERE userid = 2 AND unassignedatutc IS NOT NULL ORDER BY taskid`
+  );
+  assert.deepEqual(closed.rows, [{ taskid: 1 }, { taskid: 2 }]);
+});
+
+test('replaceTeamLead: another team\'s lead keeps their own work', async () => {
+  // Task 4 belongs to usr-5 (Team B). Team A's lead change must not touch it -- the reassignment is
+  // scoped to the outgoing lead's own assignments, not to the project at large.
+  const teamBWork = await pool.query(
+    `SELECT userid FROM work.taskassignees WHERE taskid = 4 AND unassignedatutc IS NULL`
+  );
+  assert.deepEqual(teamBWork.rows, [{ userid: 5 }]);
 });
 
 // --- moveMember --------------------------------------------------------------------------------

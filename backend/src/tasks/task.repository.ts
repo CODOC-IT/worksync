@@ -167,6 +167,63 @@ export const findActiveTaskAssignmentsForUserInProject = async (
   return result.rows;
 };
 
+// Hands every active (not-yet-Done, not-archived) task and subtask assignment `fromUserId` holds in
+// `projectId` to `toUserId`, in one transaction, and reports what moved. Written for the Team Lead
+// replacement rule (§5 of the team workflow: "any task assigned to the outgoing Team Lead must
+// automatically be reassigned to the new Team Lead"), which is why it is project-scoped rather than
+// team-scoped -- work.TeamMembers' UQ_TeamMembers_Project_User invariant means the outgoing lead
+// belongs to exactly one team of this project, so all of their project work is that team's work,
+// including tasks predating the team layer whose TeamId is still NULL.
+//
+// Selects the affected rows before writing so the caller can name each reassigned task in its
+// notification; the same statement's rows are then updated, so a task cannot be reported as
+// reassigned without having been. Assignments are closed out (UnassignedAtUtc) rather than deleted,
+// matching updateTask's assignee handling, so the history of who held the work is preserved. A task
+// the new lead is already an assignee of is left alone rather than double-inserted.
+export const reassignActiveTasksInProject = async (
+  projectId: number,
+  fromUserId: number,
+  toUserId: number,
+  actorUserId: number
+): Promise<ActiveAssignmentRow[]> =>
+  withTransaction(async (runQuery) => {
+    const affected = await runQuery<ActiveAssignmentRow>(
+      `SELECT t.taskid, t.parenttaskid, t.title
+         FROM work.taskassignees ta
+         JOIN work.tasks t ON t.taskid = ta.taskid
+         JOIN work.taskstatuses ts ON ts.taskstatusid = t.taskstatusid
+        WHERE ta.unassignedatutc IS NULL
+          AND t.projectid = $1
+          AND ta.userid = $2
+          AND t.archivedatutc IS NULL
+          AND NOT ts.iscompletedstate
+        ORDER BY t.taskid`,
+      [projectId, fromUserId]
+    );
+    if (affected.rows.length === 0) return [];
+
+    const taskIds = affected.rows.map((row) => row.taskid);
+    await runQuery(
+      `UPDATE work.taskassignees
+          SET unassignedatutc = CURRENT_TIMESTAMP, unassignedbyuserid = $1
+        WHERE userid = $2 AND unassignedatutc IS NULL AND taskid = ANY($3::bigint[])`,
+      [actorUserId, fromUserId, taskIds]
+    );
+    for (const taskId of taskIds) {
+      const existing = await runQuery<{ taskassigneeid: number }>(
+        `SELECT taskassigneeid FROM work.taskassignees
+          WHERE taskid = $1 AND userid = $2 AND unassignedatutc IS NULL`,
+        [taskId, toUserId]
+      );
+      if (existing.rows.length > 0) continue;
+      await runQuery(
+        `INSERT INTO work.taskassignees (taskid, userid, assignedbyuserid) VALUES ($1, $2, $3)`,
+        [taskId, toUserId, actorUserId]
+      );
+    }
+    return affected.rows;
+  });
+
 const getNextTaskNumber = async (runQuery: typeof query, projectId: number): Promise<number> => {
   const result = await runQuery<{ next: string }>(
     'SELECT COALESCE(MAX(tasknumber), 0) + 1 AS next FROM work.tasks WHERE projectid = $1',

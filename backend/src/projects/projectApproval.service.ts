@@ -263,7 +263,10 @@ export const decideApprovalRequest = async (
   if (decision === 'Approved') {
     switch (row.requesttype) {
       case 'PROJECT_CREATE':
-        await projectService.activatePendingProject(projectIdStr, 'Admin');
+        // The deciding Admin is passed as the actor so the team assignments this materializes are
+        // attributed to them, not to the member who proposed the setup (§3 -- the Admin may have
+        // edited it via changePendingSetup first).
+        await projectService.activatePendingProject(projectIdStr, 'Admin', actorId);
         break;
       case 'TASK_CREATE': {
         const proposal = row.requestedchangesjson ? JSON.parse(row.requestedchangesjson) as CreateTaskInput : null;
