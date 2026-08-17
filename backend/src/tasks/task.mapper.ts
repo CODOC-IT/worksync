@@ -1,4 +1,4 @@
-import { fromProjectPk, fromTaskPk, fromUserPk } from '../utils/idMapping.js';
+import { fromProjectPk, fromTaskPk, fromTeamPk, fromUserPk } from '../utils/idMapping.js';
 import {
   ApiTaskPriority,
   DB_TO_API_TASK_STATUS,
@@ -43,6 +43,8 @@ export const rowToTaskDTO = (row: TaskRow, assignees: TaskAssigneeRow[]): TaskDT
     id: fromTaskPk(row.taskid),
     taskNumber: formatProjectTaskNumber(row.projectcode, row.tasknumber),
     projectId: fromProjectPk(row.projectid),
+    ...(row.teamid ? { teamId: fromTeamPk(row.teamid) } : {}),
+    ...(row.assignmentstatus ? { assignmentStatus: row.assignmentstatus as 'NeedsTeamAssignment' | 'Assigned' } : {}),
     ...(row.parenttaskid ? { parentTaskId: fromTaskPk(row.parenttaskid) } : {}),
     title: row.title,
     description: row.description,

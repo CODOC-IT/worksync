@@ -46,7 +46,8 @@ import {
 
 import {
   TaskMutationData,
-  TaskMutationResult
+  TaskMutationResult,
+  isProjectTeamLead
 } from '../features/tasks/taskRules';
 import {
   prepareTaskCreation,
@@ -1765,7 +1766,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Ordinary team members cannot create tasks. A project-level lead may still have the
     // Team_Member account role; that lead continues below to the persisted Admin approval API.
-    if (currentRole === 'Team_Member' && projects.find((item) => item.id === input.projectId)?.teamLeadId !== currentUser.id) {
+    if (currentRole === 'Team_Member' && !isProjectTeamLead(projects.find((item) => item.id === input.projectId)!, currentUser.id)) {
       return { success: false, message: 'Only the Team Lead can create tasks for this project.' };
     }
 

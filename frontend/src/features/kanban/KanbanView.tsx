@@ -147,7 +147,7 @@ export const KanbanView: React.FC = () => {
   };
 
   const requestReviewDecision = (task: Task, decision: 'approve' | 'reject') => {
-    if (!selectedProject || !canDecideReview(currentRole, currentUser.id, selectedProject)) return;
+    if (!selectedProject || !canDecideReview(currentRole, currentUser.id, selectedProject, task)) return;
     setNotice(null);
     setPendingChange({
       task,
@@ -670,8 +670,8 @@ const BoardCard: React.FC<{
   // A Done task is never draggable by anyone, including its Team Lead — reopening is an
   // explicit, reason-carrying action via the Reopen button, not an accidental drag.
   const canDrag = canEditTask(currentRole, currentUserId, project, task) && task.status !== 'Done';
-  const canDecide = canDecideReview(currentRole, currentUserId, project);
-  const canReopen = canReopenTask(currentRole, currentUserId, project);
+  const canDecide = canDecideReview(currentRole, currentUserId, project, task);
+  const canReopen = canReopenTask(currentRole, currentUserId, project, task);
   const overdue = isTaskOverdue(task, today);
   const dueIndicator = getDueDateIndicator(task.dueDate, today, task.status === 'Done');
   const startDate = getTaskStartDate(task);
