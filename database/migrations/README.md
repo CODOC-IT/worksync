@@ -90,6 +90,11 @@ task-scoped threads store `TaskId` only), widens `CK_DiscussionThreads_Type` wit
 thread type, includes `TeamId` in the "exactly one parent" constraint, and adds the team foreign
 key. Existing project/task threads are untouched (`TeamId` stays NULL). Safe to run more than once.
 
+`20260818_01_project_team_membership_integrity.sql` repairs active team members missing an
+active `ProjectMembers` row, then enforces that a team member always belongs to the same project
+through database triggers. It also automatically ends active team memberships when a project
+membership is ended.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

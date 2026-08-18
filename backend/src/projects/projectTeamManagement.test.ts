@@ -367,6 +367,28 @@ test('moveMember: a user not currently on any team of this project is rejected',
   );
 });
 
+test('moveMember: a stale team-only member is rejected before their team assignment can change', async () => {
+  // Simulates the historic data drift: the person appears in a team but has no active
+  // ProjectMembers row. The service guard gives a clear error; the database migration adds the
+  // permanent trigger that makes creating this state impossible in production.
+  await pool.query(
+    `INSERT INTO work.teammembers (teamid, projectid, userid, islead, addedbyuserid)
+     VALUES (1, 1, 99, FALSE, 1)`
+  );
+
+  await assert.rejects(
+    () => moveMember('prj-1', 'usr-99', 'tm-2', 'usr-1', 'Admin'),
+    /must be an active project member/
+  );
+
+  const membership = await pool.query(
+    `SELECT teamid FROM work.teammembers WHERE projectid = 1 AND userid = 99 AND leftatutc IS NULL`
+  );
+  assert.deepEqual(membership.rows, [{ teamid: 1 }], 'the rejected move must not alter team placement');
+
+  await pool.query(`DELETE FROM work.teammembers WHERE projectid = 1 AND userid = 99`);
+});
+
 test('moveMember: moving a Team Lead strips their lead status and the destination gains a plain member', async () => {
   // usr-5 currently leads Team B; move them into Team A (already re-led by usr-3 from the test
   // above -- Team A now has usr-2 (plain member) and usr-3 (lead)).
