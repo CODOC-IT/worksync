@@ -49,7 +49,7 @@ export interface SubtaskFormInput extends Omit<TaskFormInput, 'projectId'> {}
 export type TaskModuleTask = Task & Partial<{
   assigneeIds: string[];
   startDate: string;
-  teamId: string;
+  teamId?: string;
 }>;
 
 export interface TaskMutationResult {
@@ -77,6 +77,7 @@ type CompatibleProject = Project & Partial<{
 export interface TaskFilters {
   search: string;
   projectId: string;
+  teamId?: string;
   status: string;
   priority: string;
   assigneeId: string;
@@ -272,6 +273,7 @@ export const filterAndSortTasks = (
       const matchesSearch = !normalizedSearch
         || task.title.toLowerCase().includes(normalizedSearch);
       const matchesProject = !filters.projectId || task.projectId === filters.projectId;
+      const matchesTeam = !filters.teamId || getTaskTeamId(task) === filters.teamId;
       const matchesStatus = !filters.status || task.status === filters.status;
       const matchesPriority = !filters.priority
         || getTaskPriorityValue(task.priority) === filters.priority;
@@ -283,6 +285,7 @@ export const filterAndSortTasks = (
       return Boolean(project)
         && matchesSearch
         && matchesProject
+        && matchesTeam
         && matchesStatus
         && matchesPriority
         && matchesAssignee

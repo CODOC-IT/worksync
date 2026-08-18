@@ -141,6 +141,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
+  const [teamFilter, setTeamFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
@@ -228,6 +229,15 @@ export const TasksView: React.FC<TasksViewProps> = ({
     }
   }, [projectFilter, taskFilterProjects]);
 
+  useEffect(() => {
+    setTeamFilter('');
+  }, [projectFilter]);
+
+  const filterProjectTeams = useMemo(
+    () => taskFilterProjects.find((project) => project.id === projectFilter)?.teams || [],
+    [projectFilter, taskFilterProjects]
+  );
+
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const selectedTaskTeam = useMemo(() => {
     if (!selectedProject) return undefined;
@@ -261,9 +271,6 @@ export const TasksView: React.FC<TasksViewProps> = ({
     [availableAssignees, form.assigneeIds]
   );
   const editableAssignees = useMemo(() => {
-    const currentAssigneeIds = new Set(
-      editingTaskSource ? getTaskAssigneeIds(editingTaskSource) : []
-    );
     const eligibleUsers = editingTaskSource?.parentTaskId
       ? availableAssignees.filter((user) => {
           const parent = tasks.find((task) => task.id === editingTaskSource.parentTaskId);
@@ -271,19 +278,15 @@ export const TasksView: React.FC<TasksViewProps> = ({
         })
       : availableAssignees;
 
-    // Keep any existing assignee visible even if they were removed from the project or parent
-    // task after this task was created. The lead must be able to remove that stale assignment.
-    return Array.from(new Map([
-      ...eligibleUsers,
-      ...users.filter((user) => currentAssigneeIds.has(user.id))
-    ].map((user) => [user.id, user])).values());
-  }, [availableAssignees, editingTaskSource, tasks, users]);
+    return eligibleUsers;
+  }, [availableAssignees, editingTaskSource, tasks]);
 
   const taskSource = showArchivedTasks ? archivedTasks : tasks;
   const filteredTasks = useMemo(
     () => filterAndSortTasks(taskSource, projects, {
       search,
       projectId: projectFilter,
+      teamId: teamFilter,
       status: statusFilter,
       priority: priorityFilter,
       assigneeId: assigneeFilter,
@@ -298,6 +301,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       myTasksOnly,
       priorityFilter,
       projectFilter,
+      teamFilter,
       projects,
       search,
       statusFilter,
@@ -420,7 +424,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
       setFormError(null);
       return;
     }
-    if (!editingTaskId && subtaskStep === null && !isAdminTeamHandoff) {
+    if (!editingTaskId && subtaskStep === null) {
       setSubtaskStep('ask');
       return;
     }
@@ -528,7 +532,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
         users,
         true,
         form.startDate,
-        { allowedAssigneeIds: availableAssignees.map((user) => user.id) }
+        {
+          allowUnassigned: isAdminTeamHandoff,
+          allowedAssigneeIds: availableAssignees.map((user) => user.id)
+        }
       );
       Object.entries(errors).forEach(([field, message]) => {
         if (field !== 'projectId') nextErrors[`${index}.${field}`] = message;
@@ -624,6 +631,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const clearFilters = () => {
     setSearch('');
     setProjectFilter('');
+    setTeamFilter('');
     setStatusFilter('');
     setPriorityFilter('');
     setAssigneeFilter('');
@@ -674,7 +682,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   const isCreatePage = isFormOpen && editingTaskId === null;
   const hasActiveFilters = Boolean(
-    search || projectFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
+    search || projectFilter || teamFilter || statusFilter || priorityFilter || assigneeFilter || myTasksOnly
   );
 
   return (
@@ -1139,11 +1147,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
                       />
                     </Field>
                     <Field
-                      label={`Assignees * (${sub.assigneeIds.length} selected)`}
+                      label={`${isAdminTeamHandoff ? 'Assignees' : 'Assignees *'} (${sub.assigneeIds.length} selected)`}
                       error={subtaskErrors[`${index}.assigneeIds`]}
                       className="sm:col-span-2"
                     >
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      {isAdminTeamHandoff ? (
+                        <p className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">The selected team's Team Lead will assign this subtask after creation.</p>
+                      ) : <div className="grid gap-2 sm:grid-cols-2">
                         {availableSubtaskAssignees.map((user) => {
                           const selected = sub.assigneeIds.includes(user.id);
                           return (
@@ -1173,7 +1183,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                             </button>
                           );
                         })}
-                      </div>
+                      </div>}
                     </Field>
                   </div>
                 </div>
@@ -1251,6 +1261,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
             </label>
 
             <ProjectFilter value={projectFilter} onChange={setProjectFilter} projects={taskFilterProjects} />
+
+            <FilterSelect value={teamFilter} onChange={setTeamFilter} label={projectFilter ? 'All teams' : 'Select a project first'} disabled={!projectFilter || filterProjectTeams.length === 0}>
+              {filterProjectTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+            </FilterSelect>
 
             <FilterSelect value={statusFilter} onChange={setStatusFilter} label="All statuses">
               {TASK_FILTER_STATUSES.map((status) => (
@@ -1414,6 +1428,11 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   </h3>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <TaskBadge value={task.priority} kind="priority" />
+                    {getTaskTeamId(task) && (
+                      <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-xs font-semibold text-cyan-200">
+                        {project.teams.find((team) => team.id === getTaskTeamId(task))?.name || 'Assigned team'}
+                      </span>
+                    )}
                     {subtaskCount > 0 && (
                       <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-semibold text-slate-300">
                         {subtaskCount} Subtask{subtaskCount === 1 ? '' : 's'}
@@ -1599,13 +1618,15 @@ const FilterSelect: React.FC<{
   value: string;
   onChange: (value: string) => void;
   label: string;
+  disabled?: boolean;
   children: React.ReactNode;
-}> = ({ value, onChange, label, children }) => (
+}> = ({ value, onChange, label, disabled = false, children }) => (
   <label className="relative">
     <select
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`${inputClass} appearance-none pr-8 text-xs`}
+      disabled={disabled}
+      className={`${inputClass} appearance-none pr-8 text-xs disabled:cursor-not-allowed disabled:opacity-50`}
     >
       <option value="">{label}</option>
       {children}
@@ -1748,6 +1769,10 @@ const TaskDetailsModal: React.FC<{
   const teamLead = project
     ? users.find((user) => user.id === project.teamLeadId)
     : undefined;
+  const taskTeam = project?.teams.find((team) => team.id === getTaskTeamId(task));
+  const taskTeamLead = taskTeam
+    ? users.find((user) => user.id === taskTeam.leadId)
+    : undefined;
   const taskAssignees = getTaskAssigneeIds(task)
     .map((id) => users.find((user) => user.id === id)?.name)
     .filter((name): name is string => Boolean(name));
@@ -1836,6 +1861,8 @@ const TaskDetailsModal: React.FC<{
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <DetailBox label="Assigned team" value={taskTeam?.name || 'Legacy project task'} />
+                <DetailBox label="Team Lead" value={taskTeamLead?.name || (taskTeam ? 'Not assigned' : teamLead?.name || 'Not assigned')} />
                 <DetailBox label="Status" value={getTaskStatusLabel(task.status)} />
                 <DetailBox label="Assigned to" value={taskAssignees.join(', ') || 'Unassigned'} />
                 <DetailBox label="Start date" value={formatOptionalDate(getTaskStartDate(task))} />
