@@ -306,6 +306,11 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   if (projectRow.statuscode !== 'Active') {
     throw new TaskValidationError('Tasks can only be created in active projects.');
   }
+  const parentRow = input.parentTaskId ? await repo.findTaskById(toTaskPk(input.parentTaskId)) : null;
+  if (input.parentTaskId && !parentRow) throw new TaskNotFoundError('Parent task not found.');
+  if (parentRow && parentRow.projectid !== projectRow.projectid) {
+    throw new TaskValidationError('A subtask must belong to the same project as its parent task.');
+  }
 
   if (!input.title?.trim()) throw new TaskValidationError('Task title is required.');
   if (!input.description?.trim()) throw new TaskValidationError('Task description is required.');
@@ -317,6 +322,9 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   if (input.dueDate > projectRow.enddate) {
     throw new TaskValidationError(`Due date cannot be after ${projectRow.enddate}.`);
   }
+  // An Admin handoff intentionally starts unassigned. This applies to every subtask in the
+  // initial handoff bundle too; the receiving Team Lead assigns each item inside their team.
+  const isAdminTeamHandoffInput = actorRole === 'Admin' && Boolean(input.teamId) && !input.assigneeIds?.length;
   const allInputs = [input, ...(input.subtasks || [])];
   for (const [index, taskInput] of allInputs.entries()) {
     const label = index === 0 ? 'Task' : `Subtask ${index}`;
@@ -328,7 +336,7 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
     if (taskInput.startDate < projectRow.startdate || taskInput.dueDate > projectRow.enddate) {
       throw new TaskValidationError(`${label} dates must be within the project dates.`);
     }
-    if (!taskInput.assigneeIds?.length && !(index === 0 && actorRole === 'Admin' && input.teamId && !(input.subtasks || []).length)) {
+    if (!taskInput.assigneeIds?.length && !isAdminTeamHandoffInput) {
       throw new TaskValidationError(`${label} requires at least one assignee.`);
     }
   }
@@ -384,10 +392,6 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   if (!input.assigneeIds?.length && !teamHandoff) {
     throw new TaskValidationError('At least one assignee is required.');
   }
-  if (teamHandoff && (input.subtasks || []).length > 0) {
-    throw new TaskValidationError('Assign the team task before adding subtasks.');
-  }
-
   for (const taskInput of allInputs) {
     if (taskInput.assigneeIds.some((assigneeId) => !projectMemberIds.has(assigneeId))) {
       throw new TaskValidationError('Every task and subtask assignee must be an active project member.');
@@ -854,18 +858,17 @@ export const createTaskEditApproval = async (
   }
 
   const members = await projectRepo.findMembersForProject(row.projectid);
-  // Multi-team architecture: the reviewer is the Team Lead of the *assignee's team* (falling back
-  // to the project lead for legacy no-team projects), so a member's edit lands with the person who
-  // actually owns the work being changed rather than a project lead in a different team.
+  // Multi-team architecture: the reviewer is the Team Lead of the task's owning team (falling
+  // back to the project lead for legacy no-team tasks). A member's current team must never route
+  // a request away from the team that owns the task.
   let reviewerId = resolveTeamLeadUserId(project, members);
   const teams = await projectRepo.findTeamsForProject(row.projectid);
   const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
-  if (teams.length > 0) {
-    const actorTeamId = teamMembers.find((tm) => tm.userid === toUserPk(actorId))?.teamid;
-    const actorTeamLead = actorTeamId
-      ? teamMembers.find((tm) => tm.teamid === actorTeamId && tm.islead)
-      : undefined;
-    if (actorTeamLead) reviewerId = fromUserPk(actorTeamLead.userid);
+  if (teams.length > 0 && row.teamid) {
+    const taskTeamLead = teamMembers.find((tm) =>
+      Number(tm.teamid) === Number(row.teamid) && tm.islead
+    );
+    if (taskTeamLead) reviewerId = fromUserPk(taskTeamLead.userid);
   }
   if (!reviewerId || reviewerId === actorId) {
     throw new TaskAuthorizationError('This project does not have an eligible Team Lead.');
@@ -977,7 +980,8 @@ export const listTaskEditApprovals = async (
   const result: TaskEditApprovalDTO[] = [];
   for (const requestRows of grouped.values()) {
     const row = requestRows[0];
-    if (!(await isProjectLead(fromProjectPk(row.projectid), actorId, actorRole))) continue;
+    const task = await repo.findTaskById(row.taskid);
+    if (!task || !(await isTaskTeamLead(task, actorId, actorRole))) continue;
     const item = requestRows.find((candidate) => candidate.fieldcode === 'taskUpdate');
     if (!item?.oldvaluejson || !item.proposedvaluejson) continue;
     try {
@@ -1021,8 +1025,8 @@ export const decideTaskEditApproval = async (
   const row = await repo.findTaskById(toTaskPk(approval.targetId));
   if (!row) throw new TaskNotFoundError('Task not found.');
   assertTaskCanBeWorkedOn(row);
-  if (!(await isProjectLead(fromProjectPk(row.projectid), actorId, actorRole))) {
-    throw new TaskAuthorizationError('Only this project\'s Team Lead can decide the task update.');
+  if (!(await isTaskTeamLead(row, actorId, actorRole))) {
+    throw new TaskAuthorizationError('Only this task\'s Team Lead can decide the task update.');
   }
   const taskPk = await repo.decideTaskEditApproval(
     requestPk,
