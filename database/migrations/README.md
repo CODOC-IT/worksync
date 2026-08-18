@@ -95,6 +95,12 @@ active `ProjectMembers` row, then enforces that a team member always belongs to 
 through database triggers. It also automatically ends active team memberships when a project
 membership is ended.
 
+`20260818_02_task_team_ownership_integrity.sql` backfills a missing subtask team from its parent,
+aligns team-task assignment state, and makes a task's `TeamId` a verified project-team ownership
+anchor. It prevents a team-owned task from becoming unowned and rejects task assignments unless
+the assignee is an active project member and, for team-owned tasks, an active member of that exact
+team.
+
 Before applying an IAM migration in production:
 
 1. Back up `auth.users`, `iam.Users`, `iam.UserRoles`, `iam.TeamLeadProjectScopes`, and project memberships.

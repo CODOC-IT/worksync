@@ -594,6 +594,16 @@ export const updateTask = async (
     }
 
     if (assigneeUserIds) {
+      // An Admin-created team handoff becomes assigned when that team's lead chooses its
+      // concrete assignees. The owning TeamId is intentionally never changed here.
+      await runQuery(
+        `UPDATE work.tasks
+         SET assignmentstatus = CASE WHEN teamid IS NOT NULL THEN 'Assigned' ELSE assignmentstatus END,
+             updatedatutc = CURRENT_TIMESTAMP,
+             rowversion = rowversion + 1
+         WHERE taskid = $1`,
+        [taskId]
+      );
       await runQuery(
         `UPDATE work.taskassignees SET unassignedatutc = CURRENT_TIMESTAMP, unassignedbyuserid = $1
          WHERE taskid = $2 AND unassignedatutc IS NULL`,
