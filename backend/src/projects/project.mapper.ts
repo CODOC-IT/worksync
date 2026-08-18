@@ -52,7 +52,12 @@ export const isTeamLeadOfProject = (
   userId: string
 ): boolean => {
   if (teamMembers.length > 0) {
-    return teamMembers.some((member) => member.islead && fromUserPk(member.userid) === userId);
+    const activeProjectMemberIds = new Set(members.map((member) => member.userid));
+    return teamMembers.some((member) =>
+      member.islead
+      && activeProjectMemberIds.has(member.userid)
+      && fromUserPk(member.userid) === userId
+    );
   }
   const teamLeads = members.filter((member) => member.memberrolecode === 'TeamLead');
   if (teamLeads.length === 0) return fromUserPk(row.owneruserid) === userId;

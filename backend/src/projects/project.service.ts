@@ -1174,6 +1174,14 @@ export const moveMember = async (
   const previousTeamLeadId = previousMembership
     ? leadOfTeam(teamMembersBeforeMove, previousMembership.teamid)
     : undefined;
+  if (previousMembership) {
+    const projectMembers = await repo.findMembersForProject(row.projectid);
+    if (!projectMembers.some((member) => member.userid === toUserPk(memberUserId))) {
+      throw new ProjectValidationError(
+        'That user must be an active project member before they can be moved between teams.'
+      );
+    }
+  }
   const strandedTasks = previousTeam ? await affectedTasksForMember(row.projectid, memberUserId) : [];
 
   const moved = await repo.moveTeamMember(row.projectid, toUserPk(memberUserId), targetTeam.teamid, toUserPk(actorId));

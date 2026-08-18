@@ -212,6 +212,22 @@ test('a normal project member is not recognized as a Team Lead', async () => {
   assert.equal(await isProjectLead('prj-1', 'usr-3', 'Team_Member'), false);
 });
 
+test('a stale team-only lead is not authorized as a Project Team Lead', async () => {
+  await pool.query(
+    `INSERT INTO iam.users (userid, organizationid, email, displayname)
+     VALUES (6, 1, 'stale-lead@worksync.test', 'Stale Team Lead')`
+  );
+  await pool.query(
+    `INSERT INTO work.teammembers (teamid, projectid, userid, islead, addedbyuserid)
+     VALUES (2, 1, 6, TRUE, 2)`
+  );
+
+  assert.equal(await isProjectLead('prj-1', 'usr-6', 'Team_Lead'), false);
+
+  await pool.query(`DELETE FROM work.teammembers WHERE projectid = 1 AND userid = 6`);
+  await pool.query(`DELETE FROM iam.users WHERE userid = 6`);
+});
+
 test('Admin is recognized regardless of membership (unchanged)', async () => {
   assert.equal(await isProjectLead('prj-1', 'usr-1', 'Admin'), true);
 });

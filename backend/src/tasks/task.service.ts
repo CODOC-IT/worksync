@@ -102,9 +102,16 @@ const isTaskTeamLead = async (row: TaskRow, userId: string, role: string): Promi
   if (role === 'HR') return false;
   if (role === 'Admin') return true;
   if (!row.teamid) return isProjectLead(projectFrontendId(row), userId, role, { allowAdmin: false });
-  const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
+  const [teamMembers, projectMembers] = await Promise.all([
+    projectRepo.findTeamMembersForProject(row.projectid),
+    projectRepo.findMembersForProject(row.projectid)
+  ]);
+  const activeProjectMemberIds = new Set(projectMembers.map((member) => Number(member.userid)));
   return teamMembers.some((member) =>
-    member.teamid === row.teamid && member.userid === toUserPk(userId) && member.islead
+    activeProjectMemberIds.has(Number(member.userid)) &&
+    Number(member.teamid) === Number(row.teamid) &&
+    Number(member.userid) === toUserPk(userId) &&
+    member.islead
   );
 };
 
@@ -199,8 +206,16 @@ const notifyTaskRecipients = (
 // for themselves), matching how authorization already resolves the lead in project.service.ts.
 const resolveTaskTeamLead = async (row: TaskRow): Promise<string> => {
   if (row.teamid) {
-    const teamMembers = await projectRepo.findTeamMembersForProject(row.projectid);
-    const lead = teamMembers.find((member) => member.teamid === row.teamid && member.islead);
+    const [teamMembers, projectMembers] = await Promise.all([
+      projectRepo.findTeamMembersForProject(row.projectid),
+      projectRepo.findMembersForProject(row.projectid)
+    ]);
+    const activeProjectMemberIds = new Set(projectMembers.map((member) => Number(member.userid)));
+    const lead = teamMembers.find((member) =>
+      activeProjectMemberIds.has(Number(member.userid)) &&
+      Number(member.teamid) === Number(row.teamid) &&
+      member.islead
+    );
     if (lead) return fromUserPk(lead.userid);
   }
   const projectRow = await projectRepo.findProjectById(row.projectid);
