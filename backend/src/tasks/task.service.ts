@@ -328,9 +328,12 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   const teams = await projectRepo.findTeamsForProject(projectRow.projectid);
   const teamMembers = await projectRepo.findTeamMembersForProject(projectRow.projectid);
   const userTeamByPk = new Map<number, number>();
-  for (const tm of teamMembers) userTeamByPk.set(tm.userid, tm.teamid);
+  // PostgreSQL bigint values are returned by `pg` as strings unless a custom parser is
+  // registered. Normalize them here because task team IDs are compared with the numeric value
+  // parsed from the frontend's `tm-<id>` identifier.
+  for (const tm of teamMembers) userTeamByPk.set(Number(tm.userid), Number(tm.teamid));
   const teamLeadByTeam = new Map<number, number>();
-  for (const tm of teamMembers) if (tm.islead) teamLeadByTeam.set(tm.teamid, tm.userid);
+  for (const tm of teamMembers) if (tm.islead) teamLeadByTeam.set(Number(tm.teamid), Number(tm.userid));
 
   let taskTeamId: number | undefined;
   let assignmentStatus: 'NeedsTeamAssignment' | 'Assigned' | undefined;
@@ -345,9 +348,9 @@ export const createTask = async (input: CreateTaskInput, actorId: string, actorR
   }
 
   if (teamHandoff) {
-    const targetTeam = teams.find((team) => team.teamid === toTeamPk(input.teamId!));
+    const targetTeam = teams.find((team) => Number(team.teamid) === toTeamPk(input.teamId!));
     if (!targetTeam) throw new TaskValidationError('Target team not found in this project.');
-    taskTeamId = targetTeam.teamid;
+    taskTeamId = Number(targetTeam.teamid);
     assignmentStatus = 'NeedsTeamAssignment';
   } else if (teams.length > 0) {
     if (actorRole !== 'Admin') {
