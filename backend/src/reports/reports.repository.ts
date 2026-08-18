@@ -816,8 +816,8 @@ export const getDeadlineBucketTasks = async (
   // (no-team) led projects keep every task, matching the old project-lead behavior.
   const isTeamScoped = teamScope && teamScope.teamIds.length > 0;
   const taskPredicate = isTeamScoped
-    ? `(t.projectid = ANY($1::int[]) AND t.teamid = ANY($4::bigint[]))
-       OR t.projectid = ANY($5::int[])`
+    ? `(t.projectid = ANY($1::int[]) AND t.teamid = ANY($2::bigint[]))
+       OR t.projectid = ANY($3::int[])`
     : `t.projectid = ANY($1::int[])
        OR (
          t.projectid = ANY($2::int[])
@@ -828,8 +828,6 @@ export const getDeadlineBucketTasks = async (
   const params: unknown[] = isTeamScoped
     ? [
         ledProjectIds,
-        memberOnlyProjectIds,
-        userPk,
         teamScope.teamIds,
         ledProjectIds.filter((pid) => !teamScope.teamProjectIds.includes(pid)),
       ]
